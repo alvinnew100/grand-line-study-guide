@@ -173,14 +173,14 @@
   "id": "interview-prep",
   "title": "Cracking the Coding Interview",
   "icon": "🎯",
-  "blurb": "The whole interview, start to finish: how hiring works, behavioural stories, Big O, a step-by-step method for technical questions, and original practice problems for every topic chapter.",
+  "blurb": "The whole interview from first recruiter call to signed offer: how hiring works, behavioural stories, Big O, a step-by-step method for technical questions, and 89 original practice problems across every topic chapter.",
   "color": "#c2410c",
   "sources": [
    "McDowell, Cracking the Coding Interview, 6th ed."
   ],
-  "words": 0,
-  "modules": 17,
-  "lessons": 0,
+  "words": 9710,
+  "modules": 23,
+  "lessons": 32,
   "problems": 89
  },
  {
@@ -264,7 +264,7 @@
   "words": 194414,
   "modules": 29,
   "lessons": 63,
-  "problems": 20
+  "problems": 30
  },
  {
   "id": "spring",
@@ -277,10 +277,10 @@
    "Spring Framework reference documentation (docs.spring.io/spring-framework/reference)",
    "Spring Boot reference documentation (docs.spring.io/spring-boot)"
   ],
-  "words": 108550,
+  "words": 108586,
   "modules": 17,
   "lessons": 35,
-  "problems": 30
+  "problems": 31
  },
  {
   "id": "go",
@@ -434,9 +434,9 @@
    "AWS Well-Architected Framework (docs.aws.amazon.com/wellarchitected)",
    "AWS Billing user guide: Free Tier (docs.aws.amazon.com/awsaccountbilling)"
   ],
-  "words": 21966,
+  "words": 66172,
   "modules": 15,
-  "lessons": 6,
+  "lessons": 18,
   "problems": 33
  },
  {
