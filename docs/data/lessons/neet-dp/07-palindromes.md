@@ -126,6 +126,37 @@ def longest_pal_subseq(s):
 print(longest_pal_subseq("bbbab"), longest_pal_subseq("cbbd"))
 ```
 
+### Reusing the palindrome table: minimum cuts
+
+The `pal` table is a building block for other DPs. **Palindrome Partitioning II** asks for the fewest
+cuts that split `s` into palindromic pieces. With `pal` available, it becomes a Word-Break-style
+prefix DP where the "dictionary" is the set of palindromic substrings:
+
+> `cuts[i]` = minimum cuts for the prefix `s[:i]`;
+> `cuts[i] = min(cuts[j] + 1)` over all `j < i` with `pal(j, i-1)`; using `cuts[0] = −1` makes a
+> whole-prefix palindrome cost 0.
+
+```python-run
+def min_cut(s):
+    n = len(s)
+    pal = [[False] * n for _ in range(n)]
+    for length in range(1, n + 1):
+        for i in range(n - length + 1):
+            j = i + length - 1
+            pal[i][j] = s[i] == s[j] and (length <= 2 or pal[i + 1][j - 1])
+    cuts = [-1] + [0] * n
+    for i in range(1, n + 1):
+        cuts[i] = min(cuts[j] + 1 for j in range(i) if pal[j][i - 1])
+    return cuts[n]
+
+for s in ["aab", "racecar", "abcde", "abbab"]:
+    print(s, min_cut(s))          # 1, 0, 4, 1
+```
+
+For `"aab"`: `cuts = [-1, 0, 0, 1]` — `"a"` needs no cut, `"aa"` needs none, `"aab"` is `"aa" | "b"`.
+Two O(n²) DPs stacked on each other is a common pattern: one precomputes a yes/no property of every
+substring, the second optimises over prefixes.
+
 ## Part 2: Maximum Product Subarray
 
 For **sums**, Kadane's algorithm keeps `cur` = best sum of a subarray ending here:
@@ -176,6 +207,26 @@ Zeros need no special case: candidate `x = 0` resets both `hi` and `lo` to 0, wh
 > [!TIP]
 > "Carry extra values per state" is a general move. Whenever an operation can flip the order
 > (negation, multiplication by negatives, subtraction), keep both extremes.
+
+A longer dry run shows the roles of `hi` and `lo` swapping more than once. `nums = [2, -5, -2, -4, 3]`:
+
+| i | x | candidates (x, hi·x, lo·x) | hi | lo | best |
+|---|---|---|---|---|---|
+| 0 | 2 | – | 2 | 2 | 2 |
+| 1 | −5 | −5, −10, −10 | −5 | −10 | 2 |
+| 2 | −2 | −2, 10, 20 | 20 | −2 | 20 |
+| 3 | −4 | −4, −80, 8 | 8 | −80 | 20 |
+| 4 | 3 | 3, 24, −240 | **24** | −240 | **24** |
+
+At `i = 2` the new maximum (20) comes from the old **minimum** (−10 × −2). At `i = 3` the maximum 8
+comes from the old minimum again (−2 × −4), i.e. the subarray `[-2, -4]`, and the final answer 24 is
+`[-2, -4, 3]`. The naive Kadane variant reports 10 here because it threw the −10 away.
+
+Common bugs, all of which the table above would expose:
+
+- updating `hi` first and then computing `lo` from the *new* `hi`;
+- initialising `best` to 0, which breaks single negative inputs like `[-2]`;
+- omitting the bare `x` candidate, so a subarray can never restart after a zero.
 
 ### An alternative view
 
@@ -252,6 +303,49 @@ print(word_break_td(s, words), f"{(time.perf_counter() - t0) * 1000:.2f} ms with
 
 Without `@cache` that input would try every way of splitting 60 `a`s into pieces of length 1–5 — on
 the order of 10¹⁷ ways — before discovering the final `b` can never match.
+
+### Listing the segmentations: Word Break II
+
+If the question changes to "return **all** ways to segment `s`", the output can be exponential, so no
+table of booleans suffices. The standard approach is memoized backtracking over the same suffix
+states: `sentences(i)` returns every segmentation of `s[i:]`, built from each dictionary word that
+starts at `i` followed by every segmentation of the rest.
+
+```python-run
+from functools import cache
+
+def word_break_all(s, words):
+    words = set(words)
+    n = len(s)
+
+    @cache
+    def sentences(i):                       # all segmentations of s[i:]
+        if i == n:
+            return [""]
+        out = []
+        for j in range(i + 1, n + 1):
+            w = s[i:j]
+            if w in words:
+                for rest in sentences(j):
+                    out.append(w + (" " + rest if rest else ""))
+        return out
+
+    return sentences(0)
+
+print(word_break_all("catsanddog", ["cat", "cats", "and", "sand", "dog"]))
+print(word_break_all("pineapplepenapple", ["apple", "pen", "applepen", "pine", "pineapple"]))
+print(word_break_all("catsandog", ["cats", "dog", "sand", "and", "cat"]))
+```
+
+The same split — *decide* with a boolean DP, *count* with an integer DP, *list* with memoized
+backtracking — applies to Decode Ways, Climbing Stairs and most other prefix problems.
+
+> [!INTERVIEW]
+> Follow-ups to expect in this lesson's problems: **palindromes** — "can you do better than O(n²)?"
+> (Manacher, O(n); name it, explain the mirror idea, don't code it unless asked); **product** — "what
+> if the array contains zeros / is all negative?" (walk through the `hi`/`lo` table); **word break** —
+> "how would you speed up the dictionary lookups?" (set of words plus distinct lengths, or a trie) and
+> "return one valid segmentation" (store, for each reachable `i`, the `j` it came from).
 
 ### Variants
 

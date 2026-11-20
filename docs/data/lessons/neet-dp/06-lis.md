@@ -237,6 +237,109 @@ for f in (quad, fast):
 | "Ending at i" DP | O(n²) | O(n) | easy (parents) |
 | Patience sorting | O(n log n) | O(n) | with parent bookkeeping |
 
+## A second dry run, with duplicates
+
+`nums = [0, 1, 0, 3, 2, 3]` exercises the cases the first example didn't: a duplicate that must *not*
+extend, and a replacement in the middle of `tails`.
+
+| x | `bisect_left(tails, x)` | action | tails |
+|---|---|---|---|
+| 0 | 0 (empty) | append | [0] |
+| 1 | 1 | append | [0, 1] |
+| 0 | 0 | replace `tails[0]` with 0 (no change) | [0, 1] |
+| 3 | 2 | append | [0, 1, 3] |
+| 2 | 2 | replace 3 with 2 | [0, 1, 2] |
+| 3 | 3 | append | [0, 1, 2, 3] |
+
+Answer 4 (`0, 1, 2, 3`). Notice the fifth step: replacing 3 by 2 did not change the length, but it
+made the final 3 able to extend — the "smaller tails dominate" principle in action. Had we used
+`bisect_right`, the second 0 would have landed at index 1 and overwritten the 1, which happens to be
+harmless here but turns `[7, 7, 7]` into length 3.
+
+## Counting the longest subsequences
+
+"How many increasing subsequences have the maximum length?" (Number of LIS) extends the O(n²) DP with
+a second array — the "carry extra values per state" move again:
+
+- `length[i]` = LIS length ending at `i`;
+- `count[i]` = number of increasing subsequences of that length ending at `i`.
+
+For each `j < i` with `nums[j] < nums[i]`: if `length[j] + 1` beats `length[i]`, replace both; if it
+ties, **add** `count[j]`.
+
+```python-run
+def number_of_lis(nums):
+    n = len(nums)
+    length, count = [1] * n, [1] * n
+    for i in range(n):
+        for j in range(i):
+            if nums[j] < nums[i]:
+                if length[j] + 1 > length[i]:
+                    length[i], count[i] = length[j] + 1, count[j]
+                elif length[j] + 1 == length[i]:
+                    count[i] += count[j]
+    best = max(length)
+    return best, sum(c for l, c in zip(length, count) if l == best)
+
+print(number_of_lis([1, 3, 5, 4, 7]))   # (4, 2): 1-3-5-7 and 1-3-4-7
+print(number_of_lis([2, 2, 2, 2]))      # (1, 4)
+```
+
+| i | 0 | 1 | 2 | 3 | 4 |
+|---|---|---|---|---|---|
+| nums | 1 | 3 | 5 | 4 | 7 |
+| length | 1 | 2 | 3 | 3 | 4 |
+| count | 1 | 1 | 1 | 1 | **2** |
+
+At `i = 4`, both `j = 2` and `j = 3` offer length 4, so their counts add.
+
+## Three bugs, demonstrated
+
+```python-run
+from bisect import bisect_left, bisect_right
+
+def correct(nums):
+    t = []
+    for x in nums:
+        k = bisect_left(t, x); t[k:k + 1] = [x]
+    return len(t)
+
+def bug_right(nums):                 # bisect_right: counts non-decreasing
+    t = []
+    for x in nums:
+        k = bisect_right(t, x); t[k:k + 1] = [x]
+    return len(t)
+
+def bug_contiguous(nums):            # longest increasing RUN, not subsequence
+    best = cur = 1
+    for a, b in zip(nums, nums[1:]):
+        cur = cur + 1 if b > a else 1
+        best = max(best, cur)
+    return best
+
+def bug_greedy(nums):                # take every element larger than the last taken
+    n, last = 0, float("-inf")
+    for x in nums:
+        if x > last:
+            n, last = n + 1, x
+    return n
+
+for a in ([7, 7, 7, 7], [1, 3, 2, 4], [10, 1, 2, 3]):
+    print(a, "correct:", correct(a), " right:", bug_right(a),
+          " contiguous:", bug_contiguous(a), " greedy:", bug_greedy(a))
+```
+
+Each wrong version is right on some inputs, which is why they survive casual testing. `[10, 1, 2, 3]`
+kills the greedy (it commits to 10); `[1, 3, 2, 4]` kills the contiguous run; `[7, 7, 7, 7]` kills
+`bisect_right`.
+
+> [!INTERVIEW]
+> A good way to present LIS: state the O(n²) "ending at i" DP first (it's easy to justify), then offer
+> the O(n log n) improvement and explain the invariant in one sentence — "`tails[k]` is the smallest
+> tail of any increasing subsequence of length k+1, and it stays sorted, so I can binary search."
+> Be ready for: *strict or non-strict?* (`bisect_left` vs `bisect_right`), *return the sequence*
+> (parent pointers), and *longest decreasing* (negate the values or reverse the array).
+
 ## Related problems that reduce to LIS
 
 - **Russian Doll Envelopes** — sort by width ascending and, for equal widths, height **descending**;

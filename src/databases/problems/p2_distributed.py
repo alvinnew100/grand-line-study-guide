@@ -66,7 +66,7 @@ or `None` if that replica did not answer in time. `r` is the read quorum.
         [[["v9", 9], ["v2", 2], ["v5", 5]], 4],
         [[None, [None, 5], ["ghost", 4]], 2],
         [[["a", 10], ["b", 9]] * 50, 60],
-        [[], 0],
+        [[], 1],
     ],
     examples=2,
     wrong_solutions=[

@@ -235,6 +235,100 @@ print(num_decodings_td("226"), num_decodings_td("11106"))
 Suffix recursion reads well ("decode the rest starting at `i`"), but recursion depth equals `n`.
 For inputs of a few hundred characters it's fine; for tens of thousands, use the loop.
 
+## A reduction worth knowing: Delete and Earn
+
+Many problems are House Robber wearing a costume. **Delete and Earn**: pick a number `x` from `nums`
+to earn `x` points, but every copy of `x − 1` and `x + 1` is then deleted. Maximise points.
+
+Observation: once you take one `x`, taking *all* copies of `x` is free (their neighbours are already
+gone). So bucket the values: `gain[v] = v × count(v)`. Now choosing bucket `v` forbids buckets `v − 1`
+and `v + 1` — a row of houses indexed by value.
+
+| value v | 0 | 1 | 2 | 3 | 4 |
+|---|---|---|---|---|---|
+| gain[v] for `[2, 2, 3, 3, 3, 4]` | 0 | 0 | 4 | 9 | 4 |
+| best through v | 0 | 0 | 4 | 9 | **9** |
+
+```python-run
+def delete_and_earn(nums):
+    gain = [0] * (max(nums) + 1)
+    for x in nums:
+        gain[x] += x
+    prev2 = prev1 = 0
+    for g in gain:                       # House Robber over value buckets
+        prev2, prev1 = prev1, max(prev1, prev2 + g)
+    return prev1
+
+print(delete_and_earn([3, 4, 2]), delete_and_earn([2, 2, 3, 3, 3, 4]))   # 6, 9
+```
+
+The skill being tested is the **reduction**, not the DP. When a new problem says "choosing this
+excludes its neighbours", look for the row of houses.
+
+## Debugging linear DP with a brute force
+
+Linear DP bugs are almost always base cases or off-by-one indices, and they hide on large inputs.
+A ten-line exhaustive solver finds them in seconds. Here is the pattern, applied to House Robber:
+
+```python-run
+from itertools import combinations
+import random
+
+def rob(nums):
+    prev2 = prev1 = 0
+    for x in nums:
+        prev2, prev1 = prev1, max(prev1, prev2 + x)
+    return prev1
+
+def rob_brute(nums):
+    n, best = len(nums), 0
+    for k in range(n + 1):
+        for idx in combinations(range(n), k):
+            if all(b - a > 1 for a, b in zip(idx, idx[1:])):      # no two adjacent
+                best = max(best, sum(nums[i] for i in idx))
+    return best
+
+random.seed(7)
+for _ in range(300):
+    nums = [random.randint(0, 20) for _ in range(random.randint(1, 9))]
+    assert rob(nums) == rob_brute(nums), nums
+print("300 random cases agree")
+
+def even_odd(nums):                      # the tempting shortcut
+    return max(sum(nums[::2]), sum(nums[1::2]))
+
+bad = next(a for a in ([random.randint(0, 9) for _ in range(4)] for _ in range(1000))
+           if even_odd(a) != rob_brute(a))
+print("shortcut fails on", bad, "->", even_odd(bad), "vs", rob_brute(bad))
+```
+
+The second half shows the other use of a brute force: **finding a counter-example** to a greedy idea
+before you waste interview time implementing it.
+
+## Counting vs optimising: a subtle difference in base cases
+
+The same recurrence shape needs different "empty" values depending on the operator:
+
+| Operator | Identity for "nothing chosen" | Value for "impossible" |
+|---|---|---|
+| `+` (count ways) | 1 | 0 |
+| `min` (cheapest) | 0 | +∞ |
+| `max` (best) | 0 | −∞ |
+| `or` (feasible) | True | False |
+
+Decode Ways uses the first row: the empty prefix has **1** decoding, and a prefix that cannot be
+decoded has **0**, which then poisons everything built on it — exactly the behaviour we want for
+`"100"`. Min Cost Climbing Stairs uses the second row. If a count comes out as 0 everywhere, the
+empty-prefix value was probably initialised to 0.
+
+> [!INTERVIEW]
+> Typical follow-ups for this family, and the one-line answers:
+> **"Can you do it in O(1) space?"** → rolling variables.
+> **"What if you can take 1, 2 or 3 steps?"** → window of three; or a general step set.
+> **"Return the actual houses / decoding."** → keep the table, walk backwards.
+> **"What if the street is a circle? A tree?"** → two linear runs; a (take, skip) pair per node.
+> **"What if n is 10¹⁸?"** → the recurrence is linear, so use 2×2 matrix exponentiation in O(log n).
+
 ## Why constant look-back means O(1) space
 
 All four recurrences read only `dp[i-1]` and `dp[i-2]`. Once `dp[i]` exists, `dp[i-2]` is never read

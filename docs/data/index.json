@@ -43,7 +43,7 @@
   "words": 73921,
   "modules": 13,
   "lessons": 33,
-  "problems": 12
+  "problems": 18
  },
  {
   "id": "dsa-foundations",
@@ -54,10 +54,10 @@
   "sources": [
    "Goodrich, Tamassia & Goldwasser, Data Structures and Algorithms in Python (Wiley, 2013), ch. 3-15"
   ],
-  "words": 67903,
-  "modules": 11,
-  "lessons": 32,
-  "problems": 28
+  "words": 77527,
+  "modules": 12,
+  "lessons": 36,
+  "problems": 32
  },
  {
   "id": "fastapi",
@@ -157,7 +157,7 @@
    "Goodrich, Tamassia & Goldwasser, Data Structures and Algorithms in Python, ch. 13.3 (Dynamic Programming)",
    "NeetCode 150 roadmap — 1-D and 2-D Dynamic Programming"
   ],
-  "words": 22797,
+  "words": 25523,
   "modules": 3,
   "lessons": 11,
   "problems": 28
