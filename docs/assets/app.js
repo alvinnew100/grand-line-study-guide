@@ -1202,6 +1202,7 @@
   $("#resetBtn").onclick = () => { if (confirm("Erase ALL progress, code and notes in this browser?")) { store.replace({}); dlg.close(); route(); } };
 
   // ---------------------------------------------------------------- boot
+  window.__sg = { Py, Sql, DATA, getProblem }; // debugging hook used by the self-test
   Promise.all([loadAll(), Ghibli.load()]).then(route).catch((e) => {
     main.innerHTML = `<div class="page narrow"><h1 class="page-title">Could not load content</h1><p class="muted">${esc(e.message)}</p><p>If you opened the file directly, serve the <code>docs/</code> folder over HTTP (e.g. <code>python -m http.server</code>).</p></div>`;
   });
