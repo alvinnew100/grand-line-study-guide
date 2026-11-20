@@ -40,7 +40,7 @@
    "Chacon & Straub, Pro Git, 2nd edition (CC BY-NC-SA 3.0), chapters 1-10",
    "Original material on team workflows, commit conventions and rescue scenarios"
   ],
-  "words": 0,
+  "words": 122503,
   "modules": 12,
   "lessons": 31,
   "problems": 25
@@ -345,12 +345,16 @@
   "id": "networking",
   "title": "Computer Networking for Engineers",
   "icon": "🌐",
-  "blurb": "tmp",
+  "blurb": "From bits on a wire to HTTP/3: layers, IP and routing, TCP, DNS, TLS, wireless, HTTP, browser performance, real-time APIs and backend networking, explained from zero with runnable simulations, annotated tool output and interview-style problems.",
   "color": "#2a6fdb",
-  "sources": [],
-  "words": 0,
-  "modules": 1,
-  "lessons": 0,
+  "sources": [
+   "Grigorik, High Performance Browser Networking (https://hpbn.co)",
+   "IETF RFCs 791, 1034/1035, 1071, 6298, 6455, 8446, 9000, 9110-9114, 9293",
+   "MDN Web Docs (HTTP, Fetch, WebSocket, Performance APIs)"
+  ],
+  "words": 117907,
+  "modules": 12,
+  "lessons": 30,
   "problems": 28
  },
  {
