@@ -8,7 +8,7 @@
   "sources": [
    "Chip Huyen, AI Engineering: Building Applications with Foundation Models (O'Reilly, 2025), ch. 1-10"
   ],
-  "words": 46556,
+  "words": 66890,
   "modules": 10,
   "lessons": 27,
   "problems": 24
@@ -22,7 +22,7 @@
   "sources": [
    "Bryant & O'Hallaron, Computer Systems: A Programmer's Perspective, 3rd ed. (CS:APP 3e)"
   ],
-  "words": 53288,
+  "words": 76298,
   "modules": 13,
   "lessons": 34,
   "problems": 18
@@ -54,10 +54,10 @@
   "sources": [
    "Goodrich, Tamassia & Goldwasser, Data Structures and Algorithms in Python (Wiley, 2013), ch. 3-15"
   ],
-  "words": 60175,
-  "modules": 10,
-  "lessons": 29,
-  "problems": 22
+  "words": 67903,
+  "modules": 11,
+  "lessons": 32,
+  "problems": 28
  },
  {
   "id": "fastapi",
@@ -92,7 +92,7 @@
   "words": 53170,
   "modules": 10,
   "lessons": 26,
-  "problems": 10
+  "problems": 17
  },
  {
   "id": "ml",
@@ -106,7 +106,7 @@
    "Chip Huyen, AI Engineering (O'Reilly) — background for deep learning and system design",
    "Goodfellow, Bengio & Courville, Deep Learning — background for the maths and optimisers"
   ],
-  "words": 30160,
+  "words": 53356,
   "modules": 10,
   "lessons": 26,
   "problems": 25
@@ -235,7 +235,7 @@
    "Goodrich, Tamassia & Goldwasser, Data Structures and Algorithms in Python, ch. 1-2",
    "The Python Tutorial, Language Reference (Data Model) and Library Reference, docs.python.org/3"
   ],
-  "words": 29039,
+  "words": 65486,
   "modules": 13,
   "lessons": 32,
   "problems": 26
@@ -251,9 +251,9 @@
    "SQLite documentation (window functions, WITH clause, EXPLAIN QUERY PLAN)",
    "PostgreSQL and MySQL reference manuals (dialect notes)"
   ],
-  "words": 55370,
+  "words": 69278,
   "modules": 19,
-  "lessons": 28,
+  "lessons": 34,
   "problems": 40
  }
 ]

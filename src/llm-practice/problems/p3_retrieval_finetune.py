@@ -451,6 +451,8 @@ returns `[[1,2,3,4], [4,5,6,7], [7,8,9,10]]`.
     return [tokens[i:i + size] for i in range(0, len(tokens), size)]
 ''',
         r'''def chunk_tokens(tokens, size, overlap):
+    if size <= 0 or overlap < 0 or overlap >= size:
+        return []
     chunks, start, step = [], 0, size - overlap
     while start + size <= len(tokens):
         chunks.append(tokens[start:start + size])

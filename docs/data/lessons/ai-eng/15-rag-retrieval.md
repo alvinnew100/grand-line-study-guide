@@ -119,16 +119,19 @@ Vector indexes organize vectors into buckets, trees or graphs so search can skip
 ```python-run
 import numpy as np
 rng = np.random.default_rng(0)
-N, d, k = 20000, 64, 5
-X = rng.normal(size=(N, d)).astype(np.float32); X /= np.linalg.norm(X, axis=1, keepdims=True)
-q = X[123] + 0.1 * rng.normal(size=d); q /= np.linalg.norm(q)
+N, d, k, n_clusters = 20000, 64, 5, 64
+topics = rng.normal(size=(200, d))                      # documents cluster around topics, like real embeddings
+X = (topics[rng.integers(0, 200, N)] + 0.6 * rng.normal(size=(N, d))).astype(np.float32)
+X /= np.linalg.norm(X, axis=1, keepdims=True)
+q = X[123] + 0.05 * rng.normal(size=d); q /= np.linalg.norm(q)
 exact = np.argsort(-(X @ q))[:k]                       # exact k-NN: scan everything
-# A tiny IVF: cluster with a few k-means steps, then search only the closest clusters.
-C = X[rng.choice(N, 64, replace=False)]
-for _ in range(5):
+# A tiny IVF index: k-means clusters; at query time search only the closest clusters.
+C = X[rng.choice(N, n_clusters, replace=False)]
+for _ in range(8):
     assign = np.argmax(X @ C.T, axis=1)
-    C = np.stack([X[assign == c].mean(axis=0) if (assign == c).any() else C[c] for c in range(64)])
+    C = np.stack([X[assign == c].mean(axis=0) if (assign == c).any() else C[c] for c in range(n_clusters)])
     C /= np.linalg.norm(C, axis=1, keepdims=True)
+assign = np.argmax(X @ C.T, axis=1)
 for nprobe in [1, 4, 16]:
     probe = np.argsort(-(C @ q))[:nprobe]
     cand = np.where(np.isin(assign, probe))[0]

@@ -59,9 +59,11 @@ for group in [["replace", "replaced", "replaces", "replacing"], ["drawback", "dr
     print(group, "->", sorted({tiny_stem(w) for w in group}))
 ```
 
-The toy stemmer merges the regular forms. It fails on the irregular ones ("was", "worse", "better"),
-which is exactly the case where a lemmatiser's dictionary is needed. It also produces non-words, such as
-"wa" from "was". That is normal for a stemmer: the stem only has to be *consistent*, not readable.
+The toy stemmer merges most regular forms. It leaves the irregular ones ("was", "worse", "better")
+untouched, which is exactly the case where a lemmatiser's dictionary is needed. It is also inconsistent
+("replace" stays, while the other forms become "replac") and it over-stems "scared" to "scar", a
+different word. Real stemmers have many more rules, but they make the same kinds of mistakes. A stem
+only has to be *consistent*, not readable.
 
 ### Using a custom tokeniser
 
@@ -218,21 +220,21 @@ import numpy as np
 from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.decomposition import LatentDirichletAllocation
 
-docs = [
-    "the army fought a long battle and the soldiers won the war",
-    "soldiers marched to war and the general planned the battle",
-    "the general led the army through a brutal war",
-    "a war film with soldiers, battle scenes and an army general",
-    "the band played a great song and the singer danced",
-    "a musical with wonderful songs, a singer and a dancing band",
-    "the singer wrote every song the band recorded",
-    "songs and dance numbers make this musical a joy",
-    "the detective solved the murder and caught the killer",
-    "a killer, a murder and a clever detective in a dark mystery",
-    "the mystery of the murder puzzled the detective",
-    "who is the killer in this murder mystery",
-]
-vect = CountVectorizer(stop_words="english")
+themes = {
+    "war": "army battle soldier war general tank enemy victory".split(),
+    "music": "band song singer dance guitar concert melody album".split(),
+    "crime": "detective murder killer mystery police clue suspect alibi".split(),
+}
+rng = np.random.RandomState(0)
+docs, main_theme = [], []
+for i in range(60):                 # synthetic "reviews": about 80% of the words from one theme, the rest from the others
+    theme = list(themes)[i % 3]
+    others = [w for t in themes if t != theme for w in themes[t]]
+    words = [rng.choice(themes[theme]) if rng.rand() < 0.8 else rng.choice(others) for _ in range(15)]
+    docs.append(" ".join(words)); main_theme.append(theme)
+print("example document:", docs[0])
+
+vect = CountVectorizer()
 X = vect.fit_transform(docs)
 lda = LatentDirichletAllocation(n_components=3, learning_method="batch", max_iter=50, random_state=0)
 doc_topics = lda.fit_transform(X)
@@ -240,11 +242,12 @@ names = vect.get_feature_names_out()
 print("components_ shape (topics x words):", lda.components_.shape)
 for k, comp in enumerate(lda.components_):
     print(f"topic {k}:", ", ".join(str(names[i]) for i in np.argsort(comp)[::-1][:6]))
-print("\ndocument-topic mixtures (each row sums to 1):")
-for i in [0, 4, 8]:
-    print(f"  doc {i}: {doc_topics[i].round(2)}  <- {docs[i][:45]}...")
-new = lda.transform(vect.transform(["a war musical where soldiers sing a song before the battle"]))
-print("\na new mixed document:", new.round(2))
+print()
+print("document-topic mixtures (each row sums to 1):")
+for i in range(3):
+    print(f"  doc {i} (mostly {main_theme[i]:5s}): {doc_topics[i].round(2)}")
+new = lda.transform(vect.transform(["soldier army battle war singer song band dance"]))
+print("a new document, half war and half music:", new.round(2))
 ```
 
 ### What topic models are good for

@@ -68,7 +68,7 @@ Step 5 is a **conflict miss**: the cache has plenty of room (sets 1 and 3 are em
 
 <div class="widget" data-widget="cache"></div>
 
-Reproduce the trace in the simulator above, then switch to 2 lines per set and watch the conflict miss disappear.
+Reproduce the trace in the simulator above, then experiment with the associativity and with the trace 0, 8, 0, 8 to see conflict misses appear and disappear.
 
 ### Conflict misses and thrashing
 
@@ -102,7 +102,12 @@ On a miss, if the set has an empty line, use it. Otherwise choose a **victim** a
 
 All of these require extra time and hardware, but further down the hierarchy (where a miss is more costly) better policies are worth the effort.
 
-Repeating the earlier trace (0, 1, 13, 8, 0) with a 2-way cache of the same capacity ($S = 2$, $E = 2$, $B = 2$; now $s = 1$, $t = 2$): addresses 0 and 8 both map to set 0, but with two lines both blocks fit. Step 5 becomes a **hit**: 3 misses instead of 4.
+Does associativity fix the earlier trace (0, 1, 13, 8, 0)? Keep the capacity fixed and compare:
+
+- **2-way** ($S = 2$, $E = 2$, $B = 2$; now $s = 1$, $t = 2$). The blocks touched are block 0 (addresses 0–1), block 6 (12–13) and block 4 (8–9). All three block numbers are even, so all three map to set 0, which has only two lines. Result: 1 hit, 4 misses, 2 evictions: no better than direct-mapped. Associativity only helps when the number of conflicting blocks does not exceed $E$.
+- **Fully associative** ($S = 1$, $E = 4$). All three blocks fit: 2 hits, 3 misses (all cold), no evictions.
+
+A trace that shows the benefit of 2-way more clearly is 0, 8, 0, 8: a direct-mapped cache with four sets misses every time (blocks 0 and 4 both map to set 0), while the 2-way cache misses twice and then hits.
 
 ```python-run
 from collections import OrderedDict
@@ -124,6 +129,7 @@ trace = [0, 1, 13, 8, 0]
 print("direct-mapped  (S=4,E=1,B=2):", simulate(trace, 2, 1, 1))
 print("2-way          (S=2,E=2,B=2):", simulate(trace, 1, 2, 1))
 print("fully assoc.   (S=1,E=4,B=2):", simulate(trace, 0, 4, 1))
+print("0,8,0,8 direct-mapped:", simulate([0, 8, 0, 8], 2, 1, 1), " 2-way:", simulate([0, 8, 0, 8], 1, 2, 1))
 ```
 
 ## 4. Fully associative caches (E = C/B)

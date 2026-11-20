@@ -48,7 +48,7 @@ df = pd.DataFrame({
 print(df["workclass"].value_counts(), "\n")           # ALWAYS check the values first
 dummies = pd.get_dummies(df, columns=["workclass", "education"], dtype=int)
 print(list(dummies.columns))
-print(dummies.drop(columns="income").head(3))
+print(dummies.drop(columns="income").head(3).T)   # transposed so every column is visible
 ```
 
 **Check the contents of each column first** with `value_counts()`. Human-entered data often has no fixed
@@ -94,9 +94,9 @@ treats every column you give it as categorical.
 ```python-run
 import pandas as pd
 demo = pd.DataFrame({"integer_feature": [0, 1, 2, 1], "categorical_feature": ["socks", "fox", "socks", "box"]})
-print(pd.get_dummies(demo, dtype=int), "\n")                       # the integer column is left untouched
+print(pd.get_dummies(demo, dtype=int).to_string(), "\n")                       # the integer column is left untouched
 demo["integer_feature"] = demo["integer_feature"].astype(str)
-print(pd.get_dummies(demo, dtype=int))                             # now both are encoded
+print(pd.get_dummies(demo, dtype=int).to_string())                             # now both are encoded
 ```
 
 Other encodings worth knowing for interviews:
@@ -182,7 +182,7 @@ for p in [5, 13, 50]:
 ```
 
 The number of features grows quickly, as $\binom{p+d}{d}-1$. On the Boston housing data in the book,
-13 features become 105 at degree 2.
+13 features become 105 at degree 2 (104 plus the constant column).
 
 **Behaviour at the edges.** High-degree polynomials tend to behave wildly at the boundaries of the data
 and in regions with few points. For comparison, the book fits a kernel SVM on the original feature and
