@@ -82,3 +82,15 @@ revoke all on function public.sg_new_session(text), public.sg_user(text, text) f
 grant execute on function public.sg_register(text, text), public.sg_login(text, text), public.sg_load(text, text),
   public.sg_save(text, text, jsonb), public.sg_logout(text, text) to anon, authenticated;
 notify pgrst, 'reload schema';
+
+-- Public leaderboard: username plus the stats each client reports (points, problems, lessons, streak).
+create or replace function public.sg_leaderboard() returns table(username text, stats jsonb)
+language sql security definer set search_path = public stable as $$
+  select a.username, a.data->'_stats'
+  from study_accounts a
+  where jsonb_typeof(a.data->'_stats'->'points') = 'number'
+  order by (a.data->'_stats'->>'points')::numeric desc, a.updated_at asc
+  limit 100;
+$$;
+grant execute on function public.sg_leaderboard() to anon, authenticated;
+notify pgrst, 'reload schema';

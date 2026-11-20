@@ -527,3 +527,6 @@ h1, h2, h3, .brand, .page-title, .p-title, .verdict { font-family: var(--display
 .checks li { padding: 3px 0; }
 .checks li.ok { color: var(--ok); } .checks li.bad { color: var(--bad); }
 .cm-dark .cm-tag { color: #f07178; } .cm-dark .cm-attribute { color: #ffcb6b; } .cm-dark .cm-qualifier { color: #c3e88d; } .cm-dark .cm-bracket { color: #89ddff; }
+
+.ptable tr.me td { background: var(--accent-soft); }
+.streak-row { gap: 22px; }

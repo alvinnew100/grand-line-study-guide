@@ -60,7 +60,7 @@
     async function push(keepalive) {
       if (!sess || busy) return;
       busy = true;
-      try { await rpc("sg_save", { ...creds(), p_data: clean(S()) }, keepalive); S()._dirty = false; store.save(); last = new Date(); }
+      try { await rpc("sg_save", { ...creds(), p_data: { ...clean(S()), _stats: computeStats() } }, keepalive); S()._dirty = false; store.save(); last = new Date(); }
       catch (e) { if (/Session expired/.test(e.message)) setSess(null); throw e; }
       finally { busy = false; }
     }
@@ -86,7 +86,7 @@
     cloudTouch = () => { if (!sess) return; clearTimeout(timer); timer = setTimeout(() => push().catch(() => {}), 4000); };
     document.addEventListener("visibilitychange", () => { if (document.hidden && sess && S()._dirty) push(true).catch(() => {}); });
     return {
-      user: () => (sess ? sess.u : null), last: () => last, pull, push,
+      user: () => (sess ? sess.u : null), last: () => last, pull, push, board: () => rpc("sg_leaderboard", {}),
       register: (u, p) => enter("sg_register", u, p), login: (u, p) => enter("sg_login", u, p),
       async logout() { if (sess) { try { await push(); await rpc("sg_logout", creds()); } catch (_) {} } setSess(null); },
     };
@@ -139,6 +139,7 @@
   function renderSidebar(activeTrack, activeLesson) {
     let html = `<a class="side-track ${!activeTrack ? "active" : ""}" href="#/"><span class="ico">🏰</span><span class="lbl">Home</span></a>
       <a class="side-track" href="#/roadmap"><span class="ico">🗺️</span><span class="lbl">Roadmap</span></a>
+      <a class="side-track" href="#/scoreboard"><span class="ico">🏆</span><span class="lbl">Scoreboard</span></a>
       <a class="side-track" href="#/problems"><span class="ico">🧩</span><span class="lbl">All problems</span></a>
       <a class="side-track" href="#/gallery"><span class="ico">🖼️</span><span class="lbl">Gallery</span></a>`;
     let group = null;
@@ -480,7 +481,7 @@
   // ---------------------------------------------------------------- Ghibli stills & quotes
   const TRACK_FILM = { csapp: "laputa", python: "baron", "dsa-foundations": "mimi", "neet-arrays": "majo", "neet-window-stack": "howl",
     "neet-linked-trees": "totoro", "neet-heap-graphs": "mononoke", "neet-dp": "chihiro", "neet-greedy-math": "porco", sql: "kokurikozaka",
-    databases: "nausicaa", ml: "kazetachinu", fastapi: "ponyo", mlops: "karigurashi", "ai-eng": "kimitachi", "llm-practice": "kaguyahime", os: "ged", "linux-cli": "yamada", vim: "marnie", cicd: "umi", thinking: "omoide", "html-css": "tanuki", javascript: "red-turtle" };
+    databases: "nausicaa", ml: "kazetachinu", fastapi: "ponyo", mlops: "karigurashi", "ai-eng": "kimitachi", "llm-practice": "kaguyahime", os: "ged", "linux-cli": "yamada", vim: "marnie", cicd: "umi", thinking: "omoide", "html-css": "tanuki", javascript: "red-turtle", git: "aya", networking: "ghiblies", "web-security": "onyourmark", docker: "umi", redis: "baron", mongodb: "nausicaa", nodejs: "howl", react: "totoro", firebase: "ponyo", graphql: "kaguyahime", django: "majo", nginx: "porco", "js-testing": "mimi" };
   const Ghibli = {
     works: {}, list: [], quotes: [], note: "", terms: "",
     async load() {
@@ -609,7 +610,8 @@
             <circle cx="60" cy="60" r="52" fill="none" stroke="var(--accent)" stroke-width="10" stroke-linecap="round" stroke-dasharray="${(C * frac).toFixed(1)} ${C.toFixed(1)}" transform="rotate(-90 60 60)"/>
             <text x="60" y="58" text-anchor="middle" font-size="24" font-weight="800" fill="currentColor">${solved}</text><text x="60" y="76" text-anchor="middle" font-size="11" fill="currentColor" opacity=".6">of ${nProb} solved</text></svg>
           <div class="dash-diff">${["Easy", "Medium", "Hard"].map((d) => `<div><span class="diff ${d}">${d}</span><b>${diff[d][0]}/${diff[d][1]}</b></div>`).join("")}
-            <div><span class="muted">Lessons read</span><b>${read}/${totals.lessons}</b></div></div>
+            <div><span class="muted">Lessons read</span><b>${read}/${totals.lessons}</b></div>
+            <div><a href="#/scoreboard">${levelOf(computeStats().points).name}</a><b>${computeStats().points} pts</b></div></div>
         </div>
         <div class="card dash-streak">
           <div class="streak-row"><div><b>${st.cur}</b><span>day streak</span></div><div><b>${st.best}</b><span>best streak</span></div><div><b>${Object.keys(s.activity || {}).length}</b><span>active days</span></div></div>
@@ -627,6 +629,53 @@
     }));
     const rb = $("#rndBtn");
     if (rb) rb.onclick = () => { const p = randomUnsolved(); if (p) location.hash = `#/problem/${p}`; };
+  }
+
+  // ---------------------------------------------------------------- scoreboard
+  const LEVELS = [[0, "Seedling"], [100, "Sprout"], [300, "Wanderer"], [700, "Navigator"], [1500, "Pilot"], [3000, "Sky Captain"], [6000, "Castle Keeper"]];
+  const levelOf = (pts) => { let i = 0; LEVELS.forEach((l, k) => { if (pts >= l[0]) i = k; }); return { name: LEVELS[i][1], n: i + 1, next: LEVELS[i + 1] ? LEVELS[i + 1][0] : null }; };
+  function computeStats() {
+    const s = S(), PTS = { Easy: 10, Medium: 20, Hard: 40 }, tracks = {};
+    let points = 0, problems = 0;
+    Object.keys(s.solved || {}).forEach((pid) => {
+      const loc = DATA.problemTrack[pid];
+      if (!loc) return;
+      const m = DATA.tracks[loc.track].problemIndex[pid];
+      points += PTS[m.difficulty] || 10; problems++; tracks[loc.track] = (tracks[loc.track] || 0) + 1;
+    });
+    const lessons = Object.keys(s.lessons || {}).filter((k) => DATA.tracks[k.split("/")[0]]).length;
+    points += lessons * 5;
+    return { points, problems, lessons, streak: streaks().best, tracks };
+  }
+  async function viewScoreboard() {
+    renderSidebar(null);
+    const me = computeStats(), lv = levelOf(me.points), u = Cloud.user();
+    const rows = DATA.index.map((ti) => {
+      const t = DATA.tracks[ti.id];
+      if (!t) return "";
+      const p = trackProgress(t);
+      return `<a class="lesson-row" href="#/track/${t.id}"><span class="st">${esc(t.icon || "")}</span><span style="flex:1;min-width:0">${esc(t.title)}<span class="bar" style="display:block;margin-top:4px"><i style="width:${p.pct}%"></i></span></span><span class="mins">${me.tracks[t.id] || 0}/${ti.problems} problems · ${p.pct}%</span></a>`;
+    }).join("");
+    setPage(`<div class="page narrow"><div class="crumbs"><a href="#/">Home</a></div><h1 class="page-title">Scoreboard</h1>
+      <p class="muted">Points count across every track: 10 for an Easy problem, 20 for Medium, 40 for Hard, and 5 for each lesson you complete.</p>
+      <div class="card"><div class="streak-row" style="flex-wrap:wrap"><div><b>${me.points}</b><span>points</span></div><div><b>${esc(lv.name)}</b><span>level ${lv.n}${lv.next ? " · next at " + lv.next : " · top level"}</span></div><div><b>${me.problems}</b><span>problems solved</span></div><div><b>${me.lessons}</b><span>lessons done</span></div><div><b>${me.streak}</b><span>best streak</span></div></div>
+        ${lv.next ? `<div class="bar" style="margin-top:12px"><i style="width:${Math.min(100, Math.round((100 * me.points) / lv.next))}%"></i></div>` : ""}</div>
+      <div class="section-h"><h2>Leaderboard</h2></div>
+      ${u ? "" : `<p class="muted">Create an account in ⚙ to appear here. Usernames on the leaderboard are public.</p>`}
+      <div class="table-wrap" id="lb"><div class="loading">Loading…</div></div>
+      <div class="section-h"><h2>Your progress by track</h2></div><div class="table-wrap" style="padding:8px">${rows}</div></div>`);
+    if (u) await Cloud.push().catch(() => {});
+    const lb = $("#lb");
+    try {
+      const list = (await Cloud.board()) || [];
+      if (!lb) return;
+      lb.innerHTML = list.length ? `<table class="ptable"><thead><tr><th>#</th><th>Player</th><th>Level</th><th>Points</th><th class="pat">Problems</th><th class="pat">Lessons</th><th class="pat">Best streak</th></tr></thead><tbody>${list.map((r, i) => {
+        const st = r.stats || {}, pts = +st.points || 0;
+        return `<tr class="${r.username === u ? "me" : ""}"><td>${i < 3 ? ["🥇", "🥈", "🥉"][i] : i + 1}</td><td><b>${esc(r.username)}</b>${r.username === u ? " (you)" : ""}</td><td>${esc(levelOf(pts).name)}</td><td><b>${pts}</b></td><td class="pat">${+st.problems || 0}</td><td class="pat">${+st.lessons || 0}</td><td class="pat">${+st.streak || 0}</td></tr>`;
+      }).join("")}</tbody></table>` : `<div class="loading">No players yet. Be the first.</div>`;
+    } catch (e) {
+      if (lb) lb.innerHTML = `<div class="loading">The leaderboard is not available yet.</div>`;
+    }
   }
 
   // ---------------------------------------------------------------- roadmap
@@ -1259,6 +1308,7 @@
       else if (parts[0] === "lesson") await viewLesson(parts[1], parts[2]);
       else if (parts[0] === "problem") await viewProblem(parts[1]);
       else if (parts[0] === "problems") viewProblems(new URLSearchParams(query || "").get("q"));
+      else if (parts[0] === "scoreboard") await viewScoreboard();
       else if (parts[0] === "roadmap") viewRoadmap();
       else if (parts[0] === "gallery") viewGallery(parts[1]);
       else if (parts[0] === "credits") viewCredits();
@@ -1288,7 +1338,7 @@
       ? `<h3>Account</h3><p>Signed in as <b>${esc(u)}</b>. Progress syncs automatically${Cloud.last() ? " · last synced " + Cloud.last().toLocaleTimeString() : ""}.</p>
          <div class="dlg-row"><button type="button" class="btn" id="acSync">Sync now</button><button type="button" class="btn" id="acOut">Log out</button></div>`
       : `<h3>Save progress across devices (optional)</h3>
-         <p class="acct-warn"><b>Read this first.</b> Choose a simple username and a <b>new password you have never used anywhere else</b>. Accounts exist only to save study progress, and this site may be shared by several people, so do not use a real password. There is no password reset.</p>
+         <p class="acct-warn"><b>Read this first.</b> Choose a simple username and a <b>new password you have never used anywhere else</b>. Accounts exist only to save study progress, and this site may be shared by several people, so do not use a real password. There is no password reset. Your username is shown on the public scoreboard, so do not use your real name.</p>
          <div class="acct-form"><input id="acU" placeholder="username (a-z, 0-9, _)" autocomplete="username" maxlength="20" autocapitalize="none" spellcheck="false">
          <input id="acP" type="password" placeholder="new password (6+ characters)" autocomplete="new-password" maxlength="72"></div>
          <div class="dlg-row"><button type="button" class="btn primary" id="acReg">Create account</button><button type="button" class="btn" id="acIn">Log in</button></div>`;
