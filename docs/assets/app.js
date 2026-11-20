@@ -136,7 +136,7 @@
   $("#menuBtn").onclick = () => { sidebar.classList.toggle("open"); scrim.classList.toggle("show", sidebar.classList.contains("open")); };
   scrim.onclick = closeMenu;
   function renderSidebar(activeTrack, activeLesson) {
-    let html = `<a class="side-track ${!activeTrack ? "active" : ""}" href="#/"><span class="ico">🍃</span><span class="lbl">Home</span></a>
+    let html = `<a class="side-track ${!activeTrack ? "active" : ""}" href="#/"><span class="ico">🏰</span><span class="lbl">Home</span></a>
       <a class="side-track" href="#/roadmap"><span class="ico">🗺️</span><span class="lbl">Roadmap</span></a>
       <a class="side-track" href="#/problems"><span class="ico">🧩</span><span class="lbl">All problems</span></a>
       <a class="side-track" href="#/gallery"><span class="ico">🖼️</span><span class="lbl">Gallery</span></a>`;
@@ -590,9 +590,9 @@
     setPage(`<div class="page">
       <section class="hero2" ${hero ? `style="background-image:url('${hero.src}')"` : ""}>
         <div class="hero2-in">
-          <p class="hero2-kicker">A Studio Ghibli themed, fan-made study guide</p>
-          <h1>Study a little every day. The wind will carry you.</h1>
-          <p>Computer systems, Python, algorithms with a live judge, SQL and databases, machine learning, FastAPI, MLOps and AI engineering.</p>
+          <p class="hero2-kicker">Big Tech interview prep · a Studio Ghibli themed, fan-made study guide</p>
+          <h1>Build your castle in the cloud, one lesson a day.</h1>
+          <p>Everything top tech companies interview on: algorithms with a live judge, systems, operating systems, Linux, SQL and databases, CI/CD, machine learning, MLOps, AI engineering and open-ended engineering questions.</p>
           <div class="hero2-cta">${cont}<a class="btn glass" href="#/roadmap">Roadmap</a><button class="btn glass" id="rndBtn" type="button">Random problem</button></div>
         </div>
         ${hero ? `<div class="hero2-credit">${Ghibli.credit(hero.w)}</div>` : ""}
