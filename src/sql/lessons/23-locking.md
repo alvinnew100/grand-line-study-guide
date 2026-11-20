@@ -28,20 +28,20 @@ Two withdrawals, one debit: a **lost update**. Each session acted correctly on w
 
 ## Locking
 
-**Locks** are the mechanism a database server uses to control simultaneous use of data resources. When part of the database is locked, other sessions wanting to modify (or, depending on the strategy, read) that data must wait until the lock is released. The book describes two strategies in use across servers:
+A **lock** is a claim a session places on a piece of data. While the claim stands, any other session whose work would conflict with it is paused, and resumes only once the holder lets go. Database products fall into two camps according to *who* has to take locks:
 
 ### Strategy 1: readers and writers both lock
 
-- Writers must obtain a **write lock** (exclusive) before modifying data.
-- Readers must obtain a **read lock** (shared) before querying it.
-- Many readers can hold read locks at once, but only **one** write lock is granted on a resource at a time, and **read requests are blocked until the write lock is released** (and vice versa).
+- A session that changes data first takes an **exclusive (write) lock** on it.
+- A session that only queries data first takes a **shared (read) lock** on it.
+- Shared locks are compatible with each other, so any number of queries can proceed together. An exclusive lock is compatible with nothing: there can be just one per resource, queries queue up behind it, and a writer in turn queues behind existing readers.
 
-The answer to the report question under this strategy: one of you waits. This guarantees consistency but can produce long waits when there are many concurrent readers and writers — a long report blocks tellers, or a burst of updates stalls the dashboard.
+For the branch report, that means somebody waits — either your query or the teller's deposit. The data you see is guaranteed consistent, but on a busy system with heavy reading and writing the queues grow: a slow report holds up the tellers, and a burst of updates freezes the dashboard.
 
 ### Strategy 2: versioning
 
-- Writers must still obtain **write locks** to modify data.
-- Readers need **no locks at all**. Instead, the server ensures that a reader sees a **consistent view** of the data — the data as it appeared when the query (or transaction) began — even if other sessions modify it in the meantime.
+- Changing data still requires an **exclusive lock**, exactly as before.
+- Querying requires **nothing**. Each query is instead shown a frozen picture: the rows exactly as they stood at the moment it (or its transaction) started, regardless of changes that other sessions commit while it runs.
 
 This is called **versioning**, today usually **MVCC** (multi-version concurrency control). The server keeps older versions of changed rows (in "undo" or "rollback" segments, or as dead row versions) so that it can reconstruct the past for readers. Under this strategy, your report shows the balances as they were when it started, and neither you nor the teller waits. The catch appears with long-running queries during heavy modification: the server must retain a lot of old versions.
 
@@ -58,11 +58,11 @@ The slogan worth remembering: **under MVCC, readers don't block writers and writ
 
 ## Lock granularities
 
-Besides *whether* to lock, the server decides *how much* to lock. The book lists three levels:
+Besides *whether* to lock, the server decides *how much* to lock. Three sizes are in common use:
 
-- **Table locks** — keep multiple users from modifying data in the same table simultaneously.
-- **Page locks** — keep multiple users from modifying data on the same page (a page is a block of storage, typically 2–16 KB, holding many rows).
-- **Row locks** — keep multiple users from modifying the same row.
+- **Table lock** — one lock for the entire table; two sessions cannot change anything in it at once, even unrelated rows.
+- **Page lock** — one lock per storage page (a disk block of roughly 2–16 KB that holds a batch of rows); sessions collide only when their rows happen to share a page.
+- **Row lock** — one lock per row; sessions collide only when they want the very same row.
 
 There is a trade-off. Coarse locks need very little bookkeeping — one lock covers a whole table — but cause waiting as soon as two users touch the same table. Fine-grained row locks let many users work in the same table as long as they touch different rows, at the cost of tracking many more locks.
 

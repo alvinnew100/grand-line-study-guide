@@ -511,3 +511,11 @@ h1, h2, h3, .brand, .page-title, .p-title, .verdict { font-family: var(--display
 .acct-form input { height: 40px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); font: inherit; padding: 0 12px; }
 .acct-bad { color: var(--bad); }
 .dlg { max-height: 90vh; overflow: auto; }
+
+.chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 14px; }
+.chip { border: 1px solid var(--border); background: var(--surface); color: var(--text); border-radius: 999px; padding: 6px 14px; font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; }
+.chip.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+:root[data-theme="dark"] .chip.on { color: #10231a; }
+.tcard-group { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); font-weight: 700; }
+.tcard[hidden] { display: none; }
+#trackGrid { grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr)); }

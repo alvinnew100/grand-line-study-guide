@@ -475,7 +475,7 @@
   // ---------------------------------------------------------------- Ghibli stills & quotes
   const TRACK_FILM = { csapp: "laputa", python: "baron", "dsa-foundations": "mimi", "neet-arrays": "majo", "neet-window-stack": "howl",
     "neet-linked-trees": "totoro", "neet-heap-graphs": "mononoke", "neet-dp": "chihiro", "neet-greedy-math": "porco", sql: "kokurikozaka",
-    databases: "nausicaa", ml: "kazetachinu", fastapi: "ponyo", mlops: "karigurashi", "ai-eng": "kimitachi", "llm-practice": "kaguyahime" };
+    databases: "nausicaa", ml: "kazetachinu", fastapi: "ponyo", mlops: "karigurashi", "ai-eng": "kimitachi", "llm-practice": "kaguyahime", os: "ged", "linux-cli": "yamada", vim: "marnie" };
   const Ghibli = {
     works: {}, list: [], quotes: [], note: "", terms: "",
     async load() {
@@ -568,21 +568,24 @@
     const diff = difficultyStats(), st = streaks();
     const nProb = Object.keys(DATA.problemTrack).length;
     const C = 2 * Math.PI * 52, frac = nProb ? solved / nProb : 0;
-    let groups = "", group = null, buf = "";
-    const flush = () => { if (group !== null) groups += `<div class="section-h"><h2>${esc(group)}</h2></div><div class="grid">${buf}</div>`; buf = ""; };
+    const groupNames = [];
+    let buf = "";
     DATA.index.forEach((ti) => {
       const t = DATA.tracks[ti.id];
       if (!t) return;
-      if (t.group !== group) { flush(); group = t.group; }
+      const g = t.group || "Other";
+      if (!groupNames.includes(g)) groupNames.push(g);
       const p = trackProgress(t), im = Ghibli.still(TRACK_FILM[t.id], "card" + t.id);
-      buf += `<a class="card tcard" href="#/track/${t.id}" style="--card-accent:${esc(t.color || "#3f6b4f")}">
+      buf += `<a class="card tcard" data-group="${esc(g)}" href="#/track/${t.id}" style="--card-accent:${esc(t.color || "#3f6b4f")}">
         ${im ? `<div class="tcard-img"><img loading="lazy" src="${im.thumb}" alt="Still from ${esc(im.w.title)}"><span class="tcard-film">${esc(im.w.title)}</span></div>` : ""}
-        <div class="tcard-body"><div class="card-top"><div class="card-ico">${esc(t.icon || "📘")}</div><h3>${esc(t.title)}</h3></div>
+        <div class="tcard-body"><span class="tcard-group">${esc(g)}</span><div class="card-top"><div class="card-ico">${esc(t.icon || "📘")}</div><h3>${esc(t.title)}</h3></div>
         <p>${esc(t.blurb || "")}</p>
         <div class="bar"><i style="width:${p.pct}%"></i></div>
         <div class="card-meta"><span>${ti.lessons} lessons</span><span>${ti.problems} problems</span><span>${p.pct}% done</span></div></div></a>`;
     });
-    flush();
+    const groups = `<div class="section-h"><h2>Tracks</h2></div>
+      <div class="chips" id="grpChips"><button class="chip on" data-g="">All ${DATA.index.length}</button>${groupNames.map((g) => `<button class="chip" data-g="${esc(g)}">${esc(g)}</button>`).join("")}</div>
+      <div class="grid" id="trackGrid">${buf}</div>`;
     const cont = s.last ? `<a class="btn primary" href="${esc(s.last.href)}">Continue: ${esc(s.last.title)}</a>` : `<a class="btn primary" href="#/roadmap">Start with the roadmap</a>`;
     setPage(`<div class="page">
       <section class="hero2" ${hero ? `style="background-image:url('${hero.src}')"` : ""}>
@@ -612,6 +615,10 @@
       ${groups}
       <div class="footer">Fan-made study site, not affiliated with Studio Ghibli. Stills are the official free images from <a href="https://www.ghibli.jp/works/" target="_blank" rel="noopener">ghibli.jp</a>. <a href="#/gallery">Gallery</a> · <a href="#/credits">Credits</a><br>${totals.lessons} lessons · ${totals.problems} problems · ${Math.round(totals.words / 1000)}k words · progress is stored in this browser</div>
     </div>`);
+    $$("#grpChips .chip").forEach((c) => (c.onclick = () => {
+      $$("#grpChips .chip").forEach((x) => x.classList.toggle("on", x === c));
+      $$("#trackGrid .tcard").forEach((el) => (el.hidden = !!c.dataset.g && el.dataset.group !== c.dataset.g));
+    }));
     const rb = $("#rndBtn");
     if (rb) rb.onclick = () => { const p = randomUnsolved(); if (p) location.hash = `#/problem/${p}`; };
   }
@@ -620,8 +627,8 @@
   const ROADMAP = {
     pos: { csapp: [0, 0], python: [2, 0], sql: [4, 0], "dsa-foundations": [1, 1], fastapi: [2, 1], ml: [3, 1], databases: [4, 1],
       "neet-arrays": [1, 2], mlops: [3, 2], "ai-eng": [4, 2], "neet-window-stack": [0, 3], "neet-linked-trees": [1, 3], "llm-practice": [4, 3],
-      "neet-greedy-math": [0, 4], "neet-heap-graphs": [1, 4], "neet-dp": [2, 4] },
-    edges: [["python", "dsa-foundations"], ["python", "fastapi"], ["python", "ml"], ["sql", "databases"], ["dsa-foundations", "neet-arrays"],
+      "neet-greedy-math": [0, 4], "neet-heap-graphs": [1, 4], "neet-dp": [2, 4], os: [0, 1], "linux-cli": [2, 2], vim: [2, 3] },
+    edges: [["csapp", "os"], ["linux-cli", "vim"], ["python", "dsa-foundations"], ["python", "fastapi"], ["python", "ml"], ["sql", "databases"], ["dsa-foundations", "neet-arrays"],
       ["neet-arrays", "neet-window-stack"], ["neet-arrays", "neet-linked-trees"], ["neet-window-stack", "neet-greedy-math"],
       ["neet-linked-trees", "neet-heap-graphs"], ["neet-linked-trees", "neet-dp"], ["ml", "mlops"], ["fastapi", "mlops"], ["databases", "mlops"],
       ["ml", "ai-eng"], ["ai-eng", "llm-practice"]],
