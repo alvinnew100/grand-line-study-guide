@@ -564,7 +564,8 @@
     const s = S();
     const totals = DATA.index.reduce((a, t) => ({ lessons: a.lessons + (t.lessons || 0), problems: a.problems + (t.problems || 0), words: a.words + (t.words || 0) }), { lessons: 0, problems: 0, words: 0 });
     const solved = Object.keys(s.solved).filter((p) => DATA.problemTrack[p]).length, read = Object.keys(s.lessons).length;
-    const hero = Ghibli.still(null, "hero" + dayKey());
+    const lw = Ghibli.works.laputa;
+    const hero = lw && lw.files.includes("laputa036") ? { w: lw, src: "assets/ghibli/laputa/laputa036.webp" } : Ghibli.still("laputa", "hero");
     const diff = difficultyStats(), st = streaks();
     const nProb = Object.keys(DATA.problemTrack).length;
     const C = 2 * Math.PI * 52, frac = nProb ? solved / nProb : 0;
