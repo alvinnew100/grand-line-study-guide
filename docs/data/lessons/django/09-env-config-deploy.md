@@ -383,4 +383,4 @@ class EnvHelperTests(SimpleTestCase):
 ]
 ```
 
-> **Source:** Vincent, *Django for Beginners*, ch. 4 (Message Board app: Heroku configuration and deployment), rewritten for environment-based configuration. Docs: https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/ · https://docs.djangoproject.com/en/5.2/ref/settings/#csrf-trusted-origins · https://12factor.net/config · https://docs.gunicorn.org/en/stable/run.html
+> **Source:** Vincent, *Django for Beginners*, ch. 4 (Message Board app: Heroku configuration and deployment), rewritten for environment-based configuration. Docs: https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/ · https://docs.djangoproject.com/en/5.2/ref/settings/#csrf-trusted-origins · https://12factor.net/config · https://gunicorn.org/run/

@@ -430,4 +430,4 @@ A /note.txt
 ]
 ```
 
-> **Source:** Stoneman, *Learn Docker in a Month of Lunches*, ch. 1-2 (topic coverage). Facts checked against <https://docs.docker.com/get-started/docker-overview/>, <https://docs.docker.com/engine/containers/resource_constraints/> and <https://docs.docker.com/engine/storage/drivers/overlayfs-driver/>. All wording and examples are original.
+> **Source:** Stoneman, *Learn Docker in a Month of Lunches*, ch. 1-2 (topic coverage). Facts checked against <https://docs.docker.com/get-started/docker-concepts/the-basics/what-is-a-container/>, <https://docs.docker.com/engine/containers/resource_constraints/> and <https://docs.docker.com/engine/storage/drivers/overlayfs-driver/>. All wording and examples are original.

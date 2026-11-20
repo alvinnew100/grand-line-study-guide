@@ -185,7 +185,7 @@ print("top_p=0.8  ", filter_logits(logits, top_p=0.8))
 
 rng = np.random.default_rng(0)
 p = filter_logits(logits, temperature=0.8, top_p=0.9)
-draws = rng.choice(len(p), size=2000, p=p)
+draws = rng.choice(len(p), size=2000, p=p).astype(np.intp)   # intp = the integer type NumPy uses for indexes
 print("sample frequencies:", np.bincount(draws, minlength=len(p)) / 2000)
 ```
 

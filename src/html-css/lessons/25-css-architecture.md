@@ -421,4 +421,4 @@ CSS becomes hard to maintain because it is global, because specificity invites e
 ]
 ```
 
-> **Source:** Duckett, *HTML & CSS*, ch. 10 and ch. 18 touch on organising style sheets; the methodologies here postdate the book. MDN: https://developer.mozilla.org/en-US/docs/Learn_web_development/Core/Styling_basics/Organizing · https://developer.mozilla.org/en-US/docs/Web/CSS/@layer · https://developer.mozilla.org/en-US/docs/Web/CSS/@scope · https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_nesting · BEM: https://getbem.com/naming/
+> **Source:** Duckett, *HTML & CSS*, ch. 10 and ch. 18 touch on organising style sheets; the methodologies here postdate the book. MDN: https://developer.mozilla.org/en-US/docs/Learn_web_development/Core/Styling_basics/Organizing · https://developer.mozilla.org/en-US/docs/Web/CSS/@layer · https://developer.mozilla.org/en-US/docs/Web/CSS/@scope · https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_nesting · BEM: https://en.bem.info/methodology/naming-convention/

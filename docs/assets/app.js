@@ -351,7 +351,7 @@
     let worker = null, ready = null, seq = 0;
     const handlers = new Map();
     function start() {
-      worker = new Worker("assets/judge/worker.js?v=5");
+      worker = new Worker("assets/judge/worker.js?v=6");
       ready = new Promise((res, rej) => {
         const onmsg = (e) => {
           if (e.data.type === "ready") res();

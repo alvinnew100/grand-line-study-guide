@@ -121,7 +121,6 @@ Run LLM calls **simultaneously** and aggregate programmatically. Two variants:
   false positives and negatives.
 
 ```python-run
-from concurrent.futures import ThreadPoolExecutor
 from collections import Counter
 
 def review(code, persona):
@@ -132,8 +131,9 @@ def review(code, persona):
 
 code = "user = input(); eval(user)"
 personas = ["security expert", "senior dev", "lenient", "pentester", "static analyst"]
-with ThreadPoolExecutor() as pool:                           # voting: same task, different prompts, in parallel
-    votes = list(pool.map(lambda p: review(code, p), personas))
+# Voting: the same task with different prompts. Here the calls run one after another (the browser
+# sandbox has no threads); real reviewers are independent, so production code sends them in parallel.
+votes = [review(code, p) for p in personas]
 tally = Counter(votes)
 print(votes, "->", "BLOCK" if tally["vulnerable"] >= 2 else "ALLOW")   # threshold tuned for recall
 ```

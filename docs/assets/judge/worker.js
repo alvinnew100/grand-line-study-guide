@@ -54,6 +54,9 @@ onmessage = async (e) => {
       const { code } = e.data;
       await loadPkgs(code);
       const ns = py.globals.get("dict")();
+      // Run snippets as a real script: without __name__, classes report their module as "builtins"
+      // (which breaks pydantic's from_attributes) and `if __name__ == "__main__":` never runs.
+      ns.set("__name__", "__main__");
       let result;
       try {
         result = await py.runPythonAsync(code, { globals: ns, filename: "snippet.py" });

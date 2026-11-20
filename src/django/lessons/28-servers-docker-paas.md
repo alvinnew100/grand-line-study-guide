@@ -404,4 +404,4 @@ class DeployReadinessTests(TestCase):
 ]
 ```
 
-> **Source:** Vincent, *Django for Beginners*, deployment sections of ch. 3–7 (Heroku, Gunicorn, Procfile), rewritten for containers and current platforms. Docs: https://docs.djangoproject.com/en/5.2/howto/deployment/ · https://docs.gunicorn.org/en/stable/settings.html · https://www.uvicorn.org/deployment/ · https://docs.docker.com/reference/dockerfile/ · https://docs.docker.com/compose/
+> **Source:** Vincent, *Django for Beginners*, deployment sections of ch. 3–7 (Heroku, Gunicorn, Procfile), rewritten for containers and current platforms. Docs: https://docs.djangoproject.com/en/5.2/howto/deployment/ · https://gunicorn.org/reference/settings/ · https://uvicorn.dev/deployment/ · https://docs.docker.com/reference/dockerfile/ · https://docs.docker.com/compose/
