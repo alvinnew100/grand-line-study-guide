@@ -212,6 +212,106 @@ Empty — as expected. (This checks set equality; to compare duplicate counts as
 - **ORDER BY names from a later query** don't exist in the result.
 - **Old MySQL** lacks INTERSECT/EXCEPT; use EXISTS / NOT EXISTS.
 
+## Worked example: set operators for data validation
+
+Set operators shine in **data-quality checks**, where the question is literally about sets: what is missing, what is extra, what overlaps. Four checks on the practice data, each one line of logic.
+
+**Referential check — keys used but not defined.** Every `product_cd` used by an account should exist in `product`:
+
+```sql-run dataset=bank
+SELECT product_cd FROM account
+EXCEPT
+SELECT product_cd FROM product;
+```
+
+An empty result is the pass condition. (The foreign key guarantees it here; in warehouses, where constraints are often not enforced, this query *is* the constraint.)
+
+**Coverage check — defined but never used.** The opposite direction finds products nobody holds:
+
+```sql-run dataset=bank
+SELECT product_cd FROM product
+EXCEPT
+SELECT product_cd FROM account;
+```
+
+**Overlap check — entities that should be disjoint.** A customer should be an individual or a business, never both:
+
+```sql-run dataset=bank
+SELECT cust_id FROM individual
+INTERSECT
+SELECT cust_id FROM business;
+```
+
+**Completeness check — every customer is one or the other.**
+
+```sql-run dataset=bank
+SELECT cust_id FROM customer
+EXCEPT
+SELECT cust_id FROM individual
+EXCEPT
+SELECT cust_id FROM business;
+```
+
+Two EXCEPTs chained: start with all customers, remove individuals, then remove businesses; anything left is a customer with no subtype row. (Evaluated top to bottom in every engine, since both operators are the same.) Together, the last two checks verify that `individual` and `business` form a clean **partition** of `customer`.
+
+## Counting what the sets contain
+
+Set operators return rows, not counts — wrap them to summarise. A compact overlap report between customers who logged in during March and customers who ordered in March:
+
+```sql-run dataset=shop
+WITH logged AS (SELECT DISTINCT customer_id FROM logins),
+     ordered AS (SELECT DISTINCT customer_id FROM orders
+                 WHERE order_date >= '2024-03-01' AND order_date < '2024-04-01')
+SELECT 'logged in' AS segment, COUNT(*) AS customers FROM logged
+UNION ALL SELECT 'ordered', COUNT(*) FROM ordered
+UNION ALL SELECT 'both', COUNT(*) FROM (SELECT customer_id FROM logged INTERSECT SELECT customer_id FROM ordered)
+UNION ALL SELECT 'logged in only', COUNT(*) FROM (SELECT customer_id FROM logged EXCEPT SELECT customer_id FROM ordered)
+UNION ALL SELECT 'ordered only', COUNT(*) FROM (SELECT customer_id FROM ordered EXCEPT SELECT customer_id FROM logged);
+```
+
+The identities from set theory are a built-in sanity check: *both + logged-in-only = logged in*, and *both + ordered-only = ordered*. If the numbers do not add up, a definition is wrong.
+
+## NULLs and duplicates in set operators
+
+Two behaviours distinguish set operators from their join and subquery rewrites.
+
+**NULLs match each other.** For INTERSECT, EXCEPT and UNION's de-duplication, two NULLs are "the same value":
+
+```sql-run dataset=bank
+SELECT 'INTERSECT finds NULL' AS test, COUNT(*) AS rows_returned
+FROM (SELECT NULL AS v INTERSECT SELECT NULL)
+UNION ALL
+SELECT 'IN finds NULL', COUNT(*)
+FROM (SELECT NULL AS v) t WHERE v IN (SELECT NULL);
+```
+
+INTERSECT returns the NULL row; `IN` does not, because `NULL = NULL` is UNKNOWN. That makes EXCEPT the safest way to compare two tables column by column — nullable columns included.
+
+**Results are sets.** `INTERSECT` and `EXCEPT` remove duplicates from their output, so the row count is a count of *distinct* rows. If account 1 appears three times on the left and once on the right, plain EXCEPT removes it entirely; `EXCEPT ALL` (PostgreSQL, MySQL 8.0.31+; not SQLite) would leave two copies.
+
+```sql-run dataset=bank
+SELECT COUNT(*) AS cust_ids_with_txn_free_accounts
+FROM (SELECT cust_id FROM account
+      EXCEPT
+      SELECT a.cust_id FROM account a JOIN txn t ON t.account_id = a.account_id);
+```
+
+Be careful reading that result: it lists customers for whom **no** account has any transaction — not customers who have *some* transaction-free account. A customer with one busy account and one idle account appears on the right-hand side and is removed. Set difference works on the values you select, so choose them to match the question (here `account_id` would answer the per-account version).
+
+## Choosing between set operators, joins and subqueries
+
+| Question | Clearest tool | Why |
+|---|---|---|
+| Which key values are in A but not B? | `EXCEPT` | reads like the question; NULL-safe |
+| Which *rows of A* (with all their columns) have no match in B? | `NOT EXISTS` / anti-join | can return columns that B lacks |
+| Which key values are in both? | `INTERSECT` | de-duplicates for you |
+| Which rows of A have a match in B? | `EXISTS` / `IN` | keeps A's columns, no duplication |
+| Are two query results identical? | `EXCEPT` both ways | compares whole rows, NULLs included |
+| Combine rows from two sources | `UNION ALL` | stacks without a sort |
+
+> [!INTERVIEW]
+> A common prompt: "Find customers who bought product A but never product B." Offer two solutions and compare them: `SELECT customer_id … WHERE product = 'A' EXCEPT SELECT customer_id … WHERE product = 'B'` (concise, returns ids only), and `EXISTS … AND NOT EXISTS …` (returns any customer columns you like). Mention that MySQL before 8.0.31 has no EXCEPT — the kind of dialect awareness interviewers like to hear.
+
 ## Summary
 
 - `INTERSECT` keeps rows present in both results; `EXCEPT` (Oracle `MINUS`) keeps rows of the first not present in the second; both remove duplicates and treat NULLs as equal.

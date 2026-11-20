@@ -301,6 +301,145 @@ the three ways you'll understand a running system — the deployment module retu
 > everything (e.g. a shared-secret check for an internal service). The two also differ in ordering:
 > middleware runs before routing; dependencies after.
 
+## Worked example: one error contract for the whole API
+
+A complete, production-shaped setup: a small hierarchy of domain errors, a single handler that renders
+all of them, and overrides for validation errors and unexpected failures so that **every** error response
+has the same shape and carries the request ID.
+
+```python
+# app/errors.py
+class AppError(Exception):
+    """Base class for expected, client-visible failures."""
+    status_code = 400
+    code = "bad_request"
+    def __init__(self, message: str, **extra):
+        self.message, self.extra = message, extra
+
+class NotFound(AppError):          status_code, code = 404, "not_found"
+class Conflict(AppError):          status_code, code = 409, "conflict"
+class PermissionDenied(AppError):  status_code, code = 403, "permission_denied"
+class RateLimited(AppError):       status_code, code = 429, "rate_limited"
+
+def error_body(request: Request, status: int, code: str, message: str, **extra) -> dict:
+    return {"error": {"code": code, "message": message, "status": status,
+                      "request_id": request_id_var.get(), **extra}}
+
+def register_exception_handlers(app: FastAPI) -> None:
+    @app.exception_handler(AppError)                       # one handler covers every subclass
+    async def app_error(request: Request, exc: AppError):
+        headers = {"Retry-After": str(exc.extra["retry_after"])} if "retry_after" in exc.extra else None
+        return JSONResponse(error_body(request, exc.status_code, exc.code, exc.message, **exc.extra),
+                            status_code=exc.status_code, headers=headers)
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_error(request: Request, exc: RequestValidationError):
+        fields = [{"field": ".".join(map(str, e["loc"][1:])), "in": e["loc"][0], "type": e["type"]}
+                  for e in exc.errors()]
+        return JSONResponse(error_body(request, 422, "validation_failed", "Invalid request", fields=fields),
+                            status_code=422)
+
+    @app.exception_handler(StarletteHTTPException)         # router 404/405 and explicit HTTPExceptions
+    async def http_error(request: Request, exc: StarletteHTTPException):
+        return JSONResponse(error_body(request, exc.status_code, "http_error", str(exc.detail)),
+                            status_code=exc.status_code, headers=exc.headers)
+
+    @app.exception_handler(Exception)                      # the unexpected
+    async def unhandled(request: Request, exc: Exception):
+        logger.exception("unhandled error")                # full traceback, server-side only
+        return JSONResponse(error_body(request, 500, "internal_error", "Internal server error"),
+                            status_code=500)
+```
+
+Services now simply `raise NotFound("Order 9 not found")` or `raise RateLimited("Slow down",
+retry_after=30)`. The same logic, runnable, with the responses a client would see:
+
+```python-run
+import json
+
+class AppError(Exception):
+    status_code, code = 400, "bad_request"
+    def __init__(self, message, **extra): self.message, self.extra = message, extra
+class NotFound(AppError):    status_code, code = 404, "not_found"
+class Conflict(AppError):    status_code, code = 409, "conflict"
+class RateLimited(AppError): status_code, code = 429, "rate_limited"
+class ValidationFailed(Exception):
+    def __init__(self, errors): self.errors = errors
+
+def body(status, code, message, request_id, **extra):
+    return {"error": {"code": code, "message": message, "status": status, "request_id": request_id, **extra}}
+
+def handle(endpoint, request_id="req-7f3a"):
+    try:
+        return 200, endpoint()
+    except AppError as e:                                   # catches every subclass
+        return e.status_code, body(e.status_code, e.code, e.message, request_id, **e.extra)
+    except ValidationFailed as e:
+        fields = [{"field": ".".join(map(str, loc[1:])), "in": loc[0], "type": t} for loc, t in e.errors]
+        return 422, body(422, "validation_failed", "Invalid request", request_id, fields=fields)
+    except Exception as e:
+        print(f"   [server log] request_id={request_id} unhandled {type(e).__name__}: {e}")
+        return 500, body(500, "internal_error", "Internal server error", request_id)
+
+def missing():  raise NotFound("Order 9 not found")
+def dup():      raise Conflict("Email already registered", field="email")
+def limited():  raise RateLimited("Too many requests", retry_after=30)
+def invalid():  raise ValidationFailed([(("body", "items", 1, "quantity"), "greater_than_equal"),
+                                        (("query", "limit"), "int_parsing")])
+def bug():      return {}["missing-key"]
+
+for ep in (missing, dup, limited, invalid, bug):
+    status, payload = handle(ep)
+    print(status, json.dumps(payload))
+```
+
+Design points worth copying: a stable machine-readable `code` separate from the human `message`; the
+request ID in every error so a user can quote it to support; validation errors flattened into a
+predictable `fields` list; and exactly one place where an unexpected exception is logged in full while the
+client sees nothing internal.
+
+> [!NOTE]
+> A handler registered for `Exception` runs inside Starlette's outermost `ServerErrorMiddleware`, so the
+> response it returns does **not** pass back through your other middleware. If CORS headers or a request
+> ID header must appear on 500 responses too, add them in that handler (or catch exceptions inside your
+> own middleware instead).
+
+## Where does an exception get caught?
+
+The layering inside Starlette determines who sees what, from the outside in:
+
+```text
+ServerErrorMiddleware          <- catches anything that escapes: logs it, returns 500
+  your middleware (last added = outermost)
+    ...
+      ExceptionMiddleware      <- runs @app.exception_handler functions (HTTPException, your classes)
+        router -> dependencies -> endpoint
+```
+
+Consequences:
+
+1. An exception with a registered handler is converted into a response *inside* your middleware, so
+   middleware written as `response = await call_next(request)` just sees a normal 404/409 response — it
+   never sees the exception.
+2. An exception *without* a handler propagates out through `call_next`, so `try/except` in a middleware
+   can observe it (useful for logging and metrics) but should re-raise.
+3. Exceptions raised **in middleware itself** are outside `ExceptionMiddleware`: your
+   `@app.exception_handler(NotFound)` will *not* handle a `NotFound` raised from middleware. Return a
+   response from the middleware directly instead of raising.
+4. Errors in `yield`-dependency cleanup that runs after the response can only be logged.
+
+## Debugging error-handling problems
+
+| Symptom | Cause |
+|---|---|
+| Custom handler never runs for 404s on unknown URLs | registered for `fastapi.HTTPException`; the router raises Starlette's — register for `starlette.exceptions.HTTPException` |
+| Handler for `Exception` seems ignored in tests | `TestClient` re-raises server exceptions by default; use `raise_server_exceptions=False` |
+| Browser shows a CORS error on failures only | the 500 response was produced outside `CORSMiddleware` and has no CORS headers |
+| Response is `200` with an exception's text in it | `return HTTPException(...)` instead of `raise` |
+| `RuntimeError: No response returned` from middleware | an exception or client disconnect inside `BaseHTTPMiddleware`'s `call_next`; check the first traceback above it |
+| Streaming or background tasks behave oddly behind `@app.middleware("http")` | `BaseHTTPMiddleware` limitations; rewrite as pure ASGI middleware |
+| Request body is empty in the endpoint | middleware consumed the body stream |
+
 ## Pitfalls
 
 - `try/except Exception: return {"error": ...}` with status 200 — hides failures from monitoring.

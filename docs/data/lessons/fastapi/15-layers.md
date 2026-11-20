@@ -289,6 +289,134 @@ the database sort and slice, rather than fetching everything and trimming in Pyt
 > key discipline is direction: web → service → data, with models shared, domain exceptions instead of
 > HTTP exceptions below the web layer, and no SQL above the data layer.
 
+## A rule that needs a service layer
+
+The pass-through services of early chapters make the layer look ceremonial. It earns its place the moment
+a use case spans more than one entity. Suppose "an explorer reports a sighting": the creature must exist,
+an explorer may log at most three sightings per day, the sighting is stored, and the creature's
+`last_seen` is updated — all or nothing.
+
+```python-run
+from datetime import date
+from pydantic import BaseModel
+
+class Missing(Exception): ...
+class RuleViolation(Exception): ...
+
+class Sighting(BaseModel):
+    explorer: str
+    creature: str
+    day: date
+    place: str
+
+# ---------- data layer: two repositories sharing one "transaction" ----------
+class Db:
+    def __init__(self):
+        self.creatures = {"yeti": {"name": "yeti", "last_seen": None}}
+        self.sightings = []
+        self._snapshot = None
+    def begin(self):    self._snapshot = ({k: dict(v) for k, v in self.creatures.items()}, list(self.sightings))
+    def rollback(self): self.creatures, self.sightings = self._snapshot
+    def commit(self):   self._snapshot = None
+
+class CreatureRepo:
+    def __init__(self, db): self.db = db
+    def exists(self, name): return name in self.db.creatures
+    def touch_last_seen(self, name, day): self.db.creatures[name]["last_seen"] = day
+
+class SightingRepo:
+    def __init__(self, db, fail_on_insert=False): self.db, self.fail = db, fail_on_insert
+    def count_for(self, explorer, day):
+        return sum(s.explorer == explorer and s.day == day for s in self.db.sightings)
+    def add(self, s):
+        if self.fail: raise ConnectionError("database went away")
+        self.db.sightings.append(s)
+
+# ---------- service layer: the use case ----------
+MAX_PER_DAY = 3
+
+def report_sighting(db, creatures, sightings, s: Sighting) -> Sighting:
+    if not creatures.exists(s.creature):
+        raise Missing(f"creature {s.creature!r} not found")
+    if sightings.count_for(s.explorer, s.day) >= MAX_PER_DAY:
+        raise RuleViolation(f"{s.explorer} already reported {MAX_PER_DAY} sightings on {s.day}")
+    db.begin()
+    try:
+        creatures.touch_last_seen(s.creature, s.day)       # write 1
+        sightings.add(s)                                   # write 2
+        db.commit()
+    except Exception:
+        db.rollback()                                      # neither write survives
+        raise
+    return s
+
+# ---------- web layer: translation only ----------
+def post_sighting(db, body, **kw):
+    try:
+        s = report_sighting(db, CreatureRepo(db), SightingRepo(db, **kw), Sighting(**body))
+        return 201, s.model_dump(mode="json")
+    except Missing as e:        return 404, {"detail": str(e)}
+    except RuleViolation as e:  return 409, {"detail": str(e)}
+    except ConnectionError:     return 503, {"detail": "storage unavailable"}
+
+db = Db()
+body = {"explorer": "ann", "creature": "yeti", "day": "2025-03-01", "place": "Himalayas"}
+for _ in range(4):
+    print(post_sighting(db, body))
+print(post_sighting(db, {**body, "creature": "bigfoot"}))
+print(post_sighting(db, {**body, "explorer": "bob", "day": "2025-03-02"}, fail_on_insert=True))
+print("last_seen NOT advanced to 03-02 (rolled back with the failed insert):",
+      db.creatures["yeti"]["last_seen"], "| stored:", len(db.sightings))
+```
+
+Read what each layer contributed. The **data layer** offered small, dumb operations. The **service**
+decided what the use case means: the order of checks, the daily limit, and — crucially — the
+**transaction boundary** around the two writes. The **web layer** mapped three kinds of failure to three
+status codes. None of that logic would be reusable from a CLI or a queue worker if it lived in the
+endpoint, and the daily-limit rule can be unit-tested with fake repositories in microseconds.
+
+This also answers a question that comes up in every design review: *who owns the transaction?* Not the
+repositories (each sees only its own table) and not the router (it shouldn't know there are two writes).
+The service — or a unit-of-work object handed to it — defines the atomic unit.
+
+## Tracing a request and an error through the layers
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant W as Web layer
+    participant S as Service layer
+    participant D as Data layer
+    C->>W: POST /sightings JSON
+    W->>W: validate body into Sighting model
+    W->>S: report_sighting(model)
+    S->>D: creature exists?
+    D-->>S: no
+    S-->>W: raise Missing
+    W-->>C: 404 with detail
+```
+
+What crosses each arrow is deliberate: JSON and status codes only on the outside; **models** and **domain
+exceptions** on the inside; SQL only beyond the data layer. If you ever see a `Request`, a
+`JSONResponse`, a cursor or an ORM session being passed along an inner arrow, a stream has been crossed.
+
+## Smells and their refactorings
+
+| Smell | Why it hurts | Refactoring |
+|---|---|---|
+| Endpoint longer than a screen | untestable without HTTP, logic not reusable | extract a service function taking and returning models |
+| `HTTPException` raised in a service | couples rules to HTTP; breaks workers and CLIs | raise a domain exception; map it with an exception handler |
+| Service receives `Request` or `Response` | hidden dependency on web details | pass the specific values (user id, locale) as arguments |
+| Router builds a query | storage knowledge leaks upward | move it to a repository method with a meaningful name |
+| Data layer returns ORM rows or tuples | callers depend on table layout | convert to models at the boundary |
+| Service imports another feature's repository | features become entangled | call that feature's service instead |
+| A "utils" module everything imports | becomes a second, unstructured layer | move each function to the layer whose knowledge it uses |
+| Every service is a one-line pass-through, forever | the layer adds no value here | for pure CRUD, routing straight to a repository is acceptable — add the service when rules appear |
+
+That final row matters: layering is a tool for managing complexity, and the book is explicit that these
+divisions are guidelines. A three-endpoint internal service does not need four packages. The skill is
+recognising the moment a rule appears and giving it a proper home.
+
 ## Pitfalls
 
 - "Fat routers": SQL and business rules in endpoint functions.

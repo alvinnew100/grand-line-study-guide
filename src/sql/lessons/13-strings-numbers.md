@@ -233,6 +233,111 @@ Run it twice — different rows each time. (This sorts the whole table, fine for
 - **Dialect drift** — check the function table before porting a query.
 - **Concatenating user input into SQL** — use bound parameters.
 
+## Worked example: cleaning a messy text column
+
+String functions are most often used in combination, to repair data. The `customer_imports` table has names and emails typed by hand. Suppose the CRM wants, for every import: a clean email, the email's user name and domain, the person's first and last name in separate columns, initials, and a display name in "LAST, First" form.
+
+Build it incrementally. First isolate the cleaning step in a CTE, so later expressions can use tidy inputs instead of repeating `lower(trim(...))`:
+
+```sql-run dataset=shop
+WITH clean AS (
+  SELECT import_id,
+         lower(trim(email)) AS email,
+         trim(full_name)    AS full_name
+  FROM customer_imports
+)
+SELECT import_id,
+       email,
+       substr(email, 1, instr(email, '@') - 1)  AS user_name,
+       substr(email, instr(email, '@') + 1)     AS domain,
+       substr(full_name, 1, instr(full_name, ' ') - 1) AS first_name,
+       substr(full_name, instr(full_name, ' ') + 1)    AS last_name,
+       upper(substr(full_name, 1, 1)) || upper(substr(full_name, instr(full_name, ' ') + 1, 1)) AS initials,
+       upper(substr(full_name, instr(full_name, ' ') + 1)) || ', ' || substr(full_name, 1, instr(full_name, ' ') - 1) AS display_name
+FROM clean
+ORDER BY import_id
+LIMIT 8;
+```
+
+Read each expression as "find a position, then cut":
+
+- `instr(email, '@')` locates the separator; everything before it (`substr(…, 1, pos - 1)`) is the user name and everything after (`substr(…, pos + 1)`) the domain.
+- Names split the same way on the first space.
+- Initials take one character at position 1 and one at the position just after the space.
+
+This works for "First Last". Real names are harder — "Mary Ann Van Der Berg", single names, trailing suffixes — and no amount of `substr` solves that reliably. The honest engineering answer is to **store names in separate columns at the source** and treat splitting as best-effort.
+
+A defensive version guards against a missing separator, where `instr` returns 0 and `substr(s, 1, -1)` would silently return an empty string:
+
+```sql-run dataset=shop
+SELECT full_name,
+       CASE WHEN instr(full_name, ' ') > 0
+            THEN substr(full_name, 1, instr(full_name, ' ') - 1)
+            ELSE full_name END AS first_name,
+       CASE WHEN instr(full_name, ' ') > 0
+            THEN substr(full_name, instr(full_name, ' ') + 1)
+            ELSE NULL END AS last_name
+FROM (SELECT 'Hana Muller' AS full_name UNION ALL SELECT 'Cher' UNION ALL SELECT 'Liam Rossi');
+```
+
+### The same task in other dialects
+
+| Task | SQLite | MySQL | PostgreSQL |
+|---|---|---|---|
+| Domain of an email | `substr(e, instr(e,'@')+1)` | `SUBSTRING_INDEX(e, '@', -1)` | `split_part(e, '@', 2)` |
+| First word | `substr(s, 1, instr(s,' ')-1)` | `SUBSTRING_INDEX(s, ' ', 1)` | `split_part(s, ' ', 1)` |
+| Pad to 8 digits | `printf('%08d', n)` | `LPAD(n, 8, '0')` | `lpad(n::text, 8, '0')` |
+| Capitalise words | — (do it in the application) | — | `initcap(s)` |
+| Regex replace | — (needs an extension) | `REGEXP_REPLACE(s, pat, rep)` | `regexp_replace(s, pat, rep)` |
+
+## Worked example: numeric functions in a pricing report
+
+Numbers deserve the same care. A pricing analyst asks for, per product: margin, margin percentage rounded to one decimal, the price rounded to the nearest \$5 for a promotional sticker, a price band, and how the price compares with its category average.
+
+```sql-run dataset=shop
+SELECT p.name,
+       p.price,
+       ROUND(p.price - p.cost, 2)                         AS margin,
+       ROUND(100.0 * (p.price - p.cost) / p.price, 1)     AS margin_pct,
+       ROUND(p.price / 5.0) * 5                           AS sticker_price,
+       CAST(p.price / 100 AS INTEGER) * 100               AS band_floor,
+       ROUND(p.price / a.avg_price, 2)                    AS ratio_to_category_avg,
+       ROUND(ln(p.price), 3)                              AS log_price
+FROM products p
+JOIN (SELECT category_id, AVG(price) AS avg_price FROM products GROUP BY category_id) a
+  ON a.category_id = p.category_id
+ORDER BY margin_pct DESC
+LIMIT 8;
+```
+
+Points worth noticing:
+
+- **`100.0 *` first.** Writing the real constant at the front makes the whole expression real-valued. With integer columns, `(price - cost) / price * 100` would truncate to 0 before multiplying.
+- **Rounding to a multiple:** divide, round, multiply back — `ROUND(x / 5.0) * 5`. The same idiom gives nearest 0.25, nearest 1,000 and so on.
+- **Bucketing:** `CAST(x / 100 AS INTEGER) * 100` floors to the hundred below; for negative numbers use `floor()` instead, since CAST truncates toward zero.
+- **Log transforms** (`ln`) are a standard feature-engineering step for skewed quantities such as prices and counts.
+
+### Floating point: round at the end, compare with a tolerance
+
+Round only for *presentation*, as the last step. Rounding intermediate values accumulates error:
+
+```sql-run dataset=shop
+SELECT ROUND(SUM(quantity * unit_price * (1 - discount)), 2)          AS sum_then_round,
+       ROUND(SUM(ROUND(quantity * unit_price * (1 - discount), 2)), 2) AS round_then_sum,
+       ROUND(SUM(ROUND(quantity * unit_price * (1 - discount), 0)), 2) AS round_to_units_then_sum
+FROM order_items;
+```
+
+And never test floating-point values for exact equality; compare within a tolerance:
+
+```sql-run dataset=shop
+SELECT 0.1 + 0.2 = 0.3                    AS exact_equal,
+       ABS((0.1 + 0.2) - 0.3) < 1e-9      AS equal_within_tolerance;
+```
+
+> [!INTERVIEW]
+> Three numeric traps appear in almost every SQL screen: **integer division** (`COUNT(x) / COUNT(*)` giving 0), **division by zero** (guard with `NULLIF`), and **percentages that do not sum to 100** because each was rounded separately. Mention them unprompted when you compute a rate.
+
 ## Summary
 
 - Strings: quote with `'`, double embedded quotes; concatenate with `||` (MySQL `CONCAT`); `length`, `instr`, `substr`, `trim`, `upper/lower`, `replace`, `printf`, `group_concat`.

@@ -188,6 +188,100 @@ The next lesson looks at multi-table joins like this in detail.
 - **Fan-out double counting** — aggregate at the right grain or pre-aggregate before joining.
 - **Joining on non-key columns** with duplicates multiplies rows.
 
+## Worked example: building a join step by step
+
+Experienced SQL writers rarely type a multi-table query in one go. They grow it, checking the row count after each step. Follow the method on a real question: *for each delivered order in December 2024, show the customer's name and country and the number of items.*
+
+**Step 1 — start from the table whose grain matches the answer.** One row per order, so start with `orders` and apply the filters:
+
+```sql-run dataset=shop
+SELECT COUNT(*) AS december_delivered_orders
+FROM orders
+WHERE status = 'delivered' AND order_date >= '2024-12-01' AND order_date < '2025-01-01';
+```
+
+Remember this number. Every later step should either keep it or change it for a reason you can explain.
+
+**Step 2 — add a many-to-one join.** Each order has exactly one customer, so the count must not change:
+
+```sql-run dataset=shop
+SELECT COUNT(*) AS rows_after_customer_join
+FROM orders o
+JOIN customers c ON c.customer_id = o.customer_id
+WHERE o.status = 'delivered' AND o.order_date >= '2024-12-01' AND o.order_date < '2025-01-01';
+```
+
+Same number — good. Had it dropped, some orders would have a `customer_id` with no matching customer; had it grown, `customer_id` would not be unique in `customers`.
+
+**Step 3 — add the one-to-many join, and regroup.** Joining to `order_items` changes the grain to one row per item, so aggregate back to one row per order:
+
+```sql-run dataset=shop
+SELECT o.order_id, o.order_date,
+       c.first_name || ' ' || c.last_name AS customer, c.country,
+       COUNT(*) AS lines, SUM(oi.quantity) AS items
+FROM orders o
+JOIN customers c    ON c.customer_id = o.customer_id
+JOIN order_items oi ON oi.order_id = o.order_id
+WHERE o.status = 'delivered' AND o.order_date >= '2024-12-01' AND o.order_date < '2025-01-01'
+GROUP BY o.order_id, o.order_date, c.first_name, c.last_name, c.country
+ORDER BY o.order_date, o.order_id;
+```
+
+The number of result rows equals the count from step 1 again: one row per order. That "count, join, count again" loop is the most reliable defence against silent join bugs, and it is worth doing out loud in an interview.
+
+## Diagnosing join problems
+
+Three diagnostic queries you will use for the rest of your career.
+
+**Is the join key unique on the side I think is "one"?**
+
+```sql-run dataset=bank
+SELECT product_cd, COUNT(*) AS n
+FROM product
+GROUP BY product_cd
+HAVING COUNT(*) > 1;
+```
+
+No rows means `product_cd` is unique in `product`, so joining `account` to it cannot multiply rows. Run the same check on a key you are less sure of — for example `business.state_id` or `individual.lname` — before joining on it.
+
+**Which rows fail to find a partner?** (An *anti-join*; outer joins are covered later, but the idiom is worth meeting now.)
+
+```sql-run dataset=bank
+SELECT c.cust_id, c.cust_type_cd
+FROM customer c
+LEFT JOIN individual i ON i.cust_id = c.cust_id
+WHERE i.cust_id IS NULL;
+```
+
+These are the customers an inner join to `individual` silently drops — the ten businesses.
+
+**How much does a join fan out?**
+
+```sql-run dataset=bank
+SELECT MIN(n) AS min_txns, ROUND(AVG(n), 1) AS avg_txns, MAX(n) AS max_txns
+FROM (SELECT a.account_id, COUNT(t.txn_id) AS n
+      FROM account a
+      LEFT JOIN txn t ON t.account_id = a.account_id
+      GROUP BY a.account_id);
+```
+
+An account has between zero and fourteen transactions. Any account-level column summed after joining to `txn` would be multiplied by up to fourteen — and accounts with zero transactions would vanish from an inner join.
+
+## Join syntax across dialects
+
+The `JOIN … ON` syntax is the same everywhere; a few surrounding details differ.
+
+| Topic | SQLite | MySQL | PostgreSQL |
+|---|---|---|---|
+| `JOIN` without `ON` | allowed (cross join) | allowed (cross join) | error |
+| `USING (col)` | yes | yes | yes |
+| `NATURAL JOIN` | yes | yes | yes |
+| Join algorithms | nested loop (+ automatic indexes) | nested loop, hash (8.0.18+) | nested loop, hash, merge |
+| Join order hint | `CROSS JOIN` fixes the order | `STRAIGHT_JOIN` | `join_collapse_limit` setting |
+
+> [!INTERVIEW]
+> A favourite warm-up: "Table A has 10 rows and table B has 20. How many rows can `A INNER JOIN B ON a.x = b.x` return?" Anywhere from **0** (no values match) to **200** (every row has the same value of x — a full Cartesian product). The answer depends entirely on the uniqueness of the join key, which is the whole lesson in one question.
+
 ## Summary
 
 - A join combines rows from two tables using a condition, typically foreign key = primary key.

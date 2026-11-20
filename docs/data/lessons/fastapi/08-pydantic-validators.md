@@ -268,6 +268,190 @@ print(ta.validate_python([{"kind": "text", "text": "hi"},
 > stored object. That distinguishes "field omitted" (keep the old value) from "field explicitly null"
 > (clear it). Using a plain `model_dump()` would overwrite every omitted field with `None`.
 
+## Watching the pipeline run
+
+The order of validators is easiest to learn by making each stage announce itself. One field with every
+kind of validator attached:
+
+```python-run
+from typing import Annotated, Any
+from pydantic import (BaseModel, Field, BeforeValidator, AfterValidator, WrapValidator,
+                      ValidationError, field_validator, model_validator)
+
+def before(v: Any):
+    print(f"  1 before      got {v!r} ({type(v).__name__})")
+    return str(v).strip()
+
+def wrap(v: Any, handler):
+    print(f"  2 wrap-enter  got {v!r}")
+    try:
+        result = handler(v)                 # run the inner steps: core int parsing + constraints
+    except ValidationError:
+        print("    wrap: inner validation failed, falling back to 0")
+        return 0
+    print(f"  4 wrap-exit   inner produced {result!r} ({type(result).__name__})")
+    return result
+
+def after(v: int):
+    print(f"  5 after       got {v!r}")
+    return v * 10
+
+# before/wrap validators run in REVERSE order of declaration, after validators in order
+Qty = Annotated[int, WrapValidator(wrap), BeforeValidator(before), Field(ge=0), AfterValidator(after)]
+
+class Line(BaseModel):
+    quantity: Qty
+
+    @model_validator(mode="before")
+    @classmethod
+    def raw(cls, data):
+        print(f"  0 model-before raw input {data!r}")
+        return data
+
+    @field_validator("quantity")
+    @classmethod
+    def decorator_after(cls, v):
+        print(f"  6 @field_validator (after) got {v!r}")
+        return v
+
+    @model_validator(mode="after")
+    def whole(self):
+        print(f"  7 model-after  instance {self!r}")
+        return self
+
+print("valid input:");   print("result:", Line(quantity="  7 "))
+print("invalid input:"); print("result:", Line(quantity="seven"))
+```
+
+Things to take from the output:
+
+- Before-validators see raw input and may change its type; the **core** step (3, not printed) turns
+  `"7"` into `7` and applies `ge=0`.
+- A **wrap** validator surrounds the core step. It can inspect the input, call the inner handler, catch
+  its failure and substitute a value — the only validator kind that can *recover* from an error. Use it
+  sparingly (lenient parsing of legacy data, timing, logging); a fallback that hides bad input is
+  dangerous in an API.
+- Ordering rule for `Annotated` metadata: **before and wrap validators run right-to-left** (the last one
+  declared sees the input first), **after validators run left-to-right**, then decorator-style ones. Swap
+  `WrapValidator` and `BeforeValidator` in the example and the wrap step will run first.
+- Model-level `before` runs first of all and `after` last, with a fully built instance.
+
+## Validators that need another field or outside context
+
+A field validator can see **previously validated fields** through `ValidationInfo.data` (fields are
+processed in declaration order), and callers can pass a `context` dict to `model_validate` for values
+that aren't part of the data — the current date, the tenant's limits, a feature flag:
+
+```python-run
+from datetime import date
+from pydantic import BaseModel, ValidationError, ValidationInfo, field_validator
+
+class Discount(BaseModel):
+    price: float
+    discount: float
+    valid_until: date
+
+    @field_validator("discount")
+    @classmethod
+    def not_more_than_price(cls, v: float, info: ValidationInfo) -> float:
+        price = info.data.get("price")           # absent if 'price' itself failed validation
+        if price is not None and v > price:
+            raise ValueError("discount exceeds price")
+        return v
+
+    @field_validator("valid_until")
+    @classmethod
+    def in_future(cls, v: date, info: ValidationInfo) -> date:
+        today = (info.context or {}).get("today", date.today())
+        if v < today:
+            raise ValueError("already expired")
+        return v
+
+ctx = {"today": date(2025, 6, 1)}                # injected -> deterministic tests, no hidden clock
+print(Discount.model_validate({"price": 20, "discount": 5, "valid_until": "2025-12-31"}, context=ctx))
+try:
+    Discount.model_validate({"price": 20, "discount": 25, "valid_until": "2025-01-01"}, context=ctx)
+except ValidationError as e:
+    for err in e.errors():
+        print(err["loc"], "-", err["msg"])
+```
+
+Prefer a `model_validator(mode="after")` when a rule involves several fields symmetrically; use
+`info.data` when one field's validity simply depends on an earlier one. Context keeps validators pure:
+no global clock, no hidden lookups, trivially testable.
+
+## Machine-readable custom errors
+
+`ValueError("...")` always produces the generic type `value_error`. When clients need to branch on the
+kind of failure (or translate messages), raise `PydanticCustomError` with your own stable code:
+
+```python-run
+from pydantic import BaseModel, ValidationError, field_validator
+from pydantic_core import PydanticCustomError
+
+class SignUp(BaseModel):
+    password: str
+
+    @field_validator("password")
+    @classmethod
+    def strength(cls, v: str) -> str:
+        if len(v) < 12:
+            raise PydanticCustomError("password_too_short",
+                                      "Password must have at least {min_length} characters",
+                                      {"min_length": 12})
+        return v
+
+try:
+    SignUp(password="hunter2")
+except ValidationError as e:
+    err = e.errors(include_url=False)[0]
+    print(err["type"], "|", err["msg"], "|", err["ctx"])
+```
+
+The `type` (`password_too_short`) becomes part of your API contract; the message can change freely.
+
+## Round-tripping and serialization modes
+
+Whatever you serialise should validate back to an equal object — the property that makes models safe to
+put on queues and into caches:
+
+```python-run
+from datetime import datetime, timezone
+from decimal import Decimal
+from uuid import UUID
+from pydantic import BaseModel
+
+class Event(BaseModel):
+    id: UUID
+    at: datetime
+    amount: Decimal
+    tags: set[str]
+
+e = Event(id=UUID(int=1), at=datetime(2025, 1, 15, 9, 30, tzinfo=timezone.utc),
+          amount=Decimal("19.90"), tags={"b", "a"})
+python_dict = e.model_dump()                      # Python types preserved (set, Decimal, datetime)
+json_text = e.model_dump_json()                   # str
+print({k: type(v).__name__ for k, v in python_dict.items()})
+print(json_text)
+print("round trip equal:", Event.model_validate_json(json_text) == e)
+print("Decimal kept exact as a string in JSON:", '"19.90"' in json_text)
+```
+
+`Decimal` is emitted as a JSON string by default precisely to survive the trip without floating-point
+rounding — decide deliberately whether money leaves your API as a string, as integer cents, or as a
+number.
+
+## Debugging validators
+
+| Symptom | Usual cause |
+|---|---|
+| Field is `None` after validation | validator has no `return` |
+| `info.data` lacks a field | that field is declared *later*, or it failed its own validation |
+| Validator never runs | wrong field name in `@field_validator("...")` (v2 raises at class creation unless `check_fields=False`), or the default was used — defaults aren't validated unless `validate_default=True` |
+| Runs on input but not on `obj.field = x` | `validate_assignment` is off |
+| `TypeError` instead of a clean 422 | the validator raised something other than `ValueError`/`AssertionError`; other exceptions propagate as server errors |
+| Output differs from stored value | a `field_serializer` or alias is applied; compare `model_dump()` with `model_dump(mode="json", by_alias=True)` |
+
 ## Pitfalls
 
 - Forgetting `return v` in a validator (field silently becomes `None`).

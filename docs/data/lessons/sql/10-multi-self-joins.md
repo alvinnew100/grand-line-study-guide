@@ -200,6 +200,106 @@ For inner joins the placement doesn't change the result, but it changes how quic
 - **Self join for deep hierarchies** — only one level per join.
 - **Joining an aggregated and a non-aggregated grain** without pre-aggregation.
 
+## Worked example: one question, four tables, built in layers
+
+Multi-table queries become manageable when you name the path first. Question: *which tellers handled the most money in transactions on accounts they did not open themselves, and at which branch do they work?*
+
+The path through the schema: `txn` (the facts) → `employee` as **teller** (via `teller_emp_id`) → `branch` (the teller's assigned branch); and `txn` → `account` (via `account_id`) to learn who opened the account. `employee` is needed once (the teller); the opener is only compared by id, so no second copy is required.
+
+```sql-run dataset=bank
+SELECT e.emp_id,
+       e.fname || ' ' || e.lname AS teller,
+       b.name AS branch,
+       COUNT(*) AS txns,
+       ROUND(SUM(t.amount), 2) AS amount_handled
+FROM txn t
+JOIN employee e ON e.emp_id = t.teller_emp_id
+JOIN branch b   ON b.branch_id = e.assigned_branch_id
+JOIN account a  ON a.account_id = t.account_id
+WHERE a.open_emp_id <> t.teller_emp_id
+GROUP BY e.emp_id, e.fname, e.lname, b.name
+ORDER BY amount_handled DESC
+LIMIT 5;
+```
+
+Check the grain at each stage: `txn` has one row per transaction; each of the three joins is many-to-one (a transaction has one teller, a teller one branch, a transaction one account), so the row count never grows — only the inner join on `teller_emp_id` shrinks it, dropping ATM/online transactions that have no teller. The WHERE clause then compares two columns from *different* tables, which is perfectly legal: after the joins, every column of every table is available on each row.
+
+If we also wanted the **name** of the employee who opened the account, `employee` would appear a second time under a different alias — the "same table twice" pattern:
+
+```sql-run dataset=bank
+SELECT t.txn_id, t.amount,
+       teller.lname AS handled_by,
+       opener.lname AS account_opened_by
+FROM txn t
+JOIN account a       ON a.account_id = t.account_id
+JOIN employee teller ON teller.emp_id = t.teller_emp_id
+JOIN employee opener ON opener.emp_id = a.open_emp_id
+WHERE teller.emp_id <> opener.emp_id
+ORDER BY t.amount DESC
+LIMIT 5;
+```
+
+Role-based aliases (`teller`, `opener`) make the query read like the sentence that describes it.
+
+## Self joins for comparing rows
+
+Self joins answer "compare each row with other rows of the same table". Three classic shapes.
+
+**Rows sharing an attribute.** Pairs of products in the same category with the same price band — here, simply the same category and a price within \$10 of each other:
+
+```sql-run dataset=shop
+SELECT a.name AS product_a, b.name AS product_b, a.price AS price_a, b.price AS price_b
+FROM products a
+JOIN products b
+  ON a.category_id = b.category_id
+ AND a.product_id < b.product_id
+ AND ABS(a.price - b.price) <= 10
+ORDER BY a.category_id, a.name;
+```
+
+Three conditions in one ON clause: an equality (same category), an inequality that removes self-pairs and mirror pairs, and a range on a computed difference.
+
+**Finding duplicates.** Two rows are suspected duplicates when they agree on a business key but have different ids:
+
+```sql-run dataset=shop
+SELECT a.import_id AS first_id, b.import_id AS duplicate_id, lower(trim(a.email)) AS email
+FROM customer_imports a
+JOIN customer_imports b
+  ON lower(trim(a.email)) = lower(trim(b.email))
+ AND a.import_id < b.import_id
+ORDER BY email
+LIMIT 8;
+```
+
+**Previous / next row.** Before window functions, "each order with the customer's previous order" was a self join on "the latest earlier order" — slow and awkward. You will see the one-line `LAG()` version in the window-functions module; knowing the self-join form helps you appreciate (and recognise) what LAG replaces.
+
+## Point-in-time joins: a worked ML example
+
+Range joins are the backbone of **point-in-time correctness** in ML: when building a training set, each example may only use information that was available at that moment. The same logic attributes each prediction to the model version that was serving at that instant:
+
+```sql-run dataset=mlops
+SELECT m.name || ':v' || m.version AS serving_model,
+       COUNT(*) AS predictions,
+       MIN(p.predicted_at) AS first_prediction,
+       MAX(p.predicted_at) AS last_prediction
+FROM predictions p
+JOIN deployments d ON d.deployment_id = p.deployment_id
+JOIN models m      ON m.model_id = d.model_id
+WHERE p.predicted_at >= d.deployed_at
+  AND (d.retired_at IS NULL OR p.predicted_at < d.retired_at)
+  AND m.name = 'fraud-model'
+GROUP BY m.name, m.version
+ORDER BY first_prediction;
+```
+
+The validity window is half-open — `deployed_at` inclusive, `retired_at` exclusive — so a prediction made at the exact moment of a hand-over belongs to exactly one deployment. Getting that boundary wrong (using `<=` on both ends) double-counts rows that fall on the boundary; using `<` on both ends loses them. An open-ended window (`retired_at IS NULL`) needs its own branch because a comparison with NULL would reject the row.
+
+> [!WARNING]
+> Range joins have no hashable equality, so on large tables combine them with an equality whenever one exists (here `deployment_id`), and index the range columns. A pure range join between two million-row tables can take hours.
+
+> [!INTERVIEW]
+> Self-join classics to recognise: *employees earning more than their manager* (join on manager id, compare salaries), *pairs of rows with the same value* (`a.key = b.key AND a.id < b.id`), *consecutive rows* (`b.id = a.id + 1`). In each, say which alias plays which role before you write the ON clause.
+
 ## Summary
 
 - Multi-table joins chain two-table joins; written order doesn't dictate execution order.

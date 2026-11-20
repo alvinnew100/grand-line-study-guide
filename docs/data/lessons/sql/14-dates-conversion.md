@@ -218,6 +218,109 @@ ORDER BY week;
 - **`now` in tests** — non-deterministic.
 - **Mixing local time and UTC.**
 
+## Worked example: a time-series report from raw timestamps
+
+Almost every date question follows the same three moves: **truncate** timestamps to a period, **aggregate** per period, and **compare** periods. Work through one end to end: *for each week of Q4 2024, how many orders were placed, what was the average gap between a customer's signup and the order, and what share of orders arrived on a weekend?*
+
+```sql-run dataset=shop
+SELECT date(o.order_date, 'weekday 0', '-6 days') AS week_start,
+       COUNT(*) AS orders,
+       ROUND(AVG(julianday(o.order_date) - julianday(c.signup_date)), 1) AS avg_days_since_signup,
+       ROUND(100.0 * SUM(strftime('%w', o.order_date) IN ('0', '6')) / COUNT(*), 1) AS weekend_pct
+FROM orders o
+JOIN customers c ON c.customer_id = o.customer_id
+WHERE o.order_date >= '2024-10-01' AND o.order_date < '2025-01-01'
+GROUP BY week_start
+ORDER BY week_start;
+```
+
+Three date techniques in four lines:
+
+- **Truncating to the week.** SQLite has no "start of week" modifier, so combine two: `'weekday 0'` moves forward to the next Sunday (or stays, if the date is a Sunday), and `'-6 days'` steps back to the Monday of that week. PostgreSQL: `date_trunc('week', d)`; MySQL: `DATE_SUB(d, INTERVAL WEEKDAY(d) DAY)`.
+- **A duration** as a difference of Julian days.
+- **A weekday test** on `strftime('%w', …)`, comparing with *strings* `'0'` (Sunday) and `'6'` (Saturday).
+
+The filter is a half-open range on the bare column, so it stays index-friendly even though the SELECT list wraps `order_date` in functions.
+
+### Truncation cheat sheet
+
+Truncating to a period is the single most common date operation, so here it is for every grain you are likely to need:
+
+```sql-run dataset=bank
+SELECT txn_date,
+       date(txn_date)                                   AS day,
+       date(txn_date, 'weekday 0', '-6 days')           AS week_start_monday,
+       date(txn_date, 'start of month')                 AS month_start,
+       strftime('%Y', txn_date) || '-Q' || ((CAST(strftime('%m', txn_date) AS INTEGER) + 2) / 3) AS quarter,
+       date(txn_date, 'start of year')                  AS year_start,
+       strftime('%Y-%m-%d %H:00:00', txn_date)          AS hour_start
+FROM txn
+WHERE txn_id IN (1, 150, 300, 450);
+```
+
+Prefer a truncated **date value** (`'2024-03-01'`) over a label (`'March'`) for grouping: it sorts correctly, can be compared and joined, and is unambiguous across years.
+
+## Worked example: durations, deadlines and ages
+
+**Elapsed time in sensible units.** A duration is a number of days with a fraction; convert by multiplying. Format it for humans with integer arithmetic:
+
+```sql-run dataset=mlops
+SELECT run_id, started_at, ended_at,
+       CAST((julianday(ended_at) - julianday(started_at)) * 24 AS INTEGER) AS whole_hours,
+       CAST((julianday(ended_at) - julianday(started_at)) * 1440 AS INTEGER) % 60 AS extra_minutes,
+       printf('%dh %02dm',
+              CAST((julianday(ended_at) - julianday(started_at)) * 24 AS INTEGER),
+              CAST((julianday(ended_at) - julianday(started_at)) * 1440 AS INTEGER) % 60) AS duration
+FROM runs
+WHERE status = 'FINISHED' AND experiment_id = 5
+ORDER BY run_id
+LIMIT 6;
+```
+
+**Deadlines.** "Which funds are still unavailable two days after the transaction?" compares a stored timestamp with a computed one:
+
+```sql-run dataset=bank
+SELECT txn_id, txn_date, funds_avail_date,
+       ROUND(julianday(funds_avail_date) - julianday(txn_date), 1) AS hold_days
+FROM txn
+WHERE funds_avail_date >= datetime(txn_date, '+2 days')
+ORDER BY txn_date
+LIMIT 6;
+```
+
+**Bucketing by age or tenure** — a typical feature for a churn model:
+
+```sql-run dataset=shop
+SELECT CASE
+         WHEN julianday('2024-12-31') - julianday(signup_date) < 90  THEN '1: under 3 months'
+         WHEN julianday('2024-12-31') - julianday(signup_date) < 180 THEN '2: 3-6 months'
+         WHEN julianday('2024-12-31') - julianday(signup_date) < 365 THEN '3: 6-12 months'
+         ELSE '4: over a year' END AS tenure,
+       COUNT(*) AS customers
+FROM customers
+GROUP BY tenure
+ORDER BY tenure;
+```
+
+Note the fixed reference date `'2024-12-31'`. Using `'now'` would make the buckets drift every day — fine for a live dashboard, wrong for a reproducible training set. In ML pipelines the reference date should be an explicit parameter (the *as-of* date).
+
+## Time zones, concretely
+
+SQLite can shift a UTC timestamp by a fixed offset or to the machine's local zone, but it has no time-zone database:
+
+```sql-run dataset=bank
+SELECT '2024-03-10 06:30:00'                          AS stored_utc,
+       datetime('2024-03-10 06:30:00', '-5 hours')    AS new_york_standard_time,
+       datetime('2024-03-10 06:30:00', '+9 hours')    AS tokyo,
+       date('2024-03-10 06:30:00', '+9 hours')        AS tokyo_calendar_day,
+       date('2024-03-10 01:30:00', '-5 hours')        AS new_york_calendar_day;
+```
+
+The last column shows why zones matter for reporting: 01:30 UTC on 10 March is still **9 March** in New York. "Daily orders" therefore depends on whose day you mean, and a fixed offset is wrong for half the year wherever daylight saving applies. PostgreSQL handles this properly with `ts AT TIME ZONE 'America/New_York'`, MySQL with `CONVERT_TZ(ts, 'UTC', 'America/New_York')`.
+
+> [!INTERVIEW]
+> Date questions are where dialect knowledge is tested. If you cannot recall a function name, say what it should do — "truncate to month", "difference in days" — and write the portable half-open range filter. Interviewers accept `date_trunc`-style pseudocode far more readily than a wrong boundary condition.
+
 ## Summary
 
 - Store ISO-8601 (ideally UTC). SQLite's `date/time/datetime/julianday/unixepoch/strftime` plus modifiers cover generation and arithmetic.

@@ -197,6 +197,118 @@ A join makes the result *wider*; a union makes it *longer*.
 - **Expecting names from the second query** — only the first query's names survive.
 - **ORDER BY in the wrong place** — it applies to the whole compound query and goes at the end (next lesson).
 
+## Worked example: a reconciliation report with UNION ALL
+
+A frequent real-world use of `UNION ALL` is putting figures from different sources into one comparable result. The bank stores a balance on each account *and* a ledger of transactions. Do the two tell the same story about activity? Build a small report that stacks three measurements, each tagged with its source.
+
+```sql-run dataset=bank
+SELECT 'accounts: total available balance' AS measure, ROUND(SUM(avail_balance), 2) AS value
+FROM account
+UNION ALL
+SELECT 'ledger: credits in 2024', ROUND(SUM(amount), 2)
+FROM txn WHERE txn_type_cd = 'CDT'
+UNION ALL
+SELECT 'ledger: debits in 2024', ROUND(SUM(amount), 2)
+FROM txn WHERE txn_type_cd = 'DBT'
+UNION ALL
+SELECT 'ledger: net movement in 2024',
+       ROUND(SUM(CASE txn_type_cd WHEN 'CDT' THEN amount ELSE -amount END), 2)
+FROM txn;
+```
+
+Each branch is a complete, independent query with its own FROM and WHERE; the only thing they share is the *shape* of the output: a label and a number. That is the mental model for every union — **agree on the output columns first, then write one SELECT per source.**
+
+The same technique builds a **long-format** table for charting, where each row is (period, series, value):
+
+```sql-run dataset=shop
+SELECT strftime('%Y-%m', order_date) AS month, 'orders placed' AS series, COUNT(*) AS value
+FROM orders GROUP BY month
+UNION ALL
+SELECT strftime('%Y-%m', signup_date), 'customers signed up', COUNT(*)
+FROM customers GROUP BY 1
+ORDER BY month, series
+LIMIT 12;
+```
+
+Two unrelated tables, one tidy result that a plotting library can consume directly.
+
+## UNION and duplicates: seeing exactly what is removed
+
+`UNION` de-duplicates on the **entire row**. A small experiment shows three different outcomes from the same two inputs:
+
+```sql-run dataset=bank
+SELECT 'UNION ALL of cities' AS what, COUNT(*) AS n
+FROM (SELECT city FROM branch UNION ALL SELECT city FROM customer)
+UNION ALL
+SELECT 'UNION of cities', COUNT(*)
+FROM (SELECT city FROM branch UNION SELECT city FROM customer)
+UNION ALL
+SELECT 'UNION of (source, city)', COUNT(*)
+FROM (SELECT 'branch' AS src, city FROM branch UNION SELECT 'customer', city FROM customer);
+```
+
+- `UNION ALL`: every row from both tables — 4 branches plus 40 customers.
+- `UNION` on `city` alone: the number of distinct cities across both tables.
+- `UNION` on `(source, city)`: the tag column makes branch rows and customer rows different, so a city present in both appears twice. **Adding a source tag disables cross-source de-duplication** — sometimes exactly what you want, sometimes a surprise.
+
+A second subtlety: `UNION` also removes duplicates *within* a single input, even ones you may have wanted. Stacking two months of sales lines with `UNION` would merge two genuinely separate sales of the same product at the same price on the same day. When rows represent events, use `UNION ALL` and include the event's key.
+
+## Types, names and NULL placeholders
+
+Three practical rules for making branches line up.
+
+**1. Pad missing columns with NULL (or a constant).** Individuals have a birth date and businesses an incorporation date; a combined list needs both branches to supply both columns:
+
+```sql-run dataset=bank
+SELECT cust_id, fname || ' ' || lname AS name, 'person' AS kind, birth_date, NULL AS incorp_date
+FROM individual
+WHERE cust_id <= 2
+UNION ALL
+SELECT cust_id, name, 'business', NULL, incorp_date
+FROM business
+WHERE cust_id <= 32
+ORDER BY cust_id;
+```
+
+**2. Name the columns in the first branch.** Later aliases are ignored, so `'business'` needs no `AS kind` — but the first SELECT must carry every name you want in the result.
+
+**3. Make types match on purpose.** SQLite will stack a number on top of a string and sort them in separate groups; PostgreSQL will refuse. Cast explicitly:
+
+```sql-run dataset=bank
+SELECT 'account' AS entity, CAST(account_id AS TEXT) AS id FROM account WHERE cust_id = 1
+UNION ALL
+SELECT 'product', product_cd FROM product WHERE product_type_cd = 'INSURANCE';
+```
+
+## When a UNION is the wrong tool
+
+Because unions are easy to write, they get over-used. Two rewrites to know.
+
+**Same table, different filters → one pass with CASE.** Instead of two scans glued together:
+
+```sql
+SELECT 'credits' AS kind, SUM(amount) FROM txn WHERE txn_type_cd = 'CDT'
+UNION ALL
+SELECT 'debits', SUM(amount) FROM txn WHERE txn_type_cd = 'DBT';
+```
+
+a single GROUP BY reads the table once:
+
+```sql-run dataset=bank
+SELECT CASE txn_type_cd WHEN 'CDT' THEN 'credits' ELSE 'debits' END AS kind,
+       ROUND(SUM(amount), 2) AS total
+FROM txn
+GROUP BY txn_type_cd;
+```
+
+**Same table, OR-able filters → one WHERE.** `SELECT … WHERE a UNION SELECT … WHERE b` is usually `SELECT DISTINCT … WHERE a OR b`. The exception is performance tuning: when `a` and `b` use *different indexes*, some optimizers handle the OR poorly, and splitting into a `UNION` of two index lookups can be much faster. Treat that as an optimisation to apply after reading the query plan, not as a default style.
+
+> [!NOTE]
+> **Dialect notes.** All major engines support `UNION` and `UNION ALL` identically. MySQL and PostgreSQL allow each branch to be parenthesised with its own `ORDER BY … LIMIT`; SQLite does not (wrap the branch in a subquery instead). Oracle requires `FROM dual` in branches that select only constants.
+
+> [!INTERVIEW]
+> "What is the difference between UNION and UNION ALL, and which is faster?" — UNION ALL concatenates; UNION additionally removes duplicate rows, which needs a sort or hash, so UNION ALL is faster and should be the default when duplicates are impossible or meaningful. A strong answer adds that both require the same number of columns with compatible types, matched by position.
+
 ## Summary
 
 - Set operators combine whole result sets vertically; both sides need the same number of columns with compatible types, matched by position.

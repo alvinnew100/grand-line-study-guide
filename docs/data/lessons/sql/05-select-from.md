@@ -197,6 +197,113 @@ Note that `hours` is NULL for runs still `RUNNING` — `ended_at` is NULL and ar
 - **Ambiguous column names** after joins — qualify them.
 - **Forgetting that a derived table needs an alias** in MySQL/PostgreSQL.
 
+## Expressions in depth: what you can compute in the select list
+
+The select list is where raw columns become the answer to a question, so it is worth seeing the main families of expression side by side. Every one of them is evaluated **once per row** of the result.
+
+```sql-run dataset=shop
+SELECT product_id,
+       name,
+       price,
+       cost,
+       price - cost                               AS margin,
+       ROUND(100.0 * (price - cost) / price, 1)   AS margin_pct,
+       upper(substr(name, 1, 3)) || '-' || product_id AS sku,
+       CASE WHEN discontinued = 1 THEN 'retired' ELSE 'active' END AS lifecycle,
+       launched_on < '2023-01-01'                 AS launched_before_2023,
+       (SELECT name FROM categories c WHERE c.category_id = p.category_id) AS category
+FROM products p
+WHERE product_id <= 6;
+```
+
+Walk through the result. `margin` and `margin_pct` are plain arithmetic; note `100.0` rather than `100`, which forces real-number division. `sku` chains three string operations. `lifecycle` uses CASE (module *Conditional logic*). `launched_before_2023` shows that a comparison is itself an expression — SQLite and MySQL return 1 or 0, PostgreSQL returns a true boolean. The last column is a *scalar subquery*: a query in parentheses that returns one value, evaluated for each product.
+
+Two rules of thumb:
+
+- **An alias defined in the select list cannot be used elsewhere in the same select list** in standard SQL. `SELECT price - cost AS margin, margin / price` fails in PostgreSQL and MySQL (SQLite permits it). Repeat the expression, or compute it in a subquery/CTE and refer to it from the outer query.
+- **Column order is yours to choose** — and matters, because clients and the judge in this guide read columns by position and name. Put identifying columns first and measures last.
+
+### Qualified stars
+
+`*` can be restricted to one table, which is handy when exploring a join without typing every column:
+
+```sql-run dataset=bank
+SELECT a.*, p.name AS product_name
+FROM account a
+JOIN product p ON p.product_cd = a.product_cd
+WHERE a.cust_id = 2;
+```
+
+All of `account`'s columns, plus one named column from `product`. The same caution applies as for a bare `*`: fine at the prompt, fragile in saved code.
+
+## DISTINCT, in detail
+
+Three clarifications that prevent most DISTINCT mistakes.
+
+**1. DISTINCT sees the whole output row.** Adding a column can only keep or increase the number of rows:
+
+```sql-run dataset=shop
+SELECT (SELECT COUNT(*) FROM (SELECT DISTINCT country FROM customers))            AS countries,
+       (SELECT COUNT(*) FROM (SELECT DISTINCT country, city FROM customers))      AS country_city_pairs,
+       (SELECT COUNT(*) FROM customers)                                           AS all_rows;
+```
+
+**2. NULLs count as equal to each other for DISTINCT** (unlike `=`). A column with several NULLs contributes a single NULL row:
+
+```sql-run dataset=shop
+SELECT DISTINCT city FROM customers WHERE country = 'Japan' ORDER BY city;
+```
+
+**3. `COUNT(DISTINCT x)` is not the same as `SELECT DISTINCT`.** The first is an aggregate that returns one number and ignores NULLs; the second removes duplicate rows and keeps a NULL row.
+
+```sql-run dataset=shop
+SELECT COUNT(city) AS non_null_cities,
+       COUNT(DISTINCT city) AS distinct_cities,
+       (SELECT COUNT(*) FROM (SELECT DISTINCT city FROM customers)) AS distinct_rows_incl_null
+FROM customers;
+```
+
+When someone reaches for DISTINCT, ask which question they are answering: "what are the different values?" (legitimate) or "why am I getting duplicates?" (a join problem to fix at its source).
+
+## FROM in practice: a small investigation
+
+A realistic use of the kinds of table. Suppose the support team asks: *which customers have placed five or more orders, and when did each last order?* Build it in layers.
+
+A **derived table** computes the per-customer summary; the outer query joins it to a **permanent table** for names:
+
+```sql-run dataset=shop
+SELECT c.customer_id, c.first_name || ' ' || c.last_name AS customer, s.orders, s.last_order
+FROM (SELECT customer_id, COUNT(*) AS orders, MAX(order_date) AS last_order
+      FROM orders
+      GROUP BY customer_id
+      HAVING COUNT(*) >= 5) AS s
+JOIN customers c ON c.customer_id = s.customer_id
+ORDER BY s.orders DESC, c.customer_id;
+```
+
+If several follow-up questions need the same summary, promote it to a **temporary table** (lives for your session) or a **view** (stored definition, always current):
+
+```sql-run dataset=shop
+CREATE VIEW customer_order_summary AS
+SELECT customer_id, COUNT(*) AS orders, MIN(order_date) AS first_order, MAX(order_date) AS last_order
+FROM orders
+GROUP BY customer_id;
+
+SELECT c.country, COUNT(*) AS customers_with_orders, ROUND(AVG(s.orders), 2) AS avg_orders
+FROM customer_order_summary s
+JOIN customers c ON c.customer_id = s.customer_id
+GROUP BY c.country
+ORDER BY customers_with_orders DESC;
+```
+
+The choice between them is about **lifetime and reuse**, not about what they can express: a derived table lives for one query, a temp table for one session, a view until it is dropped.
+
+> [!NOTE]
+> **Naming and case.** Unquoted identifiers are case-insensitive in SQLite and MySQL (on most platforms), folded to lower case in PostgreSQL and to upper case in Oracle. A table created as `"Customers"` (quoted, mixed case) must then always be written with quotes in PostgreSQL. The simplest policy — and the one this guide follows — is `lower_snake_case` names, never quoted.
+
+> [!INTERVIEW]
+> When asked to "write a query that returns X", say the output columns aloud before writing: their names, order, and what one row represents. Many interview answers lose points not for logic but for returning an extra column, an unnamed expression, or duplicate rows.
+
 ## Summary
 
 - A query has up to six clauses: SELECT, FROM, WHERE, GROUP BY, HAVING, ORDER BY.

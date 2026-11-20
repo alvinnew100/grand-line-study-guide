@@ -218,6 +218,136 @@ belongs in `try/finally`, and you should never swallow `CancelledError`.
 > `def` (FastAPI runs it in its thread pool), use an async equivalent (`await asyncio.sleep`,
 > `httpx.AsyncClient`), or wrap the call in `run_in_threadpool` / `asyncio.to_thread`.
 
+## Build an event loop in thirty lines
+
+The loop stops being magic once you've written one. Coroutines are resumable functions; a scheduler keeps
+a queue of ready tasks and a list of sleeping ones, and repeatedly runs each ready task until it next
+suspends. Below, plain generators play the role of coroutines and `yield seconds` plays the role of
+`await asyncio.sleep(seconds)`. Time is simulated, so the output is deterministic:
+
+```python-run
+import heapq
+from collections import deque
+
+class MiniLoop:
+    def __init__(self):
+        self.ready, self.sleeping, self.now, self.seq = deque(), [], 0.0, 0
+
+    def create_task(self, gen, name):
+        self.ready.append((gen, name))
+
+    def run(self):
+        while self.ready or self.sleeping:
+            if not self.ready:                               # nothing runnable: jump to next wake-up
+                wake, _, gen, name = heapq.heappop(self.sleeping)
+                self.now = max(self.now, wake)
+                self.ready.append((gen, name))
+            gen, name = self.ready.popleft()
+            try:
+                delay = next(gen)                            # run until the task's next "await"
+            except StopIteration:
+                print(f"t={self.now:.1f}  {name} finished")
+                continue
+            self.seq += 1
+            heapq.heappush(self.sleeping, (self.now + delay, self.seq, gen, name))
+
+def request(name, db_time, loop):
+    print(f"t={loop.now:.1f}  {name} start, querying db")
+    yield db_time                                            # await db.execute(...)
+    print(f"t={loop.now:.1f}  {name} got rows, calling upstream")
+    yield 0.2                                                # await http.get(...)
+
+def blocking_request(name, loop):
+    print(f"t={loop.now:.1f}  {name} start, BLOCKING for 1.0s (time.sleep / sync driver)")
+    loop.now += 1.0                                          # holds the thread: nobody else can run
+    yield 0
+
+loop = MiniLoop()
+loop.create_task(request("A", 0.3, loop), "A")
+loop.create_task(request("B", 0.1, loop), "B")
+loop.run()
+print("--- same two requests, plus one that blocks the loop ---")
+loop = MiniLoop()
+loop.create_task(request("A", 0.3, loop), "A")
+loop.create_task(blocking_request("X", loop), "X")
+loop.create_task(request("B", 0.1, loop), "B")
+loop.run()
+```
+
+In the first run, A and B overlap: both finish by t=0.5 although their waits total 0.8 s. In the second,
+request X never yields control, so the clock advances a full second while A and B sit in the queue — B
+doesn't even *start* until t=1.0. That is precisely what `time.sleep`, `requests.get` or a synchronous
+database call does inside an `async def` endpoint. The real `asyncio` loop adds I/O readiness polling
+(`epoll`/`kqueue`/IOCP), callbacks, cancellation and exception handling, but the scheduling idea is the
+same.
+
+## Measuring the damage
+
+A small experiment makes the cost concrete: ten "requests" each needing 50 ms of I/O, handled three
+ways.
+
+```python-run
+import asyncio, time
+
+async def good_handler():
+    await asyncio.sleep(0.05)                 # async driver: yields while waiting
+
+async def bad_handler():
+    time.sleep(0.05)                          # sync call inside async def: blocks the loop
+
+async def measure(handler, n=10):
+    latencies, t0 = [], time.perf_counter()
+    async def one():
+        start = time.perf_counter()
+        await handler()
+        latencies.append(time.perf_counter() - start)
+    await asyncio.gather(*(one() for _ in range(n)))
+    total = time.perf_counter() - t0
+    return total, max(latencies)
+
+for name, handler in (("await asyncio.sleep", good_handler), ("time.sleep in async", bad_handler)):
+    total, worst = await measure(handler)
+    print(f"{name:22} total {total:.2f}s   throughput {10 / total:5.0f} req/s")
+```
+
+Same work, roughly ten times less throughput — and in a real server the last request in the queue waits
+for all the others, so tail latency grows linearly with concurrency.
+
+## Finding a blocked loop in practice
+
+The symptom pattern is distinctive: latency rises with concurrency while CPU stays low, health checks
+time out intermittently, and *unrelated* endpoints slow down together. Ways to confirm it:
+
+- **asyncio debug mode.** Run with `PYTHONASYNCIODEBUG=1` (or `asyncio.run(main(), debug=True)`). The loop
+  logs any callback or task step that takes longer than `loop.slow_callback_duration` (100 ms by default):
+  `Executing <Task ...> took 1.203 seconds`, with the offending coroutine named.
+- **A watchdog task.** A coroutine that sleeps 100 ms in a loop and records how late it wakes up measures
+  event-loop lag directly; export it as a metric.
+- **Sampling profilers.** `py-spy dump --pid <pid>` prints every thread's current stack without stopping
+  the process — if the main thread is inside `socket.recv` under your endpoint, you've found the blocking
+  call. `py-spy top` shows where time goes live.
+- **Code search.** Inside `async def` functions, look for `requests.`, `time.sleep`, `open(` on large
+  files, `subprocess.run`, synchronous DB/Redis/boto3 clients, heavy `json`/pandas work, and model
+  inference.
+
+## Sync-to-async translation table
+
+| Blocking call | Async-friendly replacement |
+|---|---|
+| `time.sleep(n)` | `await asyncio.sleep(n)` |
+| `requests.get(url)` | `await client.get(url)` with a shared `httpx.AsyncClient` |
+| `psycopg2` / sync SQLAlchemy session | `asyncpg`, psycopg 3 async, `AsyncSession` — or keep sync and use `def` endpoints |
+| `redis.Redis` | `redis.asyncio.Redis` |
+| `open(...).read()` on big files | `aiofiles`, or `await run_in_threadpool(...)` |
+| `subprocess.run(...)` | `await asyncio.create_subprocess_exec(...)` |
+| `boto3` calls | `aioboto3`/`aiobotocore`, or a thread |
+| CPU-heavy function | `await run_in_threadpool(fn)` (GIL-releasing native code) or a process pool |
+| `threading.Lock` | `asyncio.Lock` |
+| `queue.Queue` | `asyncio.Queue` |
+
+When no async library exists, wrapping the call in `run_in_threadpool` / `asyncio.to_thread` is a
+perfectly respectable answer; it costs one of the worker's pool threads for the duration of the call.
+
 ## Summary
 
 - Async gives concurrency for I/O-bound work on one thread; parallelism for CPU work needs processes.

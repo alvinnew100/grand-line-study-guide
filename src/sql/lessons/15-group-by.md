@@ -245,6 +245,113 @@ SELECT product_cd, COUNT(*) FROM account GROUP BY product_cd;
 - **NULL from empty SUM** — use COALESCE where zero is expected.
 - **AVG of integers:** in SQLite and PostgreSQL `AVG` returns a fractional result, but `SUM(x) / COUNT(*)` on integers is integer division.
 
+## Worked example: from a vague question to the right aggregate
+
+Aggregation mistakes are rarely syntax errors; they are *wrong-question* errors. Take the request "what is the average order value?" and notice how many defensible answers the data can produce.
+
+**Reading 1 — average of line values.** This is what you get by averaging the line-item table directly:
+
+```sql-run dataset=shop
+SELECT ROUND(AVG(quantity * unit_price * (1 - discount)), 2) AS avg_line_value
+FROM order_items;
+```
+
+That is the average *line*, not the average *order*. An order with four lines counts four times.
+
+**Reading 2 — average of order totals.** Aggregate to the order grain first, then average:
+
+```sql-run dataset=shop
+SELECT ROUND(AVG(order_total), 2) AS avg_order_value, COUNT(*) AS orders
+FROM (SELECT order_id, SUM(quantity * unit_price * (1 - discount)) AS order_total
+      FROM order_items
+      GROUP BY order_id);
+```
+
+**Reading 3 — total revenue divided by orders.** Arithmetically the same as reading 2, and often clearer:
+
+```sql-run dataset=shop
+SELECT ROUND(SUM(quantity * unit_price * (1 - discount)) / COUNT(DISTINCT order_id), 2) AS revenue_per_order
+FROM order_items;
+```
+
+**Reading 4 — average per customer.** A different grain again: first total per customer, then average those totals. Heavy buyers no longer dominate, because each customer counts once:
+
+```sql-run dataset=shop
+SELECT ROUND(AVG(customer_total), 2) AS avg_spend_per_customer, COUNT(*) AS customers
+FROM (SELECT o.customer_id, SUM(oi.quantity * oi.unit_price * (1 - oi.discount)) AS customer_total
+      FROM orders o JOIN order_items oi ON oi.order_id = o.order_id
+      GROUP BY o.customer_id);
+```
+
+Four numbers, all "the average". The lesson: **an average is defined by its grain** — the thing you take one value per. Decide it before writing the query, and aggregate in two steps (a subquery to reach the grain, then the outer aggregate) whenever the table's grain is finer than the one you want.
+
+### Weighted versus unweighted averages
+
+The same trap appears with rates. "Average discount" could weight every line equally, or weight by money:
+
+```sql-run dataset=shop
+SELECT ROUND(100.0 * AVG(discount), 2) AS avg_discount_pct_per_line,
+       ROUND(100.0 * SUM(quantity * unit_price * discount) / SUM(quantity * unit_price), 2) AS revenue_weighted_discount_pct
+FROM order_items;
+```
+
+The first says how often and how deeply lines are discounted; the second says what fraction of list-price revenue was given away. When averaging averages (per-shard, per-day, per-group), you almost always want the weighted form: `SUM(numerator) / SUM(denominator)`, never `AVG(ratio)`.
+
+## A tour of aggregates on one table
+
+Seeing all the common aggregates on one familiar table fixes their behaviour in memory. One row per experiment:
+
+```sql-run dataset=mlops
+SELECT e.name AS experiment,
+       COUNT(*)                                   AS runs,
+       COUNT(r.ended_at)                          AS ended_runs,
+       COUNT(DISTINCT r.model_type)               AS model_types,
+       group_concat(DISTINCT r.model_type)        AS which_types,
+       MIN(r.started_at)                          AS first_run,
+       MAX(r.started_at)                          AS last_run,
+       ROUND(SUM(r.gpu_hours), 1)                 AS gpu_hours,
+       ROUND(AVG(r.gpu_hours), 2)                 AS avg_gpu_hours,
+       ROUND(MAX(r.learning_rate) / MIN(r.learning_rate), 0) AS lr_range_ratio
+FROM experiments e
+JOIN runs r ON r.experiment_id = e.experiment_id
+GROUP BY e.experiment_id, e.name
+ORDER BY runs DESC;
+```
+
+Things to verify in the output: `ended_runs` is smaller than `runs` wherever a job is still running (COUNT of a column skips NULLs); `MIN`/`MAX` work on text timestamps because ISO format sorts chronologically; `group_concat(DISTINCT …)` collapses repeats; and the last column shows that aggregates can be combined arithmetically — the ratio between the largest and smallest learning rate tried is a quick measure of how wide a hyper-parameter search was.
+
+## Aggregates that SQLite lacks, and how to get them
+
+SQLite's built-in set is small. Common gaps and their workarounds:
+
+| Need | PostgreSQL / MySQL | SQLite |
+|---|---|---|
+| Standard deviation | `STDDEV_SAMP(x)` | `sqrt((SUM(x*x) - SUM(x)*SUM(x)/COUNT(x)) / (COUNT(x) - 1))` |
+| Median / percentiles | `percentile_cont(0.5) WITHIN GROUP (ORDER BY x)` (PostgreSQL) | `ROW_NUMBER` + `COUNT(*) OVER` (see the patterns module) |
+| Conditional count | `COUNT(*) FILTER (WHERE c)` | same `FILTER` syntax (3.30+), or `SUM(CASE …)` |
+| Boolean all / any | `BOOL_AND(c)`, `BOOL_OR(c)` | `MIN(c)`, `MAX(c)` on 0/1 values |
+| Mode | `mode() WITHIN GROUP (ORDER BY x)` | group, count, take the top row |
+
+```sql-run dataset=mlops
+SELECT deployment_id,
+       COUNT(*) AS n,
+       ROUND(AVG(latency_ms), 1) AS mean_latency,
+       ROUND(sqrt((SUM(latency_ms * latency_ms) - SUM(latency_ms) * SUM(latency_ms) * 1.0 / COUNT(*))
+                  / (COUNT(*) - 1)), 1) AS stddev_latency,
+       MIN(latency_ms < 200) AS all_under_200ms,
+       MAX(latency_ms > 300) AS any_over_300ms
+FROM predictions
+GROUP BY deployment_id
+HAVING COUNT(*) >= 15
+ORDER BY stddev_latency DESC
+LIMIT 6;
+```
+
+`MIN` of a 0/1 condition is 1 only if the condition holds for *every* row (logical AND); `MAX` is 1 if it holds for *any* row (logical OR) — a handy trick in any engine.
+
+> [!INTERVIEW]
+> When asked for any "average" or "rate", restate the grain before writing: "average *per order*, so I will first sum lines per order, then average." It takes five seconds and prevents the most common wrong answer in SQL interviews.
+
 ## Summary
 
 - `GROUP BY` forms one group per distinct key; aggregates compute one value per group.

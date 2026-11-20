@@ -309,6 +309,125 @@ print(p.model_dump())               # Python objects
 print(p.model_dump(mode="json"))    # JSON-compatible types: what goes on the wire
 ```
 
+## Worked example: a complete resource with model families
+
+Putting the pieces together for one resource — distinct models for each direction, correct status codes,
+and a partial update:
+
+```python
+class ItemBase(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    price: float = Field(gt=0)
+    description: str | None = None
+
+class ItemCreate(ItemBase):                 # what a client may send when creating
+    pass
+
+class ItemUpdate(BaseModel):                # PATCH: everything optional
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    price: float | None = Field(default=None, gt=0)
+    description: str | None = None
+
+class ItemPublic(ItemBase):                 # what a client receives
+    id: int
+    created_at: datetime
+
+class ItemInDB(ItemPublic):                 # what we store: extra internal fields
+    cost_price: float
+    supplier_id: int
+
+@app.post("/items", response_model=ItemPublic, status_code=status.HTTP_201_CREATED)
+def create_item(item: ItemCreate, response: Response):
+    stored = repo.insert(item)                               # -> ItemInDB
+    response.headers["Location"] = f"/items/{stored.id}"
+    return stored                                            # cost_price, supplier_id filtered out
+
+@app.patch("/items/{item_id}", response_model=ItemPublic)
+def patch_item(item_id: int, patch: ItemUpdate):
+    stored = repo.get(item_id)
+    if stored is None:
+        raise HTTPException(status_code=404, detail="Item not found")
+    updated = stored.model_copy(update=patch.model_dump(exclude_unset=True))
+    return repo.save(updated)
+
+@app.delete("/items/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_item(item_id: int) -> None:
+    if not repo.delete(item_id):
+        raise HTTPException(status_code=404, detail="Item not found")
+```
+
+Trace `POST /items` with `{"name": "Hammer", "price": 9.5, "cost_price": 1}`:
+
+1. Body parsed as JSON; validated against `ItemCreate`. `cost_price` is not a field of `ItemCreate`, so it
+   is dropped (default `extra="ignore"`) — the client cannot set an internal field. With
+   `extra="forbid"` the request would be rejected with 422 instead, which is stricter and often better.
+2. `repo.insert` returns an `ItemInDB` with `id`, `created_at`, `cost_price`, `supplier_id`.
+3. The response model `ItemPublic` validates and filters: the client receives `id`, `name`, `price`,
+   `description`, `created_at` — nothing else.
+4. Status `201` and the `Location` header come from the decorator and the injected `Response`.
+
+The whole filtering mechanism can be reproduced, and tested, with Pydantic alone:
+
+```python-run
+from datetime import datetime, timezone
+from pydantic import BaseModel, Field
+
+class ItemBase(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    price: float = Field(gt=0)
+    description: str | None = None
+
+class ItemUpdate(BaseModel):
+    name: str | None = None
+    price: float | None = Field(default=None, gt=0)
+    description: str | None = None
+
+class ItemPublic(ItemBase):
+    id: int
+    created_at: datetime
+
+class ItemInDB(ItemPublic):
+    cost_price: float
+    supplier_id: int
+
+stored = ItemInDB(id=42, name="Hammer", price=9.5, cost_price=4.1, supplier_id=7,
+                  created_at=datetime(2025, 1, 15, tzinfo=timezone.utc))
+
+def to_response(obj, model):
+    """What response_model does: validate against the public model, keep only its fields, JSON-encode."""
+    return model.model_validate(obj.model_dump()).model_dump(mode="json")
+
+print("client sees :", to_response(stored, ItemPublic))
+
+patch = ItemUpdate.model_validate({"price": 11.0})
+updated = stored.model_copy(update=patch.model_dump(exclude_unset=True))
+print("after PATCH :", to_response(updated, ItemPublic))
+print("internal kept:", updated.cost_price, updated.supplier_id)
+
+leaked = set(ItemInDB.model_fields) - set(ItemPublic.model_fields)
+print("fields that must never appear in responses:", sorted(leaked))
+```
+
+That last line is a useful unit test in real projects: assert that the set difference between storage and
+public models contains exactly the fields you intend to keep private.
+
+## Choosing the response style
+
+| You want | Use |
+|---|---|
+| typed, filtered JSON (the normal case) | return annotation or `response_model` |
+| different success codes per branch | inject `Response`, set `status_code` |
+| extra headers/cookies with normal JSON | inject `Response` |
+| an error anywhere in the call stack | `raise HTTPException` |
+| HTML, text, redirect, file, stream | return the specific `Response` subclass |
+| full manual control, no validation | return `JSONResponse(...)` |
+| document extra outcomes in OpenAPI | `responses={404: {"model": ErrorModel}}` on the decorator |
+
+A subtle interaction: when both a return annotation and `response_model` are given, `response_model`
+wins for validation, filtering and docs, while the annotation still serves your type checker. Setting
+`response_model=None` disables FastAPI's handling when the annotation isn't a valid Pydantic type (for
+example a union including `Response`).
+
 ## Pitfalls
 
 - Returning ORM/DB objects without a response model → leaks fields, or fails serialisation.

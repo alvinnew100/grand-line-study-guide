@@ -290,6 +290,85 @@ The book's version of this flow lives across its layers: `web/user.py` holds the
 > (HTTPS only, careful storage); secret/key management and rotation; never accept `alg: none` or the
 > token's claimed algorithm.
 
+## Worked example: access tokens, refresh tokens and rotation
+
+Short-lived access tokens limit the damage of a leak, but nobody wants to log in every fifteen minutes.
+The standard answer is a second, long-lived **refresh token** whose only power is to obtain new access
+tokens — and which, unlike a JWT, is *stateful*: the server stores it (hashed) and can revoke it.
+**Rotation** issues a new refresh token on every use and invalidates the old one; if an old one ever
+reappears, someone has stolen it, and the whole token family is revoked.
+
+```python-run
+import hashlib, secrets
+
+class AuthServer:
+    ACCESS_TTL, REFRESH_TTL = 900, 30 * 24 * 3600
+
+    def __init__(self):
+        self.refresh = {}        # sha256(token) -> {"user", "family", "expires", "used"}
+        self.revoked_families = set()
+
+    def _issue(self, user, family, now):
+        token = secrets.token_urlsafe(32)                       # opaque random string, not a JWT
+        self.refresh[hashlib.sha256(token.encode()).hexdigest()] = {
+            "user": user, "family": family, "expires": now + self.REFRESH_TTL, "used": False}
+        access = {"sub": user, "exp": now + self.ACCESS_TTL}    # would be a signed JWT
+        return access, token
+
+    def login(self, user, now):
+        return self._issue(user, family=secrets.token_hex(4), now=now)
+
+    def refresh_tokens(self, token, now):
+        rec = self.refresh.get(hashlib.sha256(token.encode()).hexdigest())
+        if rec is None or rec["expires"] <= now or rec["family"] in self.revoked_families:
+            return "401 invalid refresh token"
+        if rec["used"]:                                         # reuse of a rotated token = theft signal
+            self.revoked_families.add(rec["family"])
+            return "401 token reuse detected: session family revoked"
+        rec["used"] = True
+        return self._issue(rec["user"], rec["family"], now)     # rotate
+
+    def logout(self, token):
+        rec = self.refresh.get(hashlib.sha256(token.encode()).hexdigest())
+        if rec:
+            self.revoked_families.add(rec["family"])
+
+server = AuthServer()
+access, r1 = server.login("ann", now=0)
+print("login        -> access exp", access["exp"])
+
+access, r2 = server.refresh_tokens(r1, now=900)                 # normal use: rotate r1 -> r2
+print("refresh #1   -> access exp", access["exp"], "| new refresh token issued:", r2 != r1)
+
+print("attacker replays stolen r1 ->", server.refresh_tokens(r1, now=1000))
+print("legit client uses r2      ->", server.refresh_tokens(r2, now=1100), "(forced to log in again)")
+
+access, r3 = server.login("ann", now=2000)
+server.logout(r3)
+print("after logout              ->", server.refresh_tokens(r3, now=2100))
+```
+
+Design points: refresh tokens are random opaque strings stored only as hashes (a database leak doesn't
+yield usable tokens); the `/token/refresh` endpoint is the single place a database lookup happens, so
+ordinary requests stay stateless; logout and "sign out everywhere" become possible; and reuse detection
+turns a silent theft into a visible event. The access token's remaining lifetime (up to fifteen minutes
+here) is the window you accept — shorten it, or add a `jti` deny-list in Redis, when that is too long.
+
+## Debugging authentication failures
+
+| Symptom | Things to check |
+|---|---|
+| `401` right after a successful login | client sends `Authorization: <token>` without the `Bearer ` prefix, or the header is stripped by a proxy |
+| `422` from `/token` | credentials sent as JSON; the password flow requires form encoding |
+| Works in `/docs`, fails from the frontend | CORS preflight for the `Authorization` header (see next lesson), or `tokenUrl` relative path differs behind a prefix |
+| Tokens valid on one replica, invalid on another | replicas have different `SECRET_KEY`s (generated at startup instead of injected) |
+| Every token is "expired" | server clock skew, or `exp` written in local time/milliseconds instead of UTC seconds |
+| Valid tokens rejected after a deploy | the signing key was rotated without accepting the previous key during the overlap |
+| Signature errors with tokens from another service | algorithm mismatch (HS256 vs RS256) or wrong audience/issuer |
+
+Decode the token's payload (it is only base64url) to see `sub`, `exp` and `alg` before suspecting
+anything more exotic — and never paste production tokens into third-party websites to do so.
+
 ## Pitfalls
 
 - Hashing passwords with plain SHA-256/MD5, or without a salt.

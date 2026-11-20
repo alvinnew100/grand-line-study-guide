@@ -271,6 +271,177 @@ print(endpoint())
 > roll back and clean up — but a caught exception must be re-raised, otherwise the client gets a 500 with
 > nothing logged. Teardown can't modify a response that's already gone.
 
+## Worked example: a unit of work
+
+The most valuable yield-dependency in a database-backed service wraps a request in a transaction:
+commit if the endpoint succeeds, roll back if it raises. This is the **unit of work** pattern.
+
+```python
+def get_uow(request: Request):
+    session = Session(request.app.state.engine)
+    try:
+        yield session
+        session.commit()                 # reached only if the endpoint returned normally
+    except Exception:
+        session.rollback()               # endpoint (or commit) raised
+        raise                            # never swallow
+    finally:
+        session.close()                  # always return the connection to the pool
+
+# function scope: the commit happens BEFORE the response is sent, so a failed commit becomes a 500
+UnitOfWork = Annotated[Session, Depends(get_uow, scope="function")]
+
+@router.post("/transfers", status_code=201)
+def transfer(req: TransferRequest, uow: UnitOfWork) -> TransferPublic:
+    debit(uow, req.source, req.amount)
+    credit(uow, req.target, req.amount)       # if this raises, the debit is rolled back too
+    return record_transfer(uow, req)
+```
+
+The endpoint contains no `commit`/`rollback` at all, and it's impossible to forget one. The scope choice
+is what makes this safe: with the default request scope the client could receive `201` and *then* the
+commit could fail.
+
+A runnable model, including what a client observes in each case and the difference the scope makes:
+
+```python-run
+from contextlib import contextmanager
+
+class FakeSession:
+    def __init__(self, fail_commit=False):
+        self.pending, self.committed, self.fail_commit, self.events = [], [], fail_commit, []
+    def add(self, x): self.pending.append(x)
+    def commit(self):
+        if self.fail_commit:
+            raise RuntimeError("unique constraint violated at commit")
+        self.committed += self.pending; self.pending = []; self.events.append("commit")
+    def rollback(self): self.pending = []; self.events.append("rollback")
+    def close(self): self.events.append("close")
+
+@contextmanager
+def unit_of_work(session):
+    try:
+        yield session
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+def run_request(endpoint, session, scope):
+    """Returns what the CLIENT sees. scope decides whether teardown precedes the response."""
+    try:
+        if scope == "function":
+            with unit_of_work(session) as s:
+                body = endpoint(s)
+            return f"201 {body}"                     # response built after commit succeeded
+        else:  # "request": response is sent first, teardown afterwards
+            cm = unit_of_work(session); s = cm.__enter__()
+            body = endpoint(s)
+            client_sees = f"201 {body}"              # <- already on the wire
+            try:
+                cm.__exit__(None, None, None)
+            except Exception as e:
+                print(f"     [server log] error AFTER response: {e}")
+            return client_sees
+    except Exception as e:
+        return f"500 ({e})"
+
+def ok(s): s.add("transfer#1"); return "created"
+def boom(s): s.add("debit"); raise ValueError("insufficient funds")
+
+for title, endpoint, fail_commit in [("success", ok, False), ("endpoint raises", boom, False),
+                                     ("commit fails", ok, True)]:
+    for scope in ("function", "request"):
+        if endpoint is boom and scope == "request":
+            continue
+        s = FakeSession(fail_commit)
+        print(f"{title:16} scope={scope:8} -> client: {run_request(endpoint, s, scope):45} "
+              f"committed={s.committed} events={s.events}")
+```
+
+The last line is the bug worth remembering: under request scope the client was told `201 created`
+although nothing was committed.
+
+## Step-by-step timeline of one request
+
+For an endpoint with a function-scoped unit of work, a request-scoped tracing dependency and a background
+task, the full order is:
+
+```text
+ 1. middleware (before part)
+ 2. request-scoped dependency: setup        (e.g. start a trace span)
+ 3. function-scoped dependency: setup       (open session, begin transaction)
+ 4. endpoint function runs, returns a value
+ 5. function-scoped dependency: teardown    (commit / rollback, close session)
+ 6. response model validation + serialisation
+ 7. middleware (after part) -> response sent to the client
+ 8. request-scoped dependency: teardown     (end the span)
+ 9. background tasks run
+```
+
+Two consequences: a function-scoped session is already closed during step 6, so the endpoint must return
+data that is fully loaded (no lazy relationships); and background tasks (step 9) run after *all*
+dependency teardown, which is why they must open their own resources.
+
+## Testing with overrides: a complete fixture set
+
+```python
+# tests/conftest.py
+@pytest.fixture(scope="session")
+def engine():
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    SQLModel.metadata.create_all(engine)
+    return engine
+
+@pytest.fixture
+def session(engine):
+    connection = engine.connect()
+    transaction = connection.begin()                 # outer transaction for the whole test
+    session = Session(bind=connection, join_transaction_mode="create_savepoint")
+    yield session
+    session.close()
+    transaction.rollback()                           # undo everything the test wrote
+    connection.close()
+
+@pytest.fixture
+def user(session):
+    user = User(email="tester@example.com", roles=["user"])
+    session.add(user); session.commit(); session.refresh(user)
+    return user
+
+@pytest.fixture
+def client(session, user):
+    app.dependency_overrides[get_uow] = lambda: session          # endpoint commits become savepoints
+    app.dependency_overrides[get_current_user] = lambda: user
+    with TestClient(app) as c:
+        yield c
+    app.dependency_overrides.clear()
+
+@pytest.fixture
+def anonymous_client(session):
+    app.dependency_overrides[get_uow] = lambda: session          # real auth, fake DB
+    with TestClient(app) as c:
+        yield c
+    app.dependency_overrides.clear()
+```
+
+Why this shape works well: each test runs inside a transaction that is rolled back, so tests are isolated
+and fast with no cleanup code; the *same* session is visible to the test and to the endpoint, so a test
+can assert on rows the endpoint wrote; and two clients — one pre-authenticated, one anonymous — make it
+natural to test both behaviour and access control:
+
+```python
+def test_create_order(client, session, user):
+    r = client.post("/orders", json={"total": 19.9})
+    assert r.status_code == 201
+    assert session.get(Order, r.json()["id"]).owner_id == user.id
+
+def test_orders_require_auth(anonymous_client):
+    assert anonymous_client.get("/orders").status_code == 401
+```
+
 ## Pitfalls
 
 - Two `yield`s in one dependency (error).

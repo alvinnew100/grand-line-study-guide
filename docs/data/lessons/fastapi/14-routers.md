@@ -257,6 +257,164 @@ With dozens of routes the docs need organisation:
 > dependencies and settings live in neutral modules to avoid circular imports. Use an app factory and
 > lifespan for wiring.
 
+## Worked example: refactoring a single file into routers
+
+Start with the kind of `main.py` every project has at week two:
+
+```python
+# main.py - before
+app = FastAPI()
+engine = create_engine(DATABASE_URL)
+
+def get_session(): ...
+def get_current_user(...): ...
+
+@app.post("/token") ...
+@app.get("/users/me") ...
+@app.get("/users/{user_id}") ...
+@app.get("/items") ...
+@app.post("/items") ...
+@app.get("/items/{item_id}") ...
+@app.get("/admin/stats") ...
+@app.get("/health") ...
+```
+
+The refactoring is mechanical if you do it in this order, running the tests after each step:
+
+**Step 1 — move shared things out first.** Anything two future modules will need goes into neutral
+modules, so nothing later has to import `main`:
+
+```python
+# app/db.py            -> engine, get_session, SessionDep
+# app/security.py      -> hashing, token helpers, get_current_user, CurrentUser
+# app/schemas.py       -> Pydantic models
+# app/config.py        -> Settings, get_settings
+```
+
+**Step 2 — one router per resource.** Replace `@app.` with `@router.`, hoist the common path into the
+prefix, and delete it from each route:
+
+```python
+# app/routers/items.py - after
+router = APIRouter(prefix="/items", tags=["items"])
+
+@router.get("", response_model=list[ItemPublic])
+def list_items(session: SessionDep, page: PageDep): ...
+
+@router.post("", response_model=ItemPublic, status_code=201)
+def create_item(item: ItemCreate, session: SessionDep, user: CurrentUser): ...
+
+@router.get("/{item_id}", response_model=ItemPublic, responses={404: {"model": ErrorResponse}})
+def read_item(item_id: int, session: SessionDep): ...
+```
+
+**Step 3 — make protection structural.** Instead of remembering `CurrentUser` on every admin route, put
+the requirement on the router so a new route is protected by default:
+
+```python
+# app/routers/admin.py
+router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(require_role("admin"))])
+```
+
+**Step 4 — a thin `main.py` that only wires.**
+
+```python
+# app/main.py - after
+from app.routers import admin, auth, health, items, users
+
+api = APIRouter(prefix="/api/v1")
+for r in (auth.router, users.router, items.router, admin.router):
+    api.include_router(r)
+
+app = FastAPI(title="Shop API", lifespan=lifespan)
+app.include_router(health.router)          # unversioned, unauthenticated
+app.include_router(api)
+```
+
+**Step 5 — verify nothing moved.** The public contract must be identical before and after. Snapshot the
+route table (or `/openapi.json`) before you start and compare afterwards:
+
+```python
+def route_table(app):
+    return sorted((m, r.path) for r in app.routes if hasattr(r, "methods") for m in r.methods)
+```
+
+A model of that check, showing how prefixes compose and how an accidental change is caught:
+
+```python-run
+def flatten(router, prefix=""):
+    """Each router: {'prefix': str, 'routes': [(method, path)], 'children': [routers]}"""
+    base = prefix + router.get("prefix", "")
+    table = [(m, base + p) for m, p in router.get("routes", [])]
+    for child in router.get("children", []):
+        table += flatten(child, base)
+    return sorted(table)
+
+before = sorted([("POST", "/token"), ("GET", "/users/me"), ("GET", "/users/{user_id}"),
+                 ("GET", "/items"), ("POST", "/items"), ("GET", "/items/{item_id}"),
+                 ("GET", "/admin/stats"), ("GET", "/health")])
+
+after_app = {"children": [
+    {"prefix": "", "routes": [("GET", "/health")]},
+    {"prefix": "", "routes": [("POST", "/token")]},
+    {"prefix": "/users", "routes": [("GET", "/me"), ("GET", "/{user_id}")]},
+    {"prefix": "/items", "routes": [("GET", ""), ("POST", ""), ("GET", "/{item_id}")]},
+    {"prefix": "/admin", "routes": [("GET", "/stats")]},
+]}
+print("contract preserved:", flatten(after_app) == before)
+
+# A common slip: writing "/" instead of "" in a prefixed router changes the public path
+after_app["children"][3]["routes"][0] = ("GET", "/")
+diff = set(flatten(after_app)) ^ set(before)
+print("accidental change detected:", sorted(diff))
+```
+
+That last case — `/items` silently becoming `/items/` — is the most common regression in this kind of
+refactor: clients start getting `307` redirects (and POST clients that don't follow redirects simply
+fail).
+
+## Route order still matters inside and across routers
+
+Matching is first-come-first-served over the flattened table, in the order routes were *included*:
+
+- Within a router, declare `/users/me` before `/users/{user_id}`.
+- Across routers, a broad route included early can shadow a specific one included later. A catch-all such
+  as `@router.get("/{full_path:path}")` (used to serve a single-page app) must be included **last**.
+- If two routes have the same method and path, the first wins silently — FastAPI doesn't warn. A unit
+  test asserting that `(method, path)` pairs are unique is cheap insurance in a large app.
+
+When a route "isn't being hit", print the table and look for an earlier pattern that matches the same
+URL.
+
+## Layer-based versus feature-based layout
+
+Both organisations use exactly the same routers; they differ in what sits next to what.
+
+| | Layer-based (`routers/`, `services/`, `models/`) | Feature-based (`users/`, `orders/`, `billing/`) |
+|---|---|---|
+| Finding "all the endpoints" | one folder | spread across features |
+| Adding a feature | touch 4–5 folders | add one folder |
+| Team ownership | by skill | by product area |
+| Risk | features entangle through shared modules | duplication, cross-feature imports |
+| Fits | small/medium services, one team | larger services, several teams, future extraction into microservices |
+
+A common path is to start layer-based (as the book does with `web/`, `service/`, `data/`, `model/`) and
+move to feature packages when the `services/` folder passes a dozen files. Whichever you choose, enforce
+the import direction — routers import services, never the reverse; features talk to each other through
+their service functions, not by reaching into each other's tables. Tools such as `import-linter` can
+check these rules in CI.
+
+## Per-router customisation worth knowing
+
+- `APIRouter(route_class=TimedRoute)` — a custom `APIRoute` subclass that wraps every handler in the
+  router (timing, request-body logging, gzip request decoding) without global middleware.
+- `APIRouter(default_response_class=ORJSONResponse)` — a faster or different default serialiser for one
+  area of the API.
+- `APIRouter(include_in_schema=False)` — hide a whole internal router from the docs.
+- `APIRouter(lifespan=...)` — a router can carry its own startup/shutdown logic, combined with the app's.
+- `callbacks=` and `generate_unique_id_function=` — OpenAPI details for webhook documentation and client
+  method naming.
+
 ## Pitfalls
 
 - Importing `app` from routers (circular imports).

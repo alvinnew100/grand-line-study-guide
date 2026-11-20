@@ -220,6 +220,145 @@ the same key can't both win, because Redis executes commands one at a time.
 > with an eviction policy, and emit hit/miss metrics. Add HTTP caching headers (`Cache-Control`, `ETag`)
 > so clients and CDNs can avoid the request entirely. Treat the cache as disposable.
 
+## Why invalidate *after* commit: the race, replayed
+
+"Delete the cache key after the database commit" sounds like pedantry until you interleave two requests
+by hand. The simulation runs the same writer and reader with the two possible orderings:
+
+```python-run
+def run(order):
+    db, cache, log = {"price": 10}, {"price": 10}, []
+    pending = {}
+
+    def writer_invalidate():  cache.pop("price", None); log.append("W: delete cache key")
+    def writer_begin():       pending["price"] = 12;    log.append("W: UPDATE price=12 (not committed)")
+    def writer_commit():      db.update(pending);       log.append("W: COMMIT")
+    def reader():
+        if "price" in cache:
+            log.append(f"R: cache hit {cache['price']}")
+        else:
+            cache["price"] = db["price"]                 # reads COMMITTED data only
+            log.append(f"R: cache miss -> read db ({db['price']}) -> repopulate cache")
+
+    steps = {"invalidate-then-commit": [writer_begin, writer_invalidate, reader, writer_commit],
+             "commit-then-invalidate": [writer_begin, reader, writer_commit, writer_invalidate]}[order]
+    for step in steps:
+        step()
+    print(f"[{order}]")
+    print("   " + "\n   ".join(log))
+    print(f"   final: db={db['price']} cache={cache.get('price', '(empty)')}",
+          "<- STALE until TTL expires" if cache.get("price") not in (None, db["price"]) else "<- consistent")
+
+run("invalidate-then-commit")
+run("commit-then-invalidate")
+```
+
+In the first ordering a reader slips in between the delete and the commit, finds the cache empty, reads
+the *old* committed value and writes it back — and the cache now holds stale data for a full TTL even
+though the writer "did invalidate". In the second, the worst case is that a reader sees the old value for
+the instant before the delete, after which the next read repopulates from fresh data.
+
+A narrower race remains even with the correct order (a reader that fetched the old row just before the
+commit may write it to the cache just after the delete). That is why invalidation is always paired with
+a **TTL as a safety net**, and why systems that can't tolerate any staleness either skip the cache for
+that data or use versioned keys.
+
+## Reading cached data safely with Pydantic
+
+Whatever comes out of a cache is, strictly speaking, untrusted input: it may have been written by an
+older release with a different schema. Validate on read and treat failure as a miss:
+
+```python-run
+from pydantic import BaseModel, ValidationError
+
+class ItemV2(BaseModel):
+    id: int
+    name: str
+    price_cents: int                         # v1 stored a float 'price' instead
+
+cache = {
+    "item:v2:1": '{"id": 1, "name": "hammer", "price_cents": 950}',
+    "item:v2:2": '{"id": 2, "name": "saw", "price": 12.0}',     # written by the previous release
+    "item:v2:3": '{"id": 3, "name": "drill", "price_cen',       # truncated / corrupt
+}
+
+def cached_item(item_id, load_from_db):
+    raw = cache.get(f"item:v2:{item_id}")
+    if raw is not None:
+        try:
+            return ItemV2.model_validate_json(raw), "hit"
+        except ValidationError:
+            cache.pop(f"item:v2:{item_id}")              # poisoned entry: drop it and fall through
+    item = load_from_db(item_id)
+    cache[f"item:v2:{item_id}"] = item.model_dump_json()
+    return item, "miss -> reloaded"
+
+db = lambda i: ItemV2(id=i, name=f"item{i}", price_cents=100 * i)
+for i in (1, 2, 3, 4):
+    item, how = cached_item(i, db)
+    print(i, how, item.price_cents)
+```
+
+Bumping the version segment of the key (`item:v2:` → `item:v3:`) on every schema change is cleaner still:
+the new release never sees old entries, and the old ones simply expire.
+
+## A fixed-window limiter and its edge problem
+
+Redis's `INCR` + `EXPIRE` gives the simplest shared rate limiter. Its well-known weakness is the window
+boundary; a sliding window fixes it at the cost of more state:
+
+```python-run
+from collections import defaultdict, deque
+
+class FixedWindow:
+    def __init__(self, limit, window): self.limit, self.window, self.counts = limit, window, defaultdict(int)
+    def allow(self, now):
+        bucket = int(now // self.window)                 # INCR rl:{client}:{bucket}; EXPIRE window
+        self.counts[bucket] += 1
+        return self.counts[bucket] <= self.limit
+
+class SlidingWindowLog:
+    def __init__(self, limit, window): self.limit, self.window, self.log = limit, window, deque()
+    def allow(self, now):
+        while self.log and self.log[0] <= now - self.window:      # ZREMRANGEBYSCORE
+            self.log.popleft()
+        if len(self.log) < self.limit:                            # ZCARD
+            self.log.append(now)                                  # ZADD
+            return True
+        return False
+
+# 10 requests just before the minute boundary and 10 just after
+burst = [59.0 + i * 0.09 for i in range(10)] + [60.0 + i * 0.09 for i in range(10)]
+for limiter in (FixedWindow(10, 60), SlidingWindowLog(10, 60)):
+    allowed = sum(limiter.allow(t) for t in burst)
+    print(f"{type(limiter).__name__:17} limit 10/min -> allowed {allowed} requests within 2 seconds")
+```
+
+The fixed window lets through twice the limit across the boundary. In Redis the sliding log is a sorted
+set per client (timestamps as scores); a token bucket stored in a hash and updated by a small Lua script
+gives the same smoothness with O(1) memory. Whichever you choose, the read-modify-write must be **atomic**
+— a Lua script or `MULTI/EXEC` — otherwise two workers can both read "9 used" and both allow the tenth
+request.
+
+## Choosing a store: a decision guide
+
+| Need | Reach for | Because |
+|---|---|---|
+| Transactions, joins, constraints, ad-hoc queries | PostgreSQL | the relational default |
+| Semi-structured attributes on relational rows | PostgreSQL `JSONB` | no second system to operate |
+| Sub-millisecond lookups, counters, TTLs, locks | Redis | in-memory, atomic commands |
+| Full-text relevance search, faceting, log search | Elasticsearch / OpenSearch (or Postgres FTS at small scale) | inverted indexes and scoring |
+| Similarity search over embeddings | pgvector first; a dedicated vector DB at larger scale | approximate nearest-neighbour indexes |
+| Enormous write throughput across regions | Cassandra / DynamoDB | partitioned, tunable consistency |
+| Large binary objects | object storage (S3-compatible) | cheap, durable; keep only metadata in the DB |
+| Durable event stream between services | Kafka / Redis Streams | ordered, replayable log |
+
+Every additional store is another thing to back up, monitor, secure and keep consistent with the others,
+and **there are no transactions across stores**: if you write to PostgreSQL and then to Elasticsearch, one
+can succeed and the other fail. The standard remedy is the *outbox pattern* — write the change and an
+"event to publish" row in the same database transaction, and let a background process deliver events to
+the other systems with retries.
+
 ## Pitfalls
 
 - Caching personalised responses under a shared key.

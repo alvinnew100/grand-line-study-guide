@@ -87,20 +87,16 @@ Two consequences follow directly:
 2. **Reordering.** With load balancing, a redelivered message arrives after messages that were sent later.
 
 ```python-run
-import random
-random.seed(4)
-
 queue = [f"m{i}" for i in range(1, 7)]
 processed, attempt = [], {}
 
 while queue:
     msg = queue.pop(0)
     attempt[msg] = attempt.get(msg, 0) + 1
-    worker = random.choice(["A", "B"])
-    # worker A crashes on its first try at m2 and m4 before acknowledging
-    if worker == "A" and msg in ("m2", "m4") and attempt[msg] == 1:
-        print(f"{msg}: worker A crashed, no ack -> redeliver later")
-        queue.insert(2, msg)            # broker puts it back; others have moved on
+    # the worker that picks up m2 and m4 crashes on the first try, before acknowledging
+    if msg in ("m2", "m4") and attempt[msg] == 1:
+        print(f"{msg}: worker crashed, no ack -> redelivered after the timeout")
+        queue.insert(2, msg)            # meanwhile other workers have moved on
         continue
     processed.append(msg)
 

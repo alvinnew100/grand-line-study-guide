@@ -267,6 +267,113 @@ kubectl diff -f k8s/                          # what would change?
 > the pod during temporary overload); liveness restarts a hung process and should be cheap and free of
 > external dependencies. Then mention `maxUnavailable: 0` rolling updates and `rollout undo`.
 
+## Worked example: following a rollout and a failure
+
+Watching what the controllers do makes the abstractions concrete. Deploy a new image and observe:
+
+```text
+$ kubectl set image deployment/churn-api api=ghcr.io/acme/churn-api@sha256:9c1d...
+$ kubectl get rs -l app=churn-api -w
+NAME                    DESIRED   CURRENT   READY
+churn-api-6d5f7c9b8     3         3         3        # old ReplicaSet
+churn-api-7b8c6d4f5     1         1         0        # new ReplicaSet: surge of 1 (maxSurge=1)
+churn-api-7b8c6d4f5     1         1         1        # new pod passed readiness
+churn-api-6d5f7c9b8     2         2         2        # only now is one old pod removed (maxUnavailable=0)
+churn-api-7b8c6d4f5     2         2         1
+...
+churn-api-6d5f7c9b8     0         0         0
+churn-api-7b8c6d4f5     3         3         3
+```
+
+Now the failing case: the new image cannot load its model (wrong URI).
+
+```text
+$ kubectl rollout status deployment/churn-api --timeout=120s
+Waiting for deployment "churn-api" rollout to finish: 1 out of 3 new replicas have been updated...
+error: timed out waiting for the condition
+
+$ kubectl get pods -l app=churn-api
+NAME                         READY   STATUS             RESTARTS      AGE
+churn-api-6d5f7c9b8-2xk7p    1/1     Running            0             3d
+churn-api-6d5f7c9b8-8hmq4    1/1     Running            0             3d
+churn-api-6d5f7c9b8-tz9wd    1/1     Running            0             3d
+churn-api-7b8c6d4f5-lp2vn    0/1     CrashLoopBackOff   4 (30s ago)   2m
+
+$ kubectl logs churn-api-7b8c6d4f5-lp2vn --previous | tail -2
+mlflow.exceptions.MlflowException: Registered Model with name=chrun not found
+$ kubectl rollout undo deployment/churn-api
+```
+
+Because `maxUnavailable: 0` and the new pod never became Ready, **all three old pods kept serving** —
+users noticed nothing. This is the protection the readiness probe buys you, and it is why CD pipelines
+run `kubectl rollout status` with a timeout and roll back on failure. `CrashLoopBackOff` means the
+container keeps exiting and the kubelet restarts it with exponentially increasing delays (10 s, 20 s,
+40 s... capped at 5 minutes).
+
+## Scheduling controls you will use for ML
+
+| Mechanism | Purpose | Example |
+|---|---|---|
+| `nodeSelector` / node affinity | require or prefer nodes with certain labels | run on `gpu=a10` nodes |
+| Taints + tolerations | keep pods *off* nodes unless they opt in | GPU nodes tainted so only GPU workloads land there |
+| Pod anti-affinity / topology spread | spread replicas across nodes and zones | survive a node or zone failure |
+| Priority classes | decide who is evicted under pressure | serving outranks batch training |
+| Resource quotas / limit ranges | cap what a namespace may request | team GPU budgets |
+
+```yaml
+spec:
+  priorityClassName: serving-critical
+  topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: topology.kubernetes.io/zone
+      whenUnsatisfiable: ScheduleAnyway
+      labelSelector: {matchLabels: {app: churn-api}}
+```
+
+## Managing manifests across environments
+
+Copy-pasting YAML per environment recreates the "drifting config" problem. Two standard tools:
+
+**Kustomize** — a base plus overlays that patch it, built into `kubectl`:
+
+```text
+k8s/
+├── base/{deployment.yaml,service.yaml,kustomization.yaml}
+└── overlays/
+    ├── staging/kustomization.yaml       # replicas: 1, staging config
+    └── production/kustomization.yaml    # replicas: 3, HPA, PDB, production config
+```
+
+```yaml
+# k8s/overlays/production/kustomization.yaml
+resources: ["../../base", "hpa.yaml", "pdb.yaml"]
+images:
+  - name: ghcr.io/acme/churn-api
+    digest: sha256:9c1d...                 # CD updates only this line
+replicas:
+  - {name: churn-api, count: 3}
+configMapGenerator:
+  - name: churn-config
+    literals: ["CHURN_LOG_LEVEL=WARNING", "CHURN_MODEL_URI=models:/churn/12"]
+```
+
+`kubectl apply -k k8s/overlays/production`. The generated ConfigMap gets a content-hash suffix, so a
+config change produces a new name and **triggers a rolling update automatically** — otherwise pods keep
+running with stale environment variables until something restarts them.
+
+**Helm** — templated charts with a `values.yaml` per environment, plus release history and rollback
+(`helm upgrade --install churn ./chart -f values-prod.yaml`, `helm rollback churn 3`). Most third-party
+software (Prometheus, MLflow, KServe) is distributed as Helm charts.
+
+### Security basics for ML workloads
+
+- **RBAC**: give CI a service account that can update Deployments in one namespace, nothing else.
+- **Pod security**: `runAsNonRoot`, `readOnlyRootFilesystem`, drop capabilities, no privilege
+  escalation.
+- **NetworkPolicies**: the model service may call the feature store and registry; nothing else.
+- **Workload identity** for cloud access instead of static keys in Secrets.
+- **Image policy**: only signed images from your registry.
+
 ## Summary
 
 - Kubernetes reconciles declared desired state: API server, etcd, scheduler, controllers, kubelets.

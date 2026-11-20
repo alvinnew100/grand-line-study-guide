@@ -70,7 +70,7 @@
    "FastAPI official documentation — https://fastapi.tiangolo.com/",
    "Pydantic v2 documentation — https://docs.pydantic.dev/"
   ],
-  "words": 55681,
+  "words": 72946,
   "modules": 12,
   "lessons": 29,
   "problems": 18
@@ -251,7 +251,7 @@
    "SQLite documentation (window functions, WITH clause, EXPLAIN QUERY PLAN)",
    "PostgreSQL and MySQL reference manuals (dialect notes)"
   ],
-  "words": 79753,
+  "words": 91640,
   "modules": 19,
   "lessons": 38,
   "problems": 40

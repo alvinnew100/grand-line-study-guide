@@ -230,6 +230,148 @@ good choice — and it's the one the official SQL tutorial uses.
 > later release. Avoid long locks (concurrent index builds, lock timeouts) and always have a tested
 > downgrade or a forward-fix plan.
 
+## Worked example: a zero-downtime rename, release by release
+
+Abstract advice ("expand, then contract") is easier to trust after watching it survive a rolling deploy.
+The simulation below renames `users.fullname` to `users.full_name`. At each release, **two application
+versions run at once** against the same table — exactly what happens while pods are being replaced — and
+we check that every version can still read and write.
+
+```python-run
+import sqlite3
+
+conn = sqlite3.connect(":memory:")
+conn.execute("create table users(id integer primary key, fullname text)")
+conn.execute("insert into users(fullname) values ('Ann Lee')")
+
+# --- application versions (what each release's code does) ---
+def v1_write(name):  conn.execute("insert into users(fullname) values (?)", (name,))
+def v1_read():       return [r[0] for r in conn.execute("select fullname from users order by id")]
+
+def v2_write(name):  conn.execute("insert into users(fullname, full_name) values (?, ?)", (name, name))  # dual write
+def v2_read():       return [r[0] for r in conn.execute("select coalesce(full_name, fullname) from users order by id")]
+
+def v3_write(name):  conn.execute("insert into users(full_name) values (?)", (name,))
+def v3_read():       return [r[0] for r in conn.execute("select full_name from users order by id")]
+
+def check(title, *ops):
+    try:
+        results = [op() for op in ops]
+        print(f"OK    {title}: {results[-1]}")
+    except sqlite3.Error as e:
+        print(f"BREAK {title}: {e}")
+
+print("--- naive approach: rename in place while v1 is still running ---")
+conn.execute("savepoint naive")
+conn.execute("alter table users rename column fullname to full_name")
+check("v1 code after in-place rename", v1_read)
+conn.execute("rollback to naive")
+
+print("--- expand / migrate / contract ---")
+conn.execute("alter table users add column full_name text")                    # migration 1: EXPAND
+check("release A: v1 + v2 running", lambda: v1_write("Bob Ray"), lambda: v2_write("Cy Day"), v1_read, v2_read)
+
+conn.execute("update users set full_name = fullname where full_name is null")  # migration 2: BACKFILL
+check("release B: v2 + v3 running", lambda: v2_write("Di Fox"), lambda: v3_write("Ed Gil"), v2_read, v3_read)
+
+# only v3 remains -> safe to CONTRACT
+conn.execute("alter table users drop column fullname")                        # migration 3: CONTRACT
+check("release C: only v3 running ", lambda: v3_write("Flo Hay"), v3_read)
+```
+
+Each step is boring by design. The in-place rename breaks the old code instantly; the three-migration
+route never has a moment where a running version sees a schema it can't handle. Note what makes release B
+safe: v2 reads with `coalesce(full_name, fullname)`, so rows written by v1 before the backfill still
+display, and v2 *dual-writes*, so rows it creates are valid for both older and newer code. The cost is
+three deploys instead of one — which is why you plan renames rather than doing them casually.
+
+In Alembic these are three separate revision files, shipped in three releases:
+
+```python
+# 1) expand
+def upgrade():
+    op.add_column("users", sa.Column("full_name", sa.String(200), nullable=True))
+
+# 2) backfill, in batches so no single statement locks the table for long
+def upgrade():
+    conn = op.get_bind()
+    while True:
+        result = conn.execute(sa.text("""
+            update users set full_name = fullname
+            where id in (select id from users where full_name is null limit 5000)"""))
+        if result.rowcount == 0:
+            break
+
+# 3) contract (a later release, after no running code reads `fullname`)
+def upgrade():
+    op.alter_column("users", "full_name", nullable=False)
+    op.drop_column("users", "fullname")
+```
+
+## Which schema changes are safe?
+
+| Change | Safe with old code running? | Notes |
+|---|---|---|
+| Add a table | yes | |
+| Add a nullable column / column with a default | yes | on modern PostgreSQL a constant default doesn't rewrite the table |
+| Add a `NOT NULL` column without default | **no** | old code's inserts fail; add nullable → backfill → set `NOT NULL` |
+| Add an index | yes, if built concurrently | plain `CREATE INDEX` blocks writes on big tables |
+| Add a foreign key / check constraint | careful | validation scans the table; in PostgreSQL add `NOT VALID`, then `VALIDATE` separately |
+| Rename a column or table | **no** | expand/contract as above |
+| Change a column type | usually **no** | new column + dual write + backfill |
+| Drop a column | only after no deployed code references it | ORM `SELECT`s list columns explicitly, so old code breaks immediately |
+| Drop a table | same | keep it one release longer than you think |
+
+## Migration hygiene in a team
+
+- **One linear history.** Two developers each creating a migration from the same parent produce two
+  *heads*; `alembic upgrade head` then refuses to run. Detect it in CI (`alembic heads` must print one
+  line) and fix with `alembic merge` or by re-parenting.
+- **Never edit an applied migration.** Environments that already ran it won't run it again; write a new
+  one.
+- **Test migrations themselves.** A CI job that runs `upgrade head`, then `downgrade base`, then `upgrade
+  head` on an empty database catches most broken scripts; running `upgrade` against a copy of production
+  data catches the rest (duration, locks, bad data).
+- **Check for drift.** `alembic check` (or autogenerate in CI expecting an empty diff) fails the build
+  when models changed without a migration.
+- **Data migrations** that take minutes belong in batch jobs, not in the deploy path.
+
+## Pool exhaustion: recognising and reproducing it
+
+The pool error message — `QueuePool limit of size 5 overflow 10 reached, connection timed out` — nearly
+always means connections are being *held* too long, not that the pool is too small:
+
+```python-run
+import asyncio
+
+async def handler(pool, hold, results, timeout=0.15):
+    try:
+        async with asyncio.timeout(timeout):            # pool_timeout
+            await pool.acquire()
+    except TimeoutError:
+        results.append("pool timeout")
+        return
+    try:
+        await asyncio.sleep(hold)                        # time the session is checked out
+        results.append("ok")
+    finally:
+        pool.release()
+
+async def scenario(hold):
+    pool, results = asyncio.Semaphore(3), []             # pool_size = 3
+    await asyncio.gather(*(handler(pool, hold, results) for _ in range(12)))
+    return {k: results.count(k) for k in ("ok", "pool timeout")}
+
+print("fast queries only (20 ms held)            :", await scenario(0.02))
+print("session held during a slow upstream call  :", await scenario(0.20))
+```
+
+Same pool, same traffic; the only difference is how long each request keeps its connection. Typical
+culprits: calling an external API or doing heavy computation between `get_session` and the end of the
+request, streaming a response while the session is open, forgetting to close sessions created outside the
+dependency (background tasks, scripts), and long transactions waiting on locks. Fix the holding time
+first; raise `pool_size` only when the database has headroom.
+
 ## Pitfalls
 
 - Relying on `create_all` in production.

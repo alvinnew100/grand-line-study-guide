@@ -249,6 +249,144 @@ otherwise a blocking call would stall the loop.
 > dependency at most once (cached per request unless `use_cache=False`), merges their parameters into the
 > endpoint's validation and OpenAPI docs, and injects results as arguments.
 
+## Worked example: the dependency stack of a real endpoint
+
+Here is the kind of dependency module almost every production FastAPI service ends up with. Read it
+bottom-up: each alias builds on the ones above it.
+
+```python
+# app/deps.py
+from typing import Annotated
+from fastapi import Depends, Header, HTTPException, Query, Request, status
+
+# --- 1. configuration ------------------------------------------------------------
+SettingsDep = Annotated[Settings, Depends(get_settings)]
+
+# --- 2. per-request resources ----------------------------------------------------
+def get_session(request: Request):
+    with Session(request.app.state.engine) as session:
+        yield session
+
+SessionDep = Annotated[Session, Depends(get_session)]
+
+# --- 3. identity -----------------------------------------------------------------
+def get_token(authorization: Annotated[str | None, Header()] = None) -> str:
+    scheme, _, token = (authorization or "").partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Not authenticated",
+                            headers={"WWW-Authenticate": "Bearer"})
+    return token
+
+def get_current_user(token: Annotated[str, Depends(get_token)],
+                     session: SessionDep, settings: SettingsDep) -> User:
+    user_id = decode_token(token, settings.secret_key)            # raises 401 on bad token
+    user = session.get(User, user_id)
+    if user is None or not user.is_active:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid credentials")
+    return user
+
+CurrentUser = Annotated[User, Depends(get_current_user)]
+
+# --- 4. authorization, parameterised --------------------------------------------
+def require_role(role: str):
+    def checker(user: CurrentUser) -> User:
+        if role not in user.roles:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "Not enough permissions")
+        return user
+    return checker
+
+AdminUser = Annotated[User, Depends(require_role("admin"))]
+
+# --- 5. reusable request shapes --------------------------------------------------
+class Page:
+    def __init__(self, limit: Annotated[int, Query(ge=1, le=100)] = 20,
+                 offset: Annotated[int, Query(ge=0)] = 0):
+        self.limit, self.offset = limit, offset
+
+PageDep = Annotated[Page, Depends()]
+
+# --- 6. loading a resource or 404 ------------------------------------------------
+def get_order_or_404(order_id: int, session: SessionDep, user: CurrentUser) -> Order:
+    order = session.get(Order, order_id)
+    if order is None or order.owner_id != user.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Order not found")
+    return order
+
+OrderDep = Annotated[Order, Depends(get_order_or_404)]
+```
+
+With that in place endpoints become declarations of intent:
+
+```python
+@router.get("/orders", response_model=list[OrderPublic])
+def list_orders(user: CurrentUser, page: PageDep, session: SessionDep): ...
+
+@router.get("/orders/{order_id}", response_model=OrderPublic)
+def read_order(order: OrderDep):
+    return order                                   # existence AND ownership already verified
+
+@router.delete("/orders/{order_id}", status_code=204)
+def delete_order(order: OrderDep, session: SessionDep):
+    session.delete(order); session.commit()
+
+@router.get("/admin/stats")
+def stats(admin: AdminUser, session: SessionDep): ...
+```
+
+Trace `GET /orders/9` with a valid token belonging to user 7:
+
+1. FastAPI sees `read_order` needs `get_order_or_404`, which needs `order_id` (path), `get_session` and
+   `get_current_user`; the latter needs `get_token`, `get_session` and `get_settings`.
+2. Resolution order (depth-first, each once): `get_session` → `get_token` → `get_settings` →
+   `get_current_user` → `get_order_or_404` → endpoint. The single session is shared by the user lookup
+   and the order lookup because of per-request caching.
+3. If the `Authorization` header is missing, `get_token` raises 401 and **nothing further runs** — no
+   database query for the order, no endpoint code.
+4. If order 9 belongs to someone else, the dependency raises 404 (not 403, so its existence isn't
+   revealed).
+5. After the response, `get_session`'s cleanup closes the session.
+
+Notice `get_order_or_404` uses the path parameter `order_id` itself: a dependency may declare a path
+parameter of the route it is used on. This "load or 404, with ownership check" dependency removes the
+most-duplicated five lines in CRUD code and makes forgetting the ownership check structurally harder.
+
+### Two styles of parameterised dependency
+
+`require_role("admin")` above is a **closure**: an outer function captures the argument and returns the
+real dependency. The class version from earlier (`RequireRole("admin")` with `__call__`) is equivalent.
+A subtlety: every call to `require_role("admin")` creates a *new* function object, and the per-request
+cache and `dependency_overrides` are keyed by the callable. So create each variant once and reuse it —
+which is exactly what the `AdminUser` alias does.
+
+## Dependency or something else?
+
+| Mechanism | Lifetime | Typical contents |
+|---|---|---|
+| Module-level constant | process, created at import | pure configuration-free helpers |
+| **Lifespan + `app.state`** | process, created at startup | engine/pool, HTTP client, ML model |
+| **Dependency** | one request | session, current user, parsed parameters, permission checks |
+| Middleware | every request, untyped | request IDs, timing, CORS |
+| Plain function call | wherever you call it | logic that needs no request data |
+
+A helpful test: *does it need something from the request, or need cleanup per request, or need to be
+swapped in tests?* If yes, make it a dependency. If it is just a computation on values you already have,
+call a normal function — not everything needs to be injected.
+
+## Debugging dependency problems
+
+| Symptom | Cause |
+|---|---|
+| Unexpected `422` naming a field you never declared on the endpoint | a dependency declares that parameter; look at `loc` and search your dependencies |
+| A dependency parameter is treated as a query parameter instead of being injected | missing `Depends` — a bare `session: Session` is not a dependency |
+| The dependency runs twice per request | two *different* callables (e.g. `require_role("admin")` created twice), or `use_cache=False` |
+| `dependency_overrides` has no effect | the key isn't the same object the route references (a re-created closure, a `functools.partial`, an import of a different function) |
+| `RuntimeError` about generators or "no response returned" | a `yield` dependency swallowing an exception or yielding twice |
+| Startup error "Invalid args for response field" | the dependency's *return* type isn't the issue — a route return annotation is; use `response_model=None` |
+| Slow health checks | an expensive global dependency also applies to `/health` |
+
+To see what a route will resolve, inspect its dependant tree: `route.dependant.dependencies` on any
+`APIRoute` in `app.routes` lists the callables FastAPI discovered, recursively.
+
 ## Pitfalls
 
 - `Depends(get_db())` — calling the function instead of passing it.

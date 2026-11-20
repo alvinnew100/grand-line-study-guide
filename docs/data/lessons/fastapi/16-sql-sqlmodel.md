@@ -256,6 +256,149 @@ educational debugging switch SQLAlchemy has.
 > Sessions are never shared between requests or threads. In tests, override the dependency with a session
 > bound to a test database or a transaction that rolls back after each test.
 
+## Relationships and N+1, demonstrated
+
+The N+1 problem is easier to believe once you count the queries. SQLite lets us trace every statement:
+
+```python-run
+import sqlite3
+
+conn = sqlite3.connect(":memory:")
+conn.executescript("""
+    create table users(id integer primary key, name text);
+    create table orders(id integer primary key, user_id integer references users(id), total real);
+    create index ix_orders_user on orders(user_id);
+""")
+conn.executemany("insert into users values (?, ?)", [(i, f"user{i}") for i in range(1, 51)])
+conn.executemany("insert into orders(user_id, total) values (?, ?)",
+                 [(u, 10.0 * k) for u in range(1, 51) for k in range(1, 4)])
+
+statements = []
+conn.set_trace_callback(statements.append)
+
+# --- lazy loading: what an ORM does when you touch user.orders in a loop ---
+statements.clear()
+result = {}
+for user_id, name in conn.execute("select id, name from users").fetchall():
+    result[name] = [t for (t,) in conn.execute("select total from orders where user_id = ?", (user_id,))]
+print("lazy          :", len(statements), "queries")
+
+# --- 'selectin' eager loading: one extra query with IN (...) ---
+statements.clear()
+users = conn.execute("select id, name from users").fetchall()
+ids = [u[0] for u in users]
+orders = conn.execute(f"select user_id, total from orders where user_id in ({','.join('?' * len(ids))})", ids)
+by_user = {}
+for user_id, total in orders:
+    by_user.setdefault(user_id, []).append(total)
+result2 = {name: by_user.get(uid, []) for uid, name in users}
+print("selectin      :", len(statements), "queries")
+
+# --- 'joined' eager loading: a single JOIN ---
+statements.clear()
+rows = conn.execute("""select u.name, o.total from users u left join orders o on o.user_id = u.id""").fetchall()
+print("joined        :", len(statements), "query,", len(rows), "rows for 50 users (parent data repeated)")
+print("same data     :", result == result2)
+```
+
+Fifty-one queries versus two. Over a network each query costs a round trip of perhaps a millisecond, so
+the lazy version of a 100-item page spends 100 ms doing nothing but waiting. Note the trade-off in the
+last variant: a JOIN returns one row per *child*, repeating the parent columns — fine for one-to-one and
+small one-to-many, wasteful for large collections, which is why `selectinload` is the usual default for
+collections and `joinedload` for many-to-one.
+
+In SQLModel/SQLAlchemy the relationship and the eager load look like this:
+
+```python
+class Team(SQLModel, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    name: str = Field(index=True)
+    heroes: list["Hero"] = Relationship(back_populates="team")
+
+class Hero(SQLModel, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    name: str
+    team_id: int | None = Field(default=None, foreign_key="team.id", index=True)
+    team: Team | None = Relationship(back_populates="heroes")
+
+class TeamPublicWithHeroes(TeamPublic):          # response model that includes the children
+    heroes: list[HeroPublic] = []
+
+@app.get("/teams", response_model=list[TeamPublicWithHeroes])
+def read_teams(session: SessionDep, limit: Annotated[int, Query(le=100)] = 20):
+    statement = select(Team).options(selectinload(Team.heroes)).limit(limit)
+    return session.exec(statement).all()
+```
+
+Two details matter here. Response models that include relationships must be declared explicitly — the
+plain `TeamPublic` has no `heroes`, so nothing is loaded or leaked by accident. And beware recursive
+shapes (`TeamPublicWithHeroes.heroes[*].team.heroes...`): design the nested public models to stop at one
+level.
+
+## Indexes and reading a query plan
+
+The second classic performance problem is a missing index. `EXPLAIN` shows what the database will do:
+
+```python-run
+import sqlite3
+
+conn = sqlite3.connect(":memory:")
+conn.execute("create table events(id integer primary key, user_id integer, kind text, created_at text)")
+conn.executemany("insert into events(user_id, kind, created_at) values (?, ?, ?)",
+                 [(i % 1000, "click", f"2025-01-{i % 28 + 1:02d}") for i in range(20000)])
+
+def plan(sql):
+    return " | ".join(row[3] for row in conn.execute("explain query plan " + sql))
+
+q = "select * from events where user_id = 42 order by created_at desc limit 20"
+print("no index      :", plan(q))
+conn.execute("create index ix_events_user on events(user_id)")
+print("single column :", plan(q))
+conn.execute("create index ix_events_user_created on events(user_id, created_at)")
+print("composite     :", plan(q))
+```
+
+`SCAN` means every row is read; `SEARCH ... USING INDEX` means a lookup. With only the single-column
+index the database still needs a temporary sort for `ORDER BY`; the **composite** index on `(user_id,
+created_at)` satisfies both the filter and the ordering, so the first twenty rows can be returned without
+sorting. Rules of thumb: index foreign keys and the columns in your most frequent `WHERE`/`ORDER BY`
+clauses; order composite-index columns as equality filters first, then the sort or range column; and
+remember each index slows writes a little. On PostgreSQL use `EXPLAIN (ANALYZE, BUFFERS)` on the real
+query with realistic data.
+
+## Sessions: the mental model
+
+A session is three things at once, and most ORM confusion comes from forgetting one of them:
+
+| Aspect | What it does | Consequence |
+|---|---|---|
+| **Identity map** | one Python object per row per session | `session.get(User, 1) is session.get(User, 1)`; a second session has its own copy |
+| **Unit of work** | tracks new, dirty and deleted objects; writes them at `flush` | changes are sent as SQL on flush (automatically before queries and at commit), not when you set attributes |
+| **Transaction** | begun on first use, ended by `commit`/`rollback`/`close` | nothing is durable, and nothing is visible to other sessions, until commit |
+
+Useful distinctions: `flush()` sends pending SQL *inside* the transaction (so you can read a generated
+primary key before committing); `commit()` flushes and makes it durable; `refresh(obj)` re-reads a row;
+`expire_on_commit` (default `True`) marks objects stale after commit, so the next attribute access
+reloads them — the cause of the infamous `DetachedInstanceError` when you touch an object after its
+session closed. In an API, convert to response models (or let `response_model` do it) while the session
+is still open.
+
+## Debugging checklist
+
+| Symptom | Likely cause |
+|---|---|
+| Changes vanish | no `commit()`, or an exception rolled back the transaction |
+| `id` is `None` after `add` | not flushed/committed yet, or missing `refresh` |
+| `DetachedInstanceError` / lazy-load error in serialisation | object used after its session closed; eager-load or serialise earlier |
+| `QueuePool limit ... reached, connection timed out` | sessions not closed, long transactions, or pool too small for the concurrency |
+| `SQLite objects created in a thread can only be used in that same thread` | missing `check_same_thread=False` for SQLite |
+| Endpoint slow with many tiny queries in the log | N+1 — add `selectinload` |
+| `IntegrityError` under concurrent requests only | check-then-insert race; rely on the constraint and handle the error |
+| Deadlocks under load | transactions touching the same rows in different orders; lock in a consistent order, keep transactions short |
+
+Setting `echo=True` on the engine (development only) prints every statement with its parameters and is
+the fastest way to confirm any of the above.
+
 ## Pitfalls
 
 - A global session shared by all requests.

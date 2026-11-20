@@ -224,6 +224,86 @@ GET    /v1/batch-jobs/{job_id}          poll job status
 Every URL is a noun; the verbs come from HTTP; long-running work is a resource you can poll; versions are
 in the path.
 
+## Worked trace: one resource through its whole life
+
+Following a single item from creation to deletion shows how the conventions fit together. Each step lists
+the request, the response and the rule it demonstrates.
+
+```text
+1. POST /v1/items                      {"name": "wrench", "price": 9.5}
+   -> 201 Created   Location: /v1/items/42   ETag: "a1"      body: the new item
+2. GET /v1/items/42
+   -> 200 OK        ETag: "a1"   Cache-Control: private, max-age=30
+3. GET /v1/items/42                    If-None-Match: "a1"
+   -> 304 Not Modified (no body)                              conditional read
+4. PATCH /v1/items/42                  If-Match: "a1"   {"price": 11.0}
+   -> 200 OK        ETag: "b7"                                optimistic concurrency
+5. PATCH /v1/items/42                  If-Match: "a1"   {"price": 12.0}
+   -> 412 Precondition Failed                                 someone else changed it first
+6. DELETE /v1/items/42
+   -> 204 No Content
+7. GET /v1/items/42
+   -> 404 Not Found
+8. DELETE /v1/items/42
+   -> 404 Not Found (state is unchanged: DELETE is still idempotent)
+```
+
+Steps 4 and 5 are **optimistic concurrency control**: the client proves it has seen the latest version by
+sending the ETag back in `If-Match`. Two users editing the same record can no longer silently overwrite
+each other (the "lost update" problem); the loser receives `412` and must re-read. It costs nothing but a
+header comparison, and it's the answer interviewers want when they ask how to handle concurrent edits
+without locks.
+
+## Offset versus cursor pagination, concretely
+
+The weakness of offset pagination is easiest to see by running it against data that changes between page
+requests:
+
+```python-run
+import base64, json
+
+rows = [{"id": i, "name": f"item-{i}"} for i in range(1, 11)]      # ids 1..10, newest last
+
+def page_offset(data, limit, offset):
+    return data[offset: offset + limit]
+
+def page_cursor(data, limit, cursor=None):
+    after = json.loads(base64.urlsafe_b64decode(cursor))["id"] if cursor else 0
+    chunk = [r for r in data if r["id"] > after][:limit]              # WHERE id > :after ORDER BY id LIMIT :n
+    nxt = base64.urlsafe_b64encode(json.dumps({"id": chunk[-1]["id"]}).encode()).decode() if chunk else None
+    return chunk, nxt
+
+# --- offset: read page 1, then a row is deleted, then read page 2 ---
+p1 = page_offset(rows, 3, 0)
+rows_after_delete = [r for r in rows if r["id"] != 2]                # someone deletes id 2
+p2 = page_offset(rows_after_delete, 3, 3)
+print("offset pages:", [r["id"] for r in p1], [r["id"] for r in p2], "<- id 4 was skipped!")
+
+# --- cursor: same scenario ---
+c1, cur = page_cursor(rows, 3)
+c2, _ = page_cursor(rows_after_delete, 3, cur)
+print("cursor pages:", [r["id"] for r in c1], [r["id"] for r in c2], "<- nothing skipped")
+print("opaque cursor the client sees:", cur)
+```
+
+With offsets, deleting one earlier row shifts everything up, so the client never sees item 4 (an insert
+would cause a duplicate instead). The cursor version asks "what comes after the last thing I saw?", which
+stays correct however the table changes — and the database answers it with an index seek instead of
+scanning and discarding `offset` rows. The cursor is opaque (base64) so clients can't depend on its
+contents, leaving you free to change the sort key later. The trade-off: cursors can't jump to "page 17",
+and they need a stable, unique sort key (add `id` as a tie-breaker when sorting by a non-unique column).
+
+## Design mistakes and how they show up
+
+| Symptom reported by clients | Likely design mistake | Fix |
+|---|---|---|
+| "We got charged twice after a timeout" | non-idempotent `POST` retried | accept an `Idempotency-Key` header |
+| "The mobile app broke after your release" | a field was renamed or its type changed | additive changes only; new version for breaking ones |
+| "We can't tell a validation error from an outage" | every error is `400` or `500` with free text | precise codes plus a machine-readable error `type` |
+| "The list endpoint times out" | unbounded collection | mandatory pagination with a capped `limit` |
+| "Updates overwrite each other" | blind `PUT` | ETags with `If-Match` |
+| "Dates are off by a few hours" | naive local timestamps | ISO 8601 in UTC with an explicit offset |
+
 ## Pitfalls
 
 - Verbs in URLs (`/getUser`) and inconsistent pluralisation.

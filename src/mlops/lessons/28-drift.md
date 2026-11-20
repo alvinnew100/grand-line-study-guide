@@ -228,6 +228,48 @@ result.save_html("drift_report.html")        # per-feature tests, drift share, d
 > re-engineering. Add: check data-quality bugs first, alert on effect size not p-values at large n, and
 > monitor predictions and slices.
 
+## A drift investigation, step by step
+
+*Alert: PSI on `monthly_charges` in the EU segment = 0.38 for two consecutive days (threshold 0.25); the all-traffic PSI is only about 0.11.*
+
+1. **Data quality first.** Null rate unchanged; minimum and maximum moved from (20, 120) to (20, 150);
+   row volume normal; no schema change. Not an obvious pipeline bug.
+2. **Characterise the shift.** Compare histograms: the whole distribution moved up by about 25%, not
+   just a tail. All regions or one? Only EU customers — which is why the global statistic stayed under
+   the threshold and the per-segment monitor caught it.
+3. **Find the cause.** Deployment log and upstream changelog: a price increase for EU plans took effect
+   three days ago. This is a **real covariate shift**, not a bug.
+4. **Estimate impact.** `monthly_charges` is the third most important feature. No labels yet for the
+   affected period (30-day label window). Proxies: the mean predicted churn score for EU rose from 0.11
+   to 0.16; the share above the campaign threshold rose 40%. Is that plausible (price rises do increase
+   churn) or is the model extrapolating outside its training range? Many values now exceed the training
+   maximum — extrapolation is likely.
+5. **Decide.** Short term: flag EU predictions as lower confidence, cap campaign volume, keep monitoring.
+   Medium term: retrain as soon as enough post-change labels exist, with recent data weighted more.
+   Record the decision and the reference-window update.
+
+The alert was correct, the answer was not "retrain immediately", and the valuable work was steps 2–4:
+**slice, find the cause, estimate impact.**
+
+```python-run
+import numpy as np
+rng = np.random.default_rng(5)
+ref = {"EU": rng.uniform(20, 120, 6000), "US": rng.uniform(20, 120, 6000)}
+cur = {"EU": rng.uniform(20, 120, 2000) * 1.25, "US": rng.uniform(20, 120, 2000)}
+def psi(e, a, bins=10):
+    lo, hi = e.min(), e.max()
+    f = lambda x: np.maximum(np.bincount(np.clip(np.floor((x - lo) / (hi - lo) * bins).astype(int), 0, bins - 1), minlength=bins) / len(x), 1e-4)
+    p, q = f(e), f(a); return float(np.sum((q - p) * np.log(q / p)))
+all_ref, all_cur = np.concatenate(list(ref.values())), np.concatenate(list(cur.values()))
+print(f"overall PSI: {psi(all_ref, all_cur):.3f}")
+for region in ref:
+    out_of_range = (cur[region] > ref[region].max()).mean()
+    print(f"  {region}: PSI={psi(ref[region], cur[region]):.3f}  share of values above training max: {out_of_range:.1%}")
+```
+
+The overall number hides where the problem is; slicing shows it is entirely in one region, and the
+out-of-range share quantifies how much the model is extrapolating.
+
 ## Summary
 
 - Drift types: covariate, label, concept, prediction; plus pipeline bugs masquerading as drift.
