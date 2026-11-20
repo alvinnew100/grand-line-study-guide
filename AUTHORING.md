@@ -174,3 +174,40 @@ Numeric/ML problems: numpy is available in the browser; return lists or numpy ar
 - Accurate: double-check facts against the source PDF text and official docs.
 - Original wording; cite sources.
 - Every lesson ends with a quiz; every module that teaches an algorithmic or coding skill has problems.
+
+## 5. JavaScript and HTML/CSS (web tracks)
+
+Lesson blocks:
+
+- **Runnable JavaScript**: a ```` ```js-run ```` fence. Runs in a Web Worker; `console.log` output is shown. No DOM, no network.
+- **Live HTML/CSS/JS preview**: a ```` ```html-run ```` fence containing a complete small page (put CSS in `<style>` and JS in `<script>`). It renders in a sandboxed frame below the editor and re-renders on Run.
+- Plain ```` ```javascript ````, ```` ```html ```` and ```` ```css ```` fences are static, highlighted code.
+
+JavaScript problems (`kind="js"`): same fields as Python problems, except
+`entry` is the name of a top-level function declared in the code (no `class Solution`),
+`starter`/`solution`/`wrong_solutions` are JavaScript, and `tests` are lists of JSON arguments.
+Expected outputs are computed by running `solution` in Node, so results must be JSON-serialisable
+(return arrays/objects/numbers/strings/booleans/null; `undefined` becomes `null`).
+`compare` supports `exact` (default; object key order ignored), `unordered`, `unordered_nested`, `float`.
+No `arg_types`, `checker`, or `kind="class"` for JavaScript; to test a class, have `entry` be a function
+that takes a list of operations and returns the list of results.
+
+```python
+dict(
+    id="js-sum-range", title="Sum a range", difficulty="Easy", pattern="Functions", kind="js", entry="sumRange",
+    description="...", starter="function sumRange(a, b) {\n  // your code\n}\n",
+    solution="function sumRange(a, b) {\n  let s = 0;\n  for (let i = a; i <= b; i++) s += i;\n  return s;\n}\n",
+    tests=[[1, 3], [5, 5], [3, 1]], wrong_solutions=["function sumRange(a, b) { return a + b; }\n"], guide=dict(...),
+)
+```
+
+HTML/CSS problems (`kind="web"`): the learner edits one HTML document (CSS in `<style>`).
+Give `starter` (a page with gaps), `solution` (a full page that meets every requirement) and
+`checks`: at least 3 dicts `{"name": "...what the learner sees...", "test": "<JavaScript expression>"}`.
+Each `test` is evaluated inside the rendered page after load and must be truthy, for example
+`document.querySelectorAll('nav li').length === 3`,
+`getComputedStyle(document.querySelector('h1')).textAlign === 'center'`,
+`document.querySelector('img').alt.length > 0`. The frame is 1024x768. Keep tests robust
+(compare computed values, not source text) and make sure the solution passes all of them and the
+starter fails at least one. Web problems have no `tests`/`entry`; the build only checks their shape,
+so double-check each expression by reasoning through it against your solution.

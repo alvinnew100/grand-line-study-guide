@@ -105,6 +105,57 @@ def build_sql_problem(p, track_dir):
     }
 
 
+def run_node(code, entry, arg_lists):
+    import subprocess
+    node = shutil.which("node") or r"C:/Program Files/nodejs/node.exe"
+    r = subprocess.run([node, str(ROOT / "tools" / "js_harness.js")], input=json.dumps({"code": code, "entry": entry, "tests": arg_lists}),
+                       capture_output=True, text=True, encoding="utf-8", timeout=60)
+    return json.loads(r.stdout)
+
+
+def build_js_problem(p):
+    """JavaScript problem: `entry` is a top-level function in `solution`; expected outputs come from Node."""
+    if "entry" not in p:
+        err(f"{p['id']}: missing entry")
+        return None
+    args = [list(a) for a in p["tests"]]
+    try:
+        res = run_node(p["solution"], p["entry"], args)
+    except Exception as e:  # noqa: BLE001
+        err(f"{p['id']}: node failed: {e}")
+        return None
+    if isinstance(res, dict):
+        err(f"{p['id']}: reference solution: {res.get('fatal')}")
+        return None
+    tests = []
+    for i, (a, r) in enumerate(zip(args, res)):
+        if "error" in r:
+            err(f"{p['id']}: reference solution failed on test {i}: {r['error']}")
+            return None
+        tests.append({"args": a, "expected": r["got"]})
+    spec = {"compare": p.get("compare", "exact"), "tolerance": p.get("tolerance", 1e-6)}
+    for j, bad in enumerate(p.get("wrong_solutions", [])):
+        br = run_node(bad, p["entry"], args)
+        if not isinstance(br, dict) and all("error" not in r and harness.compare(spec, t["args"], r["got"], t["expected"]) for r, t in zip(br, tests)):
+            err(f"{p['id']}: wrong_solutions[{j}] passes all tests - add stronger tests")
+    if p["starter"].strip() == p["solution"].strip():
+        err(f"{p['id']}: starter equals solution")
+    out = {k: v for k, v in p.items() if k not in ("tests", "wrong_solutions")}
+    out.update(tests=tests, examples=p.get("examples", min(3, len(tests))))
+    return out
+
+
+def build_web_problem(p):
+    """HTML/CSS problem: `checks` are JavaScript expressions evaluated inside the rendered page (verified in the browser)."""
+    checks = p.get("checks") or []
+    if len(checks) < 3 or not all(isinstance(c, dict) and c.get("name") and c.get("test") for c in checks):
+        err(f"{p['id']}: web problems need at least 3 checks, each with name and test")
+        return None
+    if p["starter"].strip() == p["solution"].strip():
+        err(f"{p['id']}: starter equals solution")
+    return {k: v for k, v in p.items() if k not in ("wrong_solutions",)}
+
+
 def build_code_problem(p):
     spec = {
         k: p.get(k)
@@ -163,7 +214,7 @@ def build_track(track_dir):
             err(f"{f.name}: failed to import: {e}")
             continue
         for p in plist:
-            missing = [k for k in REQUIRED_PROBLEM if k not in p and not (k == "tests" and p.get("kind") == "sql")]
+            missing = [k for k in REQUIRED_PROBLEM if k not in p and not (k == "tests" and p.get("kind") in ("sql", "web"))]
             if missing:
                 err(f"{f.name}:{p.get('id')}: missing {missing}")
                 continue
@@ -171,7 +222,9 @@ def build_track(track_dir):
                 err(f"{p['id']}: difficulty must be one of {DIFFS}")
             if p["id"] in problems:
                 err(f"{p['id']}: duplicate problem id")
-            built = build_sql_problem(p, track_dir) if p.get("kind") == "sql" else build_code_problem(p)
+            kind = p.get("kind")
+            built = (build_sql_problem(p, track_dir) if kind == "sql" else build_js_problem(p) if kind == "js"
+                     else build_web_problem(p) if kind == "web" else build_code_problem(p))
             if built:
                 built["track"] = tid
                 problems[p["id"]] = built

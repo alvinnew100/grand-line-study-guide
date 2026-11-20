@@ -66,7 +66,8 @@
     }
     async function pull() {
       if (!sess) return false;
-      const remote = (await rpc("sg_load", creds())) || {};
+      let remote;
+      try { remote = (await rpc("sg_load", creds())) || {}; } catch (e) { if (/Session expired/.test(e.message)) setSess(null); throw e; }
       const local = S(), dirty = local._dirty || !Object.keys(remote).length;
       store.replace(clean(dirty ? merge(local, remote) : merge(remote, local)));  // not dirty: the account copy wins
       last = new Date();
@@ -198,6 +199,8 @@
     if (lang === "quiz") { pending[id] = { type: "quiz", code }; return `<div class="quiz" id="${id}"></div>`; }
     if (lang === "mermaid") { pending[id] = { type: "mermaid", code }; return `<div class="mermaid-wrap" id="${id}"></div>`; }
     if (lang === "python-run" || lang === "py-run") { pending[id] = { type: "py", code }; return `<div class="runnable" id="${id}"></div>`; }
+    if (lang === "js-run") { pending[id] = { type: "js", code }; return `<div class="runnable" id="${id}"></div>`; }
+    if (lang === "html-run") { pending[id] = { type: "html", code }; return `<div class="runnable" id="${id}"></div>`; }
     if (lang === "sql-run") {
       const ds = (infoStr.match(/dataset=([\w-]+)/) || [])[1];
       pending[id] = { type: "sql", code, dataset: ds };
@@ -241,6 +244,8 @@
         else if (b.type === "mermaid") mountMermaid(el, b.code);
         else if (b.type === "py") mountRunnable(el, b.code, "python");
         else if (b.type === "sql") mountRunnable(el, b.code, "sql", b.dataset);
+        else if (b.type === "js") WebKit.mountJs(el, b.code, makeEditor);
+        else if (b.type === "html") WebKit.mountHtml(el, b.code, makeEditor);
       } catch (e) {
         el.innerHTML = `<pre class="io err">${esc(e.message)}</pre>`;
       }
@@ -418,7 +423,7 @@
   function makeEditor(host, value, mode, opts = {}) {
     const o = S().opts || {};
     const cm = CodeMirror(host, {
-      value, mode: mode === "sql" ? "text/x-sqlite" : { name: "python", version: 3 },
+      value, mode: mode === "sql" ? "text/x-sqlite" : mode === "js" ? "javascript" : mode === "html" ? "htmlmixed" : { name: "python", version: 3 },
       lineNumbers: opts.lineNumbers !== false, indentUnit: 4, tabSize: 4, indentWithTabs: false,
       matchBrackets: true, autoCloseBrackets: true, lineWrapping: !!o.wrap || !!opts.wrap,
       keyMap: o.vim ? "vim" : "default", viewportMargin: opts.auto ? Infinity : 10,
@@ -475,7 +480,7 @@
   // ---------------------------------------------------------------- Ghibli stills & quotes
   const TRACK_FILM = { csapp: "laputa", python: "baron", "dsa-foundations": "mimi", "neet-arrays": "majo", "neet-window-stack": "howl",
     "neet-linked-trees": "totoro", "neet-heap-graphs": "mononoke", "neet-dp": "chihiro", "neet-greedy-math": "porco", sql: "kokurikozaka",
-    databases: "nausicaa", ml: "kazetachinu", fastapi: "ponyo", mlops: "karigurashi", "ai-eng": "kimitachi", "llm-practice": "kaguyahime", os: "ged", "linux-cli": "yamada", vim: "marnie", cicd: "umi", thinking: "omoide" };
+    databases: "nausicaa", ml: "kazetachinu", fastapi: "ponyo", mlops: "karigurashi", "ai-eng": "kimitachi", "llm-practice": "kaguyahime", os: "ged", "linux-cli": "yamada", vim: "marnie", cicd: "umi", thinking: "omoide", "html-css": "tanuki", javascript: "red-turtle" };
   const Ghibli = {
     works: {}, list: [], quotes: [], note: "", terms: "",
     async load() {
@@ -628,8 +633,8 @@
   const ROADMAP = {
     pos: { csapp: [0, 0], python: [2, 0], sql: [4, 0], "dsa-foundations": [1, 1], fastapi: [2, 1], ml: [3, 1], databases: [4, 1],
       "neet-arrays": [1, 2], mlops: [3, 2], "ai-eng": [4, 2], "neet-window-stack": [0, 3], "neet-linked-trees": [1, 3], "llm-practice": [4, 3],
-      "neet-greedy-math": [0, 4], "neet-heap-graphs": [1, 4], "neet-dp": [2, 4], os: [0, 1], "linux-cli": [2, 2], vim: [2, 3], cicd: [3, 3], thinking: [3, 4] },
-    edges: [["csapp", "os"], ["linux-cli", "vim"], ["linux-cli", "cicd"], ["cicd", "thinking"], ["python", "dsa-foundations"], ["python", "fastapi"], ["python", "ml"], ["sql", "databases"], ["dsa-foundations", "neet-arrays"],
+      "neet-greedy-math": [0, 4], "neet-heap-graphs": [1, 4], "neet-dp": [2, 4], os: [0, 1], "linux-cli": [2, 2], vim: [2, 3], cicd: [3, 3], thinking: [3, 4], "html-css": [5, 0], javascript: [5, 1] },
+    edges: [["csapp", "os"], ["linux-cli", "vim"], ["linux-cli", "cicd"], ["cicd", "thinking"], ["html-css", "javascript"], ["python", "dsa-foundations"], ["python", "fastapi"], ["python", "ml"], ["sql", "databases"], ["dsa-foundations", "neet-arrays"],
       ["neet-arrays", "neet-window-stack"], ["neet-arrays", "neet-linked-trees"], ["neet-window-stack", "neet-greedy-math"],
       ["neet-linked-trees", "neet-heap-graphs"], ["neet-linked-trees", "neet-dp"], ["ml", "mlops"], ["fastapi", "mlops"], ["databases", "mlops"],
       ["ml", "ai-eng"], ["ai-eng", "llm-practice"]],
@@ -639,7 +644,7 @@
     const CW = 218, RH = 128, NW = 196, NH = 76, PAD = 16;
     const xy = (id) => { const [c, r] = ROADMAP.pos[id]; return [PAD + c * CW, PAD + r * RH]; };
     const ids = Object.keys(ROADMAP.pos).filter((id) => DATA.tracks[id]);
-    const W = PAD * 2 + 4 * CW + NW, H = PAD * 2 + 4 * RH + NH;
+    const W = PAD * 2 + 5 * CW + NW, H = PAD * 2 + 4 * RH + NH;
     const lines = ROADMAP.edges.filter(([a, b]) => DATA.tracks[a] && DATA.tracks[b]).map(([a, b]) => {
       const [ax, ay] = xy(a), [bx, by] = xy(b);
       const x1 = ax + NW / 2, y1 = ay + NH, x2 = bx + NW / 2, y2 = by, my = (y1 + y2) / 2;
@@ -880,7 +885,7 @@
     const t = DATA.tracks[p._loc.track];
     const mod = t.modules.find((m) => m.id === p._loc.module);
     renderSidebar(t.id);
-    const isSql = p.kind === "sql";
+    const isSql = p.kind === "sql", isJs = p.kind === "js", isWeb = p.kind === "web";
     const saved = S().code[pid];
     store.set((s) => (s.last = { href: location.hash, title: p.title, sub: `${t.title} · ${p.difficulty}` }));
     const plist = mod.problems, pi = plist.indexOf(pid);
@@ -895,7 +900,7 @@
         <section class="pane editor">
           <div class="editor-bar">
             <a class="btn sm" href="#/track/${t.id}" title="Back to track">←</a>
-            <span class="lang">${isSql ? "SQLite" : "Python 3"}</span>
+            <span class="lang">${isSql ? "SQLite" : isJs ? "JavaScript" : isWeb ? "HTML · CSS" : "Python 3"}</span>
             ${prevP ? `<a class="btn sm" href="#/problem/${prevP}" title="Previous problem">‹</a>` : ""}${nextP ? `<a class="btn sm" href="#/problem/${nextP}" title="Next problem">›</a>` : ""}
             <span class="sp"></span>
             <button class="btn sm" id="resetCodeBtn" title="Reset to starter code">Reset</button>
@@ -956,7 +961,7 @@
         sol.addEventListener("toggle", () => {
           if (sol.open && !sol._r) {
             sol._r = 1;
-            renderMarkdown("```" + (isSql ? "sql" : "python") + "\n" + p.solution.trim() + "\n```", $(".prose", sol));
+            renderMarkdown("```" + (isSql ? "sql" : isJs ? "javascript" : isWeb ? "html" : "python") + "\n" + p.solution.trim() + "\n```", $(".prose", sol));
             const b = h(`<button class="btn sm" style="margin:0 0 12px">Load into editor</button>`);
             b.onclick = () => { if (confirm("Replace your code with the reference solution?")) { cm.setValue(p.solution.trim() + "\n"); showPane("editor"); } };
             $(".prose", sol).appendChild(b);
@@ -979,7 +984,7 @@
     tabs.desc();
 
     // editor
-    const cm = makeEditor($("#editorHost"), saved || p.starter, isSql ? "sql" : "python", {
+    const cm = makeEditor($("#editorHost"), saved || p.starter, isSql ? "sql" : isJs ? "js" : isWeb ? "html" : "python", {
       keys: { "Ctrl-Enter": () => run(false), "Cmd-Enter": () => run(false), "Shift-Ctrl-Enter": () => run(true), "Shift-Cmd-Enter": () => run(true) },
     });
     cm.on("change", debounce(() => store.set((s) => (s.code[pid] = cm.getValue())), 400));
@@ -992,6 +997,8 @@
     const showConsole = (name) => ctabs.forEach((b) => b.classList.toggle("on", b.dataset.c === name));
     function drawCases() {
       showConsole("cases");
+      if (isWeb) { cbody.innerHTML = `<p class="muted" style="margin-top:0"><b>Run</b> shows a live preview of your page. <b>Submit</b> checks it against these requirements:</p><ul class="checks">${(p.checks || []).map((c) => `<li>${esc(c.name)}</li>`).join("")}</ul>`; return; }
+      if (isJs) { cbody.innerHTML = `<p class="muted" style="margin-top:0"><b>Run</b> checks the example tests; <b>Submit</b> runs all ${p.tests.length} tests. Use <code>console.log</code> to debug; its output appears with the result.</p>`; return; }
       if (isSql) {
         cbody.innerHTML = `<p class="muted" style="margin-top:0">Your query runs against the <code>${esc(p.dataset)}</code> dataset. <b>Run</b> shows your result; <b>Submit</b> compares it with the expected result${p.ordered ? " (row order matters)" : " (row order ignored)"}.</p><div id="schemaBox"></div>`;
         return;
@@ -1053,6 +1060,8 @@
       store.set((s) => (s.code[pid] = code));
       if (window.innerWidth < 900) showPane("console");
       if (isSql) return runSql(code, submit);
+      if (isJs) return runJs(code, submit);
+      if (isWeb) return runWeb(code, submit);
       const lines = submit ? [] : (customText ?? "").split("\n").map((x) => x.trim()).filter(Boolean);
       const total = submit ? p.tests.length : lines.length;
       setBusy(true, Py.isReady() ? `Running ${total} test${total > 1 ? "s" : ""}…` : "Starting Python in your browser (first run downloads ~10 MB)…");
@@ -1107,6 +1116,46 @@
       return Ghibli.quoteHTML("ok" + pid) + `<div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">${nextP ? `<a class="btn primary sm" href="#/problem/${nextP}">Next problem →</a>` : `<a class="btn primary sm" href="#/track/${t.id}">Back to track</a>`}<button class="btn sm" onclick="document.querySelector('[data-t=guide]').click()">Compare with the walkthrough</button></div>`;
     }
 
+    async function runJs(code, submit) {
+      const tests = submit ? p.tests : p.tests.slice(0, p.examples || 3);
+      setBusy(true, `Running ${tests.length} tests…`);
+      try {
+        const r = await WebKit.runJs(code, p.entry, tests);
+        if (r.fatal) {
+          record(submit, r.tle ? "Time Limit Exceeded" : "Runtime Error", 0, tests.length);
+          lastCases = []; lastResultHTML = `<p class="verdict ${r.tle ? "warn" : "bad"}">${r.tle ? "Time Limit Exceeded" : "Error"}</p><div class="io err">${esc(r.fatal)}</div>`;
+        } else {
+          const cases = r.results.map((c, i) => {
+            let ok = false;
+            if (!c.error) { try { ok = WebKit.eq(JSON.parse(c.got_s), tests[i].expected, p.compare || "exact", p.tolerance || 1e-6); } catch (_) {} }
+            return { ...c, ok, args_s: tests[i].args.map(fmt).join(", "), exp_s: fmt(tests[i].expected), stdout: "" };
+          });
+          const passed = cases.filter((c) => c.ok).length, all = passed === cases.length;
+          const verdict = all ? (submit ? "Accepted" : "All examples passed") : cases.some((c) => c.error) ? "Runtime Error" : "Wrong Answer";
+          record(submit, verdict, passed, cases.length);
+          lastCases = cases.filter((c, i) => i < (p.examples || 3) || !c.ok).slice(0, 12);
+          lastResultHTML = `<p class="verdict ${all ? "ok" : "bad"}">${verdict}</p><p class="muted" style="margin:0">${passed} / ${cases.length} tests passed${submit && all ? " · 🎉 marked as solved" : ""}</p>
+            <div class="case-tabs">${lastCases.map((c, i) => `<button class="${c.ok ? "ok" : "bad"}" data-i="${i}">${c.ok ? "✓" : "✗"} Case ${c.i + 1}</button>`).join("")}</div><div id="caseDetail"></div>
+            ${r.logs && r.logs.length ? `<div class="io-label">Console</div><div class="io">${esc(r.logs.slice(0, 200).join(String.fromCharCode(10)))}</div>` : ""}${submit && all ? nextSteps() : ""}`;
+        }
+        showConsole("result"); cbody.innerHTML = lastResultHTML; wireCaseTabs();
+      } finally { setBusy(false); }
+    }
+    async function runWeb(code, submit) {
+      setBusy(true, "Rendering…");
+      try {
+        let html = "";
+        if (submit) {
+          const out = await WebKit.runWeb(code, p.checks || []);
+          const passed = out.filter((c) => c.ok).length, ok = passed === out.length;
+          record(true, ok ? "Accepted" : "Wrong Answer", passed, out.length);
+          html = `<p class="verdict ${ok ? "ok" : "bad"}">${ok ? "Accepted" : "Not there yet"}</p><p class="muted" style="margin:0 0 8px">${passed} / ${out.length} requirements met${ok ? " · 🎉 marked as solved" : ""}</p>
+            <ul class="checks">${out.map((c) => `<li class="${c.ok ? "ok" : "bad"}">${c.ok ? "✓" : "✗"} ${esc(c.name)}${c.error ? ` <span class="muted">(${esc(c.error)})</span>` : ""}</li>`).join("")}</ul>${ok ? nextSteps() : ""}`;
+        }
+        lastCases = []; lastResultHTML = html + `<div class="io-label">Preview</div><div id="webPrev" class="web-host"></div>`;
+        showConsole("result"); cbody.innerHTML = lastResultHTML; WebKit.preview($("#webPrev"), code);
+      } finally { setBusy(false); }
+    }
     async function runSql(code, submit) {
       setBusy(true, "Running query…");
       try {
@@ -1136,7 +1185,7 @@
     $("#submitBtn").onclick = () => run(true);
     $("#runBtnM").onclick = () => run(false);
     $("#submitBtnM").onclick = () => run(true);
-    if (isSql) Sql.warm(); else Py.warm();
+    if (isSql) Sql.warm(); else if (!isJs && !isWeb) Py.warm();
     if (isSql) {
       // show dataset schema under testcases
       getText(`data/datasets/${p.dataset}.sql`).then((sql) => {
