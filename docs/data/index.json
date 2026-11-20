@@ -380,14 +380,17 @@
   "id": "django",
   "title": "Django",
   "icon": "🎸",
-  "blurb": "tmp",
+  "blurb": "Django 5.x from an empty folder to a deployed, tested, secure product: projects and apps, views and templates, models and the ORM in depth, forms, accounts and permissions, REST APIs and async, deployment, and interview practice with worked answers. Written for complete beginners.",
   "color": "#0c7c59",
   "sources": [
-   "tmp"
+   "William S. Vincent, Django for Beginners (topics per chapter; rewritten for Django 5.x)",
+   "Django documentation — https://docs.djangoproject.com/en/5.2/",
+   "Django REST framework documentation — https://www.django-rest-framework.org/",
+   "pytest-django, factory_boy, WhiteNoise, Channels, Gunicorn and Uvicorn documentation"
   ],
-  "words": 0,
-  "modules": 1,
-  "lessons": 0,
+  "words": 125406,
+  "modules": 17,
+  "lessons": 38,
   "problems": 26
  },
  {
