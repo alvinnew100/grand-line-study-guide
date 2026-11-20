@@ -1,0 +1,161 @@
+TRACK = dict(
+    id="mlops",
+    title="MLOps: From Notebook to Production",
+    icon="🚢",
+    color="#2a9d8f",
+    group="Machine Learning & MLOps",
+    blurb="Take a model from a Jupyter notebook to a monitored, versioned, containerised, continuously "
+          "delivered production service — data pipelines, experiment tracking, Docker, serving, Kubernetes, "
+          "CI/CD/CT, drift monitoring, cost, and LLMOps.",
+    sources=[
+        "Chip Huyen, AI Engineering (O'Reilly, 2025), ch. 3-4 (evaluation), ch. 9 (inference optimization), ch. 10 (architecture & user feedback)",
+        "Martin Kleppmann, Designing Data-Intensive Applications, ch. 10-11 (batch and stream processing)",
+        "Bill Lubanovic, FastAPI (O'Reilly, 2023), ch. 12-13 (testing, production)",
+        "Mueller & Guido, Introduction to Machine Learning with Python, ch. 5-6 (evaluation, pipelines)",
+        "Sculley et al., Hidden Technical Debt in Machine Learning Systems (NeurIPS 2015)",
+        "Official docs: MLflow, DVC, Docker, Kubernetes, KServe, GitHub Actions, Prometheus, Evidently, Feast, Airflow, Prefect, BentoML, Ray Serve, vLLM, Hugging Face",
+    ],
+    modules=[
+        dict(
+            id="lifecycle",
+            title="1. The ML Lifecycle & MLOps Maturity",
+            summary="CRISP-DM, the parts of a production ML system, who does what, ML technical debt, and MLOps levels 0-2.",
+            lessons=[
+                dict(id="ml-lifecycle", title="The ML lifecycle and the anatomy of an ML system", file="01-ml-lifecycle.md"),
+                dict(id="tech-debt-roles", title="Roles, teams and hidden technical debt", file="02-tech-debt-roles.md"),
+                dict(id="maturity-levels", title="MLOps maturity levels 0, 1 and 2", file="03-maturity-levels.md"),
+            ],
+            problems=[],
+        ),
+        dict(
+            id="foundations",
+            title="2. Engineering Foundations",
+            summary="Git workflows, Python packaging, Makefiles, pre-commit, Linux shell essentials and configuration management.",
+            lessons=[
+                dict(id="git-workflows", title="Git workflows for ML teams", file="04-git-workflows.md"),
+                dict(id="packaging-tooling", title="Python packaging, Makefiles and pre-commit", file="05-packaging-tooling.md"),
+                dict(id="shell-config", title="Linux shell essentials and configuration management", file="06-shell-config.md"),
+            ],
+            problems=[],
+        ),
+        dict(
+            id="data-engineering",
+            title="3. Data Engineering for ML",
+            summary="Sources, ETL/ELT, batch vs streaming, data validation, DVC versioning, feature stores, skew and labeling.",
+            lessons=[
+                dict(id="data-pipelines", title="Data sources, ETL/ELT, batch and streaming", file="07-data-pipelines.md"),
+                dict(id="validation-versioning", title="Data validation and versioning with DVC", file="08-validation-versioning.md"),
+                dict(id="feature-stores", title="Feature stores, training/serving skew and labeling", file="09-feature-stores.md"),
+            ],
+            problems=["mlops-validate-rows", "mlops-train-serve-skew"],
+        ),
+        dict(
+            id="experiments",
+            title="4. Experiment Tracking & Reproducibility",
+            summary="MLflow tracking, params/metrics/artifacts, seeds and pinned environments, model registry and model cards.",
+            lessons=[
+                dict(id="mlflow-tracking", title="Experiment tracking with MLflow", file="10-mlflow-tracking.md"),
+                dict(id="reproducibility", title="Reproducibility: seeds, environments and lineage", file="11-reproducibility.md"),
+                dict(id="model-registry", title="Model registry, model cards and governance", file="12-model-registry.md"),
+            ],
+            problems=["mlops-champion-model", "mlops-semver-bump"],
+        ),
+        dict(
+            id="training-scale",
+            title="5. Training at Scale",
+            summary="Pipelines and orchestration (Airflow, Prefect, Kubeflow), distributed training, GPUs and hyperparameter tuning.",
+            lessons=[
+                dict(id="orchestration", title="Pipelines and orchestration", file="13-orchestration.md"),
+                dict(id="distributed-gpus", title="Distributed training and GPUs", file="14-distributed-gpus.md"),
+                dict(id="hpo", title="Hyperparameter tuning at scale", file="15-hpo.md"),
+            ],
+            problems=["mlops-dag-order"],
+        ),
+        dict(
+            id="containers",
+            title="6. Containers",
+            summary="Docker images, layers and cache, Dockerfile best practices for Python/ML, multi-stage builds and Compose.",
+            lessons=[
+                dict(id="docker-fundamentals", title="Docker fundamentals: images, layers and the build cache", file="16-docker-fundamentals.md"),
+                dict(id="dockerfile-ml", title="Dockerfiles for ML: best practices and multi-stage builds", file="17-dockerfile-ml.md"),
+                dict(id="compose", title="Docker Compose for local ML stacks", file="18-compose.md"),
+            ],
+            problems=["mlops-docker-layer-cache"],
+        ),
+        dict(
+            id="serving",
+            title="7. Model Serving",
+            summary="Batch vs online vs streaming inference, FastAPI and gRPC, model servers, latency/throughput, batching, autoscaling and caching.",
+            lessons=[
+                dict(id="serving-patterns", title="Serving patterns: batch, online and streaming", file="19-serving-patterns.md"),
+                dict(id="fastapi-grpc", title="REST and gRPC serving with FastAPI", file="20-fastapi-grpc.md"),
+                dict(id="model-servers", title="Model servers, batching, autoscaling and caching", file="21-model-servers.md"),
+            ],
+            problems=["mlops-dynamic-batching", "mlops-feature-cache-key", "mlops-backoff-schedule"],
+        ),
+        dict(
+            id="kubernetes",
+            title="8. Kubernetes for ML",
+            summary="Pods, Deployments, Services, probes, ConfigMaps, HPA, GPU scheduling and KServe.",
+            lessons=[
+                dict(id="k8s-core", title="Kubernetes core objects", file="22-k8s-core.md"),
+                dict(id="k8s-ml", title="Scaling, GPUs and KServe on Kubernetes", file="23-k8s-ml.md"),
+            ],
+            problems=["mlops-hpa-replicas"],
+        ),
+        dict(
+            id="cicd",
+            title="9. CI/CD/CT for ML",
+            summary="GitHub Actions workflows, testing ML code, data and models, and progressive delivery: canary, shadow, blue-green, A/B.",
+            lessons=[
+                dict(id="github-actions", title="CI/CD with GitHub Actions", file="24-github-actions.md"),
+                dict(id="testing-ml", title="Testing ML systems: code, data and models", file="25-testing-ml.md"),
+                dict(id="deployment-strategies", title="Deployment strategies: canary, shadow, blue-green and A/B", file="26-deployment-strategies.md"),
+            ],
+            problems=["mlops-canary-decision", "mlops-ab-ztest"],
+        ),
+        dict(
+            id="monitoring",
+            title="10. Monitoring & Observability",
+            summary="Metrics, logs, traces, Prometheus/Grafana, data and concept drift, PSI/KS, alerting, feedback loops and retraining.",
+            lessons=[
+                dict(id="observability", title="Metrics, logs, traces and Prometheus", file="27-observability.md"),
+                dict(id="drift", title="Data drift, concept drift and statistical tests", file="28-drift.md"),
+                dict(id="alerting-retraining", title="Alerting, feedback loops and retraining triggers", file="29-alerting-retraining.md"),
+            ],
+            problems=["mlops-rolling-p95", "mlops-psi", "mlops-ks-statistic", "mlops-drift-alerts"],
+        ),
+        dict(
+            id="cloud-cost",
+            title="11. Cloud & Cost",
+            summary="SageMaker, Vertex AI and Azure ML; serverless; spot instances; and a cost-optimisation playbook.",
+            lessons=[
+                dict(id="cloud-platforms", title="Cloud ML platforms and serverless", file="30-cloud-platforms.md"),
+                dict(id="cost-optimization", title="Cost optimisation for ML workloads", file="31-cost-optimization.md"),
+            ],
+            problems=[],
+        ),
+        dict(
+            id="llmops",
+            title="12. LLMOps",
+            summary="Prompt versioning, evaluation pipelines, guardrails, gateways and routers, tracing, and LLM inference optimisation.",
+            lessons=[
+                dict(id="llmops-prompts-evals", title="Prompt management and evaluation pipelines", file="32-llmops-prompts-evals.md"),
+                dict(id="llmops-gateways", title="Guardrails, gateways, caching and tracing", file="33-llmops-gateways.md"),
+                dict(id="llm-inference", title="LLM inference optimization", file="34-llm-inference.md"),
+            ],
+            problems=["mlops-kv-cache-capacity"],
+        ),
+        dict(
+            id="capstone",
+            title="13. Capstone & Interview Playbook",
+            summary="An end-to-end project blueprint with full code, and an ML system design / MLOps interview playbook.",
+            lessons=[
+                dict(id="capstone-build", title="Capstone part 1: train, track, package and serve", file="35-capstone-build.md"),
+                dict(id="capstone-ship", title="Capstone part 2: containerise, CI, deploy and monitor", file="36-capstone-ship.md"),
+                dict(id="interview-playbook", title="MLOps interview and ML system design playbook", file="37-interview-playbook.md"),
+            ],
+            problems=[],
+        ),
+    ],
+)

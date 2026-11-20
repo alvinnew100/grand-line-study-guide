@@ -1,0 +1,244 @@
+[
+ {
+  "id": "ai-eng",
+  "title": "AI Engineering (Chip Huyen)",
+  "icon": "🤖",
+  "blurb": "Build real applications on top of foundation models: how they work, how to evaluate them, prompting, RAG and agents, finetuning, data, inference optimization and production architecture.",
+  "color": "#7b5cff",
+  "sources": [
+   "Chip Huyen, AI Engineering: Building Applications with Foundation Models (O'Reilly, 2025), ch. 1-10"
+  ],
+  "words": 24670,
+  "modules": 10,
+  "lessons": 27,
+  "problems": 8
+ },
+ {
+  "id": "csapp",
+  "title": "Computer Systems & Architecture",
+  "icon": "🖥️",
+  "blurb": "How programs really run: bits and floats, x86-64 assembly, pipelined processors, caches, linking, processes and signals, virtual memory, I/O, sockets and threads, following CS:APP.",
+  "color": "#3d7ea6",
+  "sources": [
+   "Bryant & O'Hallaron, Computer Systems: A Programmer's Perspective, 3rd ed. (CS:APP 3e)"
+  ],
+  "words": 22619,
+  "modules": 13,
+  "lessons": 34,
+  "problems": 10
+ },
+ {
+  "id": "databases",
+  "title": "Databases & Data-Intensive Systems",
+  "icon": "🏛️",
+  "blurb": "Storage engines, replication, partitioning, transactions, consensus, batch and stream processing - a chapter-by-chapter companion to Designing Data-Intensive Applications, plus practical databases for ML engineers.",
+  "color": "#3d5a80",
+  "sources": [
+   "Martin Kleppmann, Designing Data-Intensive Applications (O'Reilly, 2017), ch. 1-12",
+   "PostgreSQL documentation (postgresql.org/docs)",
+   "Redis documentation (redis.io/docs)",
+   "Apache Kafka documentation (kafka.apache.org/documentation)",
+   "Malkov & Yashunin, Efficient and robust approximate nearest neighbor search using HNSW graphs (2016)"
+  ],
+  "words": 32638,
+  "modules": 13,
+  "lessons": 33,
+  "problems": 0
+ },
+ {
+  "id": "dsa-foundations",
+  "title": "DSA Foundations (Goodrich)",
+  "icon": "📚",
+  "blurb": "The theory track: a chapter-by-chapter tour of Goodrich, Tamassia & Goldwasser - analysis, recursion, arrays, lists, trees, heaps, hashing, search trees, sorting, text, graphs and external memory - with runnable implementations and build-it-yourself exercises.",
+  "color": "#2a6f97",
+  "sources": [
+   "Goodrich, Tamassia & Goldwasser, Data Structures and Algorithms in Python (Wiley, 2013), ch. 3-15"
+  ],
+  "words": 30583,
+  "modules": 6,
+  "lessons": 16,
+  "problems": 12
+ },
+ {
+  "id": "fastapi",
+  "title": "FastAPI & Backend Engineering",
+  "icon": "⚡",
+  "blurb": "From HTTP fundamentals to production APIs: FastAPI, Pydantic, dependencies, async, databases, auth, testing, streaming and deployment — ending with a complete ML model-serving service.",
+  "color": "#059669",
+  "sources": [
+   "Bill Lubanovic, FastAPI: Modern Python Web Development (O'Reilly, 2023)",
+   "FastAPI official documentation — https://fastapi.tiangolo.com/",
+   "Pydantic v2 documentation — https://docs.pydantic.dev/"
+  ],
+  "words": 8079,
+  "modules": 12,
+  "lessons": 29,
+  "problems": 18
+ },
+ {
+  "id": "llm-practice",
+  "title": "LLMs Hands-On: Transformers, Hugging Face, RAG, MCP & Context Engineering",
+  "icon": "🔮",
+  "blurb": "The hands-on and internals companion to the AI Engineering track: build attention and BPE in numpy, drive the Hugging Face stack, ship RAG and LoRA fine-tunes, write MCP servers, and engineer context for long-running agents.",
+  "color": "#7b5cff",
+  "sources": [
+   "Hugging Face LLM Course & Agents Course (huggingface.co/learn)",
+   "Hugging Face docs: Transformers v5, Tokenizers, Datasets, PEFT, TRL, Hub, TGI",
+   "Model Context Protocol specification 2026-07-28 and 2025-11-25 (modelcontextprotocol.io)",
+   "Anthropic Engineering: Building effective agents; Effective context engineering for AI agents; Writing tools for agents",
+   "Chip Huyen, AI Engineering (O'Reilly, 2025), ch. 2, 5, 6, 7, 9, 10",
+   "Vaswani et al. 2017; Su et al. 2021 (RoPE); Hu et al. 2021 (LoRA); Dettmers et al. 2023 (QLoRA); Rafailov et al. 2023 (DPO)"
+  ],
+  "words": 21319,
+  "modules": 10,
+  "lessons": 26,
+  "problems": 0
+ },
+ {
+  "id": "ml",
+  "title": "Machine Learning",
+  "icon": "🧠",
+  "blurb": "From the maths underneath to scikit-learn models, evaluation, pipelines, text, deep-learning essentials and interview-ready system design — with runnable code in every lesson and 25 numpy implementation problems.",
+  "color": "#7b5ea7",
+  "sources": [
+   "Müller & Guido, Introduction to Machine Learning with Python (O'Reilly), ch. 1–8",
+   "scikit-learn User Guide (scikit-learn.org)",
+   "Chip Huyen, AI Engineering (O'Reilly) — background for deep learning and system design",
+   "Goodfellow, Bengio & Courville, Deep Learning — background for the maths and optimisers"
+  ],
+  "words": 2235,
+  "modules": 10,
+  "lessons": 26,
+  "problems": 25
+ },
+ {
+  "id": "mlops",
+  "title": "MLOps: From Notebook to Production",
+  "icon": "🚢",
+  "blurb": "Take a model from a Jupyter notebook to a monitored, versioned, containerised, continuously delivered production service — data pipelines, experiment tracking, Docker, serving, Kubernetes, CI/CD/CT, drift monitoring, cost, and LLMOps.",
+  "color": "#2a9d8f",
+  "sources": [
+   "Chip Huyen, AI Engineering (O'Reilly, 2025), ch. 3-4 (evaluation), ch. 9 (inference optimization), ch. 10 (architecture & user feedback)",
+   "Martin Kleppmann, Designing Data-Intensive Applications, ch. 10-11 (batch and stream processing)",
+   "Bill Lubanovic, FastAPI (O'Reilly, 2023), ch. 12-13 (testing, production)",
+   "Mueller & Guido, Introduction to Machine Learning with Python, ch. 5-6 (evaluation, pipelines)",
+   "Sculley et al., Hidden Technical Debt in Machine Learning Systems (NeurIPS 2015)",
+   "Official docs: MLflow, DVC, Docker, Kubernetes, KServe, GitHub Actions, Prometheus, Evidently, Feast, Airflow, Prefect, BentoML, Ray Serve, vLLM, Hugging Face"
+  ],
+  "words": 22260,
+  "modules": 13,
+  "lessons": 37,
+  "problems": 17
+ },
+ {
+  "id": "neet-arrays",
+  "title": "Patterns I — Arrays, Hashing & Two Pointers",
+  "icon": "🗡️",
+  "blurb": "The first two NeetCode roadmap patterns, taught properly: how to attack an interview problem, hash maps from the inside out, prefix sums and counting tricks, and every flavour of two pointers.",
+  "color": "#2e8b57",
+  "sources": [
+   "Goodrich, Tamassia & Goldwasser, Data Structures and Algorithms in Python, ch. 5 (Array-Based Sequences)",
+   "Goodrich, Tamassia & Goldwasser, Data Structures and Algorithms in Python, ch. 10 (Maps and Hash Tables)",
+   "NeetCode roadmap (NeetCode 150 / 250)",
+   "CPython documentation and source notes on dict/set"
+  ],
+  "words": 14498,
+  "modules": 2,
+  "lessons": 6,
+  "problems": 27
+ },
+ {
+  "id": "neet-dp",
+  "title": "Patterns V — Dynamic Programming",
+  "icon": "🍖",
+  "blurb": "From recursion trees to tables: the state / recurrence / base case / order / answer framework, then the NeetCode 1-D and 2-D DP problems plus knapsack, LIS, string, grid and interval DP.",
+  "color": "#e76f51",
+  "sources": [
+   "Goodrich, Tamassia & Goldwasser, Data Structures and Algorithms in Python, ch. 13.3 (Dynamic Programming)",
+   "NeetCode 150 roadmap — 1-D and 2-D Dynamic Programming"
+  ],
+  "words": 18325,
+  "modules": 3,
+  "lessons": 11,
+  "problems": 28
+ },
+ {
+  "id": "neet-greedy-math",
+  "title": "Patterns VI — Greedy, Intervals, Math & Bits",
+  "icon": "🌊",
+  "blurb": "When the locally best move is globally right (and how to prove it), interval sweeps and meeting-room heaps, matrix and number-theory tricks, and bit manipulation with Python's unbounded integers.",
+  "color": "#1f8a9e",
+  "sources": [
+   "Goodrich, Tamassia & Goldwasser, Data Structures and Algorithms in Python — §4.4 (repeated squaring), §13.4.2 (the greedy method), ch. 14 (greedy graph algorithms)",
+   "Bryant & O'Hallaron, Computer Systems: A Programmer's Perspective — ch. 2 (bit-level operations, two's complement, integer arithmetic)",
+   "NeetCode 150"
+  ],
+  "words": 0,
+  "modules": 4,
+  "lessons": 8,
+  "problems": 27
+ },
+ {
+  "id": "neet-heap-graphs",
+  "title": "Patterns IV — Heaps, Backtracking & Graphs",
+  "icon": "⚓",
+  "blurb": "Priority queues and the top-k / two-heap patterns, the backtracking template with pruning, and the full graph toolkit: DFS/BFS, topological sort, union-find, Dijkstra, Bellman-Ford, MSTs and Eulerian paths — with 35 judged NeetCode problems.",
+  "color": "#2a7ab0",
+  "sources": [
+   "Goodrich, Tamassia & Goldwasser, Data Structures and Algorithms in Python, ch. 9 (Priority Queues)",
+   "Goodrich, Tamassia & Goldwasser, Data Structures and Algorithms in Python, ch. 14 (Graph Algorithms)",
+   "NeetCode 150 roadmap"
+  ],
+  "words": 0,
+  "modules": 4,
+  "lessons": 11,
+  "problems": 16
+ },
+ {
+  "id": "neet-linked-trees",
+  "title": "Patterns III — Linked Lists, Trees & Tries",
+  "icon": "🌳",
+  "blurb": "Pointer surgery on linked lists, every flavour of tree traversal, binary search trees and tries — the node-based half of the NeetCode 150, with a judge that builds the lists and trees for you.",
+  "color": "#2e8b57",
+  "sources": [
+   "Goodrich, Tamassia & Goldwasser, Data Structures and Algorithms in Python, ch. 7 (linked lists), ch. 8 (trees), ch. 11 (search trees), ch. 13.5 (tries)",
+   "NeetCode 150 (Linked List, Trees, Tries)"
+  ],
+  "words": 20666,
+  "modules": 3,
+  "lessons": 9,
+  "problems": 36
+ },
+ {
+  "id": "neet-window-stack",
+  "title": "Patterns II — Sliding Window, Stack & Binary Search",
+  "icon": "🎯",
+  "blurb": "Three patterns that turn O(n²) and O(n) scans into O(n) and O(log n): sliding windows, (monotonic) stacks and deques, and binary search done right — including binary search on the answer.",
+  "color": "#2a9d8f",
+  "sources": [
+   "Goodrich, Tamassia & Goldwasser, Data Structures and Algorithms in Python — ch. 4.1.3 (binary search), ch. 5.3 (amortization), ch. 6 (stacks, queues, deques)",
+   "NeetCode 150 roadmap",
+   "Python docs: bisect, collections.deque"
+  ],
+  "words": 14798,
+  "modules": 3,
+  "lessons": 8,
+  "problems": 35
+ },
+ {
+  "id": "sql",
+  "title": "SQL from Zero to Interview",
+  "icon": "🗃️",
+  "blurb": "Relational thinking and standard SQL from first SELECT to window functions, recursive CTEs and interview patterns - run every query live on bank, shop and MLOps datasets.",
+  "color": "#2b7bb9",
+  "sources": [
+   "Alan Beaulieu, Learning SQL (O'Reilly), ch. 1-15 and appendices",
+   "SQLite documentation (window functions, WITH clause, EXPLAIN QUERY PLAN)",
+   "PostgreSQL and MySQL reference manuals (dialect notes)"
+  ],
+  "words": 14790,
+  "modules": 19,
+  "lessons": 8,
+  "problems": 40
+ }
+]
