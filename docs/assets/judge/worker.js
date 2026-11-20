@@ -6,7 +6,7 @@ let currentId = null;
 
 const ready = (async () => {
   py = await loadPyodide();
-  const src = await (await fetch("harness.py")).text();
+  const src = await (await fetch("harness.py", { cache: "no-cache" })).text();
   py.FS.writeFile("/home/pyodide/harness.py", src);
   py.runPython("import sys; sys.path.insert(0, '/home/pyodide'); import harness");
   py.setStdout({ batched: (s) => postMessage({ id: currentId, type: "stdout", data: s + "\n" }) });

@@ -310,3 +310,45 @@ def run_tests_json(code, spec_json, tests_json, on_result=None):
     return json.dumps(
         run_tests(code, json.loads(spec_json), json.loads(tests_json), on_result), default=str
     )
+
+
+def _patch_asyncio_for_browser():
+    """Pyodide's event loop cannot block, so asyncio.run() fails there.
+    Replace it with a small blocking loop (timers and tasks only, no sockets)."""
+    import asyncio
+    from asyncio import events
+
+    class _SyncLoop(asyncio.BaseEventLoop):
+        def __init__(self):
+            super().__init__()
+            self._selector = self
+
+        def select(self, timeout=None):
+            if timeout and timeout > 0:
+                time.sleep(timeout)
+            return []
+
+        def _process_events(self, event_list):
+            pass
+
+        def _write_to_self(self):
+            pass
+
+    def run(main, *, debug=None, loop_factory=None):
+        outer = events._get_running_loop()
+        events._set_running_loop(None)
+        loop = _SyncLoop()
+        try:
+            return loop.run_until_complete(main)
+        finally:
+            try:
+                loop.run_until_complete(loop.shutdown_asyncgens())
+            finally:
+                loop.close()
+                events._set_running_loop(outer)
+
+    asyncio.run = run
+
+
+if sys.platform == "emscripten":
+    _patch_asyncio_for_browser()

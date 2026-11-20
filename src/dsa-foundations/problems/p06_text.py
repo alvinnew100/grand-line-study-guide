@@ -418,7 +418,7 @@ product (Goodrich ch. 13.3.1). A chain of zero or one matrix costs 0.
         hints=["State: N[i][j] = minimum cost to compute A_i ... A_j; N[i][i] = 0.",
                "N[i][j] = min over k in [i, j) of N[i][k] + N[k+1][j] + d[i]*d[k+1]*d[j+1].",
                "Fill by increasing chain length b = j - i so the needed entries already exist."],
-        brute_force="Recursively try all parenthesisations: Catalan-number many — exponential. The greedy 'do the cheapest multiplication first' (first wrong solution) fails, e.g. on [10, 1, 10, 1, 10, 1, 10]... or other inputs; left-to-right evaluation (second) is rarely optimal.",
+        brute_force="Recursively try all parenthesisations: Catalan-number many — exponential. The greedy 'do the cheapest multiplication first' (first wrong solution) is not optimal in general; left-to-right evaluation (second) is rarely optimal.",
         approach="""
 For `d = [2, 10, 50, 20]`: N[0][1] = 2·10·50 = 1000, N[1][2] = 10·50·20 = 10000,
 N[0][2] = min(k=0: 0 + 10000 + 2·10·20 = 10400, k=1: 1000 + 0 + 2·50·20 = 3000) = 3000.

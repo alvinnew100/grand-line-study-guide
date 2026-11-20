@@ -40,10 +40,10 @@
    "Apache Kafka documentation (kafka.apache.org/documentation)",
    "Malkov & Yashunin, Efficient and robust approximate nearest neighbor search using HNSW graphs (2016)"
   ],
-  "words": 32638,
+  "words": 73921,
   "modules": 13,
   "lessons": 33,
-  "problems": 0
+  "problems": 5
  },
  {
   "id": "dsa-foundations",
@@ -92,7 +92,7 @@
   "words": 53170,
   "modules": 10,
   "lessons": 26,
-  "problems": 17
+  "problems": 24
  },
  {
   "id": "ml",

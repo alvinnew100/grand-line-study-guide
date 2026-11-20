@@ -194,7 +194,7 @@ comes to reflect meaning.
 import numpy as np
 vocab = {"king": 0, "queen": 1, "man": 2, "woman": 3, "apple": 4, "pear": 5}
 # a hand-made 3-d embedding table so the geometry is easy to see: (royalty, gender, fruitiness)
-E = np.array([[0.9, 0.8, 0.0], [0.9, -0.8, 0.0], [0.1, 0.8, 0.0], [0.1, -0.8, 0.0], [0.0, 0.0, 0.9], [0.0, 0.1, 0.8]])
+E = np.array([[0.9, 0.4, 0.0], [0.9, -0.4, 0.0], [0.1, 0.4, 0.0], [0.1, -0.4, 0.0], [0.0, 0.0, 0.9], [0.0, 0.1, 0.8]])
 
 def cosine(a, b):
     return float(a @ b / (np.linalg.norm(a) * np.linalg.norm(b)))

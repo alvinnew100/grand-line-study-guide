@@ -276,7 +276,7 @@
     let worker = null, ready = null, seq = 0;
     const handlers = new Map();
     function start() {
-      worker = new Worker("assets/judge/worker.js");
+      worker = new Worker("assets/judge/worker.js?v=3");
       ready = new Promise((res, rej) => {
         const onmsg = (e) => {
           if (e.data.type === "ready") res();
@@ -619,6 +619,10 @@
       <table><thead><tr><th>Quote</th><th>Speaker</th><th>Film</th></tr></thead><tbody>${Ghibli.quotes.map((q) => { const w = Ghibli.works[q.work]; return `<tr><td>“${esc(q.q)}”</td><td>${esc(q.by)}</td><td>${w ? `<a href="${esc(w.url)}" target="_blank" rel="noopener">${esc(w.title)} (${esc(w.year)})</a>` : esc(q.work)}</td></tr>`; }).join("")}</tbody></table>
       <h2>Study content</h2>
       <p>Lessons are original summaries that cite their source books and documentation at the end of each lesson. Problem statements are written for this site; links go to the original problems on LeetCode and NeetCode.</p>
+      <ul>${DATA.index.map((ti) => { const t = DATA.tracks[ti.id]; return t && t.sources && t.sources.length ? `<li><b>${esc(t.title)}:</b> ${t.sources.map(esc).join("; ")}</li>` : ""; }).join("")}</ul>
+      <h2>Inspiration and tools</h2>
+      <p>The problem selection and ordering of the pattern tracks follow the public NeetCode 150 list, and the roadmap, progress ring and streak calendar were inspired by neetcode.io. The code-and-judge layout follows the convention popularised by LeetCode. All code, text and designs here were written for this site.</p>
+      <p>Built with Pyodide, sql.js, CodeMirror, marked, highlight.js, KaTeX and Mermaid (open-source libraries under their own licences), and the Nunito, Zen Maru Gothic and JetBrains Mono fonts.</p>
       </div></div>`);
   }
 
