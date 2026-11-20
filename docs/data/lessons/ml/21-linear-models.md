@@ -244,6 +244,43 @@ From the book:
 `fit` returns `self`, so you can write `LogisticRegression().fit(X_train, y_train).predict(X_test)`, as
 the book's sidebar points out. Keep a reference to the fitted model if you need it later, though.
 
+## 9. Worked example: how ridge shrinks a coefficient
+
+One feature and no intercept is enough to see exactly what the penalty does. Ridge minimises
+$\sum_i (y_i - wx_i)^2 + \alpha w^2$. Differentiating and setting the result to zero:
+
+$$-2\sum_i x_i(y_i - wx_i) + 2\alpha w = 0\quad\Longrightarrow\quad \hat w_{ridge} = \frac{\sum_i x_iy_i}{\sum_i x_i^2 + \alpha}.$$
+
+With $\alpha = 0$ this is the least-squares slope. A positive $\alpha$ makes the denominator larger, so
+the slope shrinks towards zero. It never reaches zero for a finite $\alpha$.
+
+Take $x = (1, 2, 3)$ and $y = (2, 4, 7)$. Then $\sum x_iy_i = 31$ and $\sum x_i^2 = 14$.
+
+| $\alpha$ | $\hat w = 31/(14+\alpha)$ |
+|---|---|
+| 0 | 2.214 |
+| 1 | 2.067 |
+| 14 | 1.107 |
+| 100 | 0.272 |
+
+Setting $\alpha$ equal to $\sum x_i^2$ halves the coefficient. This also shows why scale matters. If $x$
+were measured in units 10 times smaller, $\sum x_i^2$ would be 100 times larger, and the same $\alpha$
+would shrink the coefficient far less.
+
+For the lasso, the same one-feature problem has the solution "shrink by a fixed amount, and stop at
+zero" (soft thresholding). A coefficient whose least-squares value is small enough is set exactly to
+zero. That is the algebra behind lasso's feature selection.
+
+```python-run
+import numpy as np
+from sklearn.linear_model import Ridge
+x, y = np.array([1.0, 2.0, 3.0]), np.array([2.0, 4.0, 7.0])
+for alpha in [0, 1, 14, 100]:
+    by_hand = (x @ y) / (x @ x + alpha)
+    sk = Ridge(alpha=alpha, fit_intercept=False).fit(x.reshape(-1, 1), y).coef_[0]
+    print(f"alpha={alpha:3d}: formula {by_hand:.3f}   scikit-learn {sk:.3f}")
+```
+
 ## Summary
 
 - Linear models predict with $w^\top x + b$. Linear and logistic regression differ only in the loss and

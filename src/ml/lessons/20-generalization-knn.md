@@ -257,9 +257,10 @@ q = np.array([[3, 2]])
 print("squared distances:", ((X - q) ** 2).sum(axis=1))
 for k in [1, 3, 5]:
     knn = KNeighborsClassifier(n_neighbors=k).fit(X, y)
-    print(f"k={k}: predict {knn.predict(q)[0]}  class probabilities {dict(zip(knn.classes_, knn.predict_proba(q)[0].round(2)))}")
+    proba = {str(c): round(float(v), 2) for c, v in zip(knn.classes_, knn.predict_proba(q)[0])}
+    print(f"k={k}: predict {knn.predict(q)[0]}  class probabilities {proba}")
 weighted = KNeighborsClassifier(n_neighbors=5, weights="distance").fit(X, y)
-print("k=5, distance-weighted:", weighted.predict(q)[0], dict(zip(weighted.classes_, weighted.predict_proba(q)[0].round(2))))
+print("k=5, distance-weighted:", weighted.predict(q)[0], {str(c): round(float(v), 2) for c, v in zip(weighted.classes_, weighted.predict_proba(q)[0])})
 ```
 
 `predict_proba` for k-NN is the fraction of neighbours in each class. With `weights="distance"`, each

@@ -250,6 +250,47 @@ model simply interpolates. Forecasting the future is a different and much harder
 > matches the business objective. Then explain the fix: time- or group-based splits, a single persisted
 > pipeline, and monitoring of the input distributions.
 
+## 6. Measuring a preprocessing leak yourself
+
+It is worth seeing once how large a preprocessing leak is, and when it is small. The experiment below
+uses target encoding, a step that learns from the labels. Each of 60 categories is replaced by the mean
+target of its rows. The categories are random, so they carry **no information** about the target. An
+honest evaluation should score about 50%.
+
+```python-run
+import numpy as np
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import StratifiedKFold
+
+rng = np.random.RandomState(0)
+n = 400
+category = rng.randint(0, 60, n)                   # 60 categories, unrelated to the target
+y = rng.randint(0, 2, n)
+
+def target_encode(cat_fit, y_fit, cat_apply):
+    means = {c: y_fit[cat_fit == c].mean() for c in np.unique(cat_fit)}
+    return np.array([means.get(c, y_fit.mean()) for c in cat_apply]).reshape(-1, 1)
+
+cv = StratifiedKFold(5, shuffle=True, random_state=0)
+leaky, honest = [], []
+X_leaky = target_encode(category, y, category)     # WRONG: encoded once, using every row's label
+for tr, te in cv.split(category, y):
+    leaky.append(LogisticRegression().fit(X_leaky[tr], y[tr]).score(X_leaky[te], y[te]))
+    X_tr = target_encode(category[tr], y[tr], category[tr])        # RIGHT: learned from the training fold only
+    X_te = target_encode(category[tr], y[tr], category[te])
+    honest.append(LogisticRegression().fit(X_tr, y[tr]).score(X_te, y[te]))
+print(f"encoding fitted on all rows:      CV accuracy = {np.mean(leaky):.3f}   <- looks predictive, is not")
+print(f"encoding fitted inside each fold: CV accuracy = {np.mean(honest):.3f}   <- about chance, as it should be")
+```
+
+The leaky version reports a clearly useful model on data that contains no signal at all. Each row's own
+label went into the mean for its category, so the encoded feature partly *is* the label.
+
+The size of a leak depends on how much the step learns from the labels and on how few samples support
+each statistic. A scaler learns two numbers per feature and never sees the labels, so its leak is small.
+Feature selection and target encoding learn from the labels, so their leaks can be large. The rule does
+not depend on the size: fit every step inside the fold.
+
 ## Summary
 
 - `ColumnTransformer` applies different preprocessing to different columns and concatenates the results.

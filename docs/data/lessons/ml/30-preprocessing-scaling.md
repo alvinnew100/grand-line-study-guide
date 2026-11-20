@@ -192,6 +192,71 @@ Some preprocessing changes the *shape* of a distribution, not just its location 
 > networks. It does not matter for tree-based models. Always compute the statistics on the training split
 > only, and apply them to validation and test data.
 
+## 10. Worked example: why scaling changes k-NN's neighbours
+
+A calculation by hand shows the effect better than any accuracy figure. Take three people described by
+age (years) and income (dollars):
+
+| person | age | income |
+|---|---|---|
+| A | 25 | 50,000 |
+| B | 60 | 51,000 |
+| C | 27 | 58,000 |
+
+Who is A's nearest neighbour? On the raw numbers,
+$d(A,B) = \sqrt{35^2 + 1000^2} \approx 1000.6$ and $d(A,C) = \sqrt{2^2 + 8000^2} \approx 8000.0$. B wins
+easily. A 35-year age gap counts for almost nothing, because income is measured in units a thousand times
+larger. The distance is, in effect, the income difference.
+
+Now standardise both features using the mean and standard deviation of a realistic population (age: mean
+40, std 12; income: mean 55,000, std 15,000):
+
+| person | age (z) | income (z) |
+|---|---|---|
+| A | −1.25 | −0.33 |
+| B | 1.67 | −0.27 |
+| C | −1.08 | 0.20 |
+
+$d(A,B) = \sqrt{2.92^2 + 0.07^2} \approx 2.92$ and $d(A,C) = \sqrt{0.17^2 + 0.53^2} \approx 0.56$. Now C,
+who is the same age and earns a little more, is the nearest neighbour. Neither answer is "true" in an
+absolute sense. But the scaled version treats a typical difference in age and a typical difference in
+income as equally important, which is almost always what you intend.
+
+```python-run
+import numpy as np
+people = np.array([[25, 50000.0], [60, 51000.0], [27, 58000.0]])
+mu, sigma = np.array([40.0, 55000.0]), np.array([12.0, 15000.0])
+for name, data in [("raw", people), ("standardised", (people - mu) / sigma)]:
+    d_ab, d_ac = np.linalg.norm(data[0] - data[1]), np.linalg.norm(data[0] - data[2])
+    print(f"{name:13s} d(A,B)={d_ab:9.2f}  d(A,C)={d_ac:9.2f}  -> nearest to A is {'B' if d_ab < d_ac else 'C'}")
+```
+
+The same reasoning explains the other scale-sensitive models. An RBF kernel is a function of this
+distance. A ridge penalty $\alpha\sum_j w_j^2$ punishes a weight of 0.001 on income far less than a
+weight of 1.0 on age, though both may express an effect of the same size. And PCA finds the direction of
+largest variance, which on raw data is simply the income axis.
+
+## 11. Pitfalls and questions to ask
+
+- **Scaling a sparse matrix.** Subtracting the mean makes every zero non-zero and can exhaust memory. For
+  sparse data use `StandardScaler(with_mean=False)` or `MaxAbsScaler`, which keep zeros as zeros.
+- **Scaling one-hot columns.** It is rarely needed, and it makes the features harder to read. Scale the
+  numeric columns only, using a `ColumnTransformer` (module 6).
+- **Scaling the target.** For regression with gradient-trained models it can help to standardise `y` too.
+  Remember to transform the predictions back.
+- **Outliers and `MinMaxScaler`.** One extreme value compresses all the others into a sliver of the
+  range. Clip, use `RobustScaler`, or apply a log first.
+- **New data outside the training range.** `MinMaxScaler` then produces values outside $[0,1]$. That is
+  harmless for most models, but a model that assumes bounded inputs may behave oddly.
+- **Trees do not need it, but it does no harm.** If a pipeline feeds both a linear model and a tree, you
+  can scale once for both.
+- **Persist the scaler with the model.** At prediction time you need the *training* mean and standard
+  deviation. Saving the fitted pipeline as one object is the reliable way to keep them together.
+
+A quick way to decide whether scaling matters for your model is to ask: *would the predictions change if
+I measured one feature in different units?* For k-NN, SVMs, regularised linear models, PCA and neural
+networks the answer is yes. For trees and their ensembles it is no.
+
 ## Summary
 
 - Unsupervised learning has no labels. It is powerful for exploration and preprocessing, but hard to

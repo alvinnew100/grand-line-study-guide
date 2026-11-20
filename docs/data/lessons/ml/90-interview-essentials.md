@@ -227,7 +227,7 @@ import numpy as np
 from sklearn.datasets import load_breast_cancer
 from sklearn.dummy import DummyClassifier
 from sklearn.linear_model import LogisticRegression
-from sklearn.ensemble import RandomForestClassifier, HistGradientBoostingClassifier
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.model_selection import cross_val_score, StratifiedKFold
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
@@ -239,7 +239,7 @@ candidates = {
     "majority-class baseline": DummyClassifier(strategy="most_frequent"),
     "logistic regression": make_pipeline(StandardScaler(), LogisticRegression(max_iter=1000)),
     "random forest": RandomForestClassifier(n_estimators=60, random_state=0),
-    "hist gradient boosting": HistGradientBoostingClassifier(max_iter=60, random_state=0),
+    "gradient boosting": GradientBoostingClassifier(n_estimators=60, random_state=0),
 }
 for name, model in candidates.items():
     s = cross_val_score(model, X, y, cv=cv, scoring="roc_auc")

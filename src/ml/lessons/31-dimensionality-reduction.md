@@ -250,13 +250,16 @@ data. Reducing to one dimension loses exactly half of the variance, whichever di
 Now move the last two points to $(4, 4)$ and $(0, 0)$, so the data is $(2,0)$, $(0,2)$, $(4,4)$, $(0,0)$.
 The mean is $(1.5, 1.5)$ and
 
-$$C = \frac13\begin{pmatrix}11 & 5\\ 5 & 11\end{pmatrix}.$$
+$$C = \frac13\begin{pmatrix}11 & 7\\ 7 & 11\end{pmatrix}.$$
+
+(The centred points are $(0.5,-1.5)$, $(-1.5,0.5)$, $(2.5,2.5)$, $(-1.5,-1.5)$. The squares of the first
+coordinates sum to 11, and the products of the coordinates sum to 7.)
 
 **Step 3: eigenvectors.** For a symmetric matrix of the form $\begin{pmatrix}a & b\\ b & a\end{pmatrix}$
 the eigenvectors are $(1,1)/\sqrt2$ with eigenvalue $a+b$ and $(1,-1)/\sqrt2$ with eigenvalue $a-b$.
-Here the eigenvalues are $16/3$ and $6/3$.
+Here the eigenvalues are $18/3 = 6$ and $4/3$.
 
-**Step 4: explained variance.** The first component explains $16/(16+6) = 72.7\%$ of the variance. Its
+**Step 4: explained variance.** The first component explains $18/(18+4) = 81.8\%$ of the variance. Its
 direction, the diagonal $(1,1)$, is the line along which the points are most spread out.
 
 **Step 5: project.** The coordinate of a centred point on the first component is its dot product with

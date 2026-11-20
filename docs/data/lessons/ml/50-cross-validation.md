@@ -225,6 +225,47 @@ A scores $0.953 \pm 0.02$ and model B $0.957 \pm 0.02$, you have not shown that 
 > with features built only from the past. In every case, fit preprocessing inside each fold with a
 > `Pipeline`, and keep a final untouched test set.
 
+## 8. Cross-validation by hand
+
+Writing the loop yourself removes any mystery about what `cross_val_score` does. A splitter's `split`
+method yields pairs of index arrays. For each pair you train a fresh model on one part and score it on
+the other.
+
+```python-run
+import numpy as np
+from sklearn.base import clone
+from sklearn.datasets import load_iris
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import StratifiedKFold, cross_val_score
+
+X, y = load_iris(return_X_y=True)
+model = LogisticRegression(max_iter=1000)
+cv = StratifiedKFold(n_splits=5)
+
+scores = []
+for fold, (train_idx, test_idx) in enumerate(cv.split(X, y)):
+    m = clone(model)                               # a fresh, unfitted copy for every fold
+    m.fit(X[train_idx], y[train_idx])
+    scores.append(m.score(X[test_idx], y[test_idx]))
+    print(f"fold {fold}: train on {len(train_idx)} samples, test on {len(test_idx)} -> accuracy {scores[-1]:.3f}")
+print("by hand:        ", np.round(scores, 3))
+print("cross_val_score:", cross_val_score(model, X, y, cv=cv).round(3))
+```
+
+Three details in this loop matter:
+
+- **`clone`** makes an unfitted copy with the same hyperparameters. Nothing learned in one fold carries
+  into the next.
+- The test indices of the five folds are disjoint and together cover every sample exactly once.
+- Any preprocessing must happen *inside* the loop, fitted on `X[train_idx]` only. Passing a `Pipeline` as
+  `model` does this for you (module 6).
+
+**From fold scores to a rough interval.** The five scores give a mean and a standard deviation. A common
+summary is mean ± standard deviation, here about $0.97 \pm 0.02$. Treat it as a rough guide. The folds
+share most of their training data, so their scores are not independent, and the true uncertainty is
+somewhat larger than a naive formula suggests. `cross_val_predict` returns the out-of-fold prediction for
+every sample, which is useful for building one confusion matrix over the whole dataset.
+
 ## Summary
 
 - One train/test split is noisy. k-fold CV averages over $k$ splits and uses all the data for testing once.

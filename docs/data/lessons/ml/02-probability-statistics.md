@@ -200,6 +200,104 @@ as what was observed. It is not the probability that the null is true. In ML you
 feature) and when comparing models on paired CV folds. Beware multiple comparisons: test 20 useless
 features at $\alpha=0.05$ and you should expect one "significant" result.
 
+## 9. Worked example: maximum likelihood for a coin, step by step
+
+The simplest full MLE derivation uses a coin. You flip it $n$ times and see $k$ heads. What is the best
+estimate of $p$, the probability of heads?
+
+**Likelihood.** The flips are independent, so the probability of the observed sequence is
+
+$$\mathcal L(p) = p^k(1-p)^{n-k}.$$
+
+**Log-likelihood.** Take the logarithm. The maximum stays in the same place, and products become sums:
+
+$$\log\mathcal L(p) = k\log p + (n-k)\log(1-p).$$
+
+**Differentiate and set to zero.**
+
+$$\frac{d}{dp}\log\mathcal L = \frac{k}{p} - \frac{n-k}{1-p} = 0\quad\Longrightarrow\quad k(1-p) = (n-k)p\quad\Longrightarrow\quad \hat p = \frac{k}{n}.$$
+
+The maximum-likelihood estimate is the observed fraction of heads. This matches intuition, and it is the
+same calculation that gives the class priors and feature probabilities in naive Bayes.
+
+**The problem with small samples.** Flip three times and get three heads. The MLE says $\hat p = 1$:
+tails is impossible. That is overfitting in its purest form. A MAP estimate with a prior fixes it. With a
+Beta($\alpha$, $\beta$) prior, the estimate becomes
+
+$$\hat p_{MAP} = \frac{k + \alpha - 1}{n + \alpha + \beta - 2}.$$
+
+With $\alpha=\beta=2$ this is $\frac{k+1}{n+2}$: add one imaginary head and one imaginary tail. This is
+**Laplace (add-one) smoothing**, the `alpha` parameter of `MultinomialNB`. Three heads out of three then
+gives $4/5 = 0.8$, not 1. As $n$ grows, the prior's influence fades and MAP approaches the MLE.
+
+```python-run
+import numpy as np
+n, k = 10, 7
+grid = np.linspace(0.01, 0.99, 99)
+log_lik = k * np.log(grid) + (n - k) * np.log(1 - grid)
+print("grid search for the maximum of the log-likelihood:", grid[np.argmax(log_lik)].round(2), " formula k/n:", k / n)
+
+print("\n   n   k   MLE    MAP with add-one smoothing")
+for n, k in [(3, 3), (10, 10), (10, 7), (1000, 700)]:
+    print(f"{n:4d} {k:4d}  {k / n:.3f}  {(k + 1) / (n + 2):.3f}")
+
+rng = np.random.RandomState(0)
+true_p = 0.3
+for n in [5, 50, 5000]:
+    estimates = rng.binomial(n, true_p, size=2000) / n
+    print(f"n={n:5d}: MLE across 2000 experiments has mean {estimates.mean():.3f} and std {estimates.std():.3f}  (theory {np.sqrt(true_p * (1 - true_p) / n):.3f})")
+```
+
+The last three lines show two general properties of maximum likelihood. The estimate is centred on the
+true value, and its spread shrinks like $1/\sqrt{n}$. To halve the uncertainty you need four times the
+data. The same law governs the error bars on a test-set accuracy in section 7.
+
+## 10. Covariance, correlation and what they do not tell you
+
+For two random variables, the **covariance** measures how they vary together:
+
+$$\operatorname{Cov}(X, Y) = \mathbb E\big[(X - \mathbb EX)(Y - \mathbb EY)\big].$$
+
+It depends on the units, so it is usually normalised into the **correlation coefficient**
+
+$$\rho = \frac{\operatorname{Cov}(X,Y)}{\sigma_X\,\sigma_Y}\in[-1, 1].$$
+
+The **covariance matrix** of a dataset holds the variance of each feature on its diagonal and the
+covariance of each pair off the diagonal. It is the object PCA decomposes, and the reason correlated
+features make linear-model coefficients hard to interpret.
+
+Three cautions matter in practice:
+
+- **Correlation measures only linear association.** If $y = x^2$ with $x$ symmetric around zero, the
+  correlation is 0, yet $y$ is completely determined by $x$.
+- **Correlation is not causation.** Ice-cream sales and drownings rise together because both depend on
+  the weather. A model can use such a feature to predict. It cannot tell you what would happen if you
+  intervened.
+- **Independence implies zero correlation, but not the reverse.**
+
+```python-run
+import numpy as np
+rng = np.random.RandomState(0)
+x = rng.uniform(-1, 1, 5000)
+pairs = {
+    "y = 2x + noise": 2 * x + 0.3 * rng.randn(5000),
+    "y = -x + noise": -x + 0.3 * rng.randn(5000),
+    "y = x^2 (fully dependent)": x ** 2,
+    "y independent of x": rng.randn(5000),
+}
+for name, yv in pairs.items():
+    print(f"{name:27s} correlation = {np.corrcoef(x, yv)[0, 1]:+.3f}")
+weather = rng.randn(5000)
+ice_cream, drownings = weather + 0.5 * rng.randn(5000), weather + 0.5 * rng.randn(5000)
+print("ice cream vs drownings (common cause):", round(float(np.corrcoef(ice_cream, drownings)[0, 1]), 3))
+```
+
+> [!INTERVIEW]
+> **"Derive the MLE for a Bernoulli parameter."** Write the likelihood $p^k(1-p)^{n-k}$, take the log,
+> differentiate, and solve to get $k/n$. Then volunteer the weakness: with few observations it can give
+> probabilities of exactly 0 or 1, which is why smoothing (a prior) is used. Mentioning that the standard
+> error is $\sqrt{p(1-p)/n}$ shows you understand how reliable the estimate is.
+
 ## Summary
 
 - Know Bernoulli, categorical, Gaussian, Poisson and multinomial, and which loss each one implies.

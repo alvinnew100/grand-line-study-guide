@@ -221,6 +221,46 @@ for name, model in [
 > splits on one-hot columns are inefficient, so ordinal codes or native categorical support (LightGBM,
 > CatBoost, `HistGradientBoosting`) work better.
 
+## 4. Worked example: what an interaction term lets a linear model say
+
+Suppose we predict a salary from years of experience $x_1$ and from whether the person has a degree,
+$x_2\in\{0,1\}$. A plain linear model is
+
+$$\hat y = b + w_1x_1 + w_2x_2 .$$
+
+For people without a degree this is the line $b + w_1x_1$. For people with a degree it is
+$(b + w_2) + w_1x_1$. The two lines have **different intercepts and the same slope**. The model can say
+"a degree adds a fixed amount". It cannot say "a degree makes each year of experience worth more".
+
+Add the product $x_1x_2$:
+
+$$\hat y = b + w_1x_1 + w_2x_2 + w_3\,x_1x_2 .$$
+
+Without a degree the line is still $b + w_1x_1$. With a degree it becomes $(b + w_2) + (w_1 + w_3)x_1$.
+Now the slopes differ by $w_3$. One extra feature gave the model a new kind of statement. The model is
+still linear in its parameters, so everything about fitting and regularising it stays the same.
+
+```python-run
+import numpy as np
+from sklearn.linear_model import LinearRegression
+rng = np.random.RandomState(0)
+n = 500
+years = rng.uniform(0, 20, n)
+degree = rng.randint(0, 2, n)
+salary = 30 + 1.0 * years + 5 * degree + 1.5 * years * degree + rng.normal(0, 2, n)   # in thousands
+
+plain = LinearRegression().fit(np.column_stack([years, degree]), salary)
+inter = LinearRegression().fit(np.column_stack([years, degree, years * degree]), salary)
+print("without interaction: R2 =", round(plain.score(np.column_stack([years, degree]), salary), 3), " coefficients:", plain.coef_.round(2))
+print("with interaction:    R2 =", round(inter.score(np.column_stack([years, degree, years * degree]), salary), 3), " coefficients:", inter.coef_.round(2))
+print("true values: slope 1.0, degree bonus 5, extra slope with a degree 1.5")
+```
+
+The plain model's coefficients are distorted. It has to stretch one slope and one bonus to cover an
+effect it cannot represent. With the interaction, the three coefficients recover the true values and can
+be read directly. A tree-based model would find this structure by splitting on `degree` first and then
+fitting different trends on each side, which is why it rarely needs the product feature.
+
 ## Summary
 
 - Models need numbers. Nominal categories → one-hot encoding. Check `value_counts()` first.

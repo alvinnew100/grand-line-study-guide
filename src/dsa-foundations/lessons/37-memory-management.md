@@ -71,8 +71,9 @@ for policy in ["first", "next", "best", "worst"]:
     print(f"{policy:5s}-fit: holes left {left}  could not allocate {failed}")
 ```
 
-Run it: on this classic workload, first-fit and worst-fit fail to place the last request (426)
-although enough total memory is free — external fragmentation in action — while best-fit succeeds.
+Run it: on this classic workload, first-fit, next-fit and worst-fit all fail to place the last
+request (426) although enough total memory is free — external fragmentation in action — while
+best-fit succeeds.
 On other workloads the ranking changes; there is no universally best policy.
 
 Real allocators are more elaborate: CPython's `pymalloc` serves small objects (up to 512 bytes) from
