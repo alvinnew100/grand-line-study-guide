@@ -1,5 +1,29 @@
 # Reversal, merging and in-place rearrangement
 
+> **Before this lesson:** read [Nodes, pointers and the dummy-node trick](#/lesson/neet-linked-trees/ll-pointers) (dummy nodes, inserting and deleting) and [Fast and slow pointers](#/lesson/neet-linked-trees/ll-fast-slow) (finding the middle). The section on merging k lists uses a *heap*; if you have not met one, [Priority queues and binary heaps](#/lesson/dsa-foundations/heaps) explains it, and the one sentence you need is given below.
+
+## In plain words
+
+This lesson is about three ways of **rearranging a chain without making a new one**.
+
+- **Reversing.** Picture a line of people, each with a hand on the shoulder of the person in front. To
+  reverse the line nobody needs to walk anywhere: everyone turns round and puts a hand on the person who
+  used to be behind them. In a linked list, "turn round" means changing each node's `next` to point at the
+  node before it.
+- **Merging.** Picture two piles of exam papers, each already sorted by name. To make one sorted pile you
+  repeatedly compare the two top papers and take the one that comes first. In a linked list you do the same
+  with the two front nodes.
+- **Composing.** Harder tasks ("reorder the list as first, last, second, second-to-last…") are short
+  recipes made of the steps you already know: find the middle, reverse one half, merge.
+
+Two terms before we start. **In place** means we reuse the existing nodes and only a handful of extra
+variables, instead of building a second list. A **heap** (used for merging many lists) is a container that
+always hands you its smallest item quickly; Python provides it in the `heapq` module.
+
+**Why it matters for a job.** "Change the links, keep the data where it is" is how real systems reorder
+large records cheaply. Merging sorted sequences is the heart of merge sort and of how databases and search
+engines combine sorted files that are too big for memory.
+
 The previous two lessons gave you the vocabulary (nodes, dummies, rewiring) and the measuring tools
 (fast/slow and gap pointers). This lesson covers the moves that *transform* lists: reversing all or part of a
 list, merging sorted lists (two or k of them), and combining these pieces into in-place rearrangements such
@@ -9,7 +33,7 @@ linked-list problems are a short composition of these building blocks.
 ## 1. Reversing a whole list (iterative)
 
 The arrows must all turn around. Walk the list once, and at each node point its `next` backwards to the
-node you just came from. Three names are enough:
+node you came from a moment ago. Three names are enough:
 
 - `prev` — the already-reversed part (initially `None`),
 - `cur` — the node being processed,
@@ -99,8 +123,8 @@ around 1,000, so for lists of thousands of nodes prefer the iterative version.
 
 Many problems reverse only part of a list. The general recipe:
 
-1. Use a dummy node, and walk to `before`, the node **just before** the segment.
-2. Reverse the segment's nodes with the usual loop — but initialise `prev` to `after`, the node **just after**
+1. Use a dummy node, and walk to `before`, the node **right before** the segment.
+2. Reverse the segment's nodes with the usual loop — but initialise `prev` to `after`, the node **right after**
    the segment, instead of `None`. Then the old first node of the segment automatically points to the rest
    of the list when it becomes the segment's last node.
 3. Reconnect: `before.next` = the old last node of the segment (the new first).
@@ -354,6 +378,23 @@ also an O(1)-extra-space trick: weave each copy right after its original (`A →
 - Merge two sorted lists with dummy + tail; merge k with a heap (`(val, index, node)`) or pairwise.
 - Many problems are compositions: split (fast/slow) → reverse → merge/compare.
 - Deep copies use an old→new map built in two passes.
+
+## Glossary
+
+- **Reverse (a list)** — make every `next` reference point the other way, so the old tail becomes the head.
+- **In place** — done by rewiring existing nodes with O(1) extra memory, not by copying into a new structure.
+- **`prev`, `cur`, `nxt`** — the usual three names in reversal: the already reversed part, the node being processed, and the saved rest of the list.
+- **Segment (sublist)** — a consecutive run of nodes inside a list.
+- **Merge** — combine two sorted sequences into one sorted sequence by repeatedly taking the smaller front element.
+- **Stable** — equal items keep their original relative order.
+- **Heap (priority queue)** — a container that returns its smallest item in O(log k) time when it holds k items; `heapq` in Python.
+- **Tie-breaker** — an extra field (here the list index) that decides the order when two values are equal.
+- **Divide and conquer** — solve a problem by splitting it into smaller problems of the same kind and combining the answers.
+- **Merge sort** — sort by splitting in half, sorting each half, and merging.
+- **Deep copy** — a copy made of entirely new nodes, sharing nothing with the original.
+- **Recursion limit** — Python stops a function that calls itself more than about 1,000 levels deep.
+
+## Check yourself
 
 ```quiz
 [

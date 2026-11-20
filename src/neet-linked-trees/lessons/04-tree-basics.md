@@ -1,5 +1,29 @@
 # Tree vocabulary, shapes and representations
 
+> **Before this lesson:** you should know what a node and a reference are — see [Nodes, pointers and the dummy-node trick](#/lesson/neet-linked-trees/ll-pointers) — and be able to read a function that calls itself (recursion); if recursion is new, read [Thinking recursively: four classic examples](#/lesson/dsa-foundations/recursion-examples) first. The logarithm `log₂ n` is used once and is explained where it appears.
+
+## In plain words
+
+A **tree** stores things that are organised in **levels, with each thing belonging to exactly one thing
+above it**. A family tree drawn from one ancestor downward is the classic picture; so are the folders on your
+computer (every folder sits inside exactly one parent folder) and a company chart (everyone has one manager,
+except the boss at the top).
+
+Computer scientists draw trees upside down: the starting point, called the **root**, is at the top, and the
+structure grows downward. Each item is again called a **node**. A node directly below another is its
+**child**; the one directly above is its **parent**. A node with no children is a **leaf**. A **binary
+tree** is the special case where every node has at most two children, called the *left* child and the
+*right* child.
+
+One number will come up again and again: `log₂ n` ("log base two of n") is the number of times you can halve
+n before reaching 1 — about 10 for a thousand, 20 for a million. A well-shaped tree with n nodes is only
+about `log₂ n` levels deep, which is why trees make searching fast.
+
+**Why it matters for a job.** Trees are everywhere in software: the structure of a web page (the DOM),
+JSON documents, file systems, database indexes, the syntax of a program inside a compiler. Tree questions
+are among the most common in coding interviews because one short pattern — "solve it for the children,
+combine the answers" — solves a remarkable number of them.
+
 Linked lists are one-dimensional: every node has at most one successor. Allow a node to have **several**
 successors and forbid loops, and you get a **tree** — the most important non-linear structure in computer
 science. File systems, HTML documents, organisation charts, the call stack of a recursive function, decision
@@ -301,6 +325,28 @@ algorithms *plus* a visited set.
 - $\log_2(n+1) - 1 \le h \le n - 1$: tree algorithms cost O(h) per root-to-leaf walk, which ranges from O(log n) to O(n).
 - LeetCode level order: queue-based, `None` children get no slots, trailing `None`s dropped.
 - Think recursively: base case for `None`, combine the children's answers.
+
+## Glossary
+
+- **Tree** — nodes connected by parent–child links, with one root and no cycles.
+- **Root** — the only node without a parent; the top of the tree.
+- **Parent / child / sibling** — the node directly above / directly below / sharing the same parent.
+- **Leaf (external node)** — a node with no children. **Internal node** — a node with at least one child.
+- **Ancestor / descendant** — any node on the way up to the root / anywhere below.
+- **Subtree** — a node together with everything below it; itself a tree.
+- **Edge** — one parent–child link. **Path** — a sequence of nodes joined by edges.
+- **Depth** — the number of edges from the root down to a node (the root has depth 0).
+- **Height** — the number of edges on the longest path from a node down to a leaf; the height of the tree is the height of its root.
+- **Level** — all nodes with the same depth.
+- **Binary tree** — a tree where every node has at most a left child and a right child.
+- **Complete / perfect / proper (full)** — shapes defined in §2: filled level by level from the left / every level completely full / every node has 0 or 2 children.
+- **Skewed (degenerate) tree** — every node has at most one child, so the tree is really a chain.
+- **Balanced tree** — at every node the two subtrees' heights differ by at most 1.
+- **`log₂ n`** — how many times n can be halved before reaching 1; the height of a well-balanced tree with n nodes.
+- **Level-order list** — the judge's way of writing a tree: values level by level with `None` for a missing child.
+- **Base case** — the input small enough to answer directly in a recursive function (for trees, usually the empty tree `None`).
+
+## Check yourself
 
 ```quiz
 [

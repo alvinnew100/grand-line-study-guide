@@ -1,5 +1,32 @@
 # Nodes, pointers and the dummy-node trick
 
+> **Before this lesson:** you should be able to read small Python programs with classes, loops and `None`, and know what a Python `list` is. It helps to know what "O(n)" means — see [Big-O, Big-Omega and Big-Theta](#/lesson/dsa-foundations/asymptotic-notation). For a slower, textbook-style introduction to linked lists, read [Singly and circularly linked lists](#/lesson/dsa-foundations/singly-circular) first. Nothing else is assumed.
+
+## In plain words
+
+A **linked list** is a way to store a sequence of items where each item knows only one thing about the
+sequence: *which item comes next*. Think of a **treasure hunt**. Each clue (an item) sits in a different
+place, and written on it is the location of the next clue. You cannot jump straight to clue number 7 — you
+have to follow the clues in order — but adding a new clue in the middle is easy: rewrite one clue so it
+points to the new one, and make the new one point to where the old clue used to point. Nobody else has to
+move.
+
+A few words used throughout this lesson, each defined before it is used:
+
+- A **node** is one item of the list: a small object holding a value and a note saying where the next node is.
+- A **pointer** (in Python: a **reference**) is that note — a variable or field that says *where an object
+  is*, as opposed to holding a copy of it.
+- The **head** is the first node; the **tail** is the last node. The tail's "next" note is `None`, Python's
+  word for "nothing here".
+- **O(1)**, **O(n)** (read "order one", "order n") describe how the work grows with the number of items `n`:
+  O(1) means the same small amount of work no matter how long the list is; O(n) means work proportional to
+  the length.
+
+**Why it matters for a job.** Linked lists are a standard interview topic because they test whether you
+can change references carefully without losing data. The same skill is needed for real structures built
+from linked nodes: caches that forget the least recently used entry (browsers, databases), undo histories,
+task queues inside operating systems, and the hash tables behind Python's `dict`.
+
 Arrays put their elements side by side in one block of memory, which makes indexing instant but inserting
 in the middle expensive: everything after the insertion point must shift. A **linked list** takes the
 opposite trade. Each element lives in its own little object, a **node**, and every node remembers where the
@@ -23,7 +50,7 @@ class ListNode:
 ```
 
 A list is nothing more than a reference to its first node, the **head**. The last node, the **tail**, has
-`next = None`. An empty list is simply `head = None`.
+`next = None`. An empty list is written `head = None`.
 
 ```mermaid
 graph LR
@@ -283,7 +310,7 @@ def remove_nth_from_end(head, n):
         right = right.next
     while right:                # slide the window to the end
         left, right = left.next, right.next
-    left.next = left.next.next  # left is just before the target
+    left.next = left.next.next  # left is right before the target
     return dummy.next
 
 print(to_list(remove_nth_from_end(build([1, 2, 3, 4, 5]), 2)))  # [1, 2, 3, 5]
@@ -318,7 +345,7 @@ def remove(node):
     node.prev.next = node.next
     node.next.prev = node.prev
 
-def append(node):               # insert just before the right sentinel
+def append(node):               # insert right before the right sentinel
     last = right.prev
     last.next = node
     node.prev, node.next = last, right
@@ -378,7 +405,7 @@ print("evicted", lru.key, show())
 
 ## Summary
 
-- A linked list is a chain of nodes; variables are just names pointing at nodes.
+- A linked list is a chain of nodes; variables are only names pointing at nodes.
 - Distinguish **walking** (`cur = cur.next`) from **rewiring** (`cur.next = ...`).
 - Save references before you overwrite them; draw the arrows first.
 - A **dummy node** removes the special case of the head; `dummy + tail` builds output lists.
@@ -386,10 +413,29 @@ print("evicted", lru.key, show())
 - Compare nodes with `is`; sets/dicts of nodes work by identity.
 - Doubly linked lists with sentinels give O(1) unlink/append — the core of LRU Cache.
 
+## Glossary
+
+- **Node** — one element of a linked list: an object with a value and a reference to the next node.
+- **Reference / pointer** — a name or field that says where an object is; copying it does not copy the object.
+- **Head / tail** — the first / last node of the list.
+- **`None`** — Python's "no object"; the tail's `next` is `None`, and an empty list is `head = None`.
+- **Singly linked list** — each node knows only its successor (`next`).
+- **Doubly linked list** — each node knows its successor (`next`) and its predecessor (`prev`).
+- **Traverse (walk)** — visit the nodes one after another by following `next`.
+- **Rewire** — assign to a node's `next` (or `prev`) field, which changes the shape of the list.
+- **Dummy node (sentinel)** — an extra node holding no real data, placed before the head (or after the tail) so that every real node has a neighbour and special cases disappear.
+- **Predecessor / successor** — the node right before / right after a given node.
+- **Invariant** — a statement that stays true every time a loop comes back to its start, such as "`tail` is the last node of the output".
+- **Identity vs equality** — `a is b` asks "are these the very same object?"; `a == b` asks "do they hold equal values?".
+- **LRU (least recently used) cache** — a fixed-size store that, when full, throws away the entry that has gone unused the longest.
+- **Garbage collector** — the part of Python that frees objects nothing refers to any more.
+
+## Check yourself
+
 ```quiz
 [
   {"q": "Which statement changes the structure of the list?", "options": ["cur = cur.next", "cur.next = cur.next.next", "x = cur.val", "cur = head"], "answer": 1,
-   "explain": "Only assignments to a node's field (cur.next = ...) change the list. Assigning to a local variable just moves that name."},
+   "explain": "Only assignments to a node's field (cur.next = ...) change the list. Assigning to a local variable only moves that name."},
   {"q": "To insert node `new` after node `p`, which order is correct?", "options": ["p.next = new; new.next = p.next", "new.next = p.next; p.next = new", "Either order works", "new.next = p; p.next = new"], "answer": 1,
    "explain": "First keep hold of the rest of the list via new.next, then splice. The other order makes new point to itself."},
   {"q": "Why use a dummy node?", "options": ["It makes the algorithm asymptotically faster", "It gives the head a predecessor so head changes need no special case", "Python requires it", "It saves memory"], "answer": 1,
@@ -401,7 +447,7 @@ print("evicted", lru.key, show())
   {"q": "Two lists both contain a node with value 8. Do they intersect?", "options": ["Yes", "Not necessarily: intersection means sharing the same node object", "Only if 8 is at the tail", "Only if the lists have equal length"], "answer": 1,
    "explain": "Intersection is about identity (`is`), not equal values."},
   {"q": "In an LRU cache built from a doubly linked list with sentinels `left` and `right`, the least recently used entry is…", "options": ["right.prev", "left.next", "left", "the node with the smallest key"], "answer": 1,
-   "explain": "New or touched entries are appended before `right`, so the oldest one drifts to just after `left`."}
+   "explain": "New or touched entries are appended before `right`, so the oldest one drifts to right after `left`."}
 ]
 ```
 

@@ -1,5 +1,25 @@
 # Fast and slow pointers (with Floyd's proof)
 
+> **Before this lesson:** read [Nodes, pointers and the dummy-node trick](#/lesson/neet-linked-trees/ll-pointers) — you need to be comfortable with nodes, `next`, walking a list with `cur = cur.next`, and the difference between `is` and `==`. No other background is assumed; the small amount of algebra used in the proofs is explained step by step.
+
+## In plain words
+
+Imagine two people walking along the same path, one at normal speed and one **twice as fast**. Two useful
+things follow. First, when the fast walker reaches the end of the path, the slow walker is exactly
+**half-way** — so you have found the middle without measuring the path. Second, if the path is secretly a
+**loop** (a running track), the fast walker will come round and catch up with the slow walker from behind;
+on a straight road that can never happen. So "did they ever meet again?" tells you whether the path loops.
+
+In a linked list the "walkers" are two variables that refer to nodes. We call them **pointers**. The
+**slow pointer** moves one node per step (`slow = slow.next`), the **fast pointer** two nodes per step
+(`fast = fast.next.next`). A **cycle** is a list whose last node's `next` points back to an earlier node
+instead of `None`, so following `next` goes round forever.
+
+**Why it matters for a job.** A cycle in a data structure makes any loop over it run forever, which in a
+real service means a frozen process. Detecting cycles with almost no extra memory is used in memory-leak
+tools, in checking linked structures read from disk, and in testing random-number generators. In interviews
+this technique solves a whole family of questions that look unrelated at first sight.
+
 Some linked-list questions are about *where* things are: the middle of the list, the k-th node from the end,
 whether the list loops back on itself and, if so, where the loop starts. An array would answer these with
 an index. A linked list has no indices — but two pointers moving at **different speeds** can measure
@@ -274,6 +294,23 @@ precisely so that this shared `None` state exists.
 - Different speeds measure *proportions* (middle); equal speeds with a gap measure *offsets* (k-th from end).
 - Floyd's algorithm detects a cycle in O(n) time, O(1) space; phase 2 finds the cycle entrance.
 - Any "function from a finite set to itself" is a linked list in disguise — including *Find the Duplicate Number*.
+
+## Glossary
+
+- **Pointer** — here: a variable that refers to a node and is moved along the list.
+- **Slow / fast pointer** — two pointers moving 1 and 2 nodes per step ("tortoise and hare").
+- **Middle node** — for odd length, the centre; for even length there are two middles, the *first* and the *second*.
+- **Cycle (loop)** — a part of the list you can go round forever because some node's `next` points back to an earlier node.
+- **Tail (of a ρ-shaped list)** — the straight part before the cycle; its length is called `a` in the proof.
+- **Cycle entrance** — the first node of the cycle, where the tail joins it.
+- **Floyd's algorithm** — cycle detection with a slow and a fast pointer, using O(1) extra memory.
+- **Gap pointers** — two pointers moving at the same speed, a fixed number of nodes apart.
+- **Lap** — one full trip around the cycle; its length is called `C`.
+- **Pigeonhole principle** — if n + 1 items go into n boxes, some box holds at least two.
+- **Functional graph** — a picture where every item has exactly one arrow to another item (`i → nums[i]`); following the arrows must eventually loop.
+- **O(1) space** — the algorithm uses a fixed number of variables, however long the list is.
+
+## Check yourself
 
 ```quiz
 [

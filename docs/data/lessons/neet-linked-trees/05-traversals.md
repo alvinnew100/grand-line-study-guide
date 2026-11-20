@@ -1,5 +1,34 @@
 # Traversals: DFS (pre/in/post) and BFS
 
+> **Before this lesson:** read [Tree vocabulary, shapes and representations](#/lesson/neet-linked-trees/tree-basics) — you need the words root, child, leaf, subtree and height, the `TreeNode` class, and the idea of a recursive function on a tree. The lesson also uses a *stack* and a *queue*; both are explained in one sentence below, and in full in [Stacks and their applications](#/lesson/dsa-foundations/stacks) and [Queues, circular arrays and deques](#/lesson/dsa-foundations/queues-deques).
+
+## In plain words
+
+To **traverse** a tree means to visit every node exactly once, in some chosen order. Think of visiting every
+room in a building with many branching corridors. There are two sensible strategies:
+
+- **Depth-first search (DFS):** follow one corridor all the way to its end before coming back to try the next
+  one. You need to remember the junctions you still have to return to.
+- **Breadth-first search (BFS):** visit everything one step from the entrance, then everything two steps
+  away, and so on — floor by floor.
+
+Two containers do the remembering:
+
+- A **stack** is a pile where you add and remove at the **top** only, like a stack of plates: the last thing
+  put on is the first taken off (LIFO, "last in, first out"). In Python a `list` with `append` and `pop` is
+  a stack. DFS uses a stack — when you write DFS as a recursive function, Python's own **call stack** (its
+  record of which function calls are still unfinished) plays that role for you.
+- A **queue** is a line where you join at the back and leave from the front, like a queue in a shop: first
+  in, first out (FIFO). In Python use `collections.deque` with `append` and `popleft`. BFS uses a queue.
+
+Within DFS there are three named orders — **preorder**, **inorder**, **postorder** — which differ only in
+*when* you deal with a node relative to its children: before them, between them, or after them.
+
+**Why it matters for a job.** Almost every tree algorithm is "a traversal plus a little work at each node":
+rendering a web page walks the DOM tree, deleting a folder removes the contents before the folder itself
+(postorder), a search feature explores a tree of possibilities. Knowing which order to use is most of the
+solution.
+
 A **traversal** visits every node of a tree exactly once. That sounds trivial, but the *order* of the visits
 is what makes a traversal useful: printing a table of contents needs parents before children, deleting a
 directory needs children before parents, reading a binary search tree in sorted order needs left before node
@@ -80,7 +109,7 @@ print("post", " ".join(post(root)))
   pattern of the next lesson.
 
 Goodrich (§8.4.6) unifies all three as an **Euler tour**: walk around the tree keeping it on your left. You
-pass each node three times — on the left (pre), underneath (in), on the right (post). Each traversal is just
+pass each node three times — on the left (pre), underneath (in), on the right (post). Each traversal is only
 "which of the three passes do you record?".
 
 ## 2. Recursion and the call stack
@@ -342,6 +371,25 @@ rarely required but makes a strong follow-up answer.
 - Iterative inorder: slide left pushing nodes, pop, go right. Iterative postorder: reversed modified preorder, or the visited-flag template.
 - BFS: `deque` + `for _ in range(len(q))` to process exactly one level per round.
 - Choose by the order the problem needs; mention O(h) vs O(w) memory.
+
+## Glossary
+
+- **Traversal** — a systematic way of visiting every node once.
+- **Visit** — do the actual work for a node (print it, add it to a list, compare it…).
+- **DFS (depth-first search)** — go as deep as possible along one branch before backing up.
+- **BFS (breadth-first search)** — visit nodes level by level, nearest to the root first.
+- **Preorder / inorder / postorder** — visit the node before / between / after its left and right subtrees.
+- **Level order** — the order BFS produces: top to bottom, left to right.
+- **Stack (LIFO)** — add and remove at the same end; last in, first out.
+- **Queue (FIFO)** — add at the back, remove from the front; first in, first out. `collections.deque` in Python.
+- **Call stack** — Python's record of unfinished function calls; one entry (a *frame*) per call.
+- **Recursion limit** — the maximum call-stack depth Python allows (about 1,000 by default).
+- **Iterative** — written with loops and an explicit stack or queue instead of recursion.
+- **Euler tour** — a walk around the whole outline of the tree that passes each node three times.
+- **Width** — the largest number of nodes on any one level.
+- **h, w, n** — the tree's height, width and number of nodes in complexity statements such as O(h).
+
+## Check yourself
 
 ```quiz
 [

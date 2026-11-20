@@ -1,5 +1,32 @@
 # Returning values up the tree
 
+> **Before this lesson:** read [Traversals: DFS (pre/in/post) and BFS](#/lesson/neet-linked-trees/tree-traversals) — especially preorder and postorder — and be comfortable with recursive functions on trees from [Tree vocabulary, shapes and representations](#/lesson/neet-linked-trees/tree-basics). You should know what a function *parameter* and a *return value* are in Python.
+
+## In plain words
+
+Think of a large company organised as a tree: one director at the top, managers below, staff at the bottom.
+Information moves in exactly two directions.
+
+- **Down:** the director tells each manager something ("the budget left is 100"), each manager adjusts it and
+  tells their own team ("after my costs, 80 is left"). Every person receives a message describing what
+  happened *above* them.
+- **Up:** each staff member reports a small summary to their manager ("my team has 1 person"), each manager
+  combines the reports ("my part of the company has 7 people") and reports upward. Every person receives
+  summaries of what is *below* them.
+
+In a recursive tree function, **parameters** carry information down (a parameter is a value handed to a
+function when it is called) and the **return value** carries information up (the value a function hands
+back to whoever called it). Nearly every tree problem is solved by deciding *what to send down* and *what to
+send up*.
+
+One subtlety makes the harder problems hard: sometimes the summary a manager must send upward is **not** the
+final answer the director wants. Then you keep a separate notebook (a variable outside the recursion) for the
+best answer seen so far, while still reporting the summary upward. We will call that "record versus return".
+
+**Why it matters for a job.** Computing totals over a folder tree, laying out nested boxes on a web page,
+checking permissions inherited from parent folders, evaluating nested formulas — all are "pass down / return
+up" computations. In interviews this single pattern covers the majority of medium and hard tree questions.
+
 Most medium and hard tree problems look different on the surface — diameters, balance checks, path sums,
 "good" nodes, maximum path sums — yet they are solved by the same two ideas:
 
@@ -211,7 +238,7 @@ print("diameter:", diameter(root))
 ## 4. Binary Tree Maximum Path Sum
 
 Same pattern, now with weights that can be negative. Define `gain(v)` = the best sum of a path that **starts
-at v and goes down** (possibly just `v` itself).
+at v and goes down** (possibly only `v` itself).
 
 - A child's gain can be negative; then it is better not to extend into that child at all. Clamp:
   `l = max(gain(left), 0)`, `r = max(gain(right), 0)`.
@@ -344,6 +371,27 @@ Common Ancestor of a BST*, next lesson), O(h) instead of O(n).
 - When the problem's answer differs from what the parent needs (diameter, max path sum), **record** the answer in an outer variable while **returning** the parent's summary.
 - Returning extra information (height with balance, sentinel -1) turns O(n²) solutions into O(n).
 
+## Glossary
+
+- **Parameter** — a value passed *into* a function call; here, information travelling down the tree.
+- **Return value** — the value a call hands back; here, information travelling up the tree.
+- **State** — the information being carried along a path (a running sum, a maximum so far, an allowed range).
+- **Base case** — the answer for the empty tree (`None`), where the recursion stops.
+- **Combine step** — how a node builds its own summary from its children's summaries.
+- **Postorder** — children first, then the node: the order in which values are returned up.
+- **Summary** — the small piece of information about a subtree that its parent needs (height, sum, valid or not…).
+- **Sentinel value** — a special value such as `-1` or `-inf` that signals "invalid" or "nothing yet".
+- **`nonlocal`** — a Python keyword that lets a nested function assign to a variable of the enclosing function.
+- **Record vs return** — store the problem's answer in an outer variable while returning to the parent only what the parent can use.
+- **Bend** — the highest node of a path, where it comes up one side and goes down the other.
+- **Diameter** — the number of edges on the longest path between any two nodes.
+- **Gain** — the best sum of a path that starts at a node and only goes downward.
+- **Clamp** — replace a negative value by 0 (`max(x, 0)`).
+- **Backtracking** — undoing a change to shared state after exploring a branch (`append` … `pop`).
+- **LCA (lowest common ancestor)** — the deepest node that has two given nodes in its subtree.
+
+## Check yourself
+
 ```quiz
 [
   {"q": "In Count Good Nodes, what is passed down to each child?", "options": ["The number of good nodes so far", "The maximum value on the path from the root", "The child's height", "The parent's value only"], "answer": 1,
@@ -351,7 +399,7 @@ Common Ancestor of a BST*, next lesson), O(h) instead of O(n).
   {"q": "In the diameter algorithm, what does the helper return to its parent?", "options": ["left + right", "1 + max(left, right)", "The diameter so far", "left * right"], "answer": 1,
    "explain": "The parent can only extend a path that goes down one side. The bend l + r is recorded, not returned."},
   {"q": "Why clamp child gains with max(gain, 0) in Maximum Path Sum?", "options": ["To avoid recursion errors", "Because extending into a subtree with negative gain only lowers the sum — better to stop", "Because values are non-negative", "To make it O(n)"], "answer": 1,
-   "explain": "A path need not include a child at all; a negative contribution is simply dropped."},
+   "explain": "A path need not include a child at all; a negative contribution is dropped."},
   {"q": "Why initialise `best = root.val` rather than 0 in Maximum Path Sum?", "options": ["Style", "If every value is negative, the answer is negative, and 0 is not achievable", "0 would overflow", "root.val is always the answer"], "answer": 1,
    "explain": "A path must contain at least one node; for [-3] the answer is -3."},
   {"q": "Calling a separate height() function at every node to check balance costs, on a skewed tree…", "options": ["O(n)", "O(n log n)", "O(n^2)", "O(log n)"], "answer": 2,

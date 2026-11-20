@@ -26,6 +26,9 @@ TRACK = dict(
                 "palindrome-linked-list", "intersection-of-two-linked-lists", "reorder-list",
                 "remove-nth-node-from-end-of-list", "copy-list-with-random-pointer", "add-two-numbers",
                 "find-the-duplicate-number", "lru-cache", "merge-k-sorted-lists", "reverse-nodes-in-k-group",
+                "remove-linked-list-elements", "remove-duplicates-from-sorted-list", "design-linked-list",
+                "odd-even-linked-list", "partition-list", "swap-nodes-in-pairs", "reverse-linked-list-ii",
+                "rotate-list", "maximum-twin-sum-of-a-linked-list", "sort-list",
             ],
         ),
         dict(
@@ -46,6 +49,10 @@ TRACK = dict(
                 "insert-into-a-binary-search-tree", "delete-node-in-a-bst", "validate-binary-search-tree",
                 "kth-smallest-element-in-a-bst", "construct-binary-tree-from-preorder-and-inorder-traversal",
                 "binary-tree-maximum-path-sum", "serialize-and-deserialize-binary-tree",
+                "binary-tree-preorder-traversal", "binary-tree-postorder-traversal", "symmetric-tree",
+                "merge-two-binary-trees", "minimum-depth-of-binary-tree", "sum-root-to-leaf-numbers", "path-sum-ii",
+                "binary-tree-zigzag-level-order-traversal", "lowest-common-ancestor-of-a-binary-tree",
+                "convert-sorted-array-to-binary-search-tree", "range-sum-of-bst", "binary-search-tree-iterator",
             ],
         ),
         dict(
@@ -58,6 +65,7 @@ TRACK = dict(
             ],
             problems=[
                 "implement-trie-prefix-tree", "design-add-and-search-words-data-structure", "word-search-ii",
+                "replace-words", "longest-word-in-dictionary", "map-sum-pairs",
             ],
         ),
     ],

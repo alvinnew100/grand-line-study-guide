@@ -1,5 +1,30 @@
 # Wildcards and trie-guided grid search
 
+> **Before this lesson:** read [Tries: prefix trees from scratch](#/lesson/neet-linked-trees/trie-basics) — you should be able to write `insert` and `search` yourself — and [Traversals: DFS (pre/in/post) and BFS](#/lesson/neet-linked-trees/tree-traversals) for depth-first search. A grid here is a Python list of lists, `board[row][column]`.
+
+## In plain words
+
+So far a trie lookup followed **one** road: each letter of the word picked exactly one child. This lesson
+covers two situations where there are **several roads to try**.
+
+1. **Wildcards.** A **wildcard** is a placeholder that can stand for any character. Searching a crossword
+   dictionary for `c.t` ("c, any letter, t") should find *cat*, *cot* and *cut*. At the unknown letter you
+   have to try every branch of the trie.
+2. **Word-search puzzles.** You are given a square of letters and a long list of words, and must find which
+   words can be traced by moving between neighbouring squares. Here the trie is used the other way round:
+   while you trace a path through the letters, the trie tells you immediately whether any word at all starts
+   with the letters so far — and if none does, you stop and try another direction.
+
+The method for "try an option, and if it leads nowhere, undo it and try the next" is called
+**backtracking**. It is a depth-first search (DFS, explained in the traversal lesson) over choices rather
+than over tree nodes. Cutting off a hopeless option early is called **pruning**, like cutting dead
+branches off a plant.
+
+**Why it matters for a job.** Pattern search with unknown parts, "did you mean…?" suggestions, and solvers
+for puzzles and games all combine a dictionary structure with a search that gives up early. The general
+lesson — organise your data so that a search can stop as soon as success is impossible — applies far beyond
+tries.
+
 The basic trie walks a single path: one character, one child. Two of the most common trie interview problems
 break that simplicity. In *Design Add and Search Words*, a `.` in the query can match **any** character, so the
 walk must branch. In *Word Search II*, the "query" is not a string at all but every path through a grid of
@@ -87,7 +112,7 @@ bounded by the trie's size.
 > [!TIP]
 > If patterns are mostly dots, an alternative is to bucket words **by length** and compare the pattern against
 > each word of the right length. Mentioning this trade-off shows you think about the input distribution, not
-> just the asymptotic worst case.
+> only the asymptotic worst case.
 
 ### Pitfalls
 
@@ -267,6 +292,24 @@ and *Word Break II*, where a trie lists every dictionary word that starts at a g
 - Grid backtracking: mark, recurse into neighbours, unmark.
 - Word Search II: one DFS from each cell, guided by a trie of all words; store words at end nodes, remove found words, prune empty branches.
 - Tries turn "search for many strings" into "search once, prune by prefix".
+
+## Glossary
+
+- **Wildcard** — a pattern character (here `.`) that matches any single letter.
+- **Pattern** — the string being searched for, possibly containing wildcards.
+- **Branching** — exploring more than one child of a node.
+- **DFS (depth-first search)** — explore one option fully before trying the next.
+- **Backtracking** — make a choice, explore, then undo the choice so other options can be explored.
+- **Mark / unmark** — temporarily overwrite a grid cell (for example with `#`) so the current path cannot reuse it, then restore it.
+- **Pruning** — abandoning a branch of the search as soon as it cannot lead to an answer.
+- **Grid (board)** — a table of cells addressed as `board[r][c]` (row, then column).
+- **Adjacent cells** — cells sharing a side: up, down, left or right.
+- **Short-circuit** — `any(...)` stops at the first `True` it sees, skipping the remaining work.
+- **End marker (`"$"`)** — the special dictionary key used in the nested-dict trie to mark (or store) a complete word.
+- **Shared prefix** — a beginning that several words have in common; the trie stores it once.
+- **W, L, R, C** — number of words, longest word length, and the grid's rows and columns in complexity formulas.
+
+## Check yourself
 
 ```quiz
 [

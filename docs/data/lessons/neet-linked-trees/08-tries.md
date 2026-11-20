@@ -1,5 +1,33 @@
 # Tries: prefix trees from scratch
 
+> **Before this lesson:** read [Tree vocabulary, shapes and representations](#/lesson/neet-linked-trees/tree-basics) — a trie is a tree, so you need root, child, leaf and path — and know how to use a Python `dict` (a table that looks up a value by a key) and how to loop over the characters of a string. Nothing else is assumed.
+
+## In plain words
+
+A **trie** (say "try") is a tree for storing **words**, built so that words beginning with the same letters
+share the same starting path. Think of how a phone suggests words as you type. After `c`, `a`, `r` it
+offers *car, card, care, careful*: it is as if all words were arranged along branching roads, where every
+letter you type takes you one junction further, and everything reachable from where you now stand is a
+possible completion.
+
+Some words used below:
+
+- A **string** is a piece of text, a sequence of **characters** (letters, digits, symbols).
+- A **prefix** of a string is any beginning of it: the prefixes of `card` are `c`, `ca`, `car`, `card`.
+- The **alphabet** is the set of characters allowed, for example the 26 lowercase letters; its size is
+  written $|\Sigma|$ (read "size of sigma") in formulas.
+- A **hash set** is Python's `set`: it tells you very quickly whether an exact item is stored, but knows
+  nothing about beginnings of items.
+
+In a trie, each step from a node to a child is labelled with one character. Spelling a word means walking
+from the root, one character per step. A word is stored if its walk exists **and** the node where it ends
+is marked as "a word ends here".
+
+**Why it matters for a job.** Autocomplete boxes, spell checkers, the routing tables that decide where
+internet traffic goes (matching address prefixes), and search features in editors all use tries or close
+relatives. In interviews, "implement a trie" is a standard design question, and tries are the key to several
+hard word-search problems.
+
 Hash sets answer "is this exact word stored?" in O(L) time for a word of length L. But they cannot answer
 "is any stored word *starting with* `pre`?" without scanning every word. Autocomplete, spell checkers, IP
 routing tables, word games and search engines all need prefix questions. The data structure built for them is
@@ -232,6 +260,26 @@ print(complete("x"))
 - `insert`, `search`, `startsWith` are O(L) for a string of length L, regardless of how many words are stored.
 - Use dict children in Python; add counts or stored words for prefix counting and autocomplete.
 - Variants: compressed (radix) tries, suffix tries, bitwise tries.
+
+## Glossary
+
+- **String / character** — a piece of text / one symbol of it.
+- **Prefix** — a beginning of a string (including the whole string).
+- **Alphabet ($\Sigma$)** — the set of allowed characters; $|\Sigma|$ is how many there are.
+- **Trie (prefix tree)** — a tree in which each root-to-node path spells a prefix of the stored words.
+- **Edge label** — the single character attached to a parent–child link.
+- **End-of-word flag (marker)** — a mark on a node saying that the path to it is a complete stored word.
+- **`insert`** — add a word by walking its characters and creating missing nodes.
+- **`search`** — is this exact word stored? **`startsWith`** — is any stored word beginning with this prefix?
+- **L** — the length of the word or prefix; trie operations cost O(L).
+- **Hash set** — Python's `set`; fast exact membership, no prefix queries.
+- **Augmenting a node** — storing extra data in each node (a counter, the whole word) to answer more kinds of question.
+- **Autocomplete** — listing the stored words that start with what has been typed.
+- **Compressed trie (radix tree, Patricia trie)** — a trie where chains of single-child nodes are merged into one edge.
+- **Suffix** — an ending of a string; a **suffix trie** stores all of them.
+- **Bitwise trie** — a trie over the alphabet {0, 1}, storing numbers bit by bit.
+
+## Check yourself
 
 ```quiz
 [

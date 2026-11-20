@@ -1,5 +1,30 @@
 # Binary search trees, construction and serialization
 
+> **Before this lesson:** read [Traversals: DFS (pre/in/post) and BFS](#/lesson/neet-linked-trees/tree-traversals) (you must know preorder and inorder) and [Returning values up the tree](#/lesson/neet-linked-trees/tree-return-up) (passing bounds down). Binary search on a sorted list is a helpful comparison but is not required. For the textbook treatment, including balanced trees, see [Binary search trees](#/lesson/dsa-foundations/bst) and [Rotations and AVL trees](#/lesson/dsa-foundations/avl).
+
+## In plain words
+
+A **binary search tree** (abbreviated **BST**) is a binary tree kept in order so that you can find things
+quickly. It works like looking up a word in a paper dictionary: open somewhere, and if your word comes
+earlier in the alphabet, ignore everything to the right; if later, ignore everything to the left. Each step
+throws away about half of what is left. A BST builds that rule into its shape: at every node, **smaller
+values are in the left subtree and larger values are in the right subtree**.
+
+A **key** is the value a node is ordered by. Searching, adding and removing a key each follow a single path
+from the root downward, so they take a number of steps equal to the tree's height — about `log₂ n` for a
+well-shaped tree with n keys (20 steps for a million keys).
+
+The second half of the lesson answers two practical questions:
+
+- **Construction:** if someone gives you only *lists* of a tree's values in certain traversal orders, can
+  you rebuild the exact tree?
+- **Serialization:** how do you turn a tree into a piece of text (a **string**) so it can be saved to a file
+  or sent over a network, and then rebuild it from that text (**deserialization**)?
+
+**Why it matters for a job.** Ordered trees are the reason databases answer "find this row" or "all orders
+between two dates" quickly, and why sorted maps and sets exist in most languages. Serialization is how any
+structured data — JSON, HTML, saved game states — travels between programs.
+
 A plain binary tree has no rule about where values go, so finding a value means searching everywhere: O(n).
 A **binary search tree** (BST) adds one rule that turns every search into a single walk from the root to a
 leaf. This lesson covers the BST property and its operations (search, insert, delete), the problems that
@@ -81,7 +106,7 @@ deletion.
 
 Find the node, then three cases:
 
-1. **Leaf** — just remove it (return `None` to the parent).
+1. **Leaf** — remove it (return `None` to the parent).
 2. **One child** — replace the node with its only child.
 3. **Two children** — the node must be replaced by a key that keeps the BST property on both sides: its
    **inorder successor** (the smallest key in the right subtree) or its **inorder predecessor** (the largest
@@ -385,11 +410,33 @@ saves the n + 1 null tokens.
 
 ## Summary
 
-- BST property: all left-subtree keys < node < all right-subtree keys — at every node, not just against the parent.
+- BST property: all left-subtree keys < node < all right-subtree keys — at every node, not only against the parent.
 - Search, insert and delete walk one root-to-leaf path: O(h). Two-child delete uses the inorder successor (or predecessor).
 - Inorder of a BST is sorted: validation, k-th smallest, range queries.
 - Preorder + inorder (or postorder + inorder) determines a tree; build in O(n) with a value→index map.
 - Serialise with null markers and delimiters; preorder with `#` is the simplest round-trippable format.
+
+## Glossary
+
+- **Key** — the value a node is ordered by.
+- **Binary search tree (BST)** — a binary tree where, at every node, all keys in the left subtree are smaller and all keys in the right subtree are larger.
+- **BST property (invariant)** — that ordering rule; it must hold for whole subtrees, not only for a node and its children.
+- **Search / insert / delete** — find a key, add a key, remove a key; each walks one root-to-leaf path, O(h).
+- **Inorder successor** — the next larger key: the smallest key in a node's right subtree.
+- **Inorder predecessor** — the next smaller key: the largest key in a node's left subtree.
+- **Balanced BST** — a BST whose height stays about `log₂ n`. **Self-balancing** trees (AVL, red–black) reshape themselves to stay that way.
+- **Rotation** — a small local rearrangement of nodes that changes heights while keeping the BST order.
+- **Degenerate (skewed) BST** — a BST that has become a chain, with height n − 1.
+- **Bounds `(low, high)`** — the open range of keys a node may hold, given its ancestors.
+- **Order-statistic tree** — a BST whose nodes also store subtree sizes, so the k-th smallest key is found in O(h).
+- **Construction** — rebuilding a tree from traversal sequences.
+- **Serialize / deserialize** — convert a tree to a string / rebuild the tree from that string.
+- **Null marker** — a symbol such as `#` written where a child is missing.
+- **Delimiter** — a separator character such as `,` between values.
+- **Token** — one piece of the string between delimiters (a value or a null marker).
+- **Round trip** — serialize then deserialize; it must give back an identical tree.
+
+## Check yourself
 
 ```quiz
 [
