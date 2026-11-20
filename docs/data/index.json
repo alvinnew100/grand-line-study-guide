@@ -178,7 +178,7 @@
   "sources": [
    "McDowell, Cracking the Coding Interview, 6th ed."
   ],
-  "words": 9710,
+  "words": 34989,
   "modules": 23,
   "lessons": 32,
   "problems": 89
@@ -264,7 +264,7 @@
   "words": 194414,
   "modules": 29,
   "lessons": 63,
-  "problems": 30
+  "problems": 71
  },
  {
   "id": "spring",
@@ -354,9 +354,9 @@
    "Casciaro & Mammino, Node.js Design Patterns (3rd ed.), ch. 1-13",
    "Node.js API documentation (nodejs.org/docs/latest/api)"
   ],
-  "words": 0,
+  "words": 90483,
   "modules": 15,
-  "lessons": 0,
+  "lessons": 27,
   "problems": 33
  },
  {
@@ -420,9 +420,9 @@
    "Official docs: kubernetes.io/docs (concepts, tasks and API reference), gateway-api.sigs.k8s.io",
    "Project docs: helm.sh, kustomize.io, argo-cd.readthedocs.io, kserve.github.io, kubeflow.org"
   ],
-  "words": 72610,
+  "words": 128536,
   "modules": 21,
-  "lessons": 20,
+  "lessons": 34,
   "problems": 0
  },
  {
@@ -437,9 +437,9 @@
    "AWS Well-Architected Framework (docs.aws.amazon.com/wellarchitected)",
    "AWS Billing user guide: Free Tier (docs.aws.amazon.com/awsaccountbilling)"
   ],
-  "words": 66172,
+  "words": 97358,
   "modules": 15,
-  "lessons": 18,
+  "lessons": 26,
   "problems": 33
  },
  {
@@ -457,6 +457,22 @@
   "modules": 18,
   "lessons": 38,
   "problems": 22
+ },
+ {
+  "id": "nginx",
+  "title": "NGINX: Web Server, Reverse Proxy & Load Balancer",
+  "icon": "🚦",
+  "blurb": "NGINX from zero: what a web server, reverse proxy and load balancer are, how nginx.conf is put together, location matching, load balancing, rate limiting, caching, TLS, authentication, HTTP/2 and HTTP/3, containers and cloud, monitoring, logs, tuning, a full worked deployment and interview answers.",
+  "color": "#009639",
+  "sources": [
+   "Derek DeJonghe, NGINX Cookbook (O'Reilly), ch. 1-17",
+   "Official docs: nginx.org/en/docs (core, proxy, upstream, limit_req, limit_conn, cache, ssl, v2, v3, stream, njs, otel)",
+   "Official docs: docs.nginx.com (NGINX Plus features), letsencrypt.org, kubernetes.io (Ingress)"
+  ],
+  "words": 32209,
+  "modules": 14,
+  "lessons": 10,
+  "problems": 0
  },
  {
   "id": "networking",
@@ -487,9 +503,25 @@
    "Stripe engineering blog: rate limiters and idempotency (stripe.com/blog)",
    "RFC 9309 (robots.txt), RFC 9562 (UUIDs)"
   ],
-  "words": 101101,
+  "words": 133957,
   "modules": 18,
-  "lessons": 29,
+  "lessons": 38,
+  "problems": 32
+ },
+ {
+  "id": "microservices",
+  "title": "Microservices & Software Architecture",
+  "icon": "🧩",
+  "blurb": "From a single-server application to a system of independently deployable services: boundaries, communication, sagas, deployment, testing, observability, security, resilience, scaling and the people side, with simulations you can run.",
+  "color": "#7b5ea7",
+  "sources": [
+   "Newman, Building Microservices, 2nd ed., ch. 1-16",
+   "martinfowler.com (MonolithFirst, StranglerFigApplication, CircuitBreaker, Consumer-Driven Contracts)",
+   "microservices.io (Saga, Transactional Outbox)"
+  ],
+  "words": 0,
+  "modules": 18,
+  "lessons": 36,
   "problems": 32
  },
  {
@@ -623,7 +655,7 @@
    "Chip Huyen, AI Engineering (O'Reilly, 2025), ch. 2, 5, 6, 7, 9, 10",
    "Vaswani et al. 2017; Su et al. 2021 (RoPE); Hu et al. 2021 (LoRA); Dettmers et al. 2023 (QLoRA); Rafailov et al. 2023 (DPO)"
   ],
-  "words": 59661,
+  "words": 59689,
   "modules": 10,
   "lessons": 26,
   "problems": 24
