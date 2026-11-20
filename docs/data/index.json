@@ -49,14 +49,15 @@
   "id": "vim",
   "title": "Practical Vim",
   "icon": "⌨️",
-  "blurb": "tmp",
+  "blurb": "Learn Vim as a small language of operators, motions and text objects: the dot command, modes, files, registers and macros, patterns and substitution, project tools, a real-world setup and a 14-day practice plan. Turn on Vim mode in the ⚙ settings menu and practise in every editor on this site.",
   "color": "#1f9d55",
   "sources": [
-   "Neil, Practical Vim 2e"
+   "Drew Neil, Practical Vim, 2nd edition (Pragmatic Bookshelf)",
+   "Vim and Neovim built-in documentation (:help)"
   ],
-  "words": 0,
-  "modules": 1,
-  "lessons": 0,
+  "words": 93332,
+  "modules": 9,
+  "lessons": 24,
   "problems": 23
  },
  {
@@ -231,7 +232,7 @@
   "words": 0,
   "modules": 1,
   "lessons": 0,
-  "problems": 13
+  "problems": 30
  },
  {
   "id": "go",
@@ -244,7 +245,7 @@
    "The Go Programming Language Specification, go.dev/ref/spec",
    "Go documentation: Effective Go, the Go Memory Model, the Go blog and package docs, go.dev/doc and pkg.go.dev"
   ],
-  "words": 100499,
+  "words": 108138,
   "modules": 18,
   "lessons": 42,
   "problems": 30
@@ -275,7 +276,7 @@
    "Haverbeke, Eloquent JavaScript (4th ed.), ch. 1-21",
    "MDN Web Docs (developer.mozilla.org)"
   ],
-  "words": 0,
+  "words": 143755,
   "modules": 17,
   "lessons": 37,
   "problems": 35
@@ -506,6 +507,22 @@
   "modules": 10,
   "lessons": 26,
   "problems": 24
+ },
+ {
+  "id": "html-css",
+  "title": "HTML & CSS",
+  "icon": "🎨",
+  "blurb": "Build accessible, responsive pages from first principles: semantic HTML, the cascade, the box model, Flexbox, Grid, modern CSS and the browser rendering pipeline, with live editable examples and auto-checked exercises.",
+  "color": "#e8590c",
+  "sources": [
+   "Duckett, HTML & CSS: Design and Build Websites, ch. 1-19",
+   "MDN Web Docs (developer.mozilla.org)",
+   "WCAG 2.2"
+  ],
+  "words": 90017,
+  "modules": 9,
+  "lessons": 28,
+  "problems": 33
  },
  {
   "id": "react",

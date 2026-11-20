@@ -1,0 +1,133 @@
+TRACK = dict(
+    id="vim",
+    title="Practical Vim",
+    icon="⌨️",
+    color="#1f9d55",
+    group="Tools",
+    blurb="Learn Vim as a small language of operators, motions and text objects: the dot command, modes, "
+          "files, registers and macros, patterns and substitution, project tools, a real-world setup and a "
+          "14-day practice plan. Turn on Vim mode in the ⚙ settings menu and practise in every editor on this site.",
+    sources=[
+        "Drew Neil, Practical Vim, 2nd edition (Pragmatic Bookshelf)",
+        "Vim and Neovim built-in documentation (:help)",
+    ],
+    modules=[
+        dict(
+            id="vim-way",
+            title="The Vim Way",
+            summary="The dot command, repeatable changes, the dot formula, and when to count or repeat.",
+            lessons=[
+                dict(id="vim-dot-command", title="The dot command: one key that replays your last change",
+                     file="01-dot-command.md"),
+                dict(id="vim-dot-formula", title="The dot formula: one key to move, one key to act",
+                     file="02-dot-formula.md"),
+            ],
+            problems=["vim-golf-score", "vim-dot-plan"],
+        ),
+        dict(
+            id="vim-modes",
+            title="Modes",
+            summary="Normal mode and the operator + motion grammar, Insert mode, Visual mode, and Ex commands.",
+            lessons=[
+                dict(id="vim-normal-grammar", title="Normal mode and the operator + motion grammar",
+                     file="03-normal-mode-grammar.md"),
+                dict(id="vim-insert-mode", title="Insert mode: short visits, well equipped",
+                     file="04-insert-mode.md"),
+                dict(id="vim-visual-mode", title="Visual mode: select first, then act", file="05-visual-mode.md"),
+                dict(id="vim-command-line", title="Command-line mode and Ex commands",
+                     file="06-command-line-mode.md"),
+            ],
+            problems=["vim-delete-motion", "vim-change-command", "vim-normal-sim", "vim-visual-block-insert",
+                      "vim-ex-range"],
+        ),
+        dict(
+            id="vim-files",
+            title="Files",
+            summary="Buffers, the argument list, split windows, tab pages, opening files by path or name, and saving.",
+            lessons=[
+                dict(id="vim-buffers", title="Buffers and the argument list", file="07-buffers-and-args.md"),
+                dict(id="vim-windows-tabs", title="Split windows and tab pages", file="08-windows-and-tabs.md"),
+                dict(id="vim-open-save", title="Opening files and saving them", file="09-opening-and-saving.md"),
+            ],
+            problems=["vim-buffer-list"],
+        ),
+        dict(
+            id="vim-getting-around",
+            title="Getting Around Faster",
+            summary="Motions, text objects, marks, and the jump and change lists.",
+            lessons=[
+                dict(id="vim-motions", title="Motions: getting to the right place in few keys",
+                     file="10-motions.md"),
+                dict(id="vim-text-objects", title="Text objects, matching pairs and marks",
+                     file="11-text-objects-and-marks.md"),
+                dict(id="vim-jumps", title="Jumps: retracing your steps within and between files",
+                     file="12-jumps.md"),
+            ],
+            problems=["vim-word-forward", "vim-word-motions", "vim-line-anchors", "vim-find-char",
+                      "vim-text-object-word", "vim-text-object-quote", "vim-text-object-bracket",
+                      "vim-text-object-tag", "vim-jump-list", "vim-change-list"],
+        ),
+        dict(
+            id="vim-registers-macros",
+            title="Registers",
+            summary="Copy and paste with registers, the system clipboard, and macros in series and in parallel.",
+            lessons=[
+                dict(id="vim-registers", title="Registers: copy and paste, the Vim way", file="13-registers.md"),
+                dict(id="vim-macros", title="Macros: record your keystrokes and play them back",
+                     file="14-macros.md"),
+            ],
+            problems=["vim-registers", "vim-macro-expand"],
+        ),
+        dict(
+            id="vim-patterns",
+            title="Patterns",
+            summary="Regular expressions and magic levels, search, substitution and the global command.",
+            lessons=[
+                dict(id="vim-patterns-search", title="Patterns and search", file="15-patterns-and-search.md"),
+                dict(id="vim-substitute", title="Substitution: find and replace with :s",
+                     file="16-substitution.md"),
+                dict(id="vim-global", title="The global command", file="17-global-command.md"),
+            ],
+            problems=["vim-very-magic", "vim-substitute", "vim-global-command"],
+        ),
+        dict(
+            id="vim-tools",
+            title="Tools",
+            summary="ctags, the quickfix list, grep and vimgrep, auto-completion and spell checking.",
+            lessons=[
+                dict(id="vim-ctags-quickfix-grep", title="ctags, the quickfix list and grep",
+                     file="18-ctags-quickfix-grep.md"),
+                dict(id="vim-completion-spell", title="Auto-completion and spell checking",
+                     file="19-completion-and-spelling.md"),
+            ],
+            problems=[],
+        ),
+        dict(
+            id="vim-everyday",
+            title="Vim for Everyday Engineering",
+            summary="A minimal vimrc line by line, plugins, SSH, vimdiff and Git, Neovim and LSP, "
+                    "and Vim keys in VS Code, JetBrains IDEs and this site's editor.",
+            lessons=[
+                dict(id="vim-vimrc-plugins", title="A sensible vimrc, line by line, and a map of plugins",
+                     file="20-vimrc-and-plugins.md"),
+                dict(id="vim-remote-diff-git-lsp", title="Remote machines, vimdiff, Git and language servers",
+                     file="21-remote-diff-git-lsp.md"),
+                dict(id="vim-everywhere", title="Vim keys everywhere: VS Code, JetBrains, this site, the shell",
+                     file="22-vim-everywhere.md"),
+            ],
+            problems=[],
+        ),
+        dict(
+            id="vim-practice",
+            title="A 14-Day Practice Plan with Drills",
+            summary="Twenty minutes a day: week 1 builds the core grammar, week 2 scales it up.",
+            lessons=[
+                dict(id="vim-practice-week1", title="Practice plan, week 1: the core grammar",
+                     file="23-practice-plan-week-1.md"),
+                dict(id="vim-practice-week2", title="Practice plan, week 2: registers, search, Ex and macros",
+                     file="24-practice-plan-week-2.md"),
+            ],
+            problems=[],
+        ),
+    ],
+)
