@@ -157,7 +157,7 @@
    "Goodrich, Tamassia & Goldwasser, Data Structures and Algorithms in Python, ch. 13.3 (Dynamic Programming)",
    "NeetCode 150 roadmap — 1-D and 2-D Dynamic Programming"
   ],
-  "words": 18325,
+  "words": 22797,
   "modules": 3,
   "lessons": 11,
   "problems": 28
@@ -176,7 +176,7 @@
   "words": 0,
   "modules": 4,
   "lessons": 8,
-  "problems": 27
+  "problems": 34
  },
  {
   "id": "neet-heap-graphs",
@@ -224,6 +224,21 @@
   "modules": 3,
   "lessons": 8,
   "problems": 35
+ },
+ {
+  "id": "python",
+  "title": "Python Mastery",
+  "icon": "🐍",
+  "blurb": "From names and references to decorators, generators, the data model, typing, asyncio and CPython internals: the Python you need to read, write and defend in an interview.",
+  "color": "#3776ab",
+  "sources": [
+   "Goodrich, Tamassia & Goldwasser, Data Structures and Algorithms in Python, ch. 1-2",
+   "The Python Tutorial, Language Reference (Data Model) and Library Reference, docs.python.org/3"
+  ],
+  "words": 29039,
+  "modules": 13,
+  "lessons": 32,
+  "problems": 13
  },
  {
   "id": "sql",

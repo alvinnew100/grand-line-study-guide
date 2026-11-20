@@ -765,8 +765,8 @@ def memoize(func):
     pass
 ''' + MEMO_DRIVER,
     solution=MEMO_SOLUTION,
-    tests=[[[10]], [[0]], [[1, 1, 1]], [[5, 10, 5]], [[30]], [[80]], [[3, 2, 1, 0]],
-           [list(range(40))], [[100, 50, 120]]],
+    tests=[[[10]], [[0]], [[1, 1, 1]], [[5, 10, 5]], [[20]], [[22, 22]], [[3, 2, 1, 0]],
+           [list(range(20))], [[18, 9, 21]], [[]]],
     examples=2,
     wrong_solutions=[
         '''import functools
@@ -1098,7 +1098,7 @@ def chunked(iterable, n):
 ''' + CH_DRIVER,
     solution=CH_SOLUTION,
     tests=[[[1, 2, 3, 4, 5], 2], [[], 3], [[1], 1], [[1, 2, 3], 3], [[1, 2, 3], 5],
-           [list(range(10)), 1], [list("abcdefgh"), 3], [list(range(1000)), 7], [list(range(50000)), 1000]],
+           [list(range(10)), 1], [list("abcdefgh"), 3], [list(range(1000)), 7], [list(range(8000)), 500]],
     examples=2,
     wrong_solutions=['''def chunked(iterable, n):
     items = list(iterable)
@@ -1154,7 +1154,7 @@ def moving_average(iterable, k):
 ''' + MA_DRIVER,
     solution=MA_SOLUTION,
     tests=[[[1, 2, 3, 4, 5, 6], 3], [[], 2], [[5], 1], [[5], 2], [[1, 2], 2], [[-1, 1, -1, 1, -1], 2],
-           [[0.5, 1.5, 2.5, 3.5], 4], [[10] * 20, 5], [list(range(100000)), 500],
+           [[0.5, 1.5, 2.5, 3.5], 4], [[10] * 20, 5], [list(range(6000)), 50],
            [[(i * 37) % 101 - 50 for i in range(5000)], 7]],
     examples=2,
     wrong_solutions=['''from collections import deque

@@ -115,10 +115,10 @@ def train_flops(params, tokens):
 
 for name, N, D in [("GPT-3 175B", 175e9, 300e9), ("Chinchilla 70B", 70e9, 1.4e12), ("Llama 3 70B", 70e9, 15e12)]:
     F = train_flops(N, D)
-    # assume 256 H100s at 1e15 FLOP/s peak, 40% utilization, $2/h each
+    # assume 256 H100s at 1e15 FLOP/s peak, 40% utilization, 2 USD/h each
     seconds = F / (256 * 1e15 * 0.40)
     cost = seconds / 3600 * 256 * 2
-    print(f"{name:14s} {F:9.2e} FLOPs  ~{seconds/86400:6.1f} days on 256 GPUs  ~${cost/1e6:5.1f}M")
+    print(f"{name:14s} {F:9.2e} FLOPs  ~{seconds/86400:6.1f} days on 256 GPUs  ~{cost/1e6:5.1f}M USD")
 ```
 
 The 6·N·D rule is a standard approximation (2 FLOPs for the forward pass and 4 for the backward pass, per parameter per token). It is useful for back-of-envelope budgeting. The demo's result for GPT-3 lands close to the $3.14\times10^{23}$ reported in the book.

@@ -102,9 +102,10 @@ print(min_path_sum([[1, 2, 3], [4, 5, 6]]))
 ```
 
 > [!WARNING]
-> Greedy ("step to the cheaper neighbour") fails: a cheap first step can lead into an expensive row.
-> With `[[2, 1, 100], [100, 100, 100], [1, 1, 1]]`... greedy goes right (1) and must cross a 100;
-> the DP evaluates every route implicitly.
+> Greedy ("step to the cheaper neighbour") fails: a cheap first step can lead into an expensive
+> region. On `[[1, 1, 9], [2, 9, 9], [1, 1, 1]]` greedy steps right (1 < 2) and is then forced through
+> two 9s for a total of 21, while going down first costs 1 + 2 + 1 + 1 + 1 = 6. The DP evaluates every
+> route implicitly.
 
 ## Maximal Square: anchoring at a corner
 
