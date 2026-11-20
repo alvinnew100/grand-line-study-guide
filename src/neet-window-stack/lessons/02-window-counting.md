@@ -1,5 +1,34 @@
 # Counting windows: frequency maps and "need / have"
 
+## Before this lesson
+
+- [Sliding windows: fixed vs variable](#/lesson/neet-window-stack/window-fundamentals) — you need the two templates (fixed size, and
+  grow/shrink) and the idea of a window *invariant*.
+- Python dictionaries: creating one, reading `d[key]`, `d.get(key, 0)`, and deleting with `del d[key]`.
+- `ord(ch)` — the built-in that turns a character into its number code (`ord('a')` is 97, `ord('A')` is 65).
+
+## In plain words
+
+Suppose you have a bag of letter tiles and want to know whether it contains the letters needed to spell a
+word. You would not compare the bag with the word tile by tile, over and over. You would keep a **tally**: a
+small table saying "3 × A, 1 × B, 2 × N". Two bags hold the same letters exactly when their tallies are equal.
+
+A **frequency table** (also called a *frequency map* or *counter*) is that tally: for each distinct item, how
+many times it occurs. This lesson keeps such a tally for the items currently inside a sliding window. When the
+window moves, exactly one count goes up (the item that entered) and one goes down (the item that left) — so the
+tally is never recounted from zero.
+
+Why it matters: "does this text contain a rearrangement of that word?", "what is the shortest log excerpt that
+mentions all of these error codes?", "how many product types did the customer browse in a row?" are tally
+questions. They show up in search features, fraud detection, bioinformatics and, very often, interviews.
+
+New words you will meet:
+
+- **Anagram / permutation** of a word: the same letters in a different order (`"listen"` / `"silent"`).
+- **Multiplicity**: how many copies of something are required. `"aab"` needs the letter `a` with multiplicity 2.
+- **Alphabet** (written Σ, the Greek letter sigma): the set of characters that may appear — 26 for lowercase
+  English letters.
+
 The first lesson treated the window's state as something small — a sum, a set. A large family of string
 problems needs a richer state: **how many times each character occurs in the window**. "Is this window an
 anagram of `p`?", "does it contain every character of `t`?", "how many distinct values does it hold?", "how
@@ -66,7 +95,7 @@ interviewers love, because it generalises to large alphabets.
 ### 2.2 The `matches` counter: O(1) per step
 
 Keep `matches` = the number of slots `c` (out of 26) where `win[c] == need[c]`. A step changes only two slots
-(the entering and the leaving character), so `matches` can be updated by looking at just those slots:
+(the entering and the leaving character), so `matches` can be updated by looking at only those two slots:
 
 - after incrementing `win[c]`: if it now **equals** `need[c]`, `matches += 1`; if it was equal **just before**
   (i.e. now equals `need[c] + 1`), `matches -= 1`;
@@ -299,6 +328,20 @@ feels slippery in an interview, recompute `maxf = max(count)` — 26 operations 
 - Avoid O(Σ) rescans with an aggregate: `matches` (fixed windows) or `missing` (variable windows).
 - Use the *shortest* template for "contains everything" and the *longest* template for "at most K".
 - Non-monotone conditions ("exactly K") can often be written as a difference of monotone ones.
+
+## Glossary
+
+- **Frequency table / frequency map** — for each distinct item, how many times it occurs.
+- **`Counter`** — Python's ready-made frequency table (`collections.Counter`); missing keys count as 0.
+- **Anagram / permutation (of a string)** — the same characters in a different order.
+- **Multiplicity** — the number of copies of an item.
+- **Multiset** — a collection where copies matter (unlike a set, which ignores repeats).
+- **Alphabet (Σ)** — the set of characters that can occur.
+- **`need`** — the table of counts still required by the target string.
+- **`missing`** — one integer: how many required characters the window still lacks.
+- **`matches`** — one integer: how many alphabet slots have equal counts in the window and the target.
+- **Surplus** — copies of a character beyond what is required.
+- **At most K / exactly K** — two counting conditions; the first works with a window directly, the second is obtained by subtraction.
 
 ```quiz
 [

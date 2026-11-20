@@ -1,5 +1,36 @@
 # Binary search done right
 
+## Before this lesson
+
+- Python lists and indexing; integer division with `//` (it drops the fraction: `7 // 2` is `3`).
+- `while` loops and comparison operators.
+- Big-O notation, especially what **O(log n)** means ([Big-O, Big-Omega and Big-Theta](#/lesson/dsa-foundations/asymptotic-notation)). In one sentence: `log₂ n` is the number of times
+  you can halve `n` before reaching 1 — about 10 for a thousand, 20 for a million, 30 for a billion.
+- Optional: [Thinking recursively: four classic examples](#/lesson/dsa-foundations/recursion-examples) covers the recursive version.
+
+This lesson does not depend on the sliding-window or stack lessons.
+
+## In plain words
+
+Someone thinks of a number between 1 and 100 and tells you only "higher" or "lower" after each guess. A good
+player does not guess 1, 2, 3, …; they guess 50, then 25 or 75, and so on — always the middle of what is still
+possible. Each answer removes **half** of the remaining possibilities, so 7 guesses are always enough.
+
+**Binary search** is that strategy applied to data that is **sorted** (arranged from smallest to largest). To
+find a value, look at the middle item: if it is too small, the target can only be in the right half; if too
+big, only in the left half. Repeat on the half that remains. (*Binary* means "two": every step splits the
+remaining range in two.)
+
+Why it matters: it is how databases find a row in an index, how a dictionary app finds a word, and how
+`git bisect` finds the commit that introduced a bug. Looking through a billion sorted items one by one takes a
+billion steps; binary search takes about 30. It is also famous for being easy to get *slightly* wrong — which is
+why interviewers love it and why this lesson is about writing it **correctly**, with a method instead of trial
+and error.
+
+Terms defined as we go: the two markers `lo` and `hi` (short for *low* and *high*) hold the ends of the range
+that is still possible, and `mid` is the middle position between them. An **invariant** is a statement that
+stays true every time the loop goes around; it is our main tool.
+
 Binary search is the algorithm everyone "knows" and almost everyone gets subtly wrong. Goodrich et al. note
 that although binary search was first published in 1946, a fully correct version did not appear until 1962.
 Jon Bentley later reported that most professional programmers he tested could not write a bug-free version.
@@ -293,6 +324,23 @@ Randomised testing against a brute force is the fastest way to catch off-by-ones
   ceilings; Python provides them as `bisect_left` / `bisect_right`.
 - To find the last True, round the midpoint **up**.
 - Always check the two-element case and the "not found" return value.
+
+## Glossary
+
+- **Sorted** — arranged in non-decreasing order.
+- **Search space** — the set of positions or values that could still be the answer.
+- **`lo`, `hi`, `mid`** — the ends of the search space and the midpoint between them.
+- **Closed interval `[lo, hi]`** — includes both ends. **Half-open `[lo, hi)`** — includes `lo`, excludes `hi`.
+- **Invariant** — a fact about `lo` and `hi` that stays true on every loop iteration.
+- **Predicate** — a yes/no function of a position.
+- **Monotone predicate** — one whose answers are all False and then all True (or the reverse).
+- **Lower bound** — the first position whose value is `>=` the target (`bisect_left`).
+- **Upper bound** — the first position whose value is `>` the target (`bisect_right`).
+- **Floor / ceiling (of x in a list)** — the largest value `<= x` / the smallest value `>= x`.
+- **Insertion point** — where a value would be inserted to keep the list sorted.
+- **Upper midpoint** — `(lo + hi + 1) // 2`; needed when a branch assigns `lo = mid`.
+- **Off-by-one error** — a bug caused by a bound that is one too large or too small.
+- **Overflow** — exceeding the largest number a fixed-size integer type can hold (not an issue for Python's `int`).
 
 ```quiz
 [

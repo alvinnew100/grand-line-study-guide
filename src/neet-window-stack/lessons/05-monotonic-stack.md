@@ -1,5 +1,30 @@
 # Monotonic stacks and amortized O(n)
 
+## Before this lesson
+
+- [Stacks: the LIFO toolkit](#/lesson/neet-window-stack/stack-basics) — push, pop, peek, and using a Python list as a stack.
+- The idea of amortized cost: [Dynamic arrays and amortised analysis](#/lesson/dsa-foundations/dynamic-arrays) (optional; the proof
+  is repeated here from scratch).
+- [The monotonic deque](#/lesson/neet-window-stack/monotonic-deque) is a close relative; reading it first helps but is not required.
+
+## In plain words
+
+People stand in a row, all facing right, and each one wonders: "who is the first person in front of me who is
+taller than I am?" Walk along the row from left to right carrying a notepad of people who are **still waiting
+for an answer**. Each time you reach a new person, compare them with the most recent name on the notepad: if the
+new person is taller, that waiting person has their answer — cross them off, and check the next most recent
+name. When the new person is not taller than the latest name, add the new person to the notepad.
+
+Notice two things. First, you always look at the **most recent** name — so the notepad is a stack. Second, the
+people left on the notepad are always in order of decreasing height (if a later one were taller, the earlier
+one would have been crossed off). A stack whose contents are always sorted like that is called a
+**monotonic stack** (*monotonic* = always going in one direction).
+
+Why it matters: "how many days until a warmer day?", "when does this stock price next exceed today's?", "how
+far can this bar of a chart stretch sideways before hitting a shorter bar?" are all "nearest bigger/smaller
+neighbour" questions. The naive method compares every pair; the monotonic stack handles each item about twice in
+total. It is one of the highest-value patterns for medium and hard interview questions.
+
 "For every element, find the **next greater** element to its right." The obvious solution scans right from
 each element — O(n²) in the worst case. A **monotonic stack** answers the question for *all* elements in a
 single pass, O(n) total. The same structure solves *Daily Temperatures*, *Next Greater Element*, *Online Stock
@@ -272,6 +297,21 @@ print(remove_k_digits("1432219", 3), remove_k_digits("10200", 1), remove_k_digit
 - Four variants (next/previous × greater/smaller); one pass can give both neighbours.
 - Largest Rectangle = for each bar, height × (next smaller − previous smaller − 1), computed with an
   increasing stack and a 0-height sentinel.
+
+## Glossary
+
+- **Monotonic stack** — a stack whose values, bottom to top, are always sorted (increasing or decreasing).
+- **Next greater element** — the first larger value to the right of an item; *previous greater* looks left; *smaller* variants flip the comparison.
+- **Strict / non-strict** — `<` versus `<=`; decides how equal values are treated.
+- **Resolve on pop** — an item receives its answer at the moment it is popped.
+- **Amortized analysis** — bounding the total cost of a sequence of operations.
+- **Aggregate method** — counting all operations together (total pops ≤ total pushes).
+- **Accounting method** — pre-paying for a future cheap operation at the time of an earlier one.
+- **Sentinel** — an extra artificial value (such as a bar of height 0) added to force clean-up at the end.
+- **Histogram** — a bar chart; here a list of bar heights with width 1 each.
+- **Span** — the number of consecutive earlier items (including the current one) that satisfy a comparison.
+- **Online algorithm** — one that must answer after each new item, without seeing the future.
+- **Contribution technique** — counting how much each item contributes to the total instead of examining every subarray.
 
 ```quiz
 [

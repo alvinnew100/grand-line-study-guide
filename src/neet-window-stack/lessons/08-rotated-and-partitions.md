@@ -1,5 +1,38 @@
 # Rotated arrays, 2-D matrices and partitions
 
+## Before this lesson
+
+- [Binary search done right](#/lesson/neet-window-stack/binary-search-right) — both templates, `lower_bound` / `upper_bound`, and the
+  `bisect` module.
+- [Binary search on the answer](#/lesson/neet-window-stack/search-on-answer) — searching with a yes/no predicate instead of a value.
+- What a **median** is: the middle value of a sorted list (for an even count, the average of the two middle
+  values). The median of `[1, 3, 8]` is 3; the median of `[1, 3, 8, 10]` is 5.5.
+
+## In plain words
+
+So far binary search worked on a neatly sorted list. Real data is often *almost* sorted in some structured way,
+and the same "throw away half" idea still applies if you ask the right question.
+
+Three everyday pictures for the three topics of this lesson:
+
+1. **A rotated list.** Take a sorted deck of numbered cards, cut it somewhere, and put the bottom part on top:
+   `4 5 6 7 | 0 1 2`. It is no longer sorted, but it is made of two sorted runs. By comparing a middle card with
+   the last card you can tell which run you are in — enough to discard half the deck each time.
+2. **A history log.** A thermostat records `(time, setting)` each time someone changes it. "What was the setting
+   at 14:30?" means "find the latest record made at or before 14:30". The records are already in time order, so
+   binary search finds it.
+3. **Cutting two sorted piles.** To find the middle value of two sorted piles combined, you do not need to merge
+   them. You only need to decide **how many cards to take from the first pile** for the smaller half; the rest
+   of that half comes from the second pile. Binary search can find the right count.
+
+Why it matters: rotated arrays model circular buffers and wrap-around logs; time-indexed lookups are the core of
+versioned databases and configuration histories; and the two-pile median is a well-known hard interview
+question that tests whether you understand binary search as "searching for a boundary" and not only "searching
+for a value".
+
+A **pivot** below means the position where the rotated list "drops" from its largest value back to its
+smallest. A **partition** is a cut that splits a list into a left part and a right part.
+
 Binary search does not actually need a *sorted array*. It needs a question whose answer lets you **discard
 half of the search space**. This lesson covers three situations where the data is not plainly sorted, yet a
 halving argument still exists:
@@ -327,6 +360,21 @@ invariant about `lo` and `hi`**.
 - "Latest entry not after t" is `bisect_right - 1` on an append-only sorted list.
 - The median of two sorted arrays is found by binary-searching the *cut* in the shorter array until the
   cross conditions `A[i-1] <= B[j]` and `B[j-1] <= A[i]` hold.
+
+## Glossary
+
+- **Rotation** — moving a block from the end of a list to the front (or the reverse).
+- **Pivot** — the position where a rotated sorted list drops from its largest to its smallest value.
+- **Run** — a maximal stretch that is already sorted.
+- **Floor search** — finding the largest stored key that is `<=` the query.
+- **Timestamp** — a number recording when something happened.
+- **Parallel lists** — two lists where position `i` of one belongs with position `i` of the other.
+- **Median** — the middle value of sorted data (average of the two middle values for an even count).
+- **Partition / cut** — a split of a list into a left part and a right part.
+- **Cross conditions** — the two comparisons between the *different* arrays that make a cut valid.
+- **Sentinel (±∞)** — a stand-in value for "nothing here" that makes comparisons work at the edges.
+- **Virtual array** — a sequence whose items are computed on demand instead of stored.
+- **Worst case** — the input that makes an algorithm take the longest.
 
 ```quiz
 [

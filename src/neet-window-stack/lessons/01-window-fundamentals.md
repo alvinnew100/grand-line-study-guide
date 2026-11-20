@@ -1,5 +1,40 @@
 # Sliding windows: fixed vs variable
 
+## Before this lesson
+
+You should be comfortable with:
+
+- Python lists and strings, `for` loops, and indexing such as `nums[i]` and slices such as `nums[i:j]`.
+- Sets and dictionaries (a *dictionary*, or `dict`, stores key → value pairs and finds a key in roughly constant time).
+- **Big-O notation** — a way to describe how the running time grows as the input grows. `O(n)` means "proportional
+  to the input size `n`"; `O(n²)` means "proportional to `n × n`". If this is new, read [Big-O, Big-Omega and Big-Theta](#/lesson/dsa-foundations/asymptotic-notation) first.
+
+No earlier lesson of this track is required; this is the first one.
+
+## In plain words
+
+Imagine reading a long line of text through a cardboard frame that shows only a few letters at a time. To see
+the next part you do not pick the frame up and start again from the beginning — you **slide** it one letter to
+the right. One letter disappears on the left, one new letter appears on the right, and everything in between
+stays where it was.
+
+A **sliding window** in programming is that frame. It is a stretch of neighbouring items in a list or string,
+described by two positions: where it starts (`left`) and where it ends (`right`). Instead of re-examining
+everything inside the frame after each move, the program keeps a small running summary (for example the sum of
+the visible numbers) and adjusts it for the one item that left and the one that arrived.
+
+Why it matters for a job: questions such as "the busiest 5 minutes in this log", "the longest stretch without a
+repeated value" or "the shortest run of purchases that reaches 100 euros" appear constantly in data processing,
+monitoring and interviews. The slow way looks at every possible stretch; the window way looks at each item
+about twice. On a million items that is the difference between hours and a fraction of a second.
+
+A few words used throughout:
+
+- **Contiguous** means "next to each other with no gaps". A **subarray** is a contiguous piece of a list; a
+  **substring** is a contiguous piece of a string.
+- An **index** is the position number of an item; Python counts from 0.
+- A **pointer** here is nothing more than a variable holding an index.
+
 Many interview problems ask about a **contiguous** piece of an array or string: the longest substring
 with some property, the shortest subarray reaching a sum, the maximum of every block of `k` values. The
 naive approach examines every possible piece — and there are about $n^2/2$ of them. The **sliding window**
@@ -266,7 +301,7 @@ is the classic test: at the final `a`, `last['a'] = 0` is stale and must not pul
 ### The "never shrink" trick
 
 In *Longest Repeating Character Replacement* there is an elegant twist: instead of a `while`, use an `if` and
-move `left` by just one. The window then never gets *smaller*; it slides at its maximum size so far, and only
+move `left` by exactly one. The window then never gets *smaller*; it slides at its maximum size so far, and only
 grows when a strictly better window appears. When the loop finishes, the window size *is* the answer. This
 works because we only care about the maximum length, and a window that is too large by one is shifted right
 rather than shrunk. It also lets `maxf` stay stale (never decremented) — a stale `maxf` can only make an
@@ -326,6 +361,21 @@ Before you submit, walk through this list:
   record inside.
 - Correctness depends on monotonicity: validity must only change one way as the window grows.
 - Most of the design work is choosing a state (sum, set, counts, deque) that updates in O(1).
+
+## Glossary
+
+- **Window** — the stretch of neighbouring items `nums[left..right]` currently being examined.
+- **Contiguous** — adjacent, with no gaps.
+- **Subarray / substring** — a contiguous piece of a list / of a string.
+- **Fixed-size window** — a window whose length never changes (given as `k`).
+- **Variable-size window** — a window that grows and shrinks; its length is part of the answer.
+- **State** — the summary kept for the window (a sum, a set, counts…), updated when items enter or leave.
+- **Expand / shrink** — move `right` forward to take in an item / move `left` forward to drop one.
+- **Invariant** — a statement that is true every time the loop reaches a certain line (e.g. "the window has no repeated character").
+- **Valid window** — a window that satisfies the problem's condition.
+- **Monotonicity** — validity changes in only one direction as the window grows; required for the technique to be correct.
+- **Amortized cost** — average cost per step over the whole run, even if single steps vary.
+- **Brute force** — the direct method that tries every possibility.
 
 ```quiz
 [

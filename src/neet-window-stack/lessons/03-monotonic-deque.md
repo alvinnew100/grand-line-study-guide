@@ -1,5 +1,31 @@
 # The monotonic deque: window maximum in O(n)
 
+## Before this lesson
+
+- [Sliding windows: fixed vs variable](#/lesson/neet-window-stack/window-fundamentals) — the fixed-size window template.
+- Python lists and the cost of their operations; if "amortized O(1)" is unfamiliar, read
+  [Dynamic arrays and amortised analysis](#/lesson/dsa-foundations/dynamic-arrays).
+- Helpful but optional: [Queues, circular arrays and deques](#/lesson/dsa-foundations/queues-deques).
+
+## In plain words
+
+Picture a queue of people waiting to be "the tallest person in the room". A new person walks in. Everyone
+already waiting who is **shorter (or the same height)** can go home: the newcomer is at least as tall and will
+be staying in the room longer than they will, so they will never get their turn. After they leave, the people
+still waiting are in order from tallest (at the front) to shortest (at the back), and the person at the front is
+the tallest in the room right now.
+
+That waiting line is a **monotonic deque**:
+
+- a **queue** is a line where you join at the back and leave from the front (first in, first out);
+- a **deque** (pronounced "deck", short for *double-ended queue*) lets you add and remove at **both** ends;
+- **monotonic** means "always going one way" — here, the stored values only decrease from front to back.
+
+Why it matters: a sum can be updated when an item leaves the window by subtracting it, but a **maximum** cannot
+— if the largest item leaves, you no longer know the next largest. Dashboards that show "the peak load over the
+last 60 seconds", trading systems tracking "the highest price in the last 100 ticks" and many interview problems
+need exactly this, and the monotonic deque answers it with a constant amount of work per item on average.
+
 Sums and counts are easy to maintain in a sliding window because they are **invertible**: when an element
 leaves, you subtract it. The **maximum** is not invertible. If the current maximum leaves the window, what is
 the new maximum? You cannot "subtract" your way to it — you would have to rescan the window, costing O(k).
@@ -265,6 +291,19 @@ for x in range(6):
   decreasing, so the front is the maximum.
 - Each index is appended once and popped at most once: **amortized O(1) per step, O(n) total**.
 - The same idea on prefix sums handles shortest-subarray problems with negative numbers.
+
+## Glossary
+
+- **Queue** — a first-in-first-out line: add at the back, remove from the front.
+- **Deque** — double-ended queue: add or remove at either end in O(1); `collections.deque` in Python.
+- **Monotonic** — always increasing, or always decreasing.
+- **Monotonic deque** — a deque whose stored values are kept in sorted order by discarding useless items.
+- **Dominated element** — an older item that is not larger than a newer one, so it can never be a future maximum.
+- **Expired index** — an index that has slid out of the left side of the window.
+- **Amortized O(1)** — constant cost per item on average over the whole run.
+- **Aggregate / accounting argument** — bounding the total cost of all steps together (each item is added once and removed at most once).
+- **Lazy deletion** — leaving outdated items in a structure and discarding them only when they reach the top.
+- **Prefix sum** — `P[i]` = sum of the first `i` items; the sum of any stretch is a difference of two prefix sums.
 
 ```quiz
 [

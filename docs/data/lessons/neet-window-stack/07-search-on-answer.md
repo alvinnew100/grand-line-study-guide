@@ -1,5 +1,36 @@
 # Binary search on the answer
 
+## Before this lesson
+
+- [Binary search done right](#/lesson/neet-window-stack/binary-search-right) — the "first True" template, the upper-midpoint rule and
+  the terms `lo`, `hi`, `mid`, *predicate* and *invariant*. This lesson reuses them without re-deriving them.
+- Writing small helper functions inside a function (a *nested function*) in Python.
+- Integer division `//` and the idea of rounding up (a *ceiling*).
+
+## In plain words
+
+You need to hire a moving van and want the **smallest** van that can move your boxes in at most 3 trips. You
+cannot compute the right size with a formula. But for any *particular* van size, checking is easy: load boxes
+until the van is full, drive, repeat, and count the trips. And one more fact is clear: if a van of some size is
+big enough, every bigger van is big enough too.
+
+Those two facts are all that is needed. Line up every possible van size from smallest to largest; the answers to
+"is this size enough?" read *no, no, no, …, yes, yes, yes*. The size you want is the **first yes** — and the
+previous lesson showed how to find the first yes with binary search, in about 30 checks even when there are a
+billion possible sizes.
+
+This is called **binary search on the answer** (or *parametric search*): instead of searching a list, you search
+the range of possible answers, using a yes/no test.
+
+Why it matters: capacity planning ("the fewest servers that keep response time under a limit"), scheduling
+("the earliest deadline that is achievable"), and a large group of interview problems that say *minimum … such
+that* or *maximum … such that* all have this shape. Recognising it turns a problem that looks hard into a short,
+reliable recipe.
+
+Words used below: a **predicate** is a function that answers yes/no (True/False); **feasible** means "allowed /
+good enough"; **monotone** means the yes/no answers switch at most once as the candidate grows; a **greedy**
+method makes the locally best choice at each step without looking back.
+
 The previous lesson searched *positions in a sorted array*. This lesson makes a leap that surprises most
 people the first time: you can binary-search **the answer itself**, even when there is no array to search.
 
@@ -133,7 +164,7 @@ print(ship_within_days([3, 2, 2, 4, 1, 4], 3))                # 6
 ```
 
 > [!WARNING]
-> **Bounds are part of correctness, not just speed.** With `lo = 1`, the greedy check above would happily
+> **Bounds are part of correctness, not only speed.** With `lo = 1`, the greedy check above would happily
 > "ship" a package heavier than the capacity (it starts a new day, then loads it anyway) and the search would
 > return a capacity that is too small. Either set `lo = max(weights)` or make `feasible` reject `w > cap`.
 
@@ -262,6 +293,20 @@ If all are yes: binary search on the answer.
 - Cost: O(check × log(range)) — typically $O(n \log V)$.
 - Minimising ⇒ first True, lower midpoint, `hi = mid`. Maximising ⇒ last True, upper midpoint, `lo = mid`.
 - Bounds and the greedy check deserve as much care as the search loop.
+
+## Glossary
+
+- **Binary search on the answer (parametric search)** — binary-searching the range of possible answers with a yes/no test.
+- **Decision problem** — "is this candidate good enough?" **Optimisation problem** — "what is the best candidate?"
+- **Feasible** — a candidate that satisfies all requirements.
+- **Predicate** — a function returning True or False.
+- **Monotone** — the predicate changes from False to True (or True to False) at most once as the candidate grows.
+- **Bounds** — the smallest and largest candidates considered (`lo` and `hi`).
+- **First True / last True** — the boundary searched for when minimising / maximising.
+- **Greedy check** — a simulation that always takes the locally best action (e.g. load until full).
+- **Ceiling division** — dividing and rounding up: `(a + b - 1) // b`.
+- **Minimise the maximum / maximise the minimum** — typical phrasings that signal this technique.
+- **Epsilon (eps)** — a small tolerance used to stop a search over real numbers.
 
 ```quiz
 [

@@ -1,5 +1,36 @@
 # Stacks: the LIFO toolkit
 
+## Before this lesson
+
+- Python lists: `append`, `pop`, indexing with `[-1]` (the last item), and `len`.
+- Loops, `if`/`elif`/`else`, dictionaries, and writing a small class with `__init__` and methods.
+- Big-O notation ([Big-O, Big-Omega and Big-Theta](#/lesson/dsa-foundations/asymptotic-notation)).
+- Optional background with more theory: [Stacks and their applications](#/lesson/dsa-foundations/stacks).
+
+Nothing from the sliding-window lessons is needed here.
+
+## In plain words
+
+Think of a pile of plates in a cupboard. You put a clean plate **on top**, and when you need one you take it
+**from the top**. The plate you added most recently is the first one you use; the plate at the bottom has been
+there longest and comes out last.
+
+A **stack** is a collection that behaves like that pile. There are only two main actions: **push** (put an item
+on top) and **pop** (take the top item off). You can also **peek** — look at the top item without removing it.
+This behaviour is called **LIFO**, short for *last in, first out*.
+
+Why something so small matters: your web browser's Back button, the Undo command in an editor, the way a
+programming language remembers which function to return to, and the check that every `(` in your code has a
+matching `)` are all stacks. In interviews, any problem with *nesting* (things inside things) or *"the most
+recent unfinished item"* is usually a stack problem in disguise.
+
+Two terms used below:
+
+- **ADT** stands for *abstract data type*: a description of **what** operations a collection offers, without
+  saying **how** they are implemented.
+- **Amortized** cost means the average cost per operation over a long sequence, even if a single operation is
+  occasionally expensive.
+
 A **stack** is the simplest data structure with a real personality: the last thing you put in is the first
 thing you get out (**LIFO**, last-in first-out). That one rule makes it the natural tool whenever a problem
 has *nesting*, *undo*, or *"the most recent unresolved thing"*: matching brackets, evaluating expressions,
@@ -24,7 +55,7 @@ Goodrich, Tamassia & Goldwasser (§6.1.1) define a stack by its operations:
 
 Python's list already behaves as a stack **if you only touch its end**. The book's `ArrayStack` (§6.1.2) is a
 thin *adapter* around a list that hides the other list methods and raises a clear `Empty` exception on popping
-an empty stack. In interviews just use a list, but remember the adapter's lesson: **guard every `pop`/peek**
+an empty stack. In interviews a plain list is the usual choice, but remember the adapter's lesson: **guard every `pop`/peek**
 against an empty stack.
 
 ```python-run
@@ -349,6 +380,21 @@ Reach for a stack when you see:
 - Postfix evaluation pops two operands per operator; infix with precedence becomes "sum of terms".
 - Augmenting each element with a summary of the stack below it (Min Stack) keeps queries O(1).
 - Simulations where each element is pushed once and popped at most once run in O(n) overall.
+
+## Glossary
+
+- **Stack** — a collection where items are added and removed at the same end (the top).
+- **LIFO** — last in, first out.
+- **Push / pop / peek (top)** — add on top / remove the top / look at the top.
+- **ADT (abstract data type)** — a specification of operations, independent of implementation.
+- **Adapter** — a thin class that wraps another data structure and exposes a different, smaller interface.
+- **Nesting** — structures inside structures, such as brackets within brackets.
+- **Infix / postfix notation** — operator between operands (`3 + 4`) / operator after operands (`3 4 +`, also called Reverse Polish Notation, RPN).
+- **Operand / operator** — a value being combined / the symbol that combines values.
+- **Precedence** — the rule that `*` and `/` are applied before `+` and `-`.
+- **Truncation toward zero** — dropping the fractional part (`-3.5` → `-3`), unlike *floor*, which rounds down (`-4`).
+- **Backtracking** — building a solution step by step and undoing the last step to try alternatives.
+- **Simulation** — directly acting out the process the problem describes.
 
 ```quiz
 [
