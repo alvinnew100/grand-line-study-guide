@@ -530,3 +530,16 @@ h1, h2, h3, .brand, .page-title, .p-title, .verdict { font-family: var(--display
 
 .ptable tr.me td { background: var(--accent-soft); }
 .streak-row { gap: 22px; }
+
+.stage { margin: 28px 0 0; }
+.stage h2 { margin: 0 0 4px; font-size: 21px; }
+.stage-n { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--accent); font-family: var(--font); font-weight: 800; display: block; }
+.stage-grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 230px), 1fr)); margin-top: 10px; }
+.rstep { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; border-radius: 14px; background: var(--surface); border: 2px solid var(--border); color: var(--text); font-size: 14px; position: relative; }
+a.rstep:hover { text-decoration: none; border-color: var(--accent); }
+.rstep.started { border-color: var(--accent-2); }
+.rstep.done { border-color: var(--accent); background: var(--accent-soft); }
+.rstep.next { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.rstep.soon { opacity: .55; border-style: dashed; }
+.rn-n { width: 24px; height: 24px; border-radius: 50%; background: var(--surface-2); display: grid; place-items: center; font-size: 12px; font-weight: 800; }
+.rstep .rn-t { display: block; -webkit-line-clamp: unset; font-weight: 700; }

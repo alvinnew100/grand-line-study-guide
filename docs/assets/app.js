@@ -593,7 +593,7 @@
     const groups = `<div class="section-h"><h2>Tracks</h2></div>
       <div class="chips" id="grpChips"><button class="chip on" data-g="">All ${DATA.index.length}</button>${groupNames.map((g) => `<button class="chip" data-g="${esc(g)}">${esc(g)}</button>`).join("")}</div>
       <div class="grid" id="trackGrid">${buf}</div>`;
-    const cont = s.last ? `<a class="btn primary" href="${esc(s.last.href)}">Continue: ${esc(s.last.title)}</a>` : `<a class="btn primary" href="#/roadmap">Start with the roadmap</a>`;
+    const cont = s.last ? `<a class="btn primary" href="${esc(s.last.href)}">Continue: ${esc(s.last.title)}</a>` : (nextTrack() ? `<a class="btn primary" href="#/track/${nextTrack()}">Start: ${esc(DATA.tracks[nextTrack()].title)}</a>` : `<a class="btn primary" href="#/roadmap">Open the roadmap</a>`);
     setPage(`<div class="page">
       <section class="hero2" ${hero ? `style="background-image:url('${hero.src}')"` : ""}>
         <div class="hero2-in">
@@ -678,37 +678,49 @@
     }
   }
 
-  // ---------------------------------------------------------------- roadmap
-  const ROADMAP = {
-    pos: { csapp: [0, 0], python: [2, 0], sql: [4, 0], "dsa-foundations": [1, 1], fastapi: [2, 1], ml: [3, 1], databases: [4, 1],
-      "neet-arrays": [1, 2], mlops: [3, 2], "ai-eng": [4, 2], "neet-window-stack": [0, 3], "neet-linked-trees": [1, 3], "llm-practice": [4, 3],
-      "neet-greedy-math": [0, 4], "neet-heap-graphs": [1, 4], "neet-dp": [2, 4], os: [0, 1], "linux-cli": [2, 2], vim: [2, 3], cicd: [3, 3], thinking: [3, 4], "html-css": [5, 0], javascript: [5, 1] },
-    edges: [["csapp", "os"], ["linux-cli", "vim"], ["linux-cli", "cicd"], ["cicd", "thinking"], ["html-css", "javascript"], ["python", "dsa-foundations"], ["python", "fastapi"], ["python", "ml"], ["sql", "databases"], ["dsa-foundations", "neet-arrays"],
-      ["neet-arrays", "neet-window-stack"], ["neet-arrays", "neet-linked-trees"], ["neet-window-stack", "neet-greedy-math"],
-      ["neet-linked-trees", "neet-heap-graphs"], ["neet-linked-trees", "neet-dp"], ["ml", "mlops"], ["fastapi", "mlops"], ["databases", "mlops"],
-      ["ml", "ai-eng"], ["ai-eng", "llm-practice"]],
-  };
+  // ---------------------------------------------------------------- roadmap (recommended study flow)
+  const PATH = [
+    { title: "Start here", why: "The tools every later track assumes: a first programming language, the terminal, and version control.",
+      tracks: [["python", "Python Mastery"], ["linux-cli", "The Linux Command Line"], ["git", "Git"]] },
+    { title: "Interview coding", why: "The largest part of most interview loops. Learn the theory once, then drill the patterns in order.",
+      tracks: [["dsa-foundations", "DSA Foundations"], ["neet-arrays", "Arrays, Hashing & Two Pointers"], ["neet-window-stack", "Sliding Window, Stack & Binary Search"],
+        ["neet-linked-trees", "Linked Lists, Trees & Tries"], ["neet-heap-graphs", "Heaps, Backtracking & Graphs"], ["neet-dp", "Dynamic Programming"], ["neet-greedy-math", "Greedy, Intervals, Math & Bits"]] },
+    { title: "How computers work", why: "The fundamentals interviewers probe with 'what happens when' questions.",
+      tracks: [["csapp", "Computer Systems"], ["os", "Operating Systems"], ["networking", "Computer Networking"]] },
+    { title: "Data", why: "SQL is tested directly; the rest is the vocabulary of every system design conversation.",
+      tracks: [["sql", "SQL"], ["databases", "Databases & Data-Intensive Systems"], ["redis", "Redis"], ["mongodb", "MongoDB"]] },
+    { title: "Building and shipping software", why: "How real services are written, packaged, secured and released, plus the open-ended questions about it.",
+      tracks: [["fastapi", "FastAPI & Backend"], ["docker", "Docker & Containers"], ["cicd", "CI/CD"], ["web-security", "Web Application Security"], ["thinking", "Open-Ended Engineering Questions"]] },
+    { title: "Machine learning and AI", why: "For ML, MLOps and AI engineering roles. Do this after Python, SQL and the backend stage.",
+      tracks: [["ml", "Machine Learning"], ["mlops", "MLOps"], ["ai-eng", "AI Engineering"], ["llm-practice", "LLMs Hands-On"]] },
+    { title: "Web development", why: "For full-stack or frontend roles. Skip it if you are aiming only at backend, ML or AI roles.",
+      tracks: [["html-css", "HTML & CSS"], ["javascript", "JavaScript"], ["typescript", "TypeScript"], ["react", "React with Firebase"], ["js-testing", "JavaScript Testing"],
+        ["nodejs", "Node.js"], ["graphql", "GraphQL"], ["django", "Django"], ["nginx", "NGINX"]] },
+    { title: "Extras", why: "Useful, not interview-critical. Pick them up when you have slack.", tracks: [["go", "Go"], ["vim", "Practical Vim"]] },
+  ];
+  function nextTrack() {
+    for (const st of PATH) for (const [id] of st.tracks) { const t = DATA.tracks[id]; if (t && trackProgress(t).pct < 100) return id; }
+    return null;
+  }
   function viewRoadmap() {
     renderSidebar(null);
-    const CW = 218, RH = 128, NW = 196, NH = 76, PAD = 16;
-    const xy = (id) => { const [c, r] = ROADMAP.pos[id]; return [PAD + c * CW, PAD + r * RH]; };
-    const ids = Object.keys(ROADMAP.pos).filter((id) => DATA.tracks[id]);
-    const W = PAD * 2 + 5 * CW + NW, H = PAD * 2 + 4 * RH + NH;
-    const lines = ROADMAP.edges.filter(([a, b]) => DATA.tracks[a] && DATA.tracks[b]).map(([a, b]) => {
-      const [ax, ay] = xy(a), [bx, by] = xy(b);
-      const x1 = ax + NW / 2, y1 = ay + NH, x2 = bx + NW / 2, y2 = by, my = (y1 + y2) / 2;
-      const done = trackProgress(DATA.tracks[a]).pct === 100;
-      return `<path d="M${x1},${y1} C${x1},${my} ${x2},${my} ${x2},${y2}" class="${done ? "done" : ""}"/>`;
-    }).join("");
-    const nodes = ids.map((id) => {
-      const t = DATA.tracks[id], [x, y] = xy(id), p = trackProgress(t);
-      return `<a class="rnode ${p.pct === 100 ? "done" : p.pct ? "started" : ""}" href="#/track/${id}" style="left:${x}px;top:${y}px;width:${NW}px;height:${NH}px">
-        <span class="rn-t"><span>${esc(t.icon || "")}</span>${esc(t.title)}</span><span class="bar"><i style="width:${p.pct}%"></i></span><span class="rn-m">${p.done}/${p.total} · ${p.pct}%</span></a>`;
+    const next = nextTrack();
+    let n = 0;
+    const stages = PATH.map((st, i) => {
+      const cards = st.tracks.map(([id, name]) => {
+        n++;
+        const t = DATA.tracks[id];
+        if (!t) return `<div class="rstep soon"><span class="rn-n">${n}</span><span class="rn-t">${esc(name)}</span><span class="rn-m">Being written</span></div>`;
+        const p = trackProgress(t);
+        return `<a class="rstep ${p.pct === 100 ? "done" : p.pct ? "started" : ""} ${id === next ? "next" : ""}" href="#/track/${id}">
+          <span class="rn-n">${p.pct === 100 ? "✓" : n}</span><span class="rn-t">${esc(t.icon || "")} ${esc(t.title)}</span>
+          <span class="bar"><i style="width:${p.pct}%"></i></span><span class="rn-m">${id === next ? "Next up · " : ""}${p.done}/${p.total} done · ${p.pct}%</span></a>`;
+      }).join("");
+      return `<section class="stage"><h2><span class="stage-n">Stage ${i + 1}</span> ${esc(st.title)}</h2><p class="muted">${esc(st.why)}</p><div class="stage-grid">${cards}</div></section>`;
     }).join("");
     setPage(`<div class="page"><div class="crumbs"><a href="#/">Home</a></div><h1 class="page-title">Roadmap</h1>
-      <p class="muted">Arrows point from a track to the ones that build on it. Start at the top; anything with no arrow into it needs no prerequisites.</p>
-      <div class="roadmap-scroll"><div class="roadmap" style="width:${W}px;height:${H}px"><svg width="${W}" height="${H}">${lines}</svg>${nodes}</div></div>
-      ${Ghibli.figure("laputa", "roadmap", "wide")}</div>`);
+      <p class="muted">Follow the stages top to bottom and the numbered tracks left to right. Stages 1 and 2 matter most; you can run Stage 2 problems alongside the later stages, a few each day.</p>
+      ${stages}${Ghibli.figure("laputa", "roadmap", "wide")}</div>`);
   }
 
   // ---------------------------------------------------------------- gallery & credits

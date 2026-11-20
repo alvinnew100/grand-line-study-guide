@@ -1,19 +1,5 @@
 [
  {
-  "id": "csapp",
-  "title": "Computer Systems & Architecture",
-  "icon": "🖥️",
-  "blurb": "How programs really run: bits and floats, x86-64 assembly, pipelined processors, caches, linking, processes and signals, virtual memory, I/O, sockets and threads, following CS:APP.",
-  "color": "#3d7ea6",
-  "sources": [
-   "Bryant & O'Hallaron, Computer Systems: A Programmer's Perspective, 3rd ed. (CS:APP 3e)"
-  ],
-  "words": 109956,
-  "modules": 13,
-  "lessons": 34,
-  "problems": 26
- },
- {
   "id": "python",
   "title": "Python Mastery",
   "icon": "🐍",
@@ -21,12 +7,42 @@
   "color": "#3776ab",
   "sources": [
    "Goodrich, Tamassia & Goldwasser, Data Structures and Algorithms in Python, ch. 1-2",
+   "Matthes, Python Crash Course (3rd ed.), Parts I-II (topic coverage; all wording and examples original)",
    "The Python Tutorial, Language Reference (Data Model) and Library Reference, docs.python.org/3"
   ],
-  "words": 76895,
-  "modules": 13,
-  "lessons": 32,
-  "problems": 26
+  "words": 114094,
+  "modules": 15,
+  "lessons": 43,
+  "problems": 44
+ },
+ {
+  "id": "linux-cli",
+  "title": "The Linux Command Line",
+  "icon": "🐧",
+  "blurb": "From your first prompt to shell scripts, text pipelines and on-call debugging: the command line explained from the ground up, with Python problems that rebuild the classic tools.",
+  "color": "#2a9d8f",
+  "sources": [
+   "Shotts, The Linux Command Line (5th internet edition)"
+  ],
+  "words": 0,
+  "modules": 1,
+  "lessons": 0,
+  "problems": 25
+ },
+ {
+  "id": "git",
+  "title": "Git (Pro Git)",
+  "icon": "🌿",
+  "blurb": "Git from first commit to object internals: branching, rebasing, remotes, GitHub flow, history surgery and rescue drills, with Python problems that rebuild the commit graph, diff, merge and reflog yourself.",
+  "color": "#f05133",
+  "sources": [
+   "Chacon & Straub, Pro Git, 2nd edition (CC BY-NC-SA 3.0), chapters 1-10",
+   "Original material on team workflows, commit conventions and rescue scenarios"
+  ],
+  "words": 0,
+  "modules": 12,
+  "lessons": 31,
+  "problems": 25
  },
  {
   "id": "dsa-foundations",
@@ -37,7 +53,7 @@
   "sources": [
    "Goodrich, Tamassia & Goldwasser, Data Structures and Algorithms in Python (Wiley, 2013), ch. 3-15"
   ],
-  "words": 100391,
+  "words": 100543,
   "modules": 13,
   "lessons": 38,
   "problems": 33
@@ -138,6 +154,46 @@
   "problems": 34
  },
  {
+  "id": "csapp",
+  "title": "Computer Systems & Architecture",
+  "icon": "🖥️",
+  "blurb": "How programs really run: bits and floats, x86-64 assembly, pipelined processors, caches, linking, processes and signals, virtual memory, I/O, sockets and threads, following CS:APP.",
+  "color": "#3d7ea6",
+  "sources": [
+   "Bryant & O'Hallaron, Computer Systems: A Programmer's Perspective, 3rd ed. (CS:APP 3e)"
+  ],
+  "words": 147316,
+  "modules": 13,
+  "lessons": 34,
+  "problems": 26
+ },
+ {
+  "id": "os",
+  "title": "Operating Systems (Tanenbaum)",
+  "icon": "🧵",
+  "blurb": "Processes, memory, files, I/O, deadlocks, virtualization, multiprocessors and security, with runnable simulations of every classic algorithm and two real-system case studies.",
+  "color": "#0f8b8d",
+  "sources": [
+   "Tanenbaum & Bos, Modern Operating Systems, 4th ed., ch. 1–12"
+  ],
+  "words": 0,
+  "modules": 12,
+  "lessons": 33,
+  "problems": 33
+ },
+ {
+  "id": "networking",
+  "title": "Computer Networking for Engineers",
+  "icon": "🌐",
+  "blurb": "tmp",
+  "color": "#2a6fdb",
+  "sources": [],
+  "words": 0,
+  "modules": 1,
+  "lessons": 0,
+  "problems": 28
+ },
+ {
   "id": "sql",
   "title": "SQL from Zero to Interview",
   "icon": "🗃️",
@@ -172,20 +228,20 @@
   "problems": 18
  },
  {
-  "id": "ml",
-  "title": "Machine Learning",
-  "icon": "🧠",
-  "blurb": "From the maths underneath to scikit-learn models, evaluation, pipelines, text, deep-learning essentials and interview-ready system design — with runnable code in every lesson and 25 numpy implementation problems.",
-  "color": "#7b5ea7",
+  "id": "mongodb",
+  "title": "MongoDB",
+  "icon": "🍃",
+  "blurb": "Documents, CRUD, querying, indexes, aggregation, transactions, schema design, replication, sharding and operations - a chapter-by-chapter companion to MongoDB: The Definitive Guide, plus PyMongo, change streams, Atlas Vector Search for RAG and interview-style data-modelling exercises.",
+  "color": "#13aa52",
   "sources": [
-   "Müller & Guido, Introduction to Machine Learning with Python (O'Reilly), ch. 1–8",
-   "scikit-learn User Guide (scikit-learn.org)",
-   "Chip Huyen, AI Engineering (O'Reilly) — background for deep learning and system design",
-   "Goodfellow, Bengio & Courville, Deep Learning — background for the maths and optimisers"
+   "Bradshaw, Brazil & Chodorow, MongoDB: The Definitive Guide, 3rd ed. (O'Reilly, 2019), ch. 1-24",
+   "MongoDB Manual (mongodb.com/docs/manual)",
+   "PyMongo and Motor documentation (pymongo.readthedocs.io, motor.readthedocs.io)",
+   "MongoDB Atlas Vector Search documentation (mongodb.com/docs/atlas/atlas-vector-search)"
   ],
-  "words": 68753,
-  "modules": 10,
-  "lessons": 26,
+  "words": 0,
+  "modules": 12,
+  "lessons": 28,
   "problems": 25
  },
  {
@@ -203,6 +259,84 @@
   "modules": 12,
   "lessons": 29,
   "problems": 18
+ },
+ {
+  "id": "docker",
+  "title": "Docker & Containers",
+  "icon": "🐳",
+  "blurb": "Containers from the kernel up: namespaces, cgroups and layered images, Dockerfiles and the build cache, registries, storage, Compose, health checks, observability, Swarm and Kubernetes, safe upgrades, secrets, CI builds, multi-architecture images, security hardening, ML/GPU images and worked interview answers.",
+  "color": "#1d63ed",
+  "sources": [
+   "Elton Stoneman, Learn Docker in a Month of Lunches (Manning, 2020), ch. 1-21",
+   "Official docs: docs.docker.com (Dockerfile reference, Compose file reference, Engine, Build, Swarm)",
+   "Official docs: kubernetes.io, prometheus.io, NVIDIA Container Toolkit, astral.sh/uv"
+  ],
+  "words": 51064,
+  "modules": 14,
+  "lessons": 16,
+  "problems": 15
+ },
+ {
+  "id": "cicd",
+  "title": "CI/CD & Continuous Delivery",
+  "icon": "🚀",
+  "blurb": "How software gets from a commit to production safely and repeatedly: continuous integration, deployment pipelines, test strategy, release patterns, infrastructure as code, database change, branching, DORA metrics - then hands-on GitHub Actions, GitLab CI, Docker, Argo CD and worked interview scenarios.",
+  "color": "#3a86ff",
+  "sources": [
+   "Jez Humble & David Farley, Continuous Delivery (Addison-Wesley, 2010), ch. 1-15",
+   "Forsgren, Humble & Kim, Accelerate / DORA State of DevOps research (four key metrics)",
+   "Official docs: GitHub Actions, GitLab CI/CD, Docker, Kubernetes, Terraform, Argo CD, Argo Rollouts, OpenFeature, Semantic Versioning, Conventional Commits, trunkbaseddevelopment.com"
+  ],
+  "words": 32544,
+  "modules": 6,
+  "lessons": 11,
+  "problems": 0
+ },
+ {
+  "id": "web-security",
+  "title": "Web Application Security",
+  "icon": "🛡️",
+  "blurb": "Defensive security for developers, from zero: how the web works, how each class of vulnerability arises, vulnerable-versus-fixed code, layered defences, testing, threat modelling, the secure development lifecycle, LLM application security and interview-ready answers.",
+  "color": "#b91c1c",
+  "sources": [
+   "Andrew Hoffman, Web Application Security (O'Reilly, 2020)",
+   "OWASP Top 10 — https://owasp.org/www-project-top-ten/",
+   "OWASP Cheat Sheet Series — https://cheatsheetseries.owasp.org/",
+   "MDN Web Docs, Security on the web — https://developer.mozilla.org/en-US/docs/Web/Security"
+  ],
+  "words": 30575,
+  "modules": 10,
+  "lessons": 30,
+  "problems": 26
+ },
+ {
+  "id": "thinking",
+  "title": "Open-Ended Engineering Questions",
+  "icon": "🧩",
+  "blurb": "tmp",
+  "color": "#7b5ea7",
+  "sources": [],
+  "words": 0,
+  "modules": 1,
+  "lessons": 0,
+  "problems": 24
+ },
+ {
+  "id": "ml",
+  "title": "Machine Learning",
+  "icon": "🧠",
+  "blurb": "From the maths underneath to scikit-learn models, evaluation, pipelines, text, deep-learning essentials and interview-ready system design — with runnable code in every lesson and 25 numpy implementation problems.",
+  "color": "#7b5ea7",
+  "sources": [
+   "Müller & Guido, Introduction to Machine Learning with Python (O'Reilly), ch. 1–8",
+   "scikit-learn User Guide (scikit-learn.org)",
+   "Chip Huyen, AI Engineering (O'Reilly) — background for deep learning and system design",
+   "Goodfellow, Bengio & Courville, Deep Learning — background for the maths and optimisers"
+  ],
+  "words": 68753,
+  "modules": 10,
+  "lessons": 26,
+  "problems": 25
  },
  {
   "id": "mlops",
@@ -232,7 +366,7 @@
   "sources": [
    "Chip Huyen, AI Engineering: Building Applications with Foundation Models (O'Reilly, 2025), ch. 1-10"
   ],
-  "words": 69301,
+  "words": 69524,
   "modules": 10,
   "lessons": 27,
   "problems": 24
@@ -255,5 +389,81 @@
   "modules": 10,
   "lessons": 26,
   "problems": 24
+ },
+ {
+  "id": "javascript",
+  "title": "JavaScript (Eloquent JavaScript)",
+  "icon": "✨",
+  "blurb": "The JavaScript language from values and closures to promises and the event loop, then the browser (DOM, events, canvas, fetch) and Node.js, with runnable examples, live pages and judged problems.",
+  "color": "#c99a06",
+  "sources": [
+   "Haverbeke, Eloquent JavaScript (4th ed.), ch. 1-21",
+   "MDN Web Docs (developer.mozilla.org)"
+  ],
+  "words": 0,
+  "modules": 17,
+  "lessons": 37,
+  "problems": 35
+ },
+ {
+  "id": "react",
+  "title": "React (with Firebase)",
+  "icon": "⚛️",
+  "blurb": "Modern React from the first component to how the reconciler works: state, effects, data fetching, forms, routing, testing and TypeScript, then a full Firebase back end (auth, Firestore, security rules, hosting). Every idea runs live in the page with a hand-written mini React, plus 30 judged problems.",
+  "color": "#0e9fbf",
+  "sources": [
+   "Wieruch, The Road to React",
+   "Wieruch, The Road to React with Firebase",
+   "react.dev (official React documentation)",
+   "firebase.google.com/docs (official Firebase documentation)"
+  ],
+  "words": 0,
+  "modules": 10,
+  "lessons": 29,
+  "problems": 30
+ },
+ {
+  "id": "django",
+  "title": "Django",
+  "icon": "🎸",
+  "blurb": "tmp",
+  "color": "#0c7c59",
+  "sources": [
+   "tmp"
+  ],
+  "words": 0,
+  "modules": 1,
+  "lessons": 0,
+  "problems": 26
+ },
+ {
+  "id": "go",
+  "title": "Go (Learning Go)",
+  "icon": "🐹",
+  "blurb": "Go from the first `go run` to production services: types, slices and maps, interfaces, generics, errors, modules, goroutines and channels, context, testing, the standard library and the runtime questions interviewers love. Written for complete beginners, with runnable simulations and practice problems.",
+  "color": "#00add8",
+  "sources": [
+   "Jon Bodner, Learning Go: An Idiomatic Approach to Real-World Go Programming, 2nd ed. (O'Reilly), ch. 1-16 (topic coverage and fact-checking only; all wording and examples are original)",
+   "The Go Programming Language Specification, go.dev/ref/spec",
+   "Go documentation: Effective Go, the Go Memory Model, the Go blog and package docs, go.dev/doc and pkg.go.dev"
+  ],
+  "words": 0,
+  "modules": 18,
+  "lessons": 42,
+  "problems": 18
+ },
+ {
+  "id": "vim",
+  "title": "Practical Vim",
+  "icon": "⌨️",
+  "blurb": "tmp",
+  "color": "#1f9d55",
+  "sources": [
+   "Neil, Practical Vim 2e"
+  ],
+  "words": 0,
+  "modules": 1,
+  "lessons": 0,
+  "problems": 23
  }
 ]
