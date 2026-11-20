@@ -63,21 +63,21 @@ Either way: $O(1)$ time, BST order preserved, and the subtree's shape is flatten
 
 ## 2. The AVL tree
 
-> **Height-balance property.** For every position $p$ of $T$, the heights of the children of $p$
-> differ by at most 1.
+> **Height-balance property.** At every position of the tree, the two child subtrees have heights
+> that are equal or off by one.
 
-Any BST satisfying it is an **AVL tree**. (Convention: here the height of a position counts *nodes*
+A binary search tree with this property is called an **AVL tree**. (Convention: here the height of a position counts *nodes*
 on the longest path down to a leaf, so a leaf has height 1 and a missing child height 0; the book
 uses this node-counting convention in its AVL chapter.)
 
-Every subtree of an AVL tree is itself an AVL tree. A position is **balanced** if its children's
+The property is hereditary: cut out any subtree and you again have an AVL tree. A position is **balanced** if its children's
 heights differ by at most one.
 
 ### 2.1 The height of an AVL tree is $O(\log n)$
 
-> **Proposition.** The height of an AVL tree storing $n$ entries is $O(\log n)$.
+> **Proposition.** An AVL tree holding $n$ entries is only $O(\log n)$ tall.
 
-*Justification.* Work "backwards": let $n(h)$ be the **minimum** number of nodes in an AVL tree of
+*Why.* Work "backwards": let $n(h)$ be the **minimum** number of nodes in an AVL tree of
 height $h$. Then $n(1) = 1$, $n(2) = 2$, and for $h \ge 3$ the sparsest AVL tree of height $h$ has a
 root, a sparsest subtree of height $h - 1$ and a sparsest subtree of height $h - 2$:
 

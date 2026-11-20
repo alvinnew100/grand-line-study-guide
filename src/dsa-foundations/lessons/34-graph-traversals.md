@@ -1,8 +1,7 @@
 # DFS, BFS, transitive closure and DAGs
 
-A **traversal** is a systematic procedure for exploring a graph by examining all of its vertices
-and edges. A traversal is efficient if it takes time proportional to the size of the graph,
-$O(n + m)$. Traversals answer **reachability** questions — is there a path from $u$ to $v$? is the
+To **traverse** a graph is to walk over it methodically until every vertex and every edge has been
+looked at. A good traversal manages this in time linear in the graph's size, $O(n + m)$. Traversals answer **reachability** questions — is there a path from $u$ to $v$? is the
 graph connected? does it contain a cycle? — and are the skeleton of most graph algorithms. This
 lesson covers depth-first search, breadth-first search, transitive closure (Floyd-Warshall) and
 topological ordering of directed acyclic graphs.
@@ -26,7 +25,7 @@ DFS(G, u):                       # u has already been marked as visited
 The edges used to discover new vertices are **discovery edges** (tree edges); they form the **DFS
 tree** rooted at the start vertex. Every other edge is a **nontree edge**:
 
-- **back edge** — connects a vertex to an *ancestor* in the DFS tree;
+- **back edge** — leads from a vertex up to one of its DFS-tree *ancestors*;
 - **forward edge** — connects a vertex to a *descendant* (directed graphs only);
 - **cross edge** — connects a vertex to one that is neither ancestor nor descendant (directed only).
 
@@ -45,12 +44,12 @@ graph TD
 
 ### 1.2 Properties
 
-> **Proposition.** Let $G$ be an undirected graph on which a DFS starting at $s$ has been performed.
-> Then the traversal visits all vertices in the connected component of $s$, and the discovery edges
-> form a spanning tree of that component.
+> **Proposition.** Run DFS from $s$ in an undirected graph. Every vertex of $s$'s connected
+> component gets visited (and nothing outside it), and the discovery edges make up a spanning tree
+> of that component.
 
-> **Proposition.** For a directed graph, DFS from $s$ visits all vertices **reachable** from $s$, and
-> the DFS tree contains directed paths from $s$ to each of them.
+> **Proposition.** In a digraph, DFS from $s$ visits exactly the vertices **reachable** from $s$, and
+> following tree edges gives a directed route from $s$ to each one.
 
 *Why:* suppose some reachable vertex $w$ were unvisited; take the first unvisited vertex on a path
 from $s$ to $w$ and its predecessor $u$ (visited). When DFS processed $u$ it examined that edge and
@@ -171,12 +170,11 @@ equivalent.)
 
 ### 2.1 Properties
 
-> **Proposition.** Let $G$ be a graph on which a BFS starting at $s$ has been performed. Then:
-> - the traversal visits all vertices reachable from $s$;
-> - for each vertex $v$ at level $i$, the path of the BFS tree from $s$ to $v$ has $i$ edges, and
->   **any other path from $s$ to $v$ has at least $i$ edges**;
-> - if $(u, v)$ is an edge not in the BFS tree, the level number of $v$ can be at most 1 greater
->   than the level number of $u$.
+> **Proposition.** After a BFS from $s$:
+> - every vertex that $s$ can reach has been visited;
+> - a vertex placed on level $i$ is joined to $s$ by a tree path of exactly $i$ edges, and **no
+>   route between the two is shorter**;
+> - a nontree edge $(u, v)$ never skips a level: level($v$) $\le$ level($u$) + 1.
 
 So **BFS finds shortest paths in terms of the number of edges** (unweighted shortest paths). In an
 undirected graph every nontree edge is a **cross edge** between vertices on the same or adjacent
@@ -198,7 +196,7 @@ levels; in a directed graph nontree edges are back or cross edges (never forward
 
 Reachability queries "does $u$ reach $v$?" can be answered by a traversal in $O(n + m)$ each. If
 there will be **many** queries, precompute the **transitive closure** $G^*$ of the digraph $G$: the
-digraph on the same vertices with an edge $(u, v)$ whenever $G$ has a directed path from $u$ to $v$.
+digraph on the same vertices containing the edge $(u, v)$ exactly when $u$ can reach $v$ in $G$.
 
 **Option 1:** run a DFS/BFS from each of the $n$ vertices: $O(n(n + m))$. Best for sparse graphs.
 
@@ -243,7 +241,7 @@ A **topological ordering** of a digraph is an ordering $v_1, \ldots, v_n$ of its
 for every edge $(v_i, v_j)$, $i < j$ — every edge points "forward". A valid order in which to take
 the courses.
 
-> **Proposition.** A directed graph has a topological ordering **if and only if it is acyclic**.
+> **Proposition.** Topological orderings exist for precisely those digraphs that are **acyclic**.
 
 *Why:* (⇒) on a cycle, some edge would have to point backward. (⇐) A DAG must have a vertex with
 **in-degree 0** — otherwise, walking backwards along incoming edges forever would revisit a vertex,

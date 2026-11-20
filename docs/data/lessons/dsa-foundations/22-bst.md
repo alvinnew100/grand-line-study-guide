@@ -7,11 +7,11 @@ this module, and they implement the full **sorted map** ADT.
 
 ## 1. The binary search tree property
 
-A binary search tree is a binary tree $T$ in which each position $p$ stores a key–value pair
-$(k, v)$ such that:
+Take a binary tree whose positions each hold one item $(k, v)$. It is a **binary search tree** when,
+at every position $p$ with key $k$:
 
-- keys stored in the **left subtree** of $p$ are **less than** $k$;
-- keys stored in the **right subtree** of $p$ are **greater than** $k$.
+- everything in $p$'s **left subtree** has a key **smaller than** $k$;
+- everything in $p$'s **right subtree** has a key **larger than** $k$.
 
 ```mermaid
 graph TD

@@ -27,7 +27,7 @@ it matches some $k_i$, done; otherwise continue in the child $c_i$ with $k_{i-1}
 
 A **(2,4) tree** (also *2-4 tree* or *2-3-4 tree*) is a multiway search tree with:
 
-- **Size property:** every internal node has **at most four children** (so 1, 2 or 3 keys);
+- **Size property:** no internal node has more than **four children** (so 1, 2 or 3 keys);
 - **Depth property:** all external nodes have the **same depth**.
 
 ```mermaid
@@ -43,7 +43,7 @@ graph TD
 
 Nodes are called 2-nodes, 3-nodes or 4-nodes by their number of children.
 
-> **Proposition.** The height of a (2,4) tree storing $n$ items is $O(\log n)$; more precisely
+> **Proposition.** A (2,4) tree with $n$ items has logarithmic height; more precisely
 > $\tfrac12 \log(n+1) \le h \le \log(n+1)$.
 
 *Justification.* By the size property there are at most $4^h$ external nodes, and by the depth and
@@ -134,8 +134,8 @@ higher node, swap it with its inorder predecessor (the rightmost key in the subt
 which lives in a bottom node. Removing a key from a bottom node $w$ may leave it with **no keys**
 (one child): an **underflow**. Two remedies:
 
-- **Transfer:** if an immediate sibling $s$ of $w$ is a 3-node or 4-node, move a child of $s$ to
-  $w$, a key of $s$ up to the parent $u$, and a key of $u$ down to $w$ (a rotation through the
+- **Transfer:** if an immediate sibling $s$ of $w$ is a 3-node or 4-node, shift one of $s$'s children over to
+  $w$, send a key of $s$ up to the parent $u$, and a key of $u$ down to $w$ (a rotation through the
   parent). Done.
 - **Fusion:** if the immediate siblings are 2-nodes, **merge** $w$ with a sibling into a new node and
   pull a key of the parent $u$ down into it. Now $u$ has one fewer key — it may underflow in turn,
@@ -158,8 +158,8 @@ recolourings.
 A **red-black tree** is a binary search tree whose nodes are coloured **red** or **black** such that:
 
 1. **Root property:** the root is black.
-2. **Red property:** the children of a red node (if any) are black — no two reds in a row.
-3. **Depth property:** all nodes with zero or one children have the same **black depth** — the
+2. **Red property:** a red node never has a red child — no two reds in a row.
+3. **Depth property:** every node that lacks at least one child has the same **black depth** — the
    number of black ancestors (counting the node itself if black). Equivalently: every path from the
    root down to a missing child passes through the same number of black nodes.
 
@@ -186,7 +186,7 @@ graph TD
 The depth property of the red-black tree is exactly the "all leaves at the same depth" property of
 the (2,4) tree. Red-black trees are (2,4) trees wearing a binary costume.
 
-> **Proposition.** The height of a red-black tree storing $n$ entries is $O(\log n)$; precisely
+> **Proposition.** A red-black tree with $n$ entries has height $O(\log n)$; precisely
 > $\log(n+1) - 1 \le h \le 2\log(n+1) - 2$.
 
 *Justification.* Let $d$ be the common black depth. The corresponding (2,4) tree has height $d$, so

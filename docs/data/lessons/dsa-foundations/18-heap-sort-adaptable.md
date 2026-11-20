@@ -28,16 +28,16 @@ The running time depends entirely on the PQ's `add` and `remove_min`.
 Phase 1 is $O(n)$ ($n$ constant-time adds). Phase 2 repeatedly *selects* the minimum from what is
 left: $O(n) + O(n-1) + \cdots + O(1) = O(n^2)$.
 
-| | Collection C | Priority queue P (unsorted) |
+| stage | output collection C | unsorted priority queue P |
 |---|---|---|
-| input | (7, 4, 8, 2, 5, 3) | () |
-| phase 1 … | () | (7, 4, 8, 2, 5, 3) |
-| phase 2 (a) | (2) | (7, 4, 8, 5, 3) |
-| (b) | (2, 3) | (7, 4, 8, 5) |
-| (c) | (2, 3, 4) | (7, 8, 5) |
-| (d) | (2, 3, 4, 5) | (7, 8) |
-| (e) | (2, 3, 4, 5, 7) | (8) |
-| (f) | (2, 3, 4, 5, 7, 8) | () |
+| start | (6, 1, 9, 3, 8, 2) | () |
+| end of phase 1 | () | (6, 1, 9, 3, 8, 2) |
+| phase 2, 1st removal | (1) | (6, 9, 3, 8, 2) |
+| 2nd | (1, 2) | (6, 9, 3, 8) |
+| 3rd | (1, 2, 3) | (6, 9, 8) |
+| 4th | (1, 2, 3, 6) | (9, 8) |
+| 5th | (1, 2, 3, 6, 8) | (9) |
+| 6th | (1, 2, 3, 6, 8, 9) | () |
 
 Selection sort is $\Theta(n^2)$ on **every** input — the scan for the minimum never gets shorter.
 
@@ -52,7 +52,7 @@ scanning from the back) is $O(n)$.
 Phase 1: $n$ adds at $O(\log n)$ each — or $O(n)$ using bottom-up construction. Phase 2: $n$
 `remove_min` calls, the $j$-th costing $O(\log(n - j + 1))$. Total:
 
-> **Proposition.** Heap-sort sorts $n$ elements in $O(n \log n)$ time, in the worst case.
+> **Proposition.** Even on its worst input, heap-sort needs only $O(n\log n)$ time for $n$ items.
 
 That is dramatically better than $O(n^2)$, and it is a *guarantee*, unlike quick-sort's.
 
@@ -141,7 +141,7 @@ caller hands the locator back to say *which* entry to update or remove.
 | New operation | Meaning |
 |---|---|
 | `loc = P.add(k, v)` | insert, returning a locator |
-| `P.update(loc, k, v)` | replace key and value of the entry identified by `loc` |
+| `P.update(loc, k, v)` | give the entry behind `loc` a new key `k` and value `v` |
 | `P.remove(loc)` | remove that entry and return its `(k, v)` |
 
 ### 3.1 Implementation

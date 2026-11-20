@@ -1,6 +1,6 @@
 # Graphs and their representations
 
-A **graph** is a way of representing relationships that exist between pairs of objects. Road maps,
+A **graph** models pairwise connections: a collection of things, plus the links between some of them. Road maps,
 flight networks, the web, social networks, course prerequisites, electrical circuits, dependencies
 between software packages — all are graphs. This lesson introduces the vocabulary, the basic
 counting facts, the graph ADT and the four classic data structures for storing a graph, with their
@@ -14,12 +14,12 @@ called **edges** (arcs).
 - An edge $(u, v)$ is **directed** if the pair is ordered ($u$ precedes $v$), and **undirected**
   otherwise. A graph whose edges are all undirected is an **undirected graph**; all directed, a
   **directed graph** or **digraph**; otherwise a **mixed graph**.
-- The two vertices joined by an edge are its **end vertices** (endpoints). For a directed edge, the
+- An edge's two vertices are called its **endpoints** (or end vertices). For a directed edge, the
   first is its **origin** and the second its **destination**.
-- Two vertices are **adjacent** if an edge joins them. An edge is **incident** to a vertex if the
-  vertex is one of its endpoints.
+- Two vertices are **adjacent** if an edge joins them. A vertex and an edge are **incident** when the
+  edge touches that vertex.
 - The **outgoing edges** of $v$ are the directed edges whose origin is $v$; the **incoming edges**
-  have $v$ as destination. The **degree** $\deg(v)$ is the number of incident edges; the
+  have $v$ as destination. The **degree** $\deg(v)$ counts the edges touching $v$; the
   **in-degree** and **out-degree** count incoming and outgoing edges.
 - $E$ is a *collection*, not a set: **parallel edges** (multiple edges) join the same pair of
   vertices; a **self-loop** joins a vertex to itself. A graph with neither is **simple** — the usual
@@ -48,19 +48,19 @@ mixed.
 
 ### 1.1 Paths, cycles, connectivity
 
-- A **path** is a sequence of alternating vertices and edges, starting and ending at a vertex, each
-  edge incident to its predecessor and successor vertex. A **cycle** is a path that starts and ends
-  at the same vertex (with at least one edge). **Simple** paths/cycles do not repeat vertices
+- A **path** is a walk through the graph — vertex, edge, vertex, edge, …, vertex — in which every
+  edge joins the two vertices written on either side of it. A **cycle** is a path of one or more
+  edges that returns to where it began. **Simple** paths/cycles do not repeat vertices
   (except the endpoint of a cycle). A **directed path/cycle** respects edge directions.
-- A directed graph is **acyclic** if it has no directed cycles (a **DAG**).
-- $u$ **reaches** $v$ (and $v$ is **reachable** from $u$) if there is a (directed) path from $u$ to
-  $v$. In an undirected graph reachability is symmetric.
+- A digraph with no directed cycle anywhere is called **acyclic** (a **DAG**).
+- $u$ **reaches** $v$ (and $v$ is **reachable** from $u$) if some (directed) path leads from $u$ to
+  $v$. Without edge directions, reachability is symmetric.
 - A graph is **connected** if there is a path between every pair of vertices. A digraph is
   **strongly connected** if for every pair $u, v$: $u$ reaches $v$ **and** $v$ reaches $u$.
 - A **subgraph** of $G$ uses subsets of its vertices and edges; a **spanning subgraph** contains all
   vertices. The maximal connected subgraphs are the **connected components**.
-- A **forest** is a graph without cycles; a **tree** is a connected forest (these are *free* trees —
-  no root). A **spanning tree** is a spanning subgraph that is a tree.
+- A cycle-free graph is a **forest**, and a forest in one connected piece is a **tree** (a *free*
+  tree: nobody is the root). A **spanning tree** is a tree that reaches every vertex of the graph.
 
 ### 1.2 Counting facts
 
@@ -78,8 +78,8 @@ Each edge is counted twice, once at each endpoint (the *handshake lemma*).
 So $m$ is $O(n^2)$. A graph is called **dense** if $m$ is close to $n^2$ and **sparse** if $m$ is
 closer to $n$ — most real-world graphs (roads, social networks, the web) are sparse.
 
-> **Proposition 4.** Let $G$ be an undirected graph. If $G$ is connected, $m \ge n - 1$. If $G$ is a
-> tree, $m = n - 1$. If $G$ is a forest, $m \le n - 1$.
+> **Proposition 4.** Let $G$ be an undirected graph. Connected graphs have $m \ge n - 1$; trees have exactly
+> $m = n - 1$; forests have $m \le n - 1$.
 
 ## 2. The graph ADT
 
@@ -90,11 +90,11 @@ The book models a graph with three types: `Vertex` (with `element()`), `Edge` (w
 |---|---|
 | `vertex_count()`, `edge_count()` | $n$ and $m$ |
 | `vertices()`, `edges()` | iterations of all vertices / edges |
-| `get_edge(u, v)` | the edge from $u$ to $v$, or `None` |
+| `get_edge(u, v)` | look up the edge joining $u$ to $v$ (`None` when absent) |
 | `degree(v, out=True)` | (out-)degree; `out=False` for in-degree |
 | `incident_edges(v, out=True)` | iteration of edges incident to $v$ (outgoing by default) |
-| `insert_vertex(x=None)` | create and return a new vertex storing `x` |
-| `insert_edge(u, v, x=None)` | create and return a new edge storing `x` |
+| `insert_vertex(x=None)` | add a vertex holding `x`; the new vertex is handed back |
+| `insert_edge(u, v, x=None)` | add an edge $u$–$v$ holding `x`; the new edge is handed back |
 | `remove_vertex(v)` | remove $v$ and all its incident edges |
 | `remove_edge(e)` | remove edge $e$ |
 
@@ -140,21 +140,24 @@ Worth it only for dense graphs or when the matrix itself is the algorithm's work
 
 ### 3.5 Comparison
 
-| Operation | Edge list | Adj. list | Adj. map | Adj. matrix |
-|---|---|---|---|---|
-| space | $O(n+m)$ | $O(n+m)$ | $O(n+m)$ | $O(n^2)$ |
-| `vertex_count()`, `edge_count()` | $O(1)$ | $O(1)$ | $O(1)$ | $O(1)$ |
-| `vertices()` | $O(n)$ | $O(n)$ | $O(n)$ | $O(n)$ |
-| `edges()` | $O(m)$ | $O(m)$ | $O(m)$ | $O(m)$* |
-| `get_edge(u, v)` | $O(m)$ | $O(\min(d_u, d_v))$ | $O(1)$ exp. | $O(1)$ |
-| `degree(v)` | $O(m)$ | $O(1)$ | $O(1)$ | $O(n)$ |
-| `incident_edges(v)` | $O(m)$ | $O(d_v)$ | $O(d_v)$ | $O(n)$ |
-| `insert_vertex(x)` | $O(1)$ | $O(1)$ | $O(1)$ | $O(n^2)$ |
-| `remove_vertex(v)` | $O(m)$ | $O(d_v)$ | $O(d_v)$ | $O(n^2)$ |
-| `insert_edge(u, v, x)` | $O(1)$ | $O(1)$ | $O(1)$ exp. | $O(1)$ |
-| `remove_edge(e)` | $O(1)$ | $O(1)$ | $O(1)$ exp. | $O(1)$ |
+Read each row as one data structure ($d_v$ is the degree of $v$):
 
-(*scanning the matrix naively is $O(n^2)$; the book keeps a separate edge count/list.)
+| Structure | Memory | `get_edge(u, v)` | `degree(v)` | `incident_edges(v)` | add or remove an edge | add a vertex | `remove_vertex(v)` |
+|---|---|---|---|---|---|---|---|
+| Edge list | $O(n+m)$ | $O(m)$ | $O(m)$ | $O(m)$ | $O(1)$ | $O(1)$ | $O(m)$ |
+| Adjacency list | $O(n+m)$ | $O(\min(d_u, d_v))$ | $O(1)$ | $O(d_v)$ | $O(1)$ | $O(1)$ | $O(d_v)$ |
+| Adjacency map | $O(n+m)$ | $O(1)$ expected | $O(1)$ | $O(d_v)$ | $O(1)$ expected | $O(1)$ | $O(d_v)$ |
+| Adjacency matrix | $O(n^2)$ | $O(1)$ worst case | $O(n)$ | $O(n)$ | $O(1)$ | $O(n^2)$ | $O(n^2)$ |
+
+Three things are the same everywhere: asking for the number of vertices or edges takes constant
+time (each structure keeps counters), listing every vertex takes $O(n)$, and listing every edge
+takes $O(m)$ — except that a bare matrix must be scanned in $O(n^2)$ unless a separate collection
+of edges is kept alongside it.
+
+How to read the table when choosing: the edge list is hopeless for anything local to a vertex; the
+matrix is hopeless for anything proportional to a vertex's neighbourhood and for memory; the two
+adjacency structures are good at everything, and the map variant adds a fast test for whether two
+given vertices are adjacent.
 
 ## 4. Python implementation: adjacency map
 

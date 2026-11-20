@@ -475,7 +475,7 @@
   // ---------------------------------------------------------------- Ghibli stills & quotes
   const TRACK_FILM = { csapp: "laputa", python: "baron", "dsa-foundations": "mimi", "neet-arrays": "majo", "neet-window-stack": "howl",
     "neet-linked-trees": "totoro", "neet-heap-graphs": "mononoke", "neet-dp": "chihiro", "neet-greedy-math": "porco", sql: "kokurikozaka",
-    databases: "nausicaa", ml: "kazetachinu", fastapi: "ponyo", mlops: "karigurashi", "ai-eng": "kimitachi", "llm-practice": "kaguyahime", os: "ged", "linux-cli": "yamada", vim: "marnie" };
+    databases: "nausicaa", ml: "kazetachinu", fastapi: "ponyo", mlops: "karigurashi", "ai-eng": "kimitachi", "llm-practice": "kaguyahime", os: "ged", "linux-cli": "yamada", vim: "marnie", cicd: "umi", thinking: "omoide" };
   const Ghibli = {
     works: {}, list: [], quotes: [], note: "", terms: "",
     async load() {
@@ -627,8 +627,8 @@
   const ROADMAP = {
     pos: { csapp: [0, 0], python: [2, 0], sql: [4, 0], "dsa-foundations": [1, 1], fastapi: [2, 1], ml: [3, 1], databases: [4, 1],
       "neet-arrays": [1, 2], mlops: [3, 2], "ai-eng": [4, 2], "neet-window-stack": [0, 3], "neet-linked-trees": [1, 3], "llm-practice": [4, 3],
-      "neet-greedy-math": [0, 4], "neet-heap-graphs": [1, 4], "neet-dp": [2, 4], os: [0, 1], "linux-cli": [2, 2], vim: [2, 3] },
-    edges: [["csapp", "os"], ["linux-cli", "vim"], ["python", "dsa-foundations"], ["python", "fastapi"], ["python", "ml"], ["sql", "databases"], ["dsa-foundations", "neet-arrays"],
+      "neet-greedy-math": [0, 4], "neet-heap-graphs": [1, 4], "neet-dp": [2, 4], os: [0, 1], "linux-cli": [2, 2], vim: [2, 3], cicd: [3, 3], thinking: [3, 4] },
+    edges: [["csapp", "os"], ["linux-cli", "vim"], ["linux-cli", "cicd"], ["cicd", "thinking"], ["python", "dsa-foundations"], ["python", "fastapi"], ["python", "ml"], ["sql", "databases"], ["dsa-foundations", "neet-arrays"],
       ["neet-arrays", "neet-window-stack"], ["neet-arrays", "neet-linked-trees"], ["neet-window-stack", "neet-greedy-math"],
       ["neet-linked-trees", "neet-heap-graphs"], ["neet-linked-trees", "neet-dp"], ["ml", "mlops"], ["fastapi", "mlops"], ["databases", "mlops"],
       ["ml", "ai-eng"], ["ai-eng", "llm-practice"]],

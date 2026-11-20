@@ -24,7 +24,7 @@ codeword can be a prefix of another.
 
 ### 1.2 The Huffman coding algorithm
 
-Given a string $X$ of length $n$ with $d$ distinct characters, **Huffman's algorithm** builds an
+Starting from the text $X$ that is to be compressed, **Huffman's algorithm** builds an
 optimal prefix-code tree:
 
 ```
@@ -46,12 +46,12 @@ Huffman(X):
 At every step it merges the **two least frequent** trees. Rare characters are merged early, so they
 end up deep in the tree (long codes); frequent characters join late (short codes).
 
-**Example.** $X = $ `"a fast runner need never be afraid of the dark"` (46 characters). The
+**Example.** $X = $ `"she sells sea shells by the sea shore"` (37 characters, 11 of them distinct). The
 frequencies are:
 
-| char | space | a | b | d | e | f | h | i | k | n | o | r | s | t | u | v |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| freq | 9 | 5 | 1 | 3 | 7 | 3 | 1 | 1 | 1 | 4 | 1 | 5 | 1 | 2 | 1 | 1 |
+| char | space | a | b | e | h | l | o | r | s | t | y |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| freq | 7 | 2 | 1 | 7 | 4 | 4 | 1 | 1 | 8 | 1 | 1 |
 
 ```python-run
 import heapq
@@ -87,7 +87,7 @@ def decode(bits, tree):
             out.append(node); node = tree
     return "".join(out)
 
-X = "a fast runner need never be afraid of the dark"
+X = "she sells sea shells by the sea shore"
 tree, codes = huffman(X)
 for c, code in sorted(codes.items(), key=lambda kv: (len(kv[1]), kv[0])):
     print(repr(c), X.count(c), code)
@@ -96,7 +96,8 @@ print(len(X) * 8, "bits in 8-bit ASCII ->", len(encoded), "bits with Huffman")
 print(decode(encoded, tree) == X)
 ```
 
-The space (9 occurrences) gets a 2- or 3-bit code while characters occurring once get 5 or 6 bits.
+The most frequent symbols (`s`, `e` and the space) receive the shortest codes, while letters that
+occur only once sit deepest in the tree and receive the longest.
 The total encoded length is $\sum_c f(c) \cdot \text{depth}(c)$ — the *weighted external path
 length* of the tree. A handy fact: this total equals the **sum of the keys of all internal nodes**
 created during the algorithm, since each merge adds one bit to every character beneath it.
@@ -105,8 +106,8 @@ created during the algorithm, since each merge adds one bit to every character b
 `remove_min` and one `add` at $O(\log d)$: $O(d \log d)$, plus $O(n)$ to count frequencies. Total
 **$O(n + d\log d)$**.
 
-> **Proposition.** Huffman's algorithm constructs an optimal prefix code for a string of length $n$
-> with $d$ distinct characters in $O(n + d\log d)$ time.
+> **Proposition.** For a text of $n$ characters, $d$ of them distinct, Huffman's method builds a
+> best-possible prefix code in $O(n + d\log d)$ time.
 
 *Why it is optimal (sketch).* (1) In some optimal tree, the two least frequent characters are
 siblings at the deepest level — if not, swapping them with whatever is deepest cannot increase the
@@ -120,8 +121,8 @@ Huffman's algorithm is an instance of the **greedy method**: build a solution th
 choices, at each step making the choice that looks **best right now**, never reconsidering.
 
 Greedy algorithms are simple and fast, but they are only *correct* for problems with the
-**greedy-choice property**: a global optimum can be reached by a series of locally optimal choices
-starting from a well-defined initial configuration. Proving this property (usually by an exchange
+**greedy-choice property**: a chain of choices that each look best locally is guaranteed to end at
+a globally best solution. Proving this property (usually by an exchange
 argument) is the real work.
 
 | Problem | Greedy choice | Correct? |
@@ -152,9 +153,9 @@ prefix.
 
 ### 3.1 Standard tries
 
-Let $S$ be a set of $s$ strings over alphabet $\Sigma$ such that no string is a prefix of another
+Suppose we have $s$ strings over an alphabet $\Sigma$, none of which is a prefix of another
 (we can guarantee this by appending a terminator `$` to each string — or, in practice, by marking
-nodes as "end of word"). A **standard trie** for $S$ is an ordered tree where:
+nodes as "end of word"). Their **standard trie** is an ordered tree in which:
 
 - each node other than the root is labelled with a character of $\Sigma$;
 - the children of an internal node have distinct labels (kept in alphabetical order);

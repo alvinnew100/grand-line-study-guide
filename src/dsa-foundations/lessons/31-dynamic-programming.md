@@ -110,8 +110,8 @@ A **subsequence** of a string $X = x_0 x_1 \cdots x_{n-1}$ is any string
 $x_{i_1} x_{i_2} \cdots x_{i_k}$ with $i_1 < i_2 < \cdots < i_k$ — characters in order, but **not
 necessarily contiguous** (unlike a substring). `AAAG` is a subsequence of `CGATAATTGAGA`.
 
-**LCS problem:** given $X$ (length $n$) and $Y$ (length $m$), find a longest string $S$ that is a
-subsequence of both.
+**LCS problem:** given $X$ (length $n$) and $Y$ (length $m$), find a string $S$, as long as possible, that
+is a subsequence of each of them.
 
 Brute force — enumerate all $2^n$ subsequences of $X$ and test each against $Y$ in $O(m)$ — takes
 $O(2^n m)$.

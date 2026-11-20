@@ -53,16 +53,16 @@ for B in [2, 4, 16, 100, 256, 1000, 4096]:
 An **(a,b) tree** is a multiway search tree (see the (2,4)-tree lesson for the definition of
 multiway search and $d$-nodes) with integer parameters $2 \le a \le (b+1)/2$, such that:
 
-- **Size property:** each internal node has at least $a$ children — unless it is the root, which
-  may have as few as 2 — and at most $b$ children.
-- **Depth property:** all the external nodes have the same depth.
+- **Size property:** an internal node never has more than $b$ children, and never fewer than $a$ —
+  with one exception, the root, which is allowed to drop to 2.
+- **Depth property:** every external node sits at one and the same depth.
 
 A (2,4) tree is the special case $a = 2$, $b = 4$.
 
-> **Proposition.** The height of an (a,b) tree storing $n$ entries is $\Omega(\log n / \log b)$ and
-> $O(\log n / \log a)$.
+> **Proposition.** An (a,b) tree with $n$ entries has height at least proportional to
+> $\log n / \log b$ and at most proportional to $\log n / \log a$.
 
-*Justification.* Let $h$ be the height and $n'' = n + 1$ the number of external nodes. By the size
+*Why.* Let $h$ be the height and $n'' = n + 1$ the number of external nodes. By the size
 property, level 1 has at least 2 nodes (the root has ≥ 2 children), level 2 at least $2a$, and level
 $h$ at least $2a^{h-1}$; and at most $b^h$. So
 
@@ -136,8 +136,8 @@ $\Theta(B)$, and the height is
 
 $$O\!\left(\frac{\log n}{\log \lceil d/2 \rceil}\right) = O(\log_B n).$$
 
-> **Proposition.** A B-tree with $n$ entries has I/O complexity $O(\log_B n)$ for search or update
-> operations, and uses $O(n/B)$ blocks, where $B$ is the size of a block.
+> **Proposition.** With blocks of size $B$, a B-tree of $n$ entries occupies $O(n/B)$ blocks, and
+> each search, insertion or deletion performs $O(\log_B n)$ block transfers.
 
 *Why updates too:* a search reads one node per level; an insertion may split one node per level, and
 a deletion may fuse one node per level — each a constant number of block reads and writes. The space

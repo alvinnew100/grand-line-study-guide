@@ -14,23 +14,26 @@ the **minimum key** is served first. Keys can be any objects that are mutually c
 
 | Operation | Meaning |
 |---|---|
-| `P.add(k, v)` | insert an item with key `k` and value `v` |
+| `P.add(k, v)` | put a new entry into the queue: key `k`, value `v` |
 | `P.min()` | return (but do not remove) a tuple `(k, v)` with minimum key; error if empty |
 | `P.remove_min()` | remove and return a `(k, v)` with minimum key; error if empty |
 | `P.is_empty()`, `len(P)` | as usual |
 
 Several items may share a key; then `min` may return any of them.
 
-| Operation | Return | Priority queue |
+| Operation | Returns | Contents afterwards |
 |---|---|---|
-| `P.add(5,'A')` | | {(5,A)} |
-| `P.add(9,'C')` | | {(5,A), (9,C)} |
-| `P.add(3,'B')` | | {(3,B), (5,A), (9,C)} |
-| `P.add(7,'D')` | | {(3,B), (5,A), (7,D), (9,C)} |
-| `P.min()` | (3,B) | unchanged |
-| `P.remove_min()` | (3,B) | {(5,A), (7,D), (9,C)} |
-| `P.remove_min()` | (5,A) | {(7,D), (9,C)} |
+| `P.add(6, 'x')` | | {(6,x)} |
+| `P.add(2, 'y')` | | {(2,y), (6,x)} |
+| `P.add(8, 'z')` | | {(2,y), (6,x), (8,z)} |
+| `P.min()` | (2,y) | unchanged |
+| `P.add(4, 'w')` | | {(2,y), (4,w), (6,x), (8,z)} |
+| `P.remove_min()` | (2,y) | {(4,w), (6,x), (8,z)} |
+| `P.remove_min()` | (4,w) | {(6,x), (8,z)} |
 | `len(P)` | 2 | |
+| `P.remove_min()` | (6,x) | {(8,z)} |
+
+Entries come out in key order no matter what order they went in.
 
 ### The composition pattern
 
@@ -68,8 +71,8 @@ One side is always linear. A heap balances both at $O(\log n)$.
 
 A **binary heap** is a binary tree $T$ storing items at its positions that satisfies two properties:
 
-1. **Heap-order property** (relational): for every position $p$ other than the root, the key at $p$
-   is **greater than or equal to** the key at $p$'s parent. Consequently keys along any root-to-leaf
+1. **Heap-order property** (relational): every non-root position holds a key that is **at
+   least as large as** the key stored in its parent. Consequently keys along any root-to-leaf
    path are nondecreasing and **the minimum key is at the root**.
 2. **Complete binary tree property** (structural): levels $0, 1, \ldots, h-1$ have the maximum
    possible number of nodes ($2^i$ at level $i$), and the nodes at level $h$ occupy the **leftmost**
@@ -138,9 +141,9 @@ Because the tree is complete, the $n$ items occupy exactly indices $0..n-1$ with
 "last position" is simply index $n - 1$; adding is `append`, removing the last is `pop`. No node
 objects, no references — this is why heaps are so fast in practice.
 
-The heap drawn above is the array
-
-`[(4,C), (5,A), (6,Z), (15,K), (9,F), (7,Q), (20,B), (16,X), (25,J), (14,E), (12,H), (11,S), (13,W)]`.
+Reading the drawing above level by level, left to right, gives exactly the array layout: the root
+first, then its two children, then the four grandchildren, and finally the six entries of the
+bottom level — thirteen cells, indices 0 to 12, with no holes.
 
 ```python-run
 class Empty(Exception):
@@ -214,11 +217,12 @@ Now at index 1 (parent 0, key 4): swap. At the root: stop. Result
 
 ### Analysis
 
-| Operation | Running time |
+| What you ask for | Cost |
 |---|---|
-| `len(P)`, `P.is_empty()`, `P.min()` | $O(1)$ |
-| `P.add(k, v)` | $O(\log n)$ (amortised if the array resizes) |
-| `P.remove_min()` | $O(\log n)$ (amortised likewise) |
+| `P.add(k, v)` | $O(\log n)$ — amortised if the underlying array has to grow |
+| `P.remove_min()` | $O(\log n)$ — amortised likewise |
+| `P.min()` | $O(1)$: the answer sits at index 0 |
+| `len(P)`, `P.is_empty()` | $O(1)$ |
 
 Space $O(n)$. A heap handles a sequence of $n$ mixed operations in $O(n \log n)$, versus $O(n^2)$ for
 the list versions.

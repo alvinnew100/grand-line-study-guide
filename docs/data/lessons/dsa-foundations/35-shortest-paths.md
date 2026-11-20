@@ -85,10 +85,10 @@ Each label is finalised at the moment its vertex is pulled into the cloud.
 
 ### 2.2 Why it works
 
-> **Proposition.** In Dijkstra's algorithm, whenever a vertex $v$ is pulled into the cloud, the
-> label $D[v]$ equals $d(s, v)$, the length of a shortest path from $s$ to $v$.
+> **Proposition.** At the moment Dijkstra's algorithm moves a vertex $v$ into the cloud, its label
+> is already exact: $D[v] = d(s, v)$.
 
-*Justification (by contradiction).* Suppose $z$ is the **first** vertex pulled into the cloud with
+*Why (by contradiction).* Suppose $z$ is the **first** vertex pulled into the cloud with
 $D[z] > d(s, z)$. Consider a true shortest path $P$ from $s$ to $z$. Let $y$ be the first vertex on
 $P$ that is *not* in the cloud at that moment (possibly $y = z$), and $x$ its predecessor on $P$
 (in the cloud; possibly $x = s$). Since $x$ was pulled in correctly, $D[x] = d(s, x)$, and when $x$

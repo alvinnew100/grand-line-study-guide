@@ -1,8 +1,8 @@
 # Pattern matching: brute force, Boyer-Moore, KMP
 
 Text is everywhere: documents, web pages, source code, logs, DNA sequences. The most basic question
-about text is **pattern matching**: given a text string $T$ of length $n$ and a pattern string $P$
-of length $m$, find whether $P$ is a substring of $T$ — and where. Every `Ctrl+F`, every `grep`,
+about text is **pattern matching**: we hold a long text $T$ ($n$ characters) and a shorter pattern $P$ ($m$ characters), and
+want to know if — and where — $P$ occurs inside $T$. Every `Ctrl+F`, every `grep`,
 every `str.find` solves this problem. This lesson develops three algorithms from the book: brute
 force, **Boyer-Moore** and **Knuth-Morris-Pratt (KMP)**.
 
@@ -47,8 +47,8 @@ def count_comparisons(T, P):
 print("worst case comparisons:", count_comparisons("a" * 2000 + "b", "a" * 50 + "b"))
 ```
 
-**Running time:** the outer loop runs at most $n - m + 1$ times and the inner loop at most $m$
-times: **$O(nm)$** worst case. The worst case occurs for inputs like $T = aaa\ldots ab$,
+**Running time:** there are $n - m + 1$ candidate alignments and each may compare up to $m$
+characters: **$O(nm)$** worst case. The worst case occurs for inputs like $T = aaa\ldots ab$,
 $P = aaab$: almost the whole pattern matches at every alignment before failing. On typical English
 text mismatches happen quickly and brute force is close to linear, which is why it is still
 perfectly usable for short searches.
@@ -64,13 +64,13 @@ on two heuristics:
 
 - **Looking-glass heuristic:** when testing an alignment, compare the pattern against the text
   **backwards**, from the last character of $P$ to the first.
-- **Character-jump heuristic:** on a mismatch of text character $T[i] = c$ against $P[k]$:
+- **Character-jump heuristic:** when the text character $c = T[i]$ fails to match $P[k]$:
   - if $c$ does **not occur anywhere in $P$**, shift $P$ completely past $T[i]$ — no alignment
     overlapping this character can match;
   - otherwise, shift $P$ until the **last occurrence** of $c$ in $P$ is aligned with $T[i]$.
 
-Define the **last-occurrence function**: `last(c)` is the index of the last (rightmost) occurrence of
-$c$ in $P$, or $-1$ if $c$ is not in $P$. For $P = $ `abacab`:
+Define the **last-occurrence function**: `last(c)` gives the position of the rightmost copy of
+$c$ inside $P$, and $-1$ when $P$ does not contain $c$. For $P = $ `abacab`:
 
 | c | a | b | c | d |
 |---|---|---|---|---|
@@ -157,14 +157,15 @@ pattern alone, the best way to continue.
 ### 4.1 The failure function
 
 The **failure function** $f(k)$ is the length of the **longest proper prefix of $P[0:k+1]$ that is
-also a suffix of $P[0:k+1]$** ("proper" = not the whole string). For $P = $ `amalgamation`:
+also a suffix of $P[0:k+1]$** ("proper" = not the whole string). For $P = $ `abracadabra`:
 
-| k | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| P[k] | a | m | a | l | g | a | m | a | t | i | o | n |
-| f(k) | 0 | 0 | 1 | 0 | 0 | 1 | 2 | 3 | 0 | 0 | 0 | 0 |
+| k | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| P[k] | a | b | r | a | c | a | d | a | b | r | a |
+| f(k) | 0 | 0 | 0 | 1 | 0 | 1 | 0 | 1 | 2 | 3 | 4 |
 
-E.g. $f(7) = 3$: `amalgama` has prefix `ama` equal to its suffix `ama`.
+E.g. $f(10) = 4$: the whole word both starts and ends with `abra`; and $f(7) = 1$, because
+`abracada` starts and ends with `a` but with nothing longer.
 
 **Use:** if we have matched $P[0:k]$ (so $k$ characters) and $P[k]$ mismatches the current text
 character, the longest prefix of $P$ that could still be "in progress" has length $f(k-1)$. So set
@@ -208,7 +209,7 @@ def find_kmp(T, P):
             j += 1
     return -1                         # reached end without match
 
-print(compute_kmp_fail("amalgamation"))
+print(compute_kmp_fail("abracadabra"))
 print(compute_kmp_fail("abacab"), find_kmp("abacaabaccabacabaabb", "abacab"))
 ```
 
@@ -247,8 +248,8 @@ loop either:
 So every iteration increases $j$ or $s$ (or both), and both are at most $n$: at most $2n$
 iterations. The same argument bounds the failure-function computation by $2m$.
 
-> **Proposition.** The Knuth-Morris-Pratt algorithm performs pattern matching on a text of length
-> $n$ and a pattern of length $m$ in **$O(n + m)$** time.
+> **Proposition.** KMP locates a length-$m$ pattern inside a length-$n$ text using **$O(n + m)$**
+> time in the worst case.
 
 This is worst-case optimal — any algorithm must read the input.
 

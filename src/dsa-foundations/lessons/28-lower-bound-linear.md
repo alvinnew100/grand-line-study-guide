@@ -58,8 +58,8 @@ $$\log(n!) \ge \log\left(\left(\frac{n}{2}\right)^{n/2}\right) = \frac{n}{2}\log
 
 which is $\Omega(n \log n)$.
 
-> **Proposition.** The running time of any comparison-based algorithm for sorting an $n$-element
-> sequence is $\Omega(n\log n)$ in the worst case.
+> **Proposition.** No comparison-based sorting algorithm can beat $\Omega(n\log n)$ on its worst-case
+> input of $n$ elements.
 
 So merge-sort and heap-sort are **asymptotically optimal** among comparison sorts. (The bound also
 holds for the average case and for randomised algorithms.)
@@ -80,7 +80,7 @@ for n in [3, 10, 100, 1000]:
 
 ## 2. Bucket-sort
 
-Suppose the $n$ entries have **integer keys in the range $[0, N-1]$**. Then we can sort without a
+Suppose every one of the $n$ entries carries an **integer key between $0$ and $N-1$**. Then we can sort without a
 single comparison between keys:
 
 ```
@@ -96,7 +96,7 @@ bucketSort(S):
 Phase 1 distributes entries into buckets using the key as an index: $O(n)$. Phase 2 collects the
 buckets in order: $O(n + N)$.
 
-> Bucket-sort runs in **$O(n + N)$** time and uses $O(n + N)$ space.
+> Bucket-sort therefore costs **$O(n + N)$** in both time and memory.
 
 If $N$ is $O(n)$, that is **linear** time. It is efficient when the key range is small relative to
 $n$; with 32-bit keys ($N = 2^{32}$) the bucket array alone would be enormous.
@@ -142,22 +142,27 @@ $d$-tuples such as multi-digit numbers and fixed-length strings — ordered
 **Radix-sort** sorts by applying a **stable** bucket-sort once per component. The question is the
 order: first component first, or last?
 
-Try $S = ((3,3), (1,5), (2,5), (1,2), (2,3), (1,7), (3,2), (2,2))$.
+Try $S = ((2,1), (3,4), (1,4), (3,1), (1,2), (2,4), (2,2), (1,1))$.
 
 - **First component, then second:**
-  after sorting by first: $(1,5), (1,2), (1,7), (2,5), (2,3), (2,2), (3,3), (3,2)$;
-  then by second: $(1,2), (2,2), (3,2), (2,3), (3,3), (1,5), (2,5), (1,7)$ — **not** lexicographic.
+  a stable pass on the first component gives $(1,4), (1,2), (1,1), (2,1), (2,4), (2,2), (3,4), (3,1)$;
+  a second pass on the second component then gives
+  $(1,1), (2,1), (3,1), (1,2), (2,2), (1,4), (2,4), (3,4)$ — sorted by the *second* component, which
+  is **not** lexicographic order.
 - **Second component, then first:**
-  after sorting by second: $(1,2), (3,2), (2,2), (3,3), (2,3), (1,5), (2,5), (1,7)$;
-  then stably by first: $(1,2), (1,5), (1,7), (2,2), (2,3), (2,5), (3,2), (3,3)$ — **correct**. (Within each group of equal first components, the stable sort kept the order produced by the first pass, which was already sorted by second component.)
+  the pass on the second component gives $(2,1), (3,1), (1,1), (1,2), (2,2), (3,4), (1,4), (2,4)$;
+  the stable pass on the first component then gives
+  $(1,1), (1,2), (1,4), (2,1), (2,2), (2,4), (3,1), (3,4)$ — **correct**. Inside each group of equal
+  first components, the stable pass left the entries in the order the earlier pass had produced,
+  which was already increasing in the second component.
 
 The rule: sort by the **least significant** component first, and finish with the most significant.
 The final pass puts the most significant component in order; among entries that tie on it,
 stability preserves the order established by the earlier passes. This is **LSD (least significant
 digit) radix-sort**.
 
-> **Proposition.** Let $S$ be a sequence of $n$ key–value pairs whose keys are $d$-tuples
-> $(k_1, \ldots, k_d)$ with each $k_i$ an integer in $[0, N-1]$. Radix-sort sorts $S$
+> **Proposition.** Take $n$ entries whose keys are $d$-tuples
+> $(k_1, \ldots, k_d)$ with each $k_i$ an integer in $[0, N-1]$. Radix-sort arranges them
 > lexicographically in **$O(d(n + N))$** time.
 
 For $n$ integers below $n^c$ (constant $c$), write them in base $n$: $d = c$ digits, $N = n$, total

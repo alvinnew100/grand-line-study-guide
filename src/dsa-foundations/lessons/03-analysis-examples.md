@@ -191,8 +191,8 @@ prime when $i > 1$" is false, since $2^4 - 1 = 15 = 3 \cdot 5$.
 
 ### 7.2 The "contra" attack
 
-- **Contrapositive.** To prove "if $p$ then $q$", prove "if not $q$ then not $p$". Example: if $ab$
-  is even then $a$ is even or $b$ is even. Contrapositive: if $a$ and $b$ are both odd, then
+- **Contrapositive.** To prove "if $p$ then $q$", prove "if not $q$ then not $p$". Example: whenever a product $ab$
+  is even, at least one of the two factors is even. Contrapositive: if $a$ and $b$ are both odd, then
   $a = 2j+1$, $b = 2k+1$ and $ab = 4jk + 2j + 2k + 1$ is odd. Done.
 - **De Morgan's laws** help form negations: not ($p$ or $q$) = (not $p$) and (not $q$).
 - **Contradiction.** Assume the statement is false and derive something absurd. Example: if $ab$ is
@@ -207,16 +207,19 @@ To prove $q(n)$ for all $n \ge 1$: show the **base case** $q(1)$ (perhaps a few 
 **Example.** $\sum_{i=1}^n i = n(n+1)/2$. Base: $n = 1$ gives $1 = 1 \cdot 2 / 2$. Step:
 $\sum_{i=1}^{n} i = n + \sum_{i=1}^{n-1} i = n + \frac{(n-1)n}{2} = \frac{n(n+1)}{2}$.
 
-**A second example (two base cases).** With $F(1) = 1$, $F(2) = 2$ and $F(n) = F(n-2) + F(n-1)$,
-the book proves $F(n) < 2^n$. Base cases: $1 < 2$ and $2 < 4$. Step: for $n > 2$,
-$F(n) = F(n-2) + F(n-1) < 2^{n-2} + 2^{n-1} < 2^{n-1} + 2^{n-1} = 2^n$. Two base cases are needed
-because the step reaches back two values.
+**A second example (two base cases).** Define $G(1) = 1$, $G(2) = 3$ and, from then on, each term
+as the sum of the previous two: $1, 3, 4, 7, 11, 18, \ldots$ Claim: $G(n) < 2^n$ for every
+$n \ge 1$. Base cases: $1 < 2$ and $3 < 4$. Step: for $n > 2$,
+$G(n) = G(n-1) + G(n-2) < 2^{n-1} + 2^{n-2} < 2^{n-1} + 2^{n-1} = 2^n$. Two base cases are needed
+because the step reaches back two values; checking only $G(1)$ would leave $G(2)$ — and therefore
+everything after it — unsupported.
 
-**A cautionary "proof".** An exercise in the book offers a bogus induction that $F(n)$ is $O(n)$:
-"$F(n-2)$ is $O(n-2)$ and $F(n-1)$ is $O(n-1)$, so their sum is $O(n)$." The flaw is that big-O
-hides a constant, and the induction silently lets that constant grow at every step — after $n$
-steps it is no longer a constant at all. Never induct on a statement containing big-O; induct on
-an explicit inequality with a fixed constant instead.
+**A cautionary "proof".** Here is a tempting but bogus induction claiming that the same sequence
+grows only linearly, i.e. is $O(n)$: "by the hypothesis the two earlier terms are each linear, and
+a sum of two linear quantities is linear." The flaw is that big-O hides a constant, and this
+argument silently lets that constant grow at every step — after $n$ steps it is no longer a
+constant at all. Never induct on a statement containing big-O; induct on an explicit inequality
+with a fixed constant instead.
 
 ### 7.4 Loop invariants
 
@@ -240,7 +243,7 @@ def find(S, val):
     return -1
 ```
 
-Invariant $L_j$: *`val` is not equal to any of the first $j$ elements of $S$.* Initially $j = 0$ and
+Invariant $L_j$: *none of $S[0], \ldots, S[j-1]$ equals `val`.* Initially $j = 0$ and
 the claim is vacuous. If the iteration does not return, $S[j] \ne$ `val`, so $L_{j+1}$ holds. If the
 loop ends with $j = n$, $L_n$ says `val` is nowhere in $S$, so returning $-1$ is correct.
 
