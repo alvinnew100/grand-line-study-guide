@@ -1,5 +1,35 @@
 # Longest increasing subsequence and patience sorting
 
+> **Before this lesson:** read [The DP framework](#/lesson/neet-dp/dp-framework) and
+> [Linear DP: stairs, robbers and decoders](#/lesson/neet-dp/dp-linear). Binary search (finding a position in a
+> sorted list by repeatedly halving the range) is used in the second half and is explained when it
+> appears.
+
+## In plain words
+
+Take a list of numbers and cross some out so that what remains goes **up** from left to right. The
+**longest increasing subsequence** — **LIS** for short — is the longest list you can leave behind.
+For `[10, 9, 2, 5, 3, 7]` you can keep `2, 5, 7` (or `2, 3, 7`): length 3.
+
+An everyday picture: children standing in a line in a fixed order, and you want to pick as many as
+possible so that, reading along the line, each chosen child is taller than the previous chosen one.
+You may skip children but you may not move them.
+
+Why it matters for a job: LIS is a classic interview question with two well-known solutions, a slower
+one and a faster one, so it tests whether you can improve an algorithm. It also sits inside real
+tools: file-comparison (diff) programs use it, and "longest chain of things that fit inside each
+other" problems reduce to it.
+
+Words used below:
+
+- **Subsequence** — what remains after deleting items without reordering. Not necessarily neighbours.
+- **Strictly increasing** — each number is *greater than* the one before; equal numbers are not allowed.
+- **O(n²)** and **O(n log n)** — step counts. For a list of 100,000 numbers, n² is ten billion steps
+  (too slow) while n log n is under two million (instant).
+- **Binary search** — finding where a value belongs in a *sorted* list by checking the middle and
+  discarding half each time. Python's `bisect_left(sorted_list, x)` returns the first position whose
+  value is `>= x`.
+
 The Longest Increasing Subsequence (LIS) problem is the cleanest example of a DP whose state is
 "the best answer **ending at** index `i`" — and it has a famous speed-up from O(n²) to O(n log n)
 that comes from a card game. Both versions are interview staples, and the "ending at" idea transfers
@@ -379,6 +409,21 @@ print(max_envelopes([[5, 4], [6, 4], [6, 7], [2, 3]]))   # 3: [2,3] -> [5,4] -> 
 - Patience sorting keeps the smallest tail per length; `tails` stays sorted, so binary search gives
   O(n log n).
 - `bisect_left` for strict, `bisect_right` for non-decreasing.
+
+## Glossary
+
+| Term | Meaning in plain words |
+|---|---|
+| **Subsequence** | Items kept in their original order after deleting others; gaps allowed. |
+| **LIS** | Longest increasing subsequence. |
+| **Strictly increasing** | Each item greater than the previous one (no ties). |
+| **'Ending at i' state** | The best answer among solutions whose last item is exactly item `i`. |
+| **Parent pointer** | A stored note of which earlier item came before, used to rebuild the answer. |
+| **Patience sorting** | A card-pile method whose number of piles equals the LIS length. |
+| **tails** | For each length, the smallest possible last value of an increasing subsequence of that length. |
+| **Binary search** | Halving a sorted range repeatedly to find a position in about log₂ n steps. |
+| **bisect_left / bisect_right** | Python functions returning the first position with value ≥ x / > x in a sorted list. |
+| **Invariant** | A statement that stays true every time around a loop. |
 
 ## Check yourself
 

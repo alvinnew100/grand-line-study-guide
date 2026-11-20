@@ -1,5 +1,35 @@
 # Counting knapsacks and state machines
 
+> **Before this lesson:** read [Knapsack: 0/1 and unbounded, derived from scratch](#/lesson/neet-dp/dp-knapsack)
+> for the idea of a budget and the loop-direction rule, and
+> [Linear DP: stairs, robbers and decoders](#/lesson/neet-dp/dp-linear) for rolling variables.
+
+## In plain words
+
+Sometimes knowing *where you are* in a list is not enough to decide what can happen next. You also
+need one more fact. This lesson shows the two most common "one more fact" situations:
+
+1. **How much budget is left.** Counting the ways to pay an amount with coins needs both "which coin
+   types have I already decided about" and "how much is still to pay".
+2. **What mode you are in.** When trading a share you are either *holding* it or *not holding* it,
+   and that decides whether you may buy or sell today. A list of modes with rules for moving between
+   them is called a **state machine** — like a traffic light, which is always in exactly one of
+   red / amber / green and changes according to fixed rules.
+
+Adding that extra fact turns a one-row table into a table with several rows, which is why these count
+as two-dimensional (2-D) dynamic programming (DP) problems.
+
+Why it matters for a job: "count the ways" and "best profit under trading rules" are standard
+interview questions, and state machines are everywhere in real software (order status, connection
+status, user sessions).
+
+Words used below:
+
+- **Combination** — a selection where order does not matter. **Permutation** — order matters.
+- **Mode** — which situation you are in right now (holding, resting, …).
+- **Transition** — a permitted move from one mode to another.
+- **−∞ (minus infinity)** — used as "this situation is impossible so far"; in Python `float("-inf")`.
+
 Two ideas turn many "1-D looking" problems into 2-D DP:
 
 1. **A second index for a budget.** Coin Change II, Target Sum and the 0/1 knapsack all have state
@@ -264,6 +294,21 @@ the state.
 - Counting combinations needs a canonical order of decisions: item types outer, amounts inner.
 - Target Sum is a counting subset-sum after a little algebra.
 - State machines: draw the diagram, write one line per mode, update simultaneously.
+
+## Glossary
+
+| Term | Meaning in plain words |
+|---|---|
+| **Budget dimension** | An extra table index for the amount or capacity still available. |
+| **Combination** | A choice of items where order is ignored. |
+| **Permutation** | A choice of items where different orders count separately. |
+| **Canonical order** | One agreed order of making decisions, so each combination is counted once. |
+| **Running sum** | The total so far while moving through a list. |
+| **Parity** | Whether a number is odd or even. |
+| **State machine** | A fixed set of modes plus rules (transitions) for moving between them. |
+| **Mode** | The situation you are in at the end of a step, such as hold / sold / rest. |
+| **Transition** | One allowed move between modes, possibly with a gain or cost. |
+| **Cooldown** | A forced waiting day after selling. |
 
 ## Check yourself
 

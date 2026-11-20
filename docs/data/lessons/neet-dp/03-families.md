@@ -1,5 +1,34 @@
 # A field guide to DP families
 
+> **Before this lesson:** read [From recursion to dynamic programming](#/lesson/neet-dp/dp-from-recursion) and
+> [The DP framework](#/lesson/neet-dp/dp-framework). You should know what a *state* and a *recurrence* are.
+
+## In plain words
+
+A **family** of dynamic programming (DP) problems is a group of problems that are solved with the
+same *shape* of table. Think of recipes: once you know how to make one soup, most other soups are the
+same steps with different ingredients. If you can look at a new problem and say "this is a soup", you
+already know most of the method.
+
+This lesson is a tour of the main families, with one small runnable example of each. You are **not**
+expected to master them here — each gets its own lesson later. The goal is recognition: reading a
+problem statement and guessing what the table will look like.
+
+Why it matters for a job: in an interview you have a few minutes to pick an approach. Recognising the
+family turns a blank page into "I need a table indexed by position and remaining budget", which is
+most of the way to the answer.
+
+Words used below, in plain terms:
+
+- **Sequence** — an ordered list of things (numbers in a list, letters in a string).
+- **Subsequence** — what is left after deleting some items without reordering the rest.
+  **Substring / subarray** — a run of neighbouring items, with no gaps.
+- **Grid** — a table of rows and columns, written `grid[row][column]`.
+- **Interval** — a run of neighbouring positions from `i` to `j`.
+- **Bitmask** — a whole number whose binary digits (bits) are used as a row of on/off switches, one
+  switch per item.
+- **Mod / modulo** — the remainder after division; `17 % 5` is 2.
+
 Thousands of DP problems exist, but they cluster into a handful of **families** that share a state
 shape and a recurrence template. Recognising the family is often 80% of the solution: once you know
 "this is an interval DP", you already know the state (`l, r`), the recurrence (try every split), and
@@ -313,6 +342,22 @@ print(paint_houses([[17, 2, 17], [16, 16, 5], [14, 3, 19]]))   # 10 = 2 + 5 + 3
 - Interval DP (matrix chain) and two-sequence DP (LCS) are the two examples Goodrich uses to introduce
   DP; both are O(n³)/O(nm) table fills replacing exponential searches.
 - Bitmask and digit DP are exponential/large-domain problems tamed by compact states.
+
+## Glossary
+
+| Term | Meaning in plain words |
+|---|---|
+| **Family** | A group of DP problems sharing the same kind of state and recurrence. |
+| **Sequence DP** | State is a position in one list or string. |
+| **Two-sequence DP** | State is a pair of positions, one in each of two strings. |
+| **Grid DP** | State is a cell of a grid; the table has the grid's shape. |
+| **Knapsack** | Choosing items under a budget; state is (items considered, budget left). |
+| **Interval DP** | State is a contiguous range (i, j); the recurrence tries every split point. |
+| **State machine** | State includes a small 'mode' (for example holding a share or not). |
+| **Bitmask DP** | State includes a set of used items stored as the bits of an integer. |
+| **Digit DP** | Counting numbers up to N by building them one digit at a time. |
+| **Tree DP** | State is a node of a tree; a node's answer combines its children's answers. |
+| **Topological order** | An order of states in which everything a state depends on comes earlier. |
 
 ## Check yourself
 

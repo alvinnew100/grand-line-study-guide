@@ -1,5 +1,35 @@
 # Interval DP: matrix chains and burst balloons
 
+> **Before this lesson:** read [The DP framework](#/lesson/neet-dp/dp-framework) and
+> [Grid DP and DP on DAGs](#/lesson/neet-dp/dp-grids) (two-index tables and fill order). The palindrome table in
+> [Palindromes, products and word breaks](#/lesson/neet-dp/dp-palindromes) was a first taste of interval states.
+
+## In plain words
+
+An **interval** is a run of neighbours in a row: items number `i` up to `j`. In **interval DP**
+(interval dynamic programming) the table stores one answer for every such run — "the best result
+using only items `i` to `j`" — and long runs are solved by cutting them into two shorter runs whose
+answers are already in the table.
+
+An everyday picture: breaking a chocolate bar into single squares where each break has a cost that
+depends on the piece being broken. Whatever you do, some break happens **last** (or first), leaving
+two smaller bars that are then handled separately. Try every position for that break, add the best
+answers for the two smaller bars, and keep the cheapest.
+
+Why it matters for a job: these are the "hard" DP interview questions (Burst Balloons), and the same
+idea is used by database engines to choose the order in which to join tables, and by compilers to
+decide how to group operations.
+
+Words used below:
+
+- **Matrix** — a rectangular table of numbers with a number of rows and columns (its *dimensions*).
+  Two matrices can be multiplied only when the first one's column count equals the second one's row
+  count, and the work needed depends on the sizes.
+- **Scalar multiplication** — one ordinary multiplication of two numbers; we count these as the cost.
+- **Parenthesisation** — where the brackets go, i.e. which multiplications happen first.
+- **Split point `k`** — the place where an interval is cut into a left part and a right part.
+- **O(n³)** — about n × n × n steps; fine for n up to a few hundred.
+
 Some problems aren't about prefixes at all. When you repeatedly **merge, cut or remove** things from a
 row, the leftover pieces are contiguous ranges, and the natural subproblem is an **interval**
 `(i, j)`. Interval DP has a distinctive shape — an O(n²) table filled diagonal by diagonal with an
@@ -116,7 +146,7 @@ Design questions:
    so the two sides are independent.
 3. **What does the final operation cost**, given that both sides are already done?
 
-Top-down works just as well and removes the order question:
+Top-down works equally well and removes the order question:
 
 ```python-run
 from functools import cache
@@ -280,6 +310,21 @@ O(n²).
 - Matrix chain-product (Goodrich §13.3.1) is the canonical example; Burst Balloons is the same idea
   with open intervals and sentinel 1s.
 - Validate DPs against brute force on small random inputs.
+
+## Glossary
+
+| Term | Meaning in plain words |
+|---|---|
+| **Interval** | A contiguous run of positions from `i` to `j`. |
+| **Interval DP** | A table with one answer per interval, built from shorter intervals. |
+| **Split point** | The index `k` where an interval is divided into two parts. |
+| **Last operation** | The final step performed inside an interval; choosing it makes the two sides independent. |
+| **Matrix chain-product** | Choosing the order of multiplying a chain of matrices to minimise the work. |
+| **Scalar multiplication** | A single number-times-number multiplication, used as the unit of cost. |
+| **Open interval (l, r)** | Everything strictly between `l` and `r`, with `l` and `r` themselves left out. |
+| **Padding / sentinel** | Extra values added at the ends (here 1s) so the edges need no special handling. |
+| **Fill by length** | Computing all short intervals before longer ones. |
+| **Catalan numbers** | A fast-growing sequence counting, among other things, the ways to bracket a chain. |
 
 ## Check yourself
 

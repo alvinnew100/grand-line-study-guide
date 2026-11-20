@@ -1,5 +1,35 @@
 # The DP framework: state, recurrence, base, order, answer
 
+> **Before this lesson:** read [From recursion to dynamic programming](#/lesson/neet-dp/dp-from-recursion), which
+> explains recursion, memoization (caching a recursive function) and tabulation (filling a table with
+> loops). This lesson assumes those three words.
+
+## In plain words
+
+Solving a dynamic programming (DP) problem is like filling in a form with **five boxes**. If every
+box has a clear answer, writing the program is mostly copying the form into code. If a box is empty
+or vague, the program will be wrong no matter how carefully you type.
+
+An everyday analogy: planning the cheapest train journey across a country. (1) You decide what to
+write on each line of your notebook — "cheapest cost to reach city X". (2) You decide how one line is
+worked out from others — "cheapest to X = cheapest to a neighbouring city + the ticket between them".
+(3) You know one line for free — "reaching the start city costs 0". (4) You fill lines in an order
+where the lines you need are already filled. (5) You read the answer off the line for your
+destination. Those are the five boxes: **state, recurrence, base case, order, answer**.
+
+Why it matters for a job: interviewers mark the *explanation* as much as the code. Saying these five
+things out loud is the clearest way to show you understand a DP solution, and the same habit makes
+your own bugs easy to find.
+
+Words used from here on:
+
+- **State** — the small set of values that identifies one subproblem (for example "the first `i`
+  houses"). `dp[i]` or `best[i]` is the stored answer for that state.
+- **Recurrence** — the formula that computes one state's answer from the answers of smaller states.
+- **Index** — a position number in a list or string; Python counts from 0.
+- **Prefix** — the first part of a sequence. `s[:i]` is the prefix of length `i`. A **suffix** is the
+  last part, `s[i:]`.
+
 Every DP solution in this track — from Climbing Stairs to Burst Balloons — is specified by answering
 the same five questions. If you can write down all five before coding, the code is usually ten lines
 and correct on the first try. If you can't, no amount of coding will fix it.
@@ -128,6 +158,15 @@ Not always the last cell! Examples:
 Once the five answers exist, both implementations are mechanical. Here is Min Cost Climbing Stairs
 both ways:
 
+(The problem: `cost[i]` is the toll for leaving step `i`; you may climb 1 or 2 steps at a time and
+may start on step 0 or 1; find the cheapest way to get past the last step.)
+
+How to read the first function: `best(i)` is defined **inside** `min_cost_top_down` so that it can
+see the list `cost`. `@cache` stores each result. The `if i <= 1: return 0` line is the base case
+box; the `return min(...)` line is the recurrence box; `return best(n)` at the bottom is the answer
+box. The second function has the same three boxes, but the recursion is replaced by a list `best`
+and a `for` loop — that loop is the "order" box.
+
 ```python-run
 from functools import cache
 
@@ -158,7 +197,7 @@ print(min_cost_top_down(c), min_cost_bottom_up(c))
 > recurrence comes from deciding …, base cases are …, I'll fill in … order, and the answer is …" —
 > then write the code. Interviewers grade the reasoning as much as the code.
 
-## Reconstructing the solution, not just its value
+## Reconstructing the solution, not only its value
 
 DP tables usually store only values (lengths, counts, costs). To recover *which* choices achieve the
 optimum, either store a parent pointer per cell or **walk backwards** re-checking which option
@@ -234,6 +273,21 @@ Running time: $n \cdot T$ states × $O(1)$ = $O(nT)$. Compare $2^n$ for brute fo
 - The recurrence comes from a single decision; combine with min/max, `+`, or `or`.
 - Top-down and bottom-up are two implementations of the same five answers.
 - Reconstruct choices by walking the table backwards.
+
+## Glossary
+
+| Term | Meaning in plain words |
+|---|---|
+| **State** | The values that identify one subproblem; the 'label' of a table cell. |
+| **Recurrence (transition)** | The formula giving a state's answer from smaller states' answers. |
+| **Base case** | A state whose answer is known directly. |
+| **Evaluation order** | The order in which table cells are filled so that needed cells are ready. |
+| **Prefix / suffix** | The first `i` items of a sequence / the items from position `i` to the end. |
+| **Top-down** | Recursion plus a cache (memoization). |
+| **Bottom-up** | Loops filling a table (tabulation). |
+| **Sentinel** | A special stored value such as infinity meaning 'impossible'. |
+| **Reconstruction** | Recovering *which* choices gave the best value by walking back through the table. |
+| **Disjoint and exhaustive** | Cases that never overlap and together cover every possibility — required when adding counts. |
 
 ## Check yourself
 

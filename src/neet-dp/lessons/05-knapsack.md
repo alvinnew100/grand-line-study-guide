@@ -1,5 +1,37 @@
 # Knapsack: 0/1 and unbounded, derived from scratch
 
+> **Before this lesson:** read [The DP framework](#/lesson/neet-dp/dp-framework) and
+> [Linear DP: stairs, robbers and decoders](#/lesson/neet-dp/dp-linear) — especially the "take or skip" idea from
+> House Robber.
+
+## In plain words
+
+A **knapsack problem** is any problem where you pick things under a limit. The name comes from
+packing a rucksack (a knapsack): each item has a weight and a value, the bag can only carry so much,
+and you want the most valuable load.
+
+Many problems are the same thing in disguise. Paying an amount with coins: the "bag" is the amount
+and the "items" are coins. Splitting a list into two equal halves: the "bag" is half the total.
+Recognising the disguise is the skill.
+
+Two versions matter:
+
+- **0/1 knapsack** — each item is used **zero or one** time (that is what "0/1" means).
+- **Unbounded knapsack** — each kind of item can be used **as many times as you like** (like coins).
+
+The stored answers form a table with one row per item and one column per possible limit
+(0, 1, 2, … up to the bag's capacity). That is why limits must be reasonably small whole numbers.
+
+Why it matters for a job: Coin Change and Partition Equal Subset Sum are among the most frequently
+asked interview questions, and budget-limited selection appears in real work — choosing features for
+a release under a time budget, or packing files onto disks.
+
+Words used below:
+
+- **Capacity** — the limit (maximum weight, or the amount to pay).
+- **Fractional** — allowed to take part of an item. Our items are never fractional.
+- **Feasibility** — a yes/no question: "is it possible at all?"
+
 "Knapsack" is less a single problem than a **family** that shows up whenever you choose items subject
 to a budget: coins that must sum to an amount, numbers that must hit a target, jobs that must fit in a
 time limit. NeetCode's Coin Change, Partition Equal Subset Sum, Coin Change II and Target Sum are all
@@ -50,6 +82,12 @@ Items `(1,1) (3,4) (4,5) (5,7)`, capacity 7:
 | + (5,7) | 0 | 1 | 1 | 4 | 5 | 7 | 8 | **9** |
 
 Cell `(+(4,5), 7)`: skip gives 5; take gives `5 + best(row above, 3) = 5 + 4 = 9`.
+
+How to read the code that follows: `best` is a list of lists — `best[i][c]` is the cell in row `i`,
+column `c`. The outer loop goes through the items one at a time (row by row); the inner loop goes
+through every capacity `c` from 0 to `C`. Inside, `best[i][c] = best[i - 1][c]` copies the "skip"
+answer from the row above, and the `if w <= c` block replaces it with the "take" answer when the item
+fits and gives more value.
 
 ```python-run
 def knapsack_2d(weights, values, C):
@@ -273,6 +311,21 @@ table is intended.
 - 0/1 reads the previous row → 1-D loop **downward**; unbounded reads the current row → **upward**.
 - The objective (max, min, feasibility, count) only changes the base values and combine operator.
 - Counting combinations: items outer. Counting permutations: amounts outer.
+
+## Glossary
+
+| Term | Meaning in plain words |
+|---|---|
+| **Knapsack problem** | Choose items under a capacity limit to optimise or count something. |
+| **0/1 knapsack** | Each item may be used at most once. |
+| **Unbounded knapsack** | Each kind of item may be used any number of times. |
+| **Capacity** | The limit: maximum weight, target amount or target sum. |
+| **Subset sum** | Does some group of the numbers add up exactly to a target? |
+| **Combination** | A selection where order does not matter (1+2 is the same as 2+1). |
+| **Permutation** | An arrangement where order matters (1+2 differs from 2+1). |
+| **Pseudo-polynomial** | Fast only when the capacity is a small number, because the table has one column per unit of capacity. |
+| **Bitset** | A whole number used as a row of yes/no bits. |
+| **Sentinel (infinity)** | A stand-in value meaning 'not possible'. |
 
 ## Check yourself
 

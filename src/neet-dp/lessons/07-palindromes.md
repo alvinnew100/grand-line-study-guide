@@ -1,5 +1,36 @@
 # Palindromes, products and word breaks
 
+> **Before this lesson:** read [The DP framework](#/lesson/neet-dp/dp-framework) and
+> [Linear DP: stairs, robbers and decoders](#/lesson/neet-dp/dp-linear). The "ending at i" idea comes from
+> [Longest increasing subsequence and patience sorting](#/lesson/neet-dp/dp-lis).
+
+## In plain words
+
+This lesson covers three small topics that complete the one-dimensional problems:
+
+1. **Palindromes.** A palindrome is text that reads the same backwards — `level`, `noon`, `racecar`.
+   We want to find the longest palindrome hidden inside a string, and to count all of them. The trick
+   is that a palindrome is a mirror: start in its middle and step outwards one letter each side while
+   the two letters match.
+2. **Largest product of neighbours.** Find the run of neighbouring numbers in a list whose product
+   (all multiplied together) is biggest. The twist is negative numbers: multiplying two negatives gives
+   a positive, so a very bad running product can suddenly become the best one.
+3. **Word break.** Can a string with no spaces, like `applepie`, be cut into dictionary words
+   (`apple` + `pie`)? Think of stepping stones at each position of the string: a word is a jump from
+   one stone to another, and the question is whether the last stone can be reached.
+
+Why it matters for a job: all three are standard interview questions, and each trains a habit you
+will reuse — exploiting symmetry, carrying an extra piece of information per step, and treating a
+yes/no question as "which positions can I reach?"
+
+Words used below:
+
+- **Substring** — letters that are next to each other in the string (no gaps). **Subarray** is the
+  same idea for a list.
+- **Center** — the middle of a palindrome: one letter for odd lengths, the gap between two letters for
+  even lengths.
+- **Reachability** — whether a position can be reached at all by legal steps.
+
 This lesson collects the remaining 1-D NeetCode problems. They look unrelated — palindromic substrings,
 maximum product subarray, word break — but each teaches a distinct, reusable idea:
 
@@ -360,6 +391,21 @@ backtracking — applies to Decode Ways, Climbing Stairs and most other prefix p
 - Count palindromes = count successful expansion steps; include even centers.
 - Maximum Product Subarray carries both a max and a min "ending here".
 - Word Break is reachability over prefix positions; greedy matching fails.
+
+## Glossary
+
+| Term | Meaning in plain words |
+|---|---|
+| **Palindrome** | Text that reads the same forwards and backwards. |
+| **Substring / subarray** | A run of neighbouring characters / list items. |
+| **Center** | The middle point a palindrome is symmetric around (a letter or a gap). |
+| **Expand around center** | Growing a palindrome outward from its middle while the two ends match. |
+| **Kadane's algorithm** | The 'best run ending here' method for the largest sum of neighbours. |
+| **hi / lo** | The largest and smallest product of a run ending at the current position. |
+| **Reachability DP** | A yes/no table saying which positions can be reached. |
+| **Dictionary (word list)** | The set of allowed words in Word Break. |
+| **Trie** | A tree of letters that stores many words and shares their common beginnings. |
+| **Backtracking** | Trying choices one by one and undoing them, used when every solution must be listed. |
 
 ## Check yourself
 

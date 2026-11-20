@@ -1,5 +1,35 @@
 # String DP: LCS, edit distance and friends
 
+> **Before this lesson:** read [The DP framework](#/lesson/neet-dp/dp-framework) and
+> [Grid DP and DP on DAGs](#/lesson/neet-dp/dp-grids) — the tables here are grids whose rows and columns are labelled
+> with letters. The idea of a subsequence comes from
+> [Longest increasing subsequence and patience sorting](#/lesson/neet-dp/dp-lis).
+
+## In plain words
+
+**String DP** (dynamic programming on text) compares **two** pieces of text by filling a grid. One
+text labels the rows, the other labels the columns, and the square where row "first `i` letters of A"
+meets column "first `j` letters of B" stores the answer for those two beginnings.
+
+An everyday picture: a teacher marking a spelling test compares what you wrote with the correct word
+letter by letter. When the letters agree, move on in both words. When they disagree, something was
+added, dropped or swapped — try each explanation and keep the cheapest. The grid records the cheapest
+explanation for every pair of beginnings so nothing is worked out twice.
+
+Why it matters for a job: this is how `git diff` shows changed lines, how spell checkers suggest
+corrections, and how DNA sequences are compared. Longest Common Subsequence and Edit Distance are also
+two of the most commonly asked "hard-looking" interview questions.
+
+Words and abbreviations used below:
+
+- **String** — a piece of text; `"cat"` has 3 characters.
+- **Prefix** — the first few characters. `"ca"` is the prefix of length 2 of `"cat"`. The empty prefix
+  (length 0) is written ∅ in the tables.
+- **Subsequence** — characters kept in order after deleting others (`"ct"` from `"cat"`).
+- **LCS** — longest common subsequence: the longest text that is a subsequence of both strings.
+- **Edit distance** — the fewest single-character insertions, deletions and replacements needed to
+  turn one string into another.
+
 Two-string problems are where DP tables become genuinely two-dimensional — and they all share one
 skeleton. The state is a pair of prefix lengths `(i, j)`; the recurrence looks at the last characters
 `a[i-1]` and `b[j-1]`; the table has an empty-string row and column as its base. Learn the skeleton on
@@ -48,6 +78,15 @@ graph LR
 | D | 0 | 1 | 2 | 2 | 2 | 3 | 3 |
 | A | 0 | 1 | 2 | 2 | 3 | 3 | 4 |
 | B | 0 | 1 | 2 | 2 | 3 | 4 | **4** |
+
+How to read one cell: row `B` (the second row of letters), column `B` (first column of letters) holds
+1 because the prefixes `"AB"` and `"B"` share the single letter `B`. Its neighbour to the right,
+column `D`, is also 1: `"AB"` and `"BD"` still share only `B`.
+
+In the code below, `L` has one extra row and column for the empty prefix, which is why the loops use
+`L[j + 1][k + 1]` for characters `X[j]` and `Y[k]`. `lcs_string` then starts at the bottom-right cell
+and walks backwards: a matching pair of letters is part of the answer (step diagonally); otherwise
+step towards the neighbour with the larger number.
 
 ```python-run
 def lcs_table(X, Y):
@@ -269,6 +308,21 @@ once: 22 × 19 cells.
 - LCS and Edit Distance are the templates; counting, feasibility and pattern matching swap the
   combine operator and base cases.
 - Tables can be walked backwards to recover the actual alignment or edit script.
+
+## Glossary
+
+| Term | Meaning in plain words |
+|---|---|
+| **String** | A piece of text made of characters. |
+| **Prefix** | The first `i` characters of a string; the empty prefix has length 0. |
+| **Subsequence** | Characters kept in order after deleting some; gaps allowed. |
+| **LCS** | Longest common subsequence of two strings. |
+| **Edit distance (Levenshtein distance)** | Fewest insert / delete / replace operations to change one string into another. |
+| **Diagonal move** | Stepping from cell (i, j) to (i−1, j−1): both strings lose their last character. |
+| **Supersequence** | A string that contains another as a subsequence. |
+| **Interleaving** | Merging two strings while keeping each one's letters in their original order. |
+| **Regular expression** | A pattern describing a set of strings; here `.` matches any one character and `x*` matches zero or more `x`. |
+| **Walk-back (traceback)** | Following the table from the final cell to the start to recover the actual answer. |
 
 ## Check yourself
 

@@ -1,5 +1,39 @@
 # From recursion to dynamic programming
 
+> **Before this lesson:** you should be able to read a small Python function, a `for` loop and a list.
+> It helps to have met recursion (a function that calls itself) in
+> [Thinking recursively: four classic examples](#/lesson/dsa-foundations/recursion-examples) and Big-O notation in
+> [Big-O, Big-Omega and Big-Theta](#/lesson/dsa-foundations/asymptotic-notation) — but both are re-explained below.
+
+## In plain words
+
+**Dynamic programming** (shortened to **DP** everywhere in this track) is a way of solving a big
+problem by solving smaller versions of the same problem **once each**, writing the answers down, and
+reusing them instead of working them out again.
+
+An everyday picture: you are asked "what is 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1?" You count: eight. Now
+someone adds "+ 1" on the end. You do not count from the start again — you remember "eight" and say
+"nine". Remembering the earlier answer is the whole idea. A program that does *not* remember will
+recount everything, every time, and for some problems that recounting takes longer than the age of
+the universe.
+
+Why it matters for a job: DP questions are among the most common in coding interviews, and the same
+idea runs real systems — spell checkers ("how many edits between these two words?"), `git diff`,
+route planning, and text prediction all reuse stored sub-answers.
+
+Four words appear constantly, so here they are before anything else:
+
+- **Recursion** — a function that calls itself on a smaller input. Example: "the 5th number in a
+  sequence is the 4th plus the 3rd", where the 4th and 3rd are found the same way.
+- **Subproblem** — one of those smaller inputs (finding the 4th number is a subproblem of finding the
+  5th).
+- **Cache** — a place where finished answers are stored so they can be looked up later. In Python it
+  is usually a dictionary (a lookup table from a key to a value) or a list.
+- **Big-O**, written like `O(n)` — a rough count of how many steps a program takes as its input size
+  `n` grows. `O(n)` means "about `n` steps"; `O(n²)` means "about `n × n` steps"; `O(2ⁿ)` means the
+  steps **double** every time `n` grows by one, which becomes impossibly slow very quickly. We call
+  that last kind **exponential**.
+
 Dynamic programming (DP) has a reputation for being the scariest interview topic. It doesn't deserve
 it. DP is not a separate kind of algorithm so much as a **disciplined way of making a recursive
 solution fast**. If you can write a correct recursive function, you are most of the way to a DP
@@ -17,7 +51,7 @@ The road has four stops:
 
 Richard Bellman coined "dynamic programming" in the 1950s. "Programming" meant *planning* (as in a
 TV programme schedule or linear programming), not writing code, and "dynamic" referred to decisions
-unfolding over time. The name tells you little about the technique; just remember that DP solves
+unfolding over time. The name tells you little about the technique; the thing to remember is that DP solves
 problems by **combining answers to overlapping subproblems that are each solved once**.
 
 Goodrich, Tamassia and Goldwasser describe DP as resembling divide-and-conquer, with the crucial
@@ -28,6 +62,17 @@ recursion wasteful, and what DP exploits.
 
 The Fibonacci numbers are defined by `F(0) = 0`, `F(1) = 1` and `F(n) = F(n-1) + F(n-2)`. The
 definition translates directly into code:
+
+Read the code below line by line before running it:
+
+- `calls = 0` creates a counter so we can see how much work is done.
+- `def fib(n):` defines a function named `fib` that takes one number `n`.
+- `global calls` and `calls += 1` add one to the counter every time the function starts.
+- `if n < 2: return n` is the **base case**: the two smallest inputs (0 and 1) are answered directly,
+  with no further calls. Every recursive function needs a base case, or it would call itself forever.
+- `return fib(n - 1) + fib(n - 2)` is the **recursive case**: the function calls *itself* twice, on
+  the two smaller inputs, and adds the results.
+- The loop at the bottom runs `fib` for three inputs and prints the answer and the number of calls.
 
 ```python-run
 calls = 0
@@ -73,7 +118,7 @@ graph TD
 `f3` is computed twice, `f2` three times, `f1` five times. Every repeated node is a whole subtree of
 repeated work. Two properties make this a DP problem:
 
-- **Optimal (or simply correct) substructure** — the answer for `n` is built from answers for
+- **Optimal substructure** ("the big answer is built from smaller answers") — the answer for `n` is built from answers for
   smaller inputs.
 - **Overlapping subproblems** — the same smaller inputs appear again and again.
 
@@ -90,6 +135,12 @@ share work. That is why merge sort is divide-and-conquer and not DP.
 If the same call happens repeatedly, remember its answer the first time and look it up afterwards.
 That is **memoization**. In Python the cleanest way is `functools.cache` (Python 3.9+), or
 `functools.lru_cache(maxsize=None)` on older versions:
+
+The only change from the first program is one line, `@cache`, placed directly above the function.
+A line starting with `@` is called a **decorator**: it wraps the function with extra behaviour. This
+one keeps a hidden dictionary. Each time `fib(n)` is called it first looks in the dictionary; if the
+answer for that `n` is already there it is returned immediately, and the function body does not run.
+Otherwise the body runs once and the result is stored.
 
 ```python-run
 from functools import cache
@@ -156,9 +207,20 @@ print([fib(i) for i in range(15)])
 
 ## Stop 3: tabulation (bottom-up)
 
-In the memoized version, every call to `fib(n)` waited for `fib(n-1)` and `fib(n-2)`. So if we simply
+In the memoized version, every call to `fib(n)` waited for `fib(n-1)` and `fib(n-2)`. So if we
 compute values in **increasing** order of `n`, every dependency is already available when we need
 it. Store them in a list — the "table":
+
+What each line does:
+
+- `table = [0] * (n + 1)` makes a list of `n + 1` zeros, one slot for each of `F(0)` … `F(n)`.
+- `table[1] = 1` fills in the base case `F(1) = 1` (`table[0]` is already 0).
+- `for i in range(2, n + 1):` visits the slots 2, 3, …, n from left to right.
+- `table[i] = table[i - 1] + table[i - 2]` is the recurrence, reading two slots that were filled
+  earlier in the loop.
+- `return table[n]` — the last slot holds the answer.
+
+There is no recursion at all: a loop and a list.
 
 ```python-run
 def fib(n):
@@ -190,7 +252,11 @@ no hashing), and it has no recursion-depth problems.
 ## Stop 4: space optimisation
 
 Look at the loop body: `table[i]` reads only `table[i-1]` and `table[i-2]`. Everything older is dead
-weight. Keep just the last two values:
+weight. Keep only the last two values:
+
+In the code, `a, b = b, a + b` is Python's way of changing two variables **at the same moment**: the
+right-hand side (`b` and `a + b`) is worked out first using the old values, and only then stored into
+`a` and `b`. After one step `(a, b)` goes from `(0, 1)` to `(1, 1)`, then `(1, 2)`, `(2, 3)`, `(3, 5)`…
 
 ```python-run
 def fib(n):
@@ -300,6 +366,24 @@ the output itself is exponential, so you need backtracking.
 - Tabulation is bottom-up: fill a table in dependency order.
 - Space optimisation keeps only the window of the table that future steps read.
 - Running time = number of states × work per state.
+
+## Glossary
+
+| Term | Meaning in plain words |
+|---|---|
+| **Dynamic programming (DP)** | Solving a problem by solving each smaller version once, storing the answer and reusing it. |
+| **Recursion** | A function that calls itself on a smaller input. |
+| **Base case** | The smallest input, answered directly without any further calls. |
+| **Subproblem** | A smaller instance of the same problem. |
+| **Overlapping subproblems** | The same subproblem is needed again and again by different parts of the computation. |
+| **Optimal substructure** | The best answer to the whole problem is built from best answers to its subproblems. |
+| **Recursion tree** | A drawing of every call a recursive function makes, with each call's own calls drawn beneath it. |
+| **Memoization (top-down)** | Keeping the recursive function but caching each result the first time it is computed. |
+| **Tabulation (bottom-up)** | Filling a list or grid of answers with loops, smallest subproblems first. |
+| **State** | The inputs that identify one subproblem (here, the number `n`). |
+| **Space optimisation** | Keeping only the few stored answers that later steps still need. |
+| **DAG** | Directed acyclic graph: boxes joined by one-way arrows with no way to walk in a circle. |
+| **Exponential time** | The number of steps multiplies by a constant each time the input grows by one — unusable beyond small inputs. |
 
 ## Check yourself
 

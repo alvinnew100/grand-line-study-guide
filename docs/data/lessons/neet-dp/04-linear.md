@@ -1,5 +1,32 @@
 # Linear DP: stairs, robbers and decoders
 
+> **Before this lesson:** read [From recursion to dynamic programming](#/lesson/neet-dp/dp-from-recursion) and
+> [The DP framework](#/lesson/neet-dp/dp-framework). You should recognise the five boxes: state, recurrence, base
+> case, order, answer.
+
+## In plain words
+
+**Linear DP** (also called **1-D DP**, "one-dimensional dynamic programming") means the stored
+answers fit in a single row: one answer per position of a list or string. To compute the answer at a
+position you look back at the one or two answers immediately before it.
+
+An everyday analogy: walking along a row of stepping stones where each stone has a note saying "the
+best you can do up to here". To write the note for the next stone you only need to read the notes on
+the previous one or two stones — never the whole path behind you.
+
+Why it matters for a job: these are the warm-up DP questions interviewers ask first (Climbing Stairs,
+House Robber). They test whether you can turn a sentence like "either I take this item or I skip it"
+into a two-line formula — a skill used in every harder DP problem.
+
+Words used below:
+
+- **1-D** — one index is enough to name a subproblem, so the table is a single list.
+- **Look-back** — how far behind the current position the formula reads (here: one or two steps).
+- **Rolling variables** — two ordinary variables that hold "the previous answer" and "the one before
+  that", so the full list is not needed.
+- **Greedy** — always taking the option that looks best right now, without checking the future. Greedy
+  is fast but often wrong on these problems; we show counter-examples.
+
 The first batch of NeetCode 1-D problems — Climbing Stairs, Min Cost Climbing Stairs, House Robber,
 House Robber II and Decode Ways — are all the **same machine** with different paint. Each has a state
 that is a single index, a recurrence that looks back one or two positions, and an O(1)-space solution
@@ -27,6 +54,14 @@ Notice how each row answers the framework from lesson 2. The only differences ar
 *mean* and how they're combined.
 
 ## Climbing Stairs, the template
+
+The problem: a staircase has `n` steps and each move climbs 1 or 2 steps. Count the different
+sequences of moves that reach the top. The last move is either a 1-step (from step `n−1`) or a 2-step
+(from step `n−2`), so `ways(n) = ways(n−1) + ways(n−2)`.
+
+In the code, `prev1` holds the number of ways to reach the step we have reached so far and `prev2`
+the number for the step before it. Each loop round moves one step higher: the new `prev1` is the sum
+of the two old values, and the new `prev2` is the old `prev1`.
 
 ```python-run
 def climb(n):
@@ -349,6 +384,20 @@ again. Two variables are therefore sufficient, and the solution uses O(1) extra 
 - The combine operator follows the question: `+` for counts, `min`/`max` for optimisation.
 - House Robber's take-or-skip and House Robber II's "break the circle" are reusable patterns.
 - Constant look-back gives O(1) space with rolling variables.
+
+## Glossary
+
+| Term | Meaning in plain words |
+|---|---|
+| **Linear / 1-D DP** | DP whose answers are stored one per position in a single list. |
+| **Take-or-skip** | A recurrence built from two options: use the current item or leave it. |
+| **Look-back window** | How many earlier answers the formula reads. |
+| **Rolling variables** | A few variables replacing the whole table when the window is small. |
+| **Simultaneous assignment** | `a, b = b, a + b`: both right-hand values are computed before either variable changes. |
+| **Greedy** | Choosing what looks best at each step without reconsidering. |
+| **Counter-example** | A specific input on which an idea gives the wrong answer. |
+| **Reduction** | Rewriting a new problem so that it becomes one you already know how to solve. |
+| **Brute force** | Trying every possibility; correct but slow, useful for checking fast solutions. |
 
 ## Check yourself
 

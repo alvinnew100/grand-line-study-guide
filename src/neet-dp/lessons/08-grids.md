@@ -1,5 +1,34 @@
 # Grid DP and DP on DAGs
 
+> **Before this lesson:** read [The DP framework](#/lesson/neet-dp/dp-framework) and
+> [Linear DP: stairs, robbers and decoders](#/lesson/neet-dp/dp-linear). You should be comfortable with a list of
+> lists in Python, where `grid[r][c]` means row `r`, column `c`.
+
+## In plain words
+
+A **grid** is a table of rows and columns, like a chessboard or a spreadsheet. In **grid DP**
+(grid dynamic programming) we write one answer in every square — for example "the number of ways to
+walk to this square" — and each square's answer is worked out from its neighbours' answers.
+
+An everyday picture: a city with streets in a square pattern where you may only drive east or south.
+To count the routes to a junction, add the routes to the junction directly north of it and the routes to
+the junction directly west of it, because your last block was driven from one of those two.
+
+The second half of the lesson answers a deeper question: *when is it safe to fill a table like this
+at all?* The answer is "when the squares can be put in an order such that each one only needs earlier
+ones". A set of dependencies with that property is called a **DAG**, a *directed acyclic graph*:
+"directed" = the arrows have a direction, "acyclic" = you can never follow arrows around in a circle.
+
+Why it matters for a job: grid questions are common in interviews (robots, mazes, game boards), and
+the DAG idea is how build tools, spreadsheets and task schedulers decide what to compute first.
+
+Words used below:
+
+- **Cell** — one square of the grid, named by (row, column).
+- **2-D** — two indices are needed to name a subproblem, so the table is a grid.
+- **Monotone path** — a path that only ever moves right or down.
+- **Topological order** — an order of the cells where every cell comes after the cells it depends on.
+
 Grids are the gentlest introduction to two-dimensional state. A cell `(r, c)` is the state; the
 recurrence looks at neighbouring cells; the table *is* the grid. This lesson covers the right/down
 family (Unique Paths, Minimum Path Sum, Maximal Square) and then the general idea that makes all DP
@@ -260,6 +289,21 @@ paths (Dijkstra/Bellman–Ford) are the generalisation of DP to graphs with cycl
 - Anchoring a shape at its bottom-right corner turns "largest square" into a three-neighbour min.
 - DP needs an acyclic dependency graph; with four-direction moves, find the reason for acyclicity and
   process in topological order.
+
+## Glossary
+
+| Term | Meaning in plain words |
+|---|---|
+| **Grid / matrix** | A table of rows and columns; `grid[r][c]` is one cell. |
+| **Cell** | One square of the grid. |
+| **Monotone path** | A path moving only right or down. |
+| **Row-major order** | Filling the table row by row, left to right. |
+| **One-row optimisation** | Keeping a single list for the current row because only the row above is needed. |
+| **Anchor** | Fixing where a shape ends (for example its bottom-right corner) so a recurrence can extend it. |
+| **Dependency graph** | A drawing with an arrow from each state to the states it needs. |
+| **DAG** | Directed acyclic graph: one-way arrows with no circular route. |
+| **Topological order** | An ordering in which every state appears after all states it depends on. |
+| **Memoized DFS** | Depth-first search (follow one path as far as possible) that caches each cell's result. |
 
 ## Check yourself
 
