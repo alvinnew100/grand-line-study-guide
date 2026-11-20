@@ -423,7 +423,7 @@
   "words": 128536,
   "modules": 21,
   "lessons": 34,
-  "problems": 0
+  "problems": 6
  },
  {
   "id": "aws",
@@ -503,9 +503,9 @@
    "Stripe engineering blog: rate limiters and idempotency (stripe.com/blog)",
    "RFC 9309 (robots.txt), RFC 9562 (UUIDs)"
   ],
-  "words": 133957,
-  "modules": 18,
-  "lessons": 38,
+  "words": 164775,
+  "modules": 19,
+  "lessons": 45,
   "problems": 32
  },
  {
