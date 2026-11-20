@@ -1,5 +1,26 @@
 # Inside dict and set: hashing, collisions, resizing
 
+> **Before this lesson:** you should have used Python `dict` and `set` and understand why looking something up in them is fast in practice — see [The Arrays & Hashing pattern](#/lesson/neet-arrays/arrays-hashing). You should also know what a list index is and what Big-O notation means ([How to approach an interview problem](#/lesson/neet-arrays/approach)).
+
+## In plain words
+
+A hash table is how `dict` and `set` are built inside. Picture a cloakroom with 100 numbered hooks. When you hand over your coat, the attendant does a quick calculation on your name — say, "add up the letters and keep the last two digits" — and hangs the coat on that hook number. When you come back, they redo the same calculation and walk straight to the hook. Nobody searches the whole room.
+
+That calculation is a **hash function**: a rule that turns any piece of data into a number. The hooks are **buckets**: the slots of an ordinary array. Sometimes two names give the same hook number; that is a **collision**, and the cloakroom needs a rule for it — hang both coats on the same hook, or use the next free hook.
+
+Why it matters for a job: interviewers often follow "use a dict" with "and how does a dict work?". Knowing the inside also explains everyday rules, such as why a list cannot be used as a dict key.
+
+Terms used below, defined once:
+
+- **Hash code**: the number a hash function produces for a piece of data.
+- **Bucket array**: the underlying array of slots.
+- **Load factor**: how full the table is — number of stored items divided by number of buckets.
+- **Rehashing / resizing**: moving everything into a bigger bucket array when the table gets too full.
+- **Immutable**: cannot be changed after creation (a Python `str` or `tuple`); **mutable** means it can (a `list`).
+- **Modulo**, written `%` in Python and "mod" in maths: the remainder after division, e.g. `17 % 5` is `2`.
+- **XOR** ("exclusive or", `^` in Python): a bit-by-bit operation giving 1 where two bits differ.
+- **CPython**: the standard Python interpreter, the program that runs your Python code.
+
 You can solve many problems treating `dict` and `set` as magic O(1) boxes. But interviewers love to ask
 *why* they are O(1), *when* they are not, and *what makes a good hash function*. Knowing the internals
 also explains practical rules — why lists can't be keys, why `hash(5) == hash(5.0)`, and why worst-case
@@ -126,7 +147,7 @@ deterministic order until you find the key or an empty cell:
 - **Pseudo-random probing:** the next probe depends on the bits of the hash code through a fixed
   recurrence — CPython's choice.
 
-Deletion is trickier with open addressing: simply emptying a cell would break the probe chain for keys
+Deletion is trickier with open addressing: emptying a cell would break the probe chain for keys
 inserted after it. Instead the cell is marked with a special **tombstone** ("deleted/available") that
 searches skip over but inserts may reuse.
 
@@ -326,6 +347,23 @@ function.
 > Python hash table implementation); CPython `Objects/dictobject.c` design notes; Python data model
 > documentation for `__hash__`.
 
+## Glossary
+
+| Term | Meaning |
+|---|---|
+| **Hash function** | a rule mapping a key to a bucket index; made of a hash code plus a compression function. |
+| **Hash code** | the integer computed from a key. |
+| **Compression function** | the step that maps a hash code into the range 0..N−1. |
+| **Bucket** | one slot of the table's underlying array. |
+| **Collision** | two different keys landing in the same bucket. |
+| **Separate chaining** | each bucket holds a small list of the items that landed there. |
+| **Open addressing** | items live directly in the array; on a collision, other slots are probed. |
+| **Probe** | one look at a slot while searching. |
+| **Tombstone** | a marker left in a slot after deletion so later searches do not stop early. |
+| **Load factor** | items ÷ buckets; how full the table is. |
+| **Rehashing** | building a larger table and re-inserting every item. |
+| **Hash flooding** | an attack that feeds many colliding keys to make a table slow. |
+
 ## Check yourself
 
 ```quiz
@@ -336,7 +374,7 @@ function.
    "explain": "'stop', 'tops', 'pots' all have the same sum. Polynomial hashing weights positions differently."},
   {"q": "Which collision strategy does CPython's dict use?", "options": ["Separate chaining with linked lists", "Open addressing with pseudo-random probing", "Balanced trees per bucket", "Cuckoo hashing"], "answer": 1,
    "explain": "It probes other slots following a perturbation-based recurrence."},
-  {"q": "Why can't open addressing simply clear a cell on deletion?", "options": ["Memory leaks", "It breaks the probe chain for keys inserted later", "It changes the load factor", "Python forbids it"], "answer": 1,
+  {"q": "Why can't open addressing clear a cell on deletion and leave it empty?", "options": ["Memory leaks", "It breaks the probe chain for keys inserted later", "It changes the load factor", "Python forbids it"], "answer": 1,
    "explain": "A search would stop at the newly empty cell; tombstones keep chains intact."},
   {"q": "If a class defines __eq__ comparing (x, y), what should __hash__ return?", "options": ["id(self)", "hash((self.x, self.y))", "A random number", "0"], "answer": 1,
    "explain": "Equal objects must hash equally, so hash exactly the fields used for equality."},

@@ -1,5 +1,24 @@
 # Prefix sums, counting and bucket tricks
 
+> **Before this lesson:** you should know how a dict is used to look values up and to count things — see [The Arrays & Hashing pattern](#/lesson/neet-arrays/arrays-hashing) — and what Big-O notation means ([How to approach an interview problem](#/lesson/neet-arrays/approach)).
+
+## In plain words
+
+Think of the distance markers along a motorway: each sign shows the total distance from the start. To find the distance between two towns you do not re-measure the road — you **subtract one sign from the other**. A **prefix sum** is that idea for a list of numbers: write down the running total after each item once, and any "sum of this stretch" becomes one subtraction.
+
+The other two ideas in this lesson are about sorting things into pigeonholes. **Counting** means keeping a tally per possible value, like tally marks per candidate in an election. **Bucketing** means dropping each item into a numbered box according to some property (for example "how many times it occurs") so that the boxes are already in order.
+
+Why it matters for a job: reports, dashboards and analytics constantly ask "what is the total between here and there?" and "what are the most common items?" — these tricks answer such questions fast.
+
+Terms used below, defined once:
+
+- **Subarray**: a run of neighbouring items in a list (no gaps), e.g. `[4, 1]` inside `[3, 4, 1, 5]`.
+- **Prefix**: the first few items of a list; the *empty prefix* is "no items", whose sum is 0.
+- **Range query**: a question about a stretch of the list, such as "the sum from index 2 to index 5".
+- **Inclusive / exclusive**: whether the end position is counted. "2 to 5 inclusive" includes item 5.
+- **Frequency**: how many times a value occurs.
+- **Associative operation**: one where grouping does not matter, like `+` or `max`: `(a + b) + c == a + (b + c)`.
+
 Hash maps trade memory for speed. This lesson covers three related trades that show up again and again in
 array problems:
 
@@ -314,6 +333,21 @@ again — so there are at most n swaps in total across all iterations of the out
 > **Source:** Goodrich, Tamassia & Goldwasser, *Data Structures and Algorithms in Python*, ch. 5
 > (§5.6 multidimensional data sets) and ch. 12 (§12.4.2 linear-time sorting: bucket-sort and radix-sort); ch. 10.1.2
 > (counting word frequencies with a map). NeetCode roadmap, Arrays & Hashing.
+
+## Glossary
+
+| Term | Meaning |
+|---|---|
+| **Prefix sum** | the running total of the first i items; P[0] = 0. |
+| **Range sum** | the sum of a contiguous stretch, computed as a difference of two prefix sums. |
+| **Empty prefix** | the prefix with no items, sum 0 — the reason for P[0] = 0 and {0: 1}. |
+| **Suffix** | the last few items of a list; suffix products/maxima are computed right to left. |
+| **Inclusion–exclusion** | add and subtract overlapping regions so each cell is counted exactly once. |
+| **Difference array** | stores changes between neighbours so a range update takes two writes. |
+| **Counting sort** | sorting by tallying how often each small integer value occurs. |
+| **Bucket** | a container for all items sharing a key such as a frequency. |
+| **Boyer–Moore voting** | a one-pass, O(1)-space method to find a majority element. |
+| **Cyclic sort** | placing value v at index v − 1 by repeated swaps. |
 
 ## Check yourself
 

@@ -1,5 +1,26 @@
 # k-Sum, greedy pointer moves and proofs
 
+> **Before this lesson:** you need the three two-pointer shapes — especially *converging* pointers on a sorted list — from [The Two Pointers pattern](#/lesson/neet-arrays/two-pointers), and the hash-map version of Two Sum from [The Arrays & Hashing pattern](#/lesson/neet-arrays/arrays-hashing).
+
+## In plain words
+
+This lesson answers two questions.
+
+First: you already know how to find **two** numbers that add up to a target. How do you find **three**, or four? The answer is to hold one number fixed, like holding one jigsaw piece in your hand, and search for the others that complete it. The whole family of such problems is called **k-Sum** ("k numbers that sum to a target").
+
+Second: in problems like "which two walls hold the most water?", the solution moves one of two fingers inward at each step and never looks back. How can we be sure it did not walk past the best answer? A method that makes one locally sensible choice at each step and never reconsiders is called **greedy**, and a greedy method needs a short **proof** — an argument that the thing it threw away could not have been better.
+
+Why it matters for a job: interviewers often accept the code and then ask "why is that correct?". Being able to give the two-sentence argument is what shows you understand the solution and did not memorise it.
+
+Terms used below, defined once:
+
+- **Triple / quadruple**: a group of three / four numbers.
+- **Unique triples**: `[1, 2, -3]` and `[2, 1, -3]` count as the same triple; it must be reported once.
+- **Duplicate**: a value that appears more than once in the input.
+- **Greedy algorithm**: one that commits to the best-looking move at each step.
+- **Induction**: a proof style — show something is true at the start, and that each step keeps it true.
+- **Prune**: to skip work that cannot possibly lead to an answer.
+
 The previous lesson introduced the shapes of two pointers. This one goes deeper into the problems that
 make the pattern famous — *3Sum*, *4Sum*, *Container With Most Water* and *Trapping Rain Water* — and,
 more importantly, into **why** the pointer moves are correct. Interviewers frequently ask "how do you know
@@ -38,7 +59,7 @@ for i in range(n - 2):
 ```
 
 Sorting buys two things at once: the inner Two Sum becomes an O(n) pointer scan, and **duplicates become
-adjacent**, so deduplication is just "skip a value equal to the one before it". Total: O(n log n) + n·O(n)
+adjacent**, so deduplication becomes "skip a value equal to the one before it". Total: O(n log n) + n·O(n)
 = **O(n²)**.
 
 ### Why the duplicate skipping is exactly right
@@ -308,6 +329,21 @@ If step 3 fails, the move is wrong — try the other pointer or a different stra
 > **Source:** Goodrich, Tamassia & Goldwasser, *Data Structures and Algorithms in Python*, ch. 12
 > (sorting as a preprocessing step, §12.1–12.2) and ch. 3 (justification techniques: induction and loop
 > invariants, §3.4). NeetCode roadmap, Two Pointers.
+
+## Glossary
+
+| Term | Meaning |
+|---|---|
+| **k-Sum** | find k numbers summing to a target; solved by fixing k − 2 values and converging two pointers. |
+| **Fixed index** | the position held constant by an outer loop while inner pointers search. |
+| **Duplicate skipping** | ignoring a value equal to the previous one so each answer is reported once. |
+| **Greedy algorithm** | commits to the locally best move and never reconsiders. |
+| **Discard argument** | a proof that the index being dropped cannot belong to a better answer. |
+| **Dominated** | no better than something already examined. |
+| **Bottleneck** | the limiting side — the shorter wall or the lower running maximum. |
+| **Running maximum** | the largest value seen so far in a scan. |
+| **Pruning** | skipping branches that cannot produce an answer. |
+| **Meet in the middle** | split the input in halves, precompute one half (often in a hash map), look up from the other. |
 
 ## Check yourself
 

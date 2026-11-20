@@ -1,9 +1,28 @@
 # How to approach an interview problem
 
+> **Before this lesson:** you should be able to read and write basic Python — variables, `if`, `for` loops, functions and lists. Nothing else is assumed. If "O(n)" means nothing to you yet, that is fine: it is explained below, and in full in [Big-O, Big-Omega and Big-Theta](#/lesson/dsa-foundations/asymptotic-notation).
+
+## In plain words
+
+A coding interview is a conversation in which you are given a small programming puzzle and about 45 minutes to solve it while someone watches. This lesson is a **checklist for that conversation** — the same way a pilot runs the same checklist before every flight, whatever the weather.
+
+An everyday comparison: a driving test. The examiner is not only checking that you arrive; they watch whether you check the mirrors, signal, and react calmly when something unexpected happens. In a coding interview the "mirrors and signals" are asking questions, explaining your plan, and testing your code.
+
+Why it matters for a job: almost every software company uses this kind of interview, and the habits it rewards — understand first, plan, check your work — are the habits of a reliable engineer.
+
+Terms used throughout, defined once here:
+
+- An **algorithm** is a step-by-step recipe for solving a problem.
+- The **input size**, written `n`, is how much data the algorithm receives — for example the length of a list.
+- **Big-O notation**, written like `O(n)` or `O(n²)` and read "order n", describes how the number of steps grows as `n` grows. `O(n)` means "roughly proportional to n": double the data, double the work. `O(n²)` means double the data, four times the work. `O(1)` means the work does not depend on `n` at all. Smaller growth is better.
+- A **brute-force** solution is the most direct one: try every possibility. It is usually correct but slow.
+- An **edge case** is an unusual input — an empty list, a single item, all items equal — where code often breaks.
+- A **hash set** / **hash map** (Python `set` / `dict`) is a collection that can answer "is this item here?" almost instantly; the next lesson explains them.
+
 Most candidates who fail coding interviews don't fail because they have never seen the algorithm. They fail
 because they start typing too early, solve a slightly different problem from the one asked, freeze when
 the first idea doesn't work, or finish with code that crashes on an empty list. The good news is that all
-of those are *process* failures, and process can be practised just like a sword stroke: the same motion,
+of those are *process* failures, and process can be practised like a sword stroke: the same motion,
 repeated until it is automatic.
 
 This lesson gives you that motion. Every problem in this track — and every problem you meet in an
@@ -306,6 +325,21 @@ extra. If the values were bounded, say 0–1000, a boolean array of size 1001 wo
 
 > **Source:** UMPIRE problem-solving framework (CodePath); NeetCode roadmap pattern ordering; Goodrich, Tamassia & Goldwasser, *Data Structures and Algorithms in Python*, ch. 3 (algorithm analysis) for the growth-rate reasoning.
 
+## Glossary
+
+| Term | Meaning |
+|---|---|
+| **Algorithm** | a step-by-step procedure that solves a problem. |
+| **Big-O notation** | a way of describing how running time or memory grows with the input size n, e.g. O(n), O(n²). |
+| **Brute force** | the most direct solution: try every possibility. |
+| **Constraint** | a stated limit on the input, such as n ≤ 10⁵. |
+| **Edge case** | an unusual input (empty, single item, all equal) that often exposes bugs. |
+| **Dry run** | executing code by hand on a small input while writing down the variables. |
+| **Pattern** | a reusable solution idea, such as hashing or two pointers. |
+| **Stress test** | comparing a fast solution with a slow, trusted one on many random inputs. |
+| **Trade-off** | gaining one thing (speed) by giving up another (memory). |
+| **UMPIRE** | Understand, Match, Plan, Implement, Review, Evaluate. |
+
 ## Check yourself
 
 ```quiz
@@ -321,6 +355,6 @@ extra. If the values were bounded, say 0–1000, a boolean array of size 1001 wo
   {"q": "Doubling n makes an O(n^2) algorithm roughly…", "options": ["2× slower", "4× slower", "8× slower", "no slower"], "answer": 1,
    "explain": "(2n)^2 = 4n^2."},
   {"q": "What is stress (differential) testing?", "options": ["Running code on the largest input only", "Comparing a fast solution against a trusted brute force on many random inputs", "Testing under low memory", "Timing code repeatedly"], "answer": 1,
-   "explain": "Random inputs plus a slow-but-obviously-correct reference expose bugs hand-picked examples miss."}
+   "explain": "Random inputs plus a slow reference that is easy to trust expose bugs hand-picked examples miss."}
 ]
 ```

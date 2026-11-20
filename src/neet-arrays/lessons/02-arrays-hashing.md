@@ -1,5 +1,26 @@
 # The Arrays & Hashing pattern
 
+> **Before this lesson:** you should know Python lists, loops and functions, and have read [How to approach an interview problem](#/lesson/neet-arrays/approach), which introduces Big-O notation (`O(n)` = work proportional to the input size `n`). A deeper treatment of Big-O is in [Big-O, Big-Omega and Big-Theta](#/lesson/dsa-foundations/asymptotic-notation).
+
+## In plain words
+
+An **array** is a row of numbered boxes, like a street of houses with house numbers: if you know the number, you can walk straight to the house. A Python **list** is an array.
+
+A **hash map** (in Python: a `dict`, short for dictionary) is like the index at the back of a book. Instead of reading every page to find "giraffe", you look the word up and it tells you the page immediately. A **hash set** (Python `set`) is the same idea when you only care *whether* something is present — like a guest list at a door.
+
+The pattern in this lesson is one sentence long: **when your program keeps searching through a list for something, build an index (a set or dict) once and look things up instead.** You pay with some extra memory and get a large speed-up.
+
+Why it matters for a job: this is the single most common trick in interview questions, and real programs use it constantly — caches, databases and de-duplication all rest on it.
+
+Terms used below, defined once:
+
+- **Index**: the position number of an item in a list; Python counts from 0, so `a[0]` is the first item.
+- **Key / value**: in a dict, the *key* is what you look up (the word) and the *value* is what you get back (the page number).
+- **Time complexity** and **space complexity**: how the running time and the extra memory grow with the input size, written in Big-O.
+- **Amortised**: averaged over a long run of operations — a few may be slow as long as the average is fast.
+- **In place**: changing the list you were given instead of building a new one.
+- **Reference** (or pointer): a note saying where an object lives in memory, as opposed to the object itself.
+
 The first group on the NeetCode roadmap is called *Arrays & Hashing*, and it is the foundation for almost
 everything after it. The core trade is simple: **spend memory to avoid repeated searching**. Instead of
 scanning the array again and again to answer "is X here?", "how many X's?" or "where was X?", you build a
@@ -13,13 +34,13 @@ the handful of hash-map templates that solve dozens of problems. This lesson cov
 ### Low-level arrays
 
 In memory, an **array** is a contiguous block of equally sized cells. Because every cell has the same
-size, the address of cell `i` is just `start + i * cell_size` — that's why indexing is **O(1)** no
+size, the address of cell `i` is `start + i * cell_size` — that's why indexing is **O(1)** no
 matter how long the array is. Goodrich et al. (ch. 5) stress that this constant-time address arithmetic
 is the defining property of array-based sequences.
 
 Python's `list` is a **referential array**: each cell holds a *reference* (pointer) to an object stored
 elsewhere, not the object itself. That's why a single list can hold ints, strings and other lists at the
-same time — every cell is just a pointer of the same size.
+same time — every cell is a pointer of the same size.
 
 ```mermaid
 graph LR
@@ -69,7 +90,7 @@ for k in range(40):
         last = size
 ```
 
-The byte count jumps only occasionally — between jumps, appends just fill pre-allocated slots.
+The byte count jumps only occasionally — between jumps, appends fill slots that were already allocated.
 
 ### Cost of common list operations
 
@@ -132,6 +153,15 @@ for x in nums:
     seen.add(x)
 ```
 
+Line by line, since this is the first template:
+
+- `seen = set()` creates an empty set — the "guest list" of values met so far.
+- `for x in nums:` visits each value of the list once, left to right.
+- `if x in seen:` asks the set whether `x` was met earlier. For a set this takes about the same time whether it holds ten values or ten million.
+- `seen.add(x)` records `x`, so later items can find it.
+
+For `nums = [1, 2, 3, 1]` the set grows `{1}`, `{1, 2}`, `{1, 2, 3}`; at the last item, `1 in seen` is true, so a duplicate has been found.
+
 Problems: *Contains Duplicate*, *Longest Consecutive Sequence* (membership of `x - 1` / `x + 1`),
 *Valid Sudoku* (one set per row/col/box), cycle detection in *Happy Number*.
 
@@ -144,6 +174,14 @@ for i, x in enumerate(nums):
         return [pos[target - x], i]
     pos[x] = i
 ```
+
+Line by line:
+
+- `pos = {}` creates an empty dict that will map a value to the index where it was seen.
+- `enumerate(nums)` hands out pairs `(i, x)`: the index and the value at that index.
+- `target - x` is the **complement** — the only value that could pair with `x`.
+- `if target - x in pos:` asks whether that complement has already been seen; if so, `pos[target - x]` is its index and the pair is complete.
+- `pos[x] = i` runs only if no pair was found: remember `x` for the items still to come.
 
 The key insight: for each element, the partner you need is *determined*. Instead of searching for it,
 look it up. Problems: *Two Sum*, *Subarray Sum Equals K* (complement of a prefix sum), *4Sum II*.
@@ -302,6 +340,21 @@ All three are correct; their running times differ by orders of magnitude.
 > **Source:** Goodrich, Tamassia & Goldwasser, *Data Structures and Algorithms in Python*, ch. 5
 > (§5.2 low-level and referential arrays, §5.3 dynamic arrays and amortisation, §5.4 efficiency of
 > Python's sequence types) and ch. 10 (§10.1 maps). NeetCode roadmap, Arrays & Hashing.
+
+## Glossary
+
+| Term | Meaning |
+|---|---|
+| **Array** | a contiguous row of equal-sized cells addressed by index. |
+| **Referential array** | an array whose cells hold references (pointers) to objects, like a Python list. |
+| **Dynamic array** | an array that grows automatically by copying into a larger block when full. |
+| **Amortised O(1)** | constant time on average over many operations, even if a few are slow. |
+| **Hash set / hash map** | collections giving O(1) average membership tests and key lookups (`set`, `dict`). |
+| **Hashable** | usable as a dict key or set member; in practice, immutable. |
+| **Complement** | the value that completes a pair, e.g. target − x. |
+| **Canonical key** | one agreed form shared by all items that belong in the same group. |
+| **Shallow copy** | a new list that refers to the same element objects. |
+| **Frequency count** | a table of how many times each value occurs. |
 
 ## Check yourself
 

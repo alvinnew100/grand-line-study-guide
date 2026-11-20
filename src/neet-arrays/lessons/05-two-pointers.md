@@ -1,5 +1,25 @@
 # The Two Pointers pattern
 
+> **Before this lesson:** you should be comfortable with list indices and loops, know what "in place" and Big-O mean, and have seen the hash-set approach to pair problems — see [The Arrays & Hashing pattern](#/lesson/neet-arrays/arrays-hashing) and [How to approach an interview problem](#/lesson/neet-arrays/approach).
+
+## In plain words
+
+A **pointer** here is nothing more than a variable holding a position in a list — a finger resting on one item. The two-pointers technique uses **two fingers** on the same list (or one on each of two lists) and moves them according to a rule.
+
+Everyday picture: to check whether a word such as "level" reads the same backwards, put one finger on the first letter and one on the last. Compare, then move both fingers one step toward the middle. If every pair matches, it does. You never needed to write the word out backwards.
+
+A second picture: tidying a bookshelf by sliding the books you want to keep to the left, one at a time. One finger scans every book (the *reader*); the other marks the next free place (the *writer*).
+
+Why it matters for a job: the technique turns many "compare everything with everything" solutions into a single pass, and it works without extra memory — both are things interviewers explicitly ask for.
+
+Terms used below, defined once:
+
+- **Sorted**: arranged in increasing order. *Non-decreasing* means increasing but allowing equal neighbours.
+- **In place**: changing the given list itself, using only a constant amount of extra memory.
+- **Invariant**: a statement that stays true every time around a loop; it is how you convince yourself the loop is right.
+- **Palindrome**: text that reads the same forwards and backwards.
+- **Subsequence**: what is left of a sequence after deleting some items without reordering the rest.
+
 Two pointers is the second pattern on the NeetCode roadmap and one of the most reusable ideas in
 interviews. The setup is almost embarrassingly simple — keep **two indices** into a sequence and move them
 according to some rule — yet it turns many O(n²) "check every pair" algorithms into O(n) single passes,
@@ -45,6 +65,13 @@ while l < r:
     else:
         r -= 1
 ```
+
+Line by line:
+
+- `l, r = 0, len(a) - 1` puts the left finger on the first item and the right finger on the last.
+- `while l < r:` keeps going as long as the fingers are on two different items; when they meet, every pair has been dealt with.
+- Inside the loop you look at the pair `(a[l], a[r])`, then move **exactly one** finger inward: `l += 1` steps the left finger right, `r -= 1` steps the right finger left.
+- Because one finger moves every time and they start `n - 1` apart, the loop body runs at most `n - 1` times.
 
 **Example: Two Sum II (sorted input).** If `a[l] + a[r]` is too small, `a[l]` can't be in any solution:
 its best possible partner is the largest remaining value `a[r]`, and even that wasn't enough. Discard `l`.
@@ -109,6 +136,14 @@ for r in range(len(a)):
 return w                    # length of the kept prefix
 ```
 
+Line by line:
+
+- `w = 0` — the writer starts at the first slot.
+- `for r in range(len(a)):` — the reader visits every index.
+- `if keep(a[r]):` — decide whether this item belongs in the result (`keep` stands for whatever rule the problem gives).
+- `a[w] = a[r]` copies the kept item into the next free slot, and `w += 1` moves the writer on. Items that are not kept are skipped: the reader moves, the writer does not.
+- At the end `w` is the number of kept items, and they occupy `a[0]` to `a[w-1]`.
+
 The invariant is the key to getting it right: **`a[:w]` is exactly the answer for `a[:r]`**. Each problem
 only changes what "keep" means:
 
@@ -136,7 +171,7 @@ Watch how the non-zeros slide forward in order while zeros collect behind the wr
 
 A three-pointer cousin is the **Dutch national flag** partition (*Sort Colors*): `lo` grows a region of
 0s at the front, `hi` grows a region of 2s at the back, and `mid` scans the unknown middle. The subtle rule
-— after swapping with `hi`, **don't** advance `mid`, because the value that just arrived hasn't been
+— after swapping with `hi`, **don't** advance `mid`, because the value that arrived a moment ago hasn't been
 examined — is a classic interview trap.
 
 ### Shape 3 — One pointer per sequence
@@ -255,6 +290,20 @@ for s in ["A man, a plan, a canal: Panama", "race a car", ".,", "0P", "No 'x' in
 > **Source:** Goodrich, Tamassia & Goldwasser, *Data Structures and Algorithms in Python*, ch. 5 (§5.4
 > efficiency of list operations, §5.5.2 in-place insertion sort) and ch. 12 (merging in merge-sort,
 > in-place partitioning in quick-sort). NeetCode roadmap, Two Pointers.
+
+## Glossary
+
+| Term | Meaning |
+|---|---|
+| **Pointer** | a variable holding an index into a sequence. |
+| **Converging pointers** | two indices starting at opposite ends and moving toward each other. |
+| **Reader / writer** | two indices moving the same way: one scans, one marks where kept items go. |
+| **Invariant** | a condition that holds before and after every loop iteration. |
+| **In place** | modifying the input using O(1) extra memory. |
+| **Merge** | combining two sorted sequences into one sorted sequence. |
+| **Partition** | rearranging items into groups (e.g. all 0s, then 1s, then 2s). |
+| **Dutch national flag** | the three-pointer algorithm that partitions into three groups in one pass. |
+| **Discard** | to rule an index out permanently because it cannot be part of a better answer. |
 
 ## Check yourself
 
