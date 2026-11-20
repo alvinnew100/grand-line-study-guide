@@ -294,6 +294,46 @@ Format spec mini-language: `[[fill]align][sign][width][,][.precision][type]` whe
 > [!INTERVIEW]
 > Expect quick-fire questions: What does `else` on a `for` loop do? (Runs if no `break`.) What's `a or b` when `a` is `0`? (`b`.) Why is `-7 % 3 == 2`? (Floor semantics, result takes the divisor's sign.) How do you swap two variables? (`a, b = b, a`.) What's the cost of `x in range(n)`? (O(1) for ints.)
 
+## Interactive loops: input, sentinels and flags
+
+Console programs combine `input()` with a `while` loop. Two points cause most of the trouble: `input` always returns a **string** (convert it, and expect the conversion to fail), and the loop needs a clear exit — a **sentinel** value such as `"q"`, a Boolean **flag** that any branch can switch off, or `while True` with `break` placed exactly where the decision is made.
+
+```python
+total = 0
+while True:
+    text = input("Amount (blank to finish): ").strip()
+    if not text:                  # sentinel: an empty line ends the loop
+        break
+    try:
+        total += float(text)
+    except ValueError:
+        print(f"{text!r} is not a number")
+        continue                  # ask again
+print(f"Total: {total:.2f}")
+```
+
+The same loop shape drives menu programs and games: read a command, dispatch on it, repeat until told to stop. Because this page cannot pause for typing, here it is with the answers supplied by an iterator — the technique to use in tests as well, since logic that receives its "input" as an argument can be checked automatically:
+
+```python-run
+def add_amounts(read):
+    """read is any zero-argument function returning the next line of input."""
+    total, rejected = 0.0, []
+    while True:
+        text = read().strip()
+        if not text:
+            break
+        try:
+            total += float(text)
+        except ValueError:
+            rejected.append(text)
+    return total, rejected
+
+answers = iter(["12.5", "abc", " 7 ", "1e2", ""])
+print(add_amounts(lambda: next(answers)))
+```
+
+For a gentler, step-by-step introduction to `input`, `while`, flags, `break` and `continue`, see the lesson *User input, while loops and functions* in the "Start here" module.
+
 ## Pitfalls recap
 
 - `/` returns float; use `//` for integer division.

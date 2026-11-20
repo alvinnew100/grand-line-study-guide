@@ -287,6 +287,34 @@ print("".join(reverse_words_inplace(list("the sky is blue"))))
 > [!INTERVIEW]
 > Know these costs cold: list append O(1) amortised, `pop(0)` / `insert(0)` O(n), `in` on a list O(n), slicing O(k), string concatenation in a loop potentially O(n²) — use `join`. When asked "why is `append` amortised O(1)?", explain geometric over-allocation: resizes happen at sizes growing by a constant factor, so total copying is a geometric series bounded by O(n).
 
+## Everyday list and string chores
+
+A few operations come up constantly in scripts and deserve to be at your fingertips.
+
+```python-run
+guests = ["ana", "ben", "cy", "ben"]
+del guests[0]                          # remove by position, value not needed
+last = guests.pop()                    # remove by position and keep the value
+guests.remove("ben")                   # remove by value: first match only (ValueError if absent)
+print(guests, last)
+
+votes = ["tea", "coffee", "tea", "water", "tea"]
+no_tea = [v for v in votes if v != "tea"]          # remove EVERY occurrence: build a new list
+print(no_tea, votes.count("tea"))
+
+names = ["mossback", "Eagle Tooth", "cinder hill"]
+print(sorted(names), sorted(names, key=str.lower), sorted(names, key=len, reverse=True))
+print(names)                                        # sorted() never changes its argument
+
+url = "https://example.org/reports/2026-summary.pdf"
+print(url.removeprefix("https://"), url.removesuffix(".pdf"), url.rpartition("/")[2])
+print(repr("  padded \t\n".strip()), "xx-data-xx".strip("x"), "a,b;c".replace(";", ",").split(","))
+```
+
+`str.removeprefix` and `str.removesuffix` (3.9+) remove an exact leading or trailing piece and leave the string unchanged when it is not there. Do not confuse them with `strip("...")`, whose argument is a *set of characters* to trim from both ends — `"banana.na".strip(".na")` removes far more than a suffix.
+
+The beginner-level tour of these operations — indexing from zero, `append`/`insert`/`del`/`pop`/`remove`, `sort` versus `sorted`, slices and copying — is the lesson *Lists and loops* in the "Start here" module.
+
 ## Pitfalls recap
 
 - `(5)` is an int; `(5,)` is a tuple.

@@ -8,9 +8,26 @@ TRACK = dict(
           "CPython internals: the Python you need to read, write and defend in an interview.",
     sources=[
         "Goodrich, Tamassia & Goldwasser, Data Structures and Algorithms in Python, ch. 1-2",
+        "Matthes, Python Crash Course (3rd ed.), Parts I-II (topic coverage; all wording and examples original)",
         "The Python Tutorial, Language Reference (Data Model) and Library Reference, docs.python.org/3",
     ],
     modules=[
+        dict(
+            id="py-start",
+            title="Start here: Python from zero",
+            summary="A gentle on-ramp for complete beginners: values, lists, decisions, loops, functions, classes, files and tests.",
+            lessons=[
+                dict(id="py-start-first-steps", title="First steps: running Python, values, names and text", file="s1-first-steps.md"),
+                dict(id="py-start-lists-loops", title="Lists and loops: working with many values", file="s2-lists-loops.md"),
+                dict(id="py-start-decisions-dicts", title="Decisions and dictionaries", file="s3-decisions-dictionaries.md"),
+                dict(id="py-start-input-functions", title="User input, while loops and functions", file="s4-input-while-functions.md"),
+                dict(id="py-start-classes", title="Classes: modelling things with objects", file="s5-classes-beginners.md"),
+                dict(id="py-start-files-tests", title="Files, errors and tests: programs you can rely on", file="s6-files-errors-tests.md"),
+            ],
+            problems=["py-start-greeting", "py-start-weather-advice", "py-start-list-summary", "py-start-count-vowels",
+                      "py-start-basket-total", "py-start-multiples", "py-start-word-lengths", "py-start-halving-steps",
+                      "py-start-safe-divide", "py-start-inventory"],
+        ),
         dict(
             id="py-basics",
             title="Python Basics",
@@ -146,6 +163,20 @@ TRACK = dict(
                 dict(id="py-cpython", title="CPython internals: bytecode, refcounting and GC", file="32-cpython-internals.md"),
             ],
             problems=[],
+        ),
+        dict(
+            id="py-projects",
+            title="Projects",
+            summary="Plan and structure a project, then build a game loop, a data visualisation, an API client and a Django web app.",
+            lessons=[
+                dict(id="py-proj-planning", title="Planning and structuring a small project", file="p1-planning-projects.md"),
+                dict(id="py-proj-game", title="A game: the loop, state, events and collisions", file="p2-game-loop.md"),
+                dict(id="py-proj-dataviz", title="Data visualisation: from raw files to clear charts", file="p3-data-visualization.md"),
+                dict(id="py-proj-apis", title="Working with web APIs", file="p4-web-apis.md"),
+                dict(id="py-proj-django", title="A web application with Django", file="p5-django-web-app.md"),
+            ],
+            problems=["py-proj-rect-collision", "py-proj-game-step", "py-proj-bounce", "py-proj-high-scores",
+                      "py-proj-text-chart", "py-proj-rain-by-city", "py-proj-api-stations", "py-proj-route-match"],
         ),
     ],
 )

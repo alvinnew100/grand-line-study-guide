@@ -308,6 +308,46 @@ The generator `read_sales` keeps memory flat and isolates parsing/validation fro
 > [!INTERVIEW]
 > Typical questions: "How do you read a huge file?" — iterate line by line (`for line in f`) or in fixed-size chunks; never `read()` it all. "Why `with open(...)`?" — guarantees the file is closed/flushed even on exceptions. "`json.dump` vs `json.dumps`?" — file vs string. "Why not `line.split(',')` for CSV?" — quoted fields may contain commas, quotes and newlines. "Text vs binary mode?" — `str` with decoding and newline translation vs raw `bytes`.
 
+## Persisting program state: load-or-default
+
+Small programs often need to remember something between runs — a user's name, preferences, a high score. The dependable pattern has three parts: **load** what was saved or fall back to defaults, **work** with a plain dictionary in memory, and **save** when something changes. Keeping each part in its own function makes all three testable.
+
+```python-run
+import json, tempfile
+from pathlib import Path
+
+DEFAULTS = {"name": None, "theme": "light", "launches": 0}
+
+def load_settings(path):
+    """Return saved settings merged over the defaults; never raises for a missing or damaged file."""
+    try:
+        saved = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        saved = {}
+    if not isinstance(saved, dict):
+        saved = {}
+    return {**DEFAULTS, **saved}
+
+def save_settings(path, settings):
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(settings, indent=2), encoding="utf-8")
+    temporary.replace(path)               # swap in the finished file in one step
+
+path = Path(tempfile.mkdtemp()) / "settings.json"
+for run in range(3):                      # three 'runs' of the program
+    settings = load_settings(path)
+    settings["launches"] += 1
+    if settings["name"] is None:
+        settings["name"] = "Dana"         # would come from input() on the first run
+    save_settings(path, settings)
+    print(f"run {run + 1}: {settings}")
+
+path.write_text("{ this is not json", encoding="utf-8")
+print("after corruption:", load_settings(path))
+```
+
+Three details make it robust. Merging the saved values *over* a dictionary of defaults means a file written by an older version of the program, lacking newer keys, still loads. Catching `JSONDecodeError` as well as `FileNotFoundError` covers a half-written or hand-edited file. And writing to a temporary file that is then renamed means a crash in the middle of saving cannot leave a truncated settings file behind. The introductory treatment of reading, writing and JSON is in the "Start here" lesson *Files, errors and tests*.
+
 ## Pitfalls recap
 
 - Omitting `encoding="utf-8"` (platform-dependent behaviour).
