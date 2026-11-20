@@ -1,0 +1,122 @@
+import pathlib as _pl
+import re as _re
+
+_HERE = _pl.Path(__file__).parent
+_DEFINED = set()
+for _f in (_HERE / "problems").glob("*.py"):
+    _DEFINED.update(_re.findall(r'^\s*id="(cicd-[a-z0-9-]+)"', _f.read_text(encoding="utf-8"), _re.M))
+
+
+def _m(mid, title, summary, lessons, problems=()):
+    return dict(
+        id=mid, title=title, summary=summary,
+        lessons=[dict(id=i, title=t, file=f) for i, t, f in lessons if (_HERE / "lessons" / f).exists()],
+        problems=[p for p in problems if p in _DEFINED],
+    )
+
+
+TRACK = dict(
+    id="cicd",
+    title="CI/CD & Continuous Delivery",
+    icon="🚀",
+    color="#3a86ff",
+    group="Engineering Practice",
+    blurb="How software gets from a commit to production safely and repeatedly: continuous integration, "
+          "deployment pipelines, test strategy, release patterns, infrastructure as code, database change, "
+          "branching, DORA metrics - then hands-on GitHub Actions, GitLab CI, Docker, Argo CD and worked "
+          "interview scenarios.",
+    sources=[
+        "Jez Humble & David Farley, Continuous Delivery (Addison-Wesley, 2010), ch. 1-15",
+        "Forsgren, Humble & Kim, Accelerate / DORA State of DevOps research (four key metrics)",
+        "Official docs: GitHub Actions, GitLab CI/CD, Docker, Kubernetes, Terraform, Argo CD, Argo Rollouts, "
+        "OpenFeature, Semantic Versioning, Conventional Commits, trunkbaseddevelopment.com",
+    ],
+    modules=[
+        _m("delivery-problem", "1. The Problem of Delivering Software",
+           "Why releases hurt, the anti-patterns behind the pain, and the principles that remove it.",
+           [("release-antipatterns", "Release anti-patterns and the cost of late feedback", "01-release-antipatterns.md"),
+            ("delivery-principles", "Principles of continuous delivery", "02-delivery-principles.md")]),
+        _m("config-management", "2. Configuration Management",
+           "Version control for everything, reproducible dependencies, environment configuration and secrets.",
+           [("version-everything", "Version control everything and pin your dependencies", "03-version-everything.md"),
+            ("config-and-secrets", "Environments, configuration and secrets", "04-config-and-secrets.md")],
+           ["cicd-version-constraint", "cicd-config-layering"]),
+        _m("continuous-integration", "3. Continuous Integration",
+           "The practices that make integration a non-event, and the discipline that keeps the build trustworthy.",
+           [("ci-practices", "Continuous integration: the practice, not the server", "05-ci-practices.md"),
+            ("build-discipline", "Broken builds, team discipline and distributed teams", "06-build-discipline.md")]),
+        _m("testing-strategy", "4. Implementing a Testing Strategy",
+           "The four testing quadrants, the test pyramid, test doubles, and strategies for new and legacy code.",
+           [("quadrants-pyramid", "Testing quadrants and the test pyramid", "07-quadrants-pyramid.md"),
+            ("test-doubles", "Test doubles and strategy for real projects", "08-test-doubles.md")]),
+        _m("pipeline-anatomy", "5. Anatomy of the Deployment Pipeline",
+           "Stages, gates, build-once-promote-everywhere, and pipelines defined as code.",
+           [("pipeline-stages", "Stages, gates and the flow of a change", "09-pipeline-stages.md"),
+            ("build-once", "Build once, promote artifacts, pipeline as code", "10-build-once.md")],
+           ["cicd-pipeline-stage-order", "cicd-pipeline-duration"]),
+        _m("scripting", "6. Build and Deployment Scripting",
+           "Task runners, idempotent deploy scripts, and one deployment path for every environment.",
+           [("build-scripts", "Build scripting: one command, any machine", "11-build-scripts.md"),
+            ("deploy-scripts", "Deployment scripting: idempotent, layered, verified", "12-deploy-scripts.md")]),
+        _m("commit-stage", "7. The Commit Stage",
+           "Five-minute feedback: unit tests, static analysis, packaging and the artifact repository.",
+           [("commit-stage-feedback", "Designing a fast commit stage", "13-commit-stage-feedback.md"),
+            ("static-analysis-artifacts", "Static analysis, quality gates and the artifact repository", "14-static-analysis-artifacts.md")],
+           ["cicd-jobs-to-rerun", "cicd-test-sharding"]),
+        _m("acceptance-testing", "8. Automated Acceptance Testing",
+           "Acceptance criteria as executable specifications, test data, asynchrony and flaky tests.",
+           [("executable-specs", "Acceptance criteria and executable specifications", "15-executable-specs.md"),
+            ("test-data-flakiness", "Test data, asynchrony and flaky tests", "16-test-data-flakiness.md")],
+           ["cicd-flaky-tests"]),
+        _m("nonfunctional", "9. Testing Non-Functional Requirements",
+           "Capacity and performance tests as pipeline gates, and security scanning shifted left.",
+           [("capacity-performance", "Capacity and performance testing in the pipeline", "17-capacity-performance.md"),
+            ("security-scanning", "Security scanning and supply-chain checks", "18-security-scanning.md")]),
+        _m("deploy-release", "10. Deploying and Releasing",
+           "Blue-green, canary and rolling releases; rollback versus roll-forward; emergency fixes.",
+           [("release-strategies", "Blue-green, canary and rolling deployments", "19-release-strategies.md"),
+            ("rollback-emergency", "Rollback, roll-forward, zero downtime and emergency fixes", "20-rollback-emergency.md")],
+           ["cicd-rolling-update", "cicd-blue-green-fsm", "cicd-canary-decision", "cicd-rollback-target"]),
+        _m("infrastructure", "11. Managing Infrastructure and Environments",
+           "Infrastructure as code, immutable servers, environment parity and monitoring.",
+           [("infrastructure-as-code", "Infrastructure as code and immutable infrastructure", "21-infrastructure-as-code.md"),
+            ("monitoring-environments", "Monitoring, observability and environment management", "22-monitoring-environments.md")]),
+        _m("data", "12. Managing Data",
+           "Versioned schema migrations, expand/contract, backward compatibility and test data.",
+           [("schema-migrations", "Schema migrations and expand/contract", "23-schema-migrations.md"),
+            ("data-compat-testdata", "Backward compatibility, data rollback and test data", "24-data-compat-testdata.md")],
+           ["cicd-migration-plan"]),
+        _m("components", "13. Components and Dependencies",
+           "Dependency graphs, pipelines for libraries, monorepo versus polyrepo and artifact versioning.",
+           [("dependency-graphs", "Dependency graphs and pipelines for components", "25-dependency-graphs.md"),
+            ("monorepo-versioning", "Monorepo vs polyrepo and artifact versioning", "26-monorepo-versioning.md")],
+           ["cicd-monorepo-rebuild-set", "cicd-semver-bump"]),
+        _m("version-control", "14. Advanced Version Control",
+           "Trunk-based development, branch types, feature toggles and branch by abstraction.",
+           [("branching-models", "Trunk-based development, feature branches and release branches", "27-branching-models.md"),
+            ("toggles-abstraction", "Feature toggles and branch by abstraction", "28-toggles-abstraction.md")],
+           ["cicd-flag-rollout"]),
+        _m("managing-cd", "15. Managing Continuous Delivery",
+           "Maturity models, risk, compliance and the four DORA metrics.",
+           [("maturity-risk-compliance", "Maturity, risk and compliance", "29-maturity-risk-compliance.md"),
+            ("dora-metrics", "DORA metrics: measuring delivery performance", "30-dora-metrics.md")],
+           ["cicd-dora-metrics", "cicd-freeze-window"]),
+        _m("modern-pipelines", "16. Modern Pipelines Hands-On",
+           "A complete GitHub Actions workflow line by line, GitLab CI, Docker multi-stage builds and GitOps with Argo CD.",
+           [("github-actions-workflow", "A complete GitHub Actions pipeline, line by line", "31-github-actions-workflow.md"),
+            ("gitlab-docker", "GitLab CI and Docker multi-stage builds", "32-gitlab-docker.md"),
+            ("gitops-argocd", "GitOps with Argo CD", "33-gitops-argocd.md")],
+           ["cicd-cache-key"]),
+        _m("main-green", "17. Keeping Main Green",
+           "Branch protection, required checks, merge queues, revert-first, bisect, flaky quarantine and build cops.",
+           [("guardrails", "Guardrails: branch protection, required checks and merge queues", "34-guardrails.md"),
+            ("recovery-practices", "Recovery: revert first, bisect, quarantine and learn", "35-recovery-practices.md")],
+           ["cicd-required-checks", "cicd-merge-queue", "cicd-git-bisect", "cicd-revert-selection"]),
+        _m("interview-scenarios", "18. CI/CD Interview Scenarios",
+           "Fully worked answers to the scenarios interviewers actually ask.",
+           [("scenario-bad-push", "Scenario: bad code on main, and a deploy taking the site down", "36-scenario-bad-push.md"),
+            ("scenario-scale-speed", "Scenario: monolith vs 40 microservices, and a 50-minute test suite", "37-scenario-scale-speed.md"),
+            ("scenario-migration-ml", "Scenario: zero-downtime migration, and CI/CD for ML models", "38-scenario-migration-ml.md")]),
+    ],
+)
+TRACK["modules"] = [m for m in TRACK["modules"] if m["lessons"]]

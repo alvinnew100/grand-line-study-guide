@@ -163,7 +163,7 @@
    "Bryant & O'Hallaron, Computer Systems: A Programmer's Perspective — ch. 2 (bit-level operations, two's complement, integer arithmetic)",
    "NeetCode 150"
   ],
-  "words": 22712,
+  "words": 28115,
   "modules": 4,
   "lessons": 8,
   "problems": 60
@@ -336,7 +336,7 @@
    "Forsgren, Humble & Kim, Accelerate / DORA State of DevOps research (four key metrics)",
    "Official docs: GitHub Actions, GitLab CI/CD, Docker, Kubernetes, Terraform, Argo CD, Argo Rollouts, OpenFeature, Semantic Versioning, Conventional Commits, trunkbaseddevelopment.com"
   ],
-  "words": 127245,
+  "words": 138447,
   "modules": 18,
   "lessons": 38,
   "problems": 22
@@ -405,7 +405,7 @@
   "sources": [
    "Tanenbaum & Bos, Modern Operating Systems, 4th ed., ch. 1–12"
   ],
-  "words": 0,
+  "words": 153034,
   "modules": 12,
   "lessons": 33,
   "problems": 33
