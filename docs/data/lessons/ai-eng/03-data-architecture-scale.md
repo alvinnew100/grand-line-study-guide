@@ -7,7 +7,7 @@ You do not need to train a foundation model to build with one. You do need to kn
 
 ## 1. Training data: a model is only as good as its data
 
-If there is no Vietnamese in the training data, the model cannot translate English into Vietnamese. Model developers often have to "use what we have, not what we want."
+A model that never saw Vietnamese text during training cannot translate into Vietnamese. Model developers often have to work with whatever data is available, even when it is not the data they would choose.
 
 A common source is **Common Crawl**, a nonprofit's periodic crawl of the web (about 2–3 billion pages a month in 2022–2023). Google's cleaned subset is **C4**. The quality is questionable: clickbait, misinformation, propaganda and toxic content. Yet most models that disclose their sources use some version of it, including GPT-3 and Gemini. Many companies have stopped disclosing their training data at all. Heuristic filters help a little. GPT-2, for example, only used Reddit links with at least three upvotes.
 
@@ -74,21 +74,21 @@ print("output shape:", (weights @ V).shape)
 
 A transformer is a stack of **transformer blocks**, and the number of blocks is the model's number of **layers**. Each block has:
 
-- an **attention module** with four weight matrices: query, key, value and output projection.
+- an **attention module** holding four weight matrices: one each for queries, keys and values, plus an output projection.
 - an **MLP (feedforward) module**: linear layers separated by nonlinear activations such as ReLU ($\max(0,x)$) or GELU, which GPT-2 and GPT-3 used.
 
 Before the blocks sits an **embedding module** (token embeddings plus positional embeddings). Naively, the number of position indices sets the maximum context length, though there are tricks to extend it. After the blocks sits an **output layer**, also called the unembedding layer or *model head*, which maps hidden vectors to token probabilities.
 
 Model size is driven by the model dimension, the number of blocks, the feedforward dimension and the vocabulary size. From the book's Llama table:
 
-| Model | Blocks | Model dim | FFN dim | Vocab |
+| Model | Vocab | Model dim | FFN dim | Blocks |
 |---|---|---|---|---|
-| Llama 2-7B | 32 | 4,096 | 11,008 | 32K |
-| Llama 2-13B | 40 | 5,120 | 13,824 | 32K |
-| Llama 2-70B | 80 | 8,192 | 22,016 | 32K |
-| Llama 3-8B | 32 | 4,096 | 14,336 | 128K |
-| Llama 3-70B | 80 | 8,192 | 28,672 | 128K |
-| Llama 3-405B | 126 | 16,384 | 53,248 | 128K |
+| Llama 2-7B | 32K | 4,096 | 11,008 | 32 |
+| Llama 2-13B | 32K | 5,120 | 13,824 | 40 |
+| Llama 2-70B | 32K | 8,192 | 22,016 | 80 |
+| Llama 3-8B | 128K | 4,096 | 14,336 | 32 |
+| Llama 3-70B | 128K | 8,192 | 28,672 | 80 |
+| Llama 3-405B | 128K | 16,384 | 53,248 | 126 |
 
 Context length affects memory but **not** the parameter count.
 
@@ -139,7 +139,7 @@ Caveats from the book:
 
 - The law assumes data is much cheaper than compute. It was derived for **dense models on mostly human-generated data**. MoE models and synthetic data are open research questions.
 - **Production is not only quality.** Llama's authors deliberately trained *smaller* models on *more* data than Chinchilla-optimal because smaller models are cheaper to serve. Sardana et al. (2023) adjusted the law to account for inference demand.
-- **Diminishing returns.** Going from a 3% to a 2% error rate can need an order of magnitude more data or compute. Dropping language-modeling loss from about 3.4 to 2.8 nats needed 10× more data, though users do notice that difference.
+- **Diminishing returns.** Going from a 3% to a 2% error rate can need an order of magnitude more data or compute. Lowering the language-modeling loss from roughly 3.4 nats to 2.8 took ten times as much data, though users do notice that difference.
 
 ```python-run
 # Chinchilla-style allocation: given compute C, solve N, D with D = 20N and C = 6ND.
@@ -152,7 +152,7 @@ for C in [1e21, 1e22, 1e23, 1e24, 1e25]:
 
 ### Scaling extrapolation and emergent abilities
 
-Big models are too expensive to train many times, so researchers study hyperparameters on small models and **extrapolate** (hyperparameter transfer). Microsoft and OpenAI transferred hyperparameters from a 40M model to a 6.7B model. It is hard to do well: ten hyperparameters already give 1,024 combinations, and **emergent abilities**, which appear only at scale, make extrapolation less reliable.
+Big models are too expensive to train many times, so researchers study hyperparameters on small models and **extrapolate** (hyperparameter transfer). Microsoft and OpenAI showed that settings tuned on a 40M-parameter model carried over to one with 6.7B parameters. It is hard to do well: ten hyperparameters already give 1,024 combinations, and **emergent abilities**, which appear only at scale, make extrapolation less reliable.
 
 ### Scaling bottlenecks
 

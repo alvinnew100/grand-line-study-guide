@@ -21,12 +21,12 @@ How you index depends on how you plan to retrieve, and chunking has a large effe
 ### Simple strategies
 
 - **Fixed-size chunks** by some unit: characters (for example 2,048), words (512), sentences (20) or paragraphs (one each).
-- **Recursive splitting**: split by sections. If a section is too long, split it into paragraphs, and if a paragraph is too long, into sentences. This reduces the chance of cutting related text arbitrarily.
+- **Recursive splitting**: start with the largest unit (sections). Any section over the size limit is broken into paragraphs, and any oversized paragraph into sentences. This reduces the chance of cutting related text arbitrarily.
 - **Structure-aware splitting**: language-specific splitters for code, Q&A documents split by question–answer pair, and special handling for languages such as Chinese.
 
 ### Overlap
 
-Without overlap, a boundary can cut through important context. Huyen's example is "I left my wife a note". Split into "I left my wife" and "a note", neither chunk carries the meaning. **Overlapping** chunks ensure boundary information appears whole in at least one chunk. A typical setting is a 2,048-character chunk with about 20 characters of overlap.
+Without overlap, a boundary can cut through important context. Huyen's example is the sentence "I left my wife a note". If the boundary falls after "wife", the first chunk says something very different from the original and the second says almost nothing. **Overlapping** chunks ensure boundary information appears whole in at least one chunk. A typical setting is a 2,048-character chunk with about 20 characters of overlap.
 
 ### Token-based chunking
 
@@ -40,7 +40,7 @@ You can chunk by the generative model's **tokens**. This aligns chunk sizes with
 | risk losing important information. If topic X is named only in the first half of a document, the second half's chunk may never be retrieved | fewer chunks fit, with more irrelevant text in each |
 | more chunks means more embeddings to compute and store and a larger search space (slower queries) | cheaper indexing |
 
-The chunk size must not exceed the generator's context limit, and for embedding-based retrieval it must not exceed the **embedding model's** context limit either. In Huyen's words, there is no universal best chunk size or overlap. You have to experiment.
+The chunk size must not exceed the generator's context limit, and for embedding-based retrieval it must not exceed the **embedding model's** context limit either. No chunk size or overlap is right for every application, so the book's advice is to test several on your own data.
 
 ```python-run
 def fixed_chunks(words, size, overlap):
@@ -54,13 +54,13 @@ for size, ov in [(4, 0), (4, 2)]:
 
 ## 2. Reranking
 
-The retriever's first ranking can be refined. Reranking is especially useful when you need to **cut the number of documents**, to fit the context window or to reduce input tokens.
+The retriever's first ranking can be refined. It helps most when you have to **cut the number of documents**, to fit the context window or to reduce input tokens.
 
 - **Two-stage pattern.** A cheap retriever fetches many candidates, and a more precise, more expensive model (for example a cross-encoder that reads query and document together) reorders the top ones.
 - **Time-based reranking.** Give recent data more weight. This matters for news, email assistants and stock analysis.
 - **Diversity.** A common extension outside the book is maximal marginal relevance (MMR), which penalizes candidates that are too similar to ones already chosen, so the context is not filled with near-duplicates. You will implement it in the problems.
 
-Huyen makes a point about **context reranking vs search reranking**. In search, the exact position (first or fifth) is crucial. In context reranking, order still matters, because models read the beginning and end of context best, but as long as a document is *included*, its exact rank matters less.
+Huyen makes a point about **context reranking vs search reranking**. In search, whether a result lands in the top spot or a few places down decides whether it gets seen. When reranking for a model's context, order still matters, because models read the beginning and end of context best, but as long as a document is *included*, its exact rank matters less.
 
 ```python-run
 import numpy as np
@@ -76,14 +76,14 @@ for alpha in [1.0, 0.7]:
 
 Query rewriting is also called query reformulation, normalization or expansion. Consider this conversation:
 
-> **User:** When was the last time John Doe bought something from us?
-> **AI:** John last bought a Fruity Fedora hat two weeks ago, on January 3, 2030.
-> **User:** How about Emily Doe?
+> **User:** What plan is the Acme Corp account on?
+> **AI:** Acme Corp has been on the Team plan since March.
+> **User:** And Globex?
 
-Retrieving with "How about Emily Doe?" alone returns junk. The query must be rewritten to stand alone: *"When was the last time Emily Doe bought something from us?"*
+Retrieving with "And Globex?" alone returns junk. The query must be rewritten to stand alone: *"What plan is the Globex account on?"*
 
-- Traditional search engines use heuristics. AI applications can use a model with a prompt such as "Given the following conversation, rewrite the last user input to reflect what the user is actually asking."
-- It gets hard with **identity resolution**. "How about his wife?" first requires looking up who his wife is. If that information is unavailable, the rewriter should say the query cannot be resolved. It should **not hallucinate a name**, which would produce a confidently wrong answer.
+- Traditional search engines use heuristics. AI applications can hand the job to a model: show it the conversation so far and ask it to restate the user's latest message as a complete, self-contained question.
+- It gets hard with **identity resolution**. A follow-up such as "And its parent company?" first requires looking up which company that is. If that information is unavailable, the rewriter should say the query cannot be resolved. It should **not hallucinate a name**, which would produce a confidently wrong answer.
 
 ```python-run
 # A rule-based stand-in for an LLM rewriter: resolve an elliptical follow-up using the previous question.
@@ -94,8 +94,8 @@ def rewrite(history, last):
     prev_q = history[-1]
     entity = re.search(r"[A-Z][a-z]+ [A-Z][a-z]+", prev_q)          # naive: first capitalized full name
     return prev_q.replace(entity.group(0), m.group(2)) if entity else last
-hist = ["When was the last time John Doe bought something from us?"]
-print(rewrite(hist, "How about Emily Doe?"))
+hist = ["When did Maria Lopez last place an order with us?"]
+print(rewrite(hist, "How about Daniel Kim?"))
 ```
 
 ## 4. Contextual retrieval
@@ -103,7 +103,7 @@ print(rewrite(hist, "How about Emily Doe?"))
 The idea is to **augment each chunk with context** so it is easier to retrieve.
 
 - **Metadata**: tags, keywords, extracted entities. If a document contains the error code `EADDRNOTAVAIL (99)`, storing it as metadata lets you find the chunk by keyword even after it has been embedded. Products can be augmented with descriptions and reviews, and images and videos with titles and captions.
-- **Questions it can answer.** For customer support, attach likely questions to the password-reset article: "How to reset password?", "I forgot my password", "I can't log in", "Help, I can't find my account".
+- **Questions it can answer.** For customer support, attach the phrasings customers actually use to the refund-policy article: "Can I get my money back?", "How do I return this?", "I was charged twice".
 - **Document context.** A chunk cut from the middle of a document may not say what it is about. Add the document **title and summary**. Anthropic (2024) uses a model to write a short context of **50–100 tokens** that situates each chunk within its document, using a prompt that shows the whole document and the chunk and asks for a succinct situating context. That context is **prepended** to the chunk before indexing with both BM25 and embeddings.
 
 ```python-run
@@ -131,20 +131,20 @@ Enterprise needs such as access control, compliance and separation of data and c
 
 ### Multimodal RAG
 
-If the generator is multimodal, context can include images, audio and video. For "What's the color of the house in the Pixar movie Up?", the retriever fetches a picture of the house.
+If the generator is multimodal, context can include images, audio and video. If a user asks what colour a landmark building is, the retriever can fetch a photo of it and pass that to the model along with the question.
 
 - Retrieval can use **metadata** (titles, tags, captions) with ordinary text search.
 - Or it can use a **multimodal embedding model** such as CLIP. Embed images and texts into the same space, embed the query, and fetch the nearest images.
 
 ### RAG with tabular data
 
-Many answers live in tables. For an e-commerce site ("Kitty Vogue" in the book), "How many units of Fruity Fedora were sold in the last 7 days?" needs a query against a `Sales` table. This is **text-to-SQL**:
+Many answers live in tables. Take an online shop. A question such as "How many units of our best-selling hat did we sell this past week?" can only be answered by querying a `Sales` table. This is **text-to-SQL**:
 
 1. **Text-to-SQL**: generate the SQL query from the user question and the table schemas.
 2. **SQL execution**: run it.
 3. **Generation**: answer from the SQL result and the original question.
 
-If there are too many tables to fit their schemas in the prompt, add an intermediate step that predicts **which tables** are needed. Text-to-SQL can be done by the same generator or by a specialized model. Notice that this is already agent-like: the model generates an action (SQL) that a tool executes. The next lesson covers agents.
+If there are too many tables to fit their schemas in the prompt, add an intermediate step that predicts **which tables** are needed. The SQL can be written by the main generator model or by a separate model specialized in text-to-SQL. Notice that this is already agent-like: the model generates an action (SQL) that a tool executes. The next lesson covers agents.
 
 ```python-run
 import sqlite3
@@ -187,8 +187,8 @@ print(f"Q: {question}\nSQL: {generated_sql}\nA: {result} units were sold in the 
   {"q": "Halving the chunk size means…", "options": ["Half as many embeddings to store", "Twice as many chunks to index and search, but twice as many chunks fit in context", "No change", "Better recall guaranteed"], "answer": 1, "explain": "Smaller chunks give more diverse context but raise indexing and storage cost and can lose context."},
   {"q": "What's a downside of chunking by the generator's tokens?", "options": ["Tokens are larger than words", "Switching to a model with a different tokenizer requires re-indexing", "It can't be done", "It breaks BM25"], "answer": 1, "explain": "Token-based chunks depend on a specific tokenizer."},
   {"q": "How does context reranking differ from search reranking?", "options": ["Order never matters", "Exact rank matters less as long as the document is included, though placement at start/end still helps", "It uses no models", "It must be random"], "answer": 1, "explain": "In search the top positions are everything. For context, inclusion matters most."},
-  {"q": "The follow-up 'How about Emily Doe?' should be handled by…", "options": ["Retrieving with it verbatim", "Rewriting it into a standalone query using conversation history", "Ignoring it", "Increasing top-k"], "answer": 1, "explain": "Query rewriting makes the query self-contained before retrieval."},
-  {"q": "A user asks 'How about his wife?' and the system has no record of who she is. The rewriter should…", "options": ["Guess a plausible name", "Acknowledge that the query can't be resolved rather than hallucinate", "Return an empty string silently", "Use the user's name"], "answer": 1, "explain": "A hallucinated identity leads to a confidently wrong answer."},
+  {"q": "In a chat about account plans, the follow-up 'And Globex?' should be handled by…", "options": ["Retrieving with it verbatim", "Rewriting it into a standalone query using conversation history", "Ignoring it", "Increasing top-k"], "answer": 1, "explain": "Query rewriting makes the query self-contained before retrieval."},
+  {"q": "A user asks 'And its parent company?' and the system has no record of which company that is. The rewriter should…", "options": ["Guess a plausible company", "Acknowledge that the query can't be resolved rather than hallucinate", "Return an empty string silently", "Use the user's name"], "answer": 1, "explain": "A hallucinated identity leads to a confidently wrong answer."},
   {"q": "Anthropic's contextual retrieval does what before indexing?", "options": ["Deletes short chunks", "Prepends a short model-generated context (about 50-100 tokens) situating each chunk in its document", "Translates chunks to English", "Quantizes embeddings"], "answer": 1, "explain": "The situating context makes chunks retrievable even when they don't mention the document's subject."},
   {"q": "The three steps of RAG over tabular data are…", "options": ["Chunk, embed, rerank", "Text-to-SQL, SQL execution, generation from the result", "Tokenize, sample, decode", "Crawl, index, serve"], "answer": 1, "explain": "The model writes a query, a tool executes it, and the model answers from the result."}
 ]

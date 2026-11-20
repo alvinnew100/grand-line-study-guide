@@ -12,7 +12,7 @@ The next lesson covers what you need once this is running: observability, orches
 
 ## The starting point
 
-In its simplest form, the application receives a query, sends it to a model, and returns the response. There is no context augmentation, no guardrails and no optimization. "Model API" here means either a third-party API (OpenAI, Google, Anthropic) or a self-hosted model.
+In its simplest form, the application receives a query, sends it to a model, and returns the response. Nothing augments the context, nothing guards the inputs or outputs, and nothing is optimized. "Model API" here means either a third-party API (OpenAI, Google, Anthropic) or a self-hosted model.
 
 ```mermaid
 flowchart LR
@@ -27,7 +27,7 @@ The first addition is usually a way for the system to **gather the information e
 - text retrieval (term-based, embedding-based or hybrid), image and multimodal retrieval, tabular retrieval through text-to-SQL, and
 - **tools** that gather information automatically: web search, news, weather, internal APIs.
 
-Model API providers differ in what they support, including document upload limits, retrieval types and tool use, so compare them. Specialized RAG solutions may let you upload as many documents as your vector database holds, while general-purpose model APIs often cap uploads.
+Model API providers differ in what they support, including document upload limits, retrieval types and tool use, so compare them. A dedicated RAG product may be limited only by the capacity of its vector store, while a general-purpose model API usually caps how many documents you can attach.
 
 ## Step 2. Put in guardrails
 
@@ -39,9 +39,9 @@ They protect against two kinds of risk.
 
 **1. Leaking private information to external APIs.** This applies when you send data outside your organization. It can happen when an employee pastes a company secret into a prompt, when a developer puts internal policies in the system prompt, or when a tool retrieves private data into the context. There is no airtight way to stop it, but you can use **sensitive-data detection** tools on outgoing prompts for:
 
-- personal information (ID numbers, phone numbers, bank accounts),
-- human faces, and
-- keywords and phrases associated with intellectual property or privileged information.
+- personal identifiers such as national ID, phone and bank account numbers,
+- faces in images, and
+- terms tied to the company's intellectual property or other privileged material.
 
 When sensitive data is found, either **block** the whole query or **mask** it. A phone number can be replaced with a placeholder such as `[PHONE NUMBER]`. Keep a **reverse PII map** so that if the response contains the placeholder, you can **unmask** it before showing the user.
 
@@ -77,7 +77,7 @@ Output guardrails have two jobs: **catch output failures** and **specify the pol
 Failures to catch:
 
 - **Quality**: empty responses (the easiest to detect), **malformatted** responses such as invalid JSON, **factually inconsistent** (hallucinated) responses, and generally bad responses.
-- **Security**: **toxic** responses (racist, sexual, illegal), responses containing **private or sensitive information**, responses that trigger **remote tool or code execution**, and **brand-risk** responses that mischaracterize your company or competitors.
+- **Security**: **toxic** responses (racist, sexual, illegal), responses containing **private or sensitive information**, responses that trigger **remote tool or code execution**, and **brand-risk** responses that say something false or embarrassing about your company or a competitor.
 
 Track the **false refusal rate** as well as security failures. A system that blocks legitimate requests frustrates users.
 
@@ -92,7 +92,7 @@ Track the **false refusal rate** as well as security failures. A system that blo
 - **Streaming.** Output guardrails work poorly in stream mode. Partial responses are hard to evaluate, and unsafe content may reach the user before a guardrail can block it.
 - **Self-hosting vs APIs.** API providers supply many guardrails out of the box. Self-hosting removes the need for some input guardrails, because data does not leave your organization.
 
-Ready-made solutions include Meta's Purple Llama, NVIDIA NeMo Guardrails, Azure PyRIT and Azure AI content filters, the Perspective API and OpenAI's moderation API. Some model gateways bundle guardrails.
+Ready-made solutions include Meta's Purple Llama, NVIDIA NeMo Guardrails, Azure's PyRIT and content filters, Google's Perspective API, and the moderation endpoint from OpenAI. Some model gateways bundle guardrails.
 
 ```mermaid
 flowchart LR
@@ -105,9 +105,9 @@ flowchart LR
   POL --> M
 ```
 
-## Step 3. Add model router and gateway
+## Step 3. Add a model router and a gateway
 
-As applications grow to use several models, two components help manage the complexity and cost.
+Once an application relies on more than one model, two components help manage the complexity and cost.
 
 ### Router
 
@@ -116,17 +116,17 @@ Use **different solutions for different queries**, not one model for everything.
 - **Specialization.** One model for technical troubleshooting and another for billing may each do better than a generalist.
 - **Cost.** Send simple queries to cheaper models.
 
-A router typically contains an **intent classifier** that predicts what the user is trying to do, and routes on that:
+The core of most routers is an **intent classifier**. It guesses the user's goal, and the query is routed accordingly:
 
 - A password reset goes to the FAQ page.
 - A billing mistake goes to a human operator.
 - A technical problem goes to the troubleshooting chatbot.
 
-An intent classifier also keeps the system away from **out-of-scope** conversations. Asked who it would vote for, the bot returns a stock reply without spending an API call. It can detect **ambiguous** queries and ask for clarification. For "Freezing", it asks whether the user wants to freeze their account or is talking about the weather.
+An intent classifier also keeps the system away from **out-of-scope** conversations. Asked who it would vote for, the bot returns a stock reply without spending an API call. It can also spot **ambiguous** queries and ask a follow-up question. For "Freezing", it asks whether the user wants to freeze their account or is talking about the weather.
 
 Other routers decide what to do next. A **next-action predictor** for agents chooses between the code interpreter and the search API. A **memory router** decides whether to use an attached document or search the internet.
 
-Routers should be **fast and cheap** so that several can be used without much overhead. Many teams adapt small language models (GPT-2, BERT, Llama 7B) or train smaller classifiers from scratch. Routing usually happens **before** retrieval: is the query in scope, and does it need retrieval? It can also happen after: should this go to a human? Watch **context limits**. If a 1,000-token query bound for a 4K-context model picks up 8,000 tokens from a web search, either truncate the context or reroute to a model with a larger window.
+A router has to be **quick and inexpensive**, because a pipeline may chain several of them. Many teams adapt small language models (GPT-2, BERT, Llama 7B) or train smaller classifiers from scratch. Routing usually happens **before** retrieval: is the query in scope, and does it need retrieval? It can also happen after: should this go to a human? Watch **context limits**. If a 1,000-token query bound for a 4K-context model picks up 8,000 tokens from a web search, either truncate the context or reroute to a model with a larger window.
 
 ```python-run
 # A toy router: intent classification -> route. In production this is a small, fast model.
@@ -145,14 +145,14 @@ for q in ["I forgot my password", "I was charged twice", "The app crashes on sta
 
 ### Gateway
 
-A **model gateway** is an intermediate layer that lets your organization work with different models in a **unified and secure** way.
+A **model gateway** sits between your applications and the models. It gives the whole organization **one consistent, secured entry point** to all of them.
 
 - **Unified interface.** One wrapper sits in front of all models, self-hosted and commercial. If a provider changes its API, you update the gateway, not every application.
 - **Access control and cost management.** Applications get access to the gateway, not your organizational API tokens, which leak easily. The gateway enforces fine-grained access (which user or application may use which model) and **monitors and limits usage** to prevent abuse and control spend.
 - **Fallback policies.** When rate limits or API failures occur, which Huyen notes is unfortunately common, the gateway routes to alternative models, retries after a wait, or degrades gracefully.
 - **Other functions**, since all traffic already passes through it: load balancing, logging and analytics, and sometimes caching and guardrails.
 
-Gateways are fairly simple to build, and many exist off the shelf: Portkey's AI Gateway, MLflow AI Gateway, Wealthsimple's LLM Gateway, TrueFoundry, Kong and Cloudflare.
+Gateways are fairly simple to build, and many exist off the shelf: open source and commercial options include the gateways from Portkey, MLflow, Wealthsimple, TrueFoundry, Kong and Cloudflare.
 
 ```python-run
 # A minimal gateway: unified call, per-key access control, usage accounting, and fallback on failure.
@@ -187,7 +187,7 @@ A cached item is used only when exactly the same item is requested. If a user as
 
 Implementation: in-memory storage for speed, or PostgreSQL, Redis or tiered storage for capacity. You need an **eviction policy**: LRU (least recently used), LFU (least frequently used) or FIFO.
 
-What to cache depends on how likely the query is to recur. **User-specific** queries ("What's the status of my recent order?") and **time-sensitive** queries ("How's the weather?") are poor candidates. Some teams train a classifier to predict whether a query should be cached.
+What to cache depends on how likely the query is to recur. **User-specific** queries ("What's the status of my recent order?") and **time-sensitive** queries ("How's the weather?") are poor candidates. Some teams use a small classifier to decide which queries are worth caching.
 
 > [!WARNING]
 > **Caching can leak data.** User X asks "What is the return policy for electronics?" The answer depends on X's membership, so the response includes X's information, and the system caches it as if it were generic. Later, user Y asks the same question and receives X's information. Never cache responses that depend on user-specific context without including that context in the cache key.
@@ -197,10 +197,10 @@ What to cache depends on how likely the query is to recur. **User-specific** que
 Cached items are reused when the new query is **semantically similar**. "What's the capital of Vietnam?" and "What's the capital city of Vietnam?" can share an answer. The mechanism:
 
 1. Embed the query.
-2. Use vector search to find the cached embedding with the highest similarity, X.
+2. Search the cache's vector index for the stored query whose embedding is closest. Call its similarity score X.
 3. If X is above a **similarity threshold**, return the cached result. Otherwise process the query and cache it with its embedding.
 
-Huyen is cautious. Semantic caching's value is "more dubious" because many of its components can fail: it needs high-quality embeddings, working vector search and a reliable similarity metric, and the threshold is hard to set. A false match returns a **wrong answer**. The vector search also adds latency and compute. It can be worth it if the hit rate is high, so measure efficiency, cost and performance risk first.
+Huyen is cautious. She rates its value as more doubtful than exact caching, because it has many parts that can fail: it needs high-quality embeddings, working vector search and a reliable similarity metric, and the threshold is hard to set. A false match returns a **wrong answer**. The vector search also adds latency and compute. It can be worth it if the hit rate is high, so measure efficiency, cost and performance risk first.
 
 ```mermaid
 flowchart LR

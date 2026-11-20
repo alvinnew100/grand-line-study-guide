@@ -11,13 +11,13 @@ flowchart TB
   IT --> S1
 ```
 
-## Step 1. Evaluate all components in a system
+## Step 1. Evaluate every component
 
-Real applications have many components and many turns. Evaluate the **end-to-end output** and each **intermediate output** independently. Otherwise you will not know where a failure came from.
+Production applications are built from several components and often run over several turns. Score the **final output** and also every **intermediate output** on its own. Otherwise you will not know where a failure came from.
 
 Huyen's example is extracting a person's current employer from a resume PDF in two steps:
 
-1. Extract all text from the PDF. Evaluate this with similarity between the extracted text and the ground-truth text.
+1. Extract all text from the PDF. Score it by how similar the extracted text is to a hand-checked transcription.
 2. Extract the current employer from that text. Evaluate this with accuracy, given correctly extracted text.
 
 If the final answer is wrong, these per-component metrics tell you which step to fix.
@@ -39,9 +39,9 @@ Decide what the application should do, and also what it should **not** do. A cus
 
 LinkedIn's criteria for its job assessment application included relevance, factual consistency and safety. Huyen's support-bot example uses relevance, factual consistency and safety.
 
-### Create scoring rubrics with examples
+### Write scoring rubrics, with examples
 
-For each criterion, pick a **scoring system** (binary, 1–5, 0–1) and write a **rubric with examples**. What does a 3 look like? Validate the rubric with people. If humans find it hard to apply consistently, refine it, because an AI judge will find it hard too. The same rubric can later double as annotation guidelines for finetuning data.
+For every criterion, pick a **scoring system** (binary, 1–5, 0–1) and write a **rubric with examples**. What does a 3 look like? Validate the rubric with people. If humans find it hard to apply consistently, refine it, because an AI judge will find it hard too. The same rubric can later double as annotation guidelines for finetuning data.
 
 ### Tie evaluation metrics to business metrics
 
@@ -60,12 +60,12 @@ This mapping also sets the **usefulness threshold**. Perhaps the product is not 
 Different criteria call for different methods. You might use a **small toxicity classifier**, **semantic similarity** for relevance, and an **AI judge** for factual consistency against the context. Mix cost tiers: a cheap classifier on 100% of traffic and an expensive judge on 1%.
 
 - **Use logprobs when available.** They show confidence. A model whose top class has 30–40% probability is unsure, and one at 95% is confident. They also give perplexity for fluency and consistency checks.
-- **Use automatic metrics as much as possible, but don't be afraid of human evaluation**, even in production. LinkedIn manually evaluated up to 500 daily conversations. Humans are often the north-star metric for open-ended quality.
+- **Automate what you can, and keep humans in the loop anyway**, including in production. LinkedIn manually evaluated up to 500 daily conversations. Humans are often the north-star metric for open-ended quality.
 - **Plan for production.** References often do not exist in production, but users do. Decide which feedback to collect and how it correlates with your offline metrics (Module 10).
 
 ### Annotate evaluation data
 
-Curate annotated examples for each component and criterion, for both turn-based and task-based evaluation. **Use real production data** when possible, and use natural labels if you have them. Otherwise label with humans or AI (Module 8).
+Build a labelled set for every component and every criterion, covering turn-level and task-level evaluation. **Prefer real production data** where you can, and use natural labels if you have them. Otherwise label with humans or AI (Module 8).
 
 **Slice your data.** Separate the data into subsets and examine performance on each. This helps you:
 
@@ -74,25 +74,25 @@ Curate annotated examples for each component and criterion, for both turn-based 
 - find improvement areas, and
 - avoid **Simpson's paradox**, where model A beats B on aggregate but loses on every subgroup.
 
-Huyen's Simpson's paradox table (originally kidney-stone treatment data):
+Here is a small made-up example of Simpson's paradox (the book illustrates it with a well-known medical dataset):
 
 | | Group 1 | Group 2 | Overall |
 |---|---|---|---|
-| Model A | **93%** (81/87) | **73%** (192/263) | 78% (273/350) |
-| Model B | 87% (234/270) | 69% (55/80) | **83%** (289/350) |
+| Model A | **90%** (90/100) | **60%** (150/250) | 69% (240/350) |
+| Model B | 85% (238/280) | 50% (35/70) | **78%** (273/350) |
 
 A wins both groups, yet B wins overall, because B's examples are concentrated in the easier group.
 
 ```python-run
-A = {"g1": (81, 87), "g2": (192, 263)}
-B = {"g1": (234, 270), "g2": (55, 80)}
+A = {"g1": (90, 100), "g2": (150, 250)}
+B = {"g1": (238, 280), "g2": (35, 70)}
 for name, m in [("A", A), ("B", B)]:
     per = {g: f"{c/n:.0%}" for g, (c, n) in m.items()}
     tot = sum(c for c, _ in m.values()) / sum(n for _, n in m.values())
     print(name, per, "overall", f"{tot:.0%}")
 ```
 
-Keep **multiple evaluation sets**: one that mirrors the production distribution; slices by tier (paid vs free), traffic source (mobile vs web) and usage; a set of examples the system is known to get wrong; examples with common user mistakes such as typos; and an **out-of-scope** set to check the app declines properly. In Huyen's words, *if you care about something, put a test set on it.*
+Keep **multiple evaluation sets**: one that mirrors the production distribution; slices by tier (paid vs free), traffic source (mobile vs web) and usage; a set of examples the system is known to get wrong; examples with common user mistakes such as typos; and an **out-of-scope** set to check the app declines properly. The book's rule of thumb is that anything you care about deserves its own test set.
 
 ### How much evaluation data? Bootstrap it
 
@@ -117,7 +117,7 @@ Rules of thumb from OpenAI, cited by Huyen: to detect a 30% score difference you
 
 Ask these questions about the pipeline itself:
 
-- **Is it giving the right signals?** Do better responses get higher scores? Do eval improvements lead to better business outcomes?
+- **Is it giving the right signals?** Do better responses get higher scores? When the evaluation score goes up, do business results follow?
 - **How reliable is it?** If you run it twice, do you get the same result? Bootstrap variance, judge consistency and fixed sampling settings all help.
 - **How correlated are your metrics?** If two metrics are perfectly correlated, you need only one. If they are completely uncorrelated, either you found something interesting or one metric is broken.
 - **How much cost and latency does it add?** Evaluation in the request path (guardrails) adds latency, and judges add cost. Sampling helps.

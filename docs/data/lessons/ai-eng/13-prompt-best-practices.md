@@ -8,22 +8,22 @@ Communicating with a model is like communicating with a person: clarity helps.
 
 ### Explain, without ambiguity, what you want
 
-If you want an essay scored, specify the scale. Is it 1–5 or 1–10? If the model is unsure, should it pick its best guess or output "I don't know"? As you experiment you will see undesired behaviours. Adjust the prompt for each. If the model outputs fractional scores such as 4.5 and you do not want them, say "output only integer scores".
+If you want an essay scored, specify the scale. Is it 1–5 or 1–10? If the model is unsure, should it pick its best guess or output "I don't know"? As you experiment you will see undesired behaviours. Adjust the prompt for each. If the model outputs fractional scores such as 4.5 and you do not want them, tell it that scores must be whole numbers.
 
-### Ask the model to adopt a persona
+### Give the model a persona
 
-A persona sets the perspective for the response. Given the essay "I like chickens. Chickens are fluffy and they give tasty eggs.", a default model might score it 2/5. Told to act as a **first-grade teacher**, it scores it 4/5. Personas matter for both tone and judgment.
+A persona fixes the point of view the response is written from. The book's example is a child's two-sentence essay about liking chickens. With no persona, a model might give it 2 out of 5. Asked to grade as a **first-grade teacher**, it gives 4 out of 5. Personas matter for both tone and judgment.
 
 ### Provide examples
 
-Examples remove ambiguity about how you want the model to respond. Huyen's example: a bot for young children is asked "Will Santa bring me presents on Christmas?" Without guidance, the model may explain that Santa is fictional. A single example Q&A that plays along (about the tooth fairy, say) steers it toward the tone you want.
+Examples show the model the kind of response you expect, which instructions alone often leave open. Huyen's example: a bot for young children is asked "Will Santa bring me presents on Christmas?" Without guidance, the model may explain that Santa is fictional. A single example Q&A that plays along (about the tooth fairy, say) steers it toward the tone you want.
 
 Choose example **formats that use fewer tokens** when length matters. Huyen compares two layouts for the same labeled examples: a verbose one ("Label the following item as edible or inedible. Input: chickpea. Output: edible …") at 38 tokens and a compact `chickpea --> edible` layout at 27 tokens, with similar effectiveness.
 
 ### Specify the output format
 
 - Ask for **concise** output when you want it. Long outputs cost latency and money.
-- Tell the model to skip preambles such as "Based on the content of this essay, I'd give it a score of…".
+- Tell the model to skip the lead-in sentence before the answer (for a grader, something like "After reading this essay, my score is…").
 - For structured output, state the keys and types and show an example.
 - Use **markers** to mark where the answer should start. For classification-style prompts without a marker, the model may continue the *input* instead of producing the label. `edible-or-not: pineapple pizza -->` makes the boundary explicit.
 
@@ -89,12 +89,12 @@ for q in ["I was charged twice this month", "The app shows error 502", "Who shou
 
 ### Chain-of-thought (CoT)
 
-**CoT** means explicitly asking the model to think step by step (Wei et al., 2022, almost a year before ChatGPT). It was one of the first techniques that worked across models, improving LaMDA, GPT-3 and PaLM on math and reasoning benchmarks. LinkedIn found it also reduces hallucinations.
+With **CoT** you ask the model outright to reason through the problem in steps before answering. The technique comes from Wei et al. (2022) and predates ChatGPT by close to a year. It was one of the first techniques that worked across models, improving LaMDA, GPT-3 and PaLM on math and reasoning benchmarks. LinkedIn found it also reduces hallucinations.
 
 Variants, from least to most guided:
 
 - **Zero-shot CoT**: append "Think step by step before answering" or "Explain your rationale before giving an answer".
-- **Specified steps**: "Follow these steps: 1. Determine the speed of the fastest dog breed. 2. … 3. Determine which is faster."
+- **Specified steps**: you list the steps yourself. For "which is heavier, a grand piano or a small car?", the steps could be: look up a typical weight for each, then compare.
 - **One-shot or few-shot CoT**: include a worked example with its reasoning.
 
 ### Self-critique
@@ -110,9 +110,9 @@ The cost is **latency**. A model that reasons through intermediate steps makes u
 
 Prompt engineering is back-and-forth. Each model has quirks: one is better with numbers, another at roleplay; some prefer instructions first, some last. Get to know your model, and read the provider's prompting guide.
 
-- **Version your prompts** and use an experiment-tracking tool.
-- **Standardize evaluation metrics and data** so you can compare prompts fairly.
-- **Evaluate each prompt in the context of the whole system.** A prompt that improves one subtask can make the overall system worse.
+- **Version your prompts**, and record experiments in a tracking tool.
+- **Keep the evaluation data and metrics fixed** so that two prompts can be compared fairly.
+- **Judge a prompt by its effect on the full pipeline.** An edit that helps one subtask can still make the end result worse.
 
 ## 6. Evaluate prompt engineering tools
 
