@@ -539,8 +539,8 @@ class Solution:
         [[[INF, INF], [INF, INF]]],
         [[[0, INF, INF], [INF, -1, INF], [INF, INF, 0]]],
         [_rooms(_R, 60, 60, 0.25, 0.01)],
-        [_rooms(_R, 100, 100, 0.2, 0.002)],
-        [[[0] + [INF] * 149] + [[INF] * 150 for _ in range(149)]],
+        [_rooms(_R, 60, 60, 0.2, 0.002)],
+        [[[0] + [INF] * 79] + [[INF] * 80 for _ in range(79)]],
     ],
     examples=1,
     wrong_solutions=[

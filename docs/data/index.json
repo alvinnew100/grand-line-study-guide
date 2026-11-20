@@ -192,7 +192,7 @@
   "words": 0,
   "modules": 4,
   "lessons": 11,
-  "problems": 16
+  "problems": 29
  },
  {
   "id": "neet-linked-trees",
@@ -220,7 +220,7 @@
    "NeetCode 150 roadmap",
    "Python docs: bisect, collections.deque"
   ],
-  "words": 14798,
+  "words": 20005,
   "modules": 3,
   "lessons": 8,
   "problems": 35

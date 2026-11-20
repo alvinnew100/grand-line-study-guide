@@ -32,7 +32,7 @@ O(1):
 from collections import deque
 import time
 
-n = 100_000
+n = 40_000
 lst = list(range(n))
 t = time.time()
 while lst: lst.pop(0)
