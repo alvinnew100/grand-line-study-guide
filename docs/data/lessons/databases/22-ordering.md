@@ -1,266 +1,287 @@
 # Ordering, causality, Lamport clocks and total order broadcast
 
-A linearizable register behaves as if there is one copy of the data and every operation takes effect at a single point in time. That definition implies operations are executed in some well-defined **order**. Ordering has come up repeatedly in this track:
+Look back over this track and one idea keeps returning in different clothes: **order**. The whole job of a leader in single-leader replication is to decide the order of writes, so that followers apply them identically. Serializability means transactions behave as if executed in *some* order. Linearizability means operations appear to happen in one well-defined order that agrees with real time. Timestamps and clocks were attempts to impose order on a messy world - which write happened later?
 
-- The main job of the leader in single-leader replication is to determine the **order of writes** in the replication log.
-- Serializability is about ensuring transactions behave as if executed in **some sequential order**.
-- Timestamps and clocks are attempts to bring order into a disorderly world.
+This lesson treats ordering as a subject in its own right. It turns out that there are two notions of order, a weak one (causal order, a *partial* order) and a strong one (a *total* order), that the weak one is cheap and the strong one expensive, and that the strong one - in the form of **total order broadcast** - is equivalent to consensus. Understanding where the boundary lies explains why some things can be done with clever counters and others need a full consensus protocol.
 
-There are deep connections between ordering, linearizability and consensus.
+## 1. Why order matters: causality
 
-## 1. Ordering and causality
+Order matters because it preserves **causality** - cause comes before effect.
 
-Ordering keeps coming up because it helps preserve **causality**:
+- A reply only makes sense after the message it replies to. A reader who sees the reply first is confused.
+- A row has to be created before it can be updated. A replica that receives the update first has nothing to apply it to.
+- If operation B was made by someone who had already seen the result of operation A, then A *happened before* B. If neither knew of the other, they are **concurrent**.
+- A snapshot that is "consistent" is consistent *with causality*: if it contains an effect, it contains everything that led to it. Reading a snapshot means seeing the effects of everything that causally happened before a point in time, and nothing after.
+- Write skew arises when a decision (allow this admin to step down) is causally dependent on an observation (there are two admins) that is no longer true.
+- In the auction scene of the previous lesson, Eli's stale result was a causality violation: his query came causally *after* Dana's announcement.
 
-- In consistent prefix reads, an observer saw an answer before its question. The question *caused* the answer.
-- With multi-leader replication, some writes could overtake others, so an update could arrive for a row that does not exist yet. The row must be created before it is updated.
-- In detecting concurrent writes, if A happened before B then B might know about A or build on it. If they are concurrent there is no causal link.
-- A snapshot under snapshot isolation is **consistent with causality**: if it contains an answer, it must contain the question.
-- Write skew involved causal dependencies: Alice was allowed to go off call because the transaction *thought* Bob was still on call.
+A system that respects the order imposed by cause and effect is **causally consistent**. Snapshot isolation provides it, for example.
 
-Causality imposes an ordering on events: cause comes before effect. If a system obeys the ordering imposed by causality, we say it is **causally consistent**.
+### A partial order, not a total order
 
-### 1.1 The causal order is not a total order
+A **total order** lets you compare any two elements: of two distinct integers one is greater. A **partial order** allows some pairs to be incomparable: of the sets $\{a, b\}$ and $\{b, c\}$, neither contains the other.
 
-A **total order** allows any two elements to be compared. Natural numbers are totally ordered. Mathematical sets are not: is $\{a, b\}$ greater than $\{b, c\}$? Neither is a subset of the other, so they are **incomparable**. Sets are **partially ordered**.
+The two consistency models differ in exactly this way:
 
-- **Linearizability** gives a **total order** of operations. If the system behaves as though there is one copy of the data and every operation is atomic, then for any two operations we can always say which happened first.
-- **Causality** defines a **partial order**. Two events are ordered if they are causally related, and incomparable if they are concurrent.
-
-So a linearizable datastore has **no concurrent operations**: there is a single timeline. Concurrency would mean the timeline branches and merges again, as in Git's version history.
-
-### 1.2 Linearizability is stronger than causal consistency
-
-Linearizability **implies** causality. Any linearizable system preserves causality correctly. That makes linearizable systems simple to understand, but linearizability harms performance and availability, especially with significant network delays.
-
-The good news is that a middle ground exists. A system can be causally consistent without paying the performance cost of linearizability. In fact, **causal consistency is the strongest possible consistency model that does not slow down due to network delays and remains available in the face of network failures**. In many cases, systems that appear to require linearizability really only require causal consistency.
-
-### 1.3 Capturing causal dependencies
-
-To maintain causality, you need to know which operation happened before which. If one operation happened before another, they must be processed in that order on every replica. This is the idea behind **version vectors** (lesson 12), generalised to the whole database. The database needs to know which version of the data the application read, which is why the version number from the prior read is passed back on a write. SSI conflict detection uses a similar idea.
-
-## 2. Sequence number ordering
-
-Explicitly tracking all causal dependencies can become impractical, because clients read lots of data before writing. A better way is to use **sequence numbers** or **timestamps** to order events. The timestamp need not come from a time-of-day clock. It can come from a **logical clock**, an algorithm that generates a sequence of numbers to identify operations, typically using counters incremented for every operation.
-
-Such sequence numbers are compact and provide a **total order**. We can create them in a total order that is **consistent with causality**: if A causally happened before B, then A gets a lower sequence number than B. Concurrent operations may be ordered arbitrarily.
-
-In a single-leader database, the replication log defines a total order of writes consistent with causality: the leader increments a counter for each operation.
-
-### 2.1 Noncausal sequence number generators
-
-Without a single leader (multi-leader, leaderless, or a partitioned database), people use various methods:
-
-- Each node generates its own independent set of sequence numbers. With two nodes, one generates only odd numbers and the other only even numbers.
-- Attach a timestamp from a time-of-day clock (physical clock) to each operation. This is what LWW does.
-- Preallocate blocks of sequence numbers: node A claims 1 to 1,000 and node B claims 1,001 to 2,000.
-
-These perform better and scale better than pushing everything through one leader. They produce unique, approximately increasing numbers. The problem is that the numbers are **not consistent with causality**. The odd/even scheme cannot tell you which of an odd-numbered and an even-numbered operation happened first. Physical timestamps are subject to clock skew. With block allocation, one operation may get number 1,001 and a causally *later* one number 50.
-
-### 2.2 Lamport timestamps
-
-There is a simple method for generating sequence numbers that **is** consistent with causality: the **Lamport timestamp**, proposed in 1978 by Leslie Lamport in one of the most-cited papers in distributed systems.
-
-Each node has a unique identifier and keeps a **counter** of the number of operations it has processed. The Lamport timestamp is the pair **(counter, node ID)**. Two nodes may sometimes have the same counter value, but including the node ID makes each timestamp unique.
-
-A Lamport timestamp has no relationship to a physical clock, but it provides total ordering: given two timestamps, the one with the greater counter is greater. If counters are equal, the one with the greater node ID is greater.
-
-The key idea that makes them consistent with causality:
-
-> Every node and every client keeps track of the **maximum counter value it has seen so far**, and includes that maximum on every request. When a node receives a request or response with a maximum counter value greater than its own counter, it immediately **increases its own counter to that maximum**.
-
-The rules in full:
-
-1. Before a local event (including a send), a node does `counter += 1`.
-2. Every message carries the sender's counter.
-3. On receive, the node sets `counter = max(local, received) + 1`.
-
-```mermaid
-sequenceDiagram
-  participant A as Node A
-  participant B as Node B
-  participant C as Node C
-  Note over A: event, c=1
-  A->>B: msg carries 1
-  Note over B: max 0,1 +1 = 2
-  Note over C: event, c=1
-  B->>C: msg carries 2
-  Note over C: max 1,2 +1 = 3
-  C->>A: msg carries 3
-  Note over A: max 1,3 +1 = 4
-```
-
-As long as the maximum counter value is carried along with every operation, the scheme ensures that the ordering from Lamport timestamps is consistent with causality, because every causal dependency results in an increased timestamp.
-
-```python-run
-class Node:
-    def __init__(self, nid): self.id, self.c, self.log = nid, 0, []
-    def local(self, what):
-        self.c += 1; self.log.append(((self.c, self.id), what)); return self.c
-    def send(self, what):
-        return self.local(f"send {what}")
-    def recv(self, ts, what):
-        self.c = max(self.c, ts) + 1; self.log.append(((self.c, self.id), f"recv {what}"))
-
-a, b, c = Node("A"), Node("B"), Node("C")
-a.local("write x")
-m1 = a.send("m1"); c.local("write y")
-b.recv(m1, "m1")
-m2 = b.send("m2"); c.recv(m2, "m2")
-m3 = c.send("m3"); a.recv(m3, "m3")
-
-events = sorted(a.log + b.log + c.log)            # total order by (counter, node id)
-for ts, what in events:
-    print(ts, what)
-```
-
-Sorting by `(counter, node)` gives a total order in which every send precedes its receive.
-
-> [!NOTE]
-> **Lamport timestamps vs version vectors.** Version vectors can distinguish whether two operations are **concurrent** or whether one is causally dependent on the other. Lamport timestamps **always enforce a total ordering**. From the total order of Lamport timestamps you **cannot tell** whether two operations are concurrent or causally dependent. The advantage of Lamport timestamps is that they are more compact. Formally: $A \to B \Rightarrow L(A) < L(B)$, but the converse does not hold.
-
-### 2.3 Timestamp ordering is not sufficient
-
-Lamport timestamps define a total order consistent with causality, but they are not quite sufficient for many common problems.
-
-Consider a system that needs to ensure a **username uniquely identifies a user account**. If two users concurrently try to create an account with the same username, one should succeed and the other fail. At first glance, a total ordering of operations seems enough: pick the one with the lower timestamp as the winner.
-
-That approach works for determining the winner **after the fact**: once you have collected all the username creation operations in the system, you can compare their timestamps. It is not sufficient when a node has **just received a request** from a user and must decide **right now** whether the request succeeds. At that moment the node does not know whether another node is concurrently creating an account with the same username, and what timestamp that other node may assign.
-
-To be sure that no other node is in the process of concurrently creating an account with the same username and a lower timestamp, you would have to check with **every other node**. If one of them has failed or is unreachable, the system would grind to a halt. That is not the fault-tolerant system we need.
-
-The problem is that the total order of operations only emerges **after** you have collected all of the operations. If another node has generated some operations but you do not yet know what they are, you cannot construct the final ordering. To implement something like a uniqueness constraint, a total ordering is not enough. You also need to know **when that order is finalised**. This idea of knowing when your total order is finalised is captured in **total order broadcast**.
-
-## 3. Total order broadcast
-
-If your program runs on a single CPU core, defining a total ordering of operations is easy: it is the order in which they were executed. In a distributed system, getting all nodes to agree on the same total ordering is tricky.
-
-Single-leader replication determines a total order by choosing one node as leader and sequencing all operations on a single CPU core on the leader. The challenge is how to scale if throughput exceeds what one leader can handle, and how to handle failover if the leader fails. In the distributed systems literature this problem is known as **total order broadcast** or **atomic broadcast**.
-
-Total order broadcast is usually described as a protocol for exchanging messages between nodes. Informally, it requires two **safety** properties to always be satisfied:
-
-- **Reliable delivery.** No messages are lost. If a message is delivered to one node, it is delivered to all nodes.
-- **Totally ordered delivery.** Messages are delivered to every node **in the same order**.
-
-A correct algorithm must ensure these properties hold even if a node or the network is faulty. Messages will not be delivered while the network is interrupted, but the algorithm can keep retrying so that they get through when the network is repaired (and then they must still be delivered in the correct order).
-
-### 3.1 Using total order broadcast
-
-Consensus services such as ZooKeeper and etcd actually implement total order broadcast. This hints at the strong connection between total order broadcast and consensus.
-
-- **Database replication.** If every message represents a write to the database, and every replica processes the same writes in the same order, then the replicas remain consistent with each other (aside from temporary replication lag). This principle is known as **state machine replication**.
-- **Serializable transactions.** If every message represents a deterministic transaction to be executed as a stored procedure, and if every node processes those messages in the same order, then the partitions and replicas of the database are kept consistent.
-- **A log.** Another way of looking at total order broadcast is that it is a way of creating a **log** (as in a replication log, transaction log or write-ahead log): delivering a message is like appending to the log. Since all nodes must deliver the same messages in the same order, all nodes can read the log and see the same sequence of messages.
-- **Fencing tokens.** Every request to acquire the lock is appended as a message to the log, and all messages are sequentially numbered in the order they appear in the log. The sequence number can then serve as a fencing token, because it is monotonically increasing. In ZooKeeper, this sequence number is called `zxid`.
-
-An important aspect is that the order is **fixed at the time the messages are delivered**: a node is not allowed to retroactively insert a message into an earlier position in the order if later messages have already been delivered. This makes total order broadcast stronger than timestamp ordering.
+- **Linearizability** imposes a total order. The system behaves as one copy with atomic operations, so for any two operations we can say which took effect first. There are no concurrent operations in this view: a single timeline.
+- **Causality** defines a partial order. Two operations are ordered if one happened before the other; if they are concurrent they are simply incomparable. The history is not a line but a graph that forks and merges - much like the commit history in Git, where branches are created by concurrent work and joined again by merges.
 
 ```mermaid
 flowchart LR
-  P1[Node 1 proposes m_a] --> TOB[[Total order broadcast]]
-  P2[Node 2 proposes m_b] --> TOB
-  P3[Node 3 proposes m_c] --> TOB
-  TOB -->|"1: m_b, 2: m_a, 3: m_c"| R1[Replica 1 state machine]
-  TOB -->|"1: m_b, 2: m_a, 3: m_c"| R2[Replica 2 state machine]
-  TOB -->|"1: m_b, 2: m_a, 3: m_c"| R3[Replica 3 state machine]
+  A[A: create doc] --> B[B: edit title]
+  A --> C[C: edit body]
+  B --> D[D: merge, sees B and C]
+  C --> D
+  D --> E[E: publish]
 ```
 
-### 3.2 Implementing linearizable storage using total order broadcast
+Here B and C are concurrent. A total order would force us to pretend one came first; the causal order honestly says neither did.
 
-Total order broadcast is **asynchronous**: messages are guaranteed to be delivered reliably in a fixed order, but there is no guarantee about *when* a message will be delivered (so one recipient may lag behind the others). By contrast, linearizability is a recency guarantee: a read is guaranteed to see the latest value written.
+### Causal consistency is the strongest model that stays available
 
-If you have total order broadcast, you can build linearizable storage on top of it. For example, you can ensure that usernames uniquely identify user accounts. Imagine that for every possible username, you can have a linearizable register with an atomic **compare-and-set** operation. Every register initially has the value `null`. When a user wants to create a username, you execute a compare-and-set on the register for that username, setting it to the user account ID, under the condition that the previous register value is `null`.
+Linearizability **implies** causality: any linearizable system preserves causal order. But linearizability costs latency and availability under network trouble, as the last lesson showed.
 
-You can implement such a linearizable compare-and-set operation by using total order broadcast as an **append-only log**:
+The good news is that linearizability is not the only way to preserve causality. Causal consistency can be had on its own, and it is the **strongest consistency model that does not slow down because of network delays and remains available during network failures**. In many cases an application that seems to need linearizability really needs only causal consistency.
 
-1. **Append a message** to the log, tentatively indicating the username you want to claim.
-2. **Read the log**, and wait for the message you appended to be delivered back to you.
-3. **Check for any messages** claiming the username you want. If the first message for your desired username is your own message, then you are successful: you can commit the username claim (perhaps by appending another message to the log) and acknowledge it to the client. If the first message for your desired username is from another user, you abort the operation.
+### Keeping track of causal dependencies
 
-Because log entries are delivered to all nodes in the same order, if there are several concurrent writes, all nodes will agree on which one came first. Choosing the first of the conflicting writes as the winner and aborting later ones ensures that all nodes agree on whether a write was committed or aborted.
+To maintain causal consistency, a replica that processes an operation must make sure that everything causally preceding it has already been processed; if something is missing, the later operation waits. To do that, the system has to know *which version of the data the client had seen* when it issued the write.
+
+That is what version numbers and **version vectors** do in leaderless stores: the client passes back the version from its last read, and the database can tell whether a write builds on a previous one or is concurrent with it. The conflict detection of serializable snapshot isolation works on the same information - at commit, it checks whether the version a transaction read is still current.
+
+Tracking every dependency explicitly becomes unwieldy when clients read a lot before writing. Is there something more compact?
+
+## 2. Ordering with sequence numbers
+
+A better trick: give every operation a **sequence number** or **timestamp** from a **logical clock** - a counter, not an oscillator. Sequence numbers are compact, a few bytes, and they provide a total order.
+
+We want that total order to be **consistent with causality**: if A happened before B, A's number is smaller. Concurrent operations may be ordered arbitrarily. A total order with that property captures all the causal information and adds some extra ordering on top.
+
+With a **single leader** this is easy. The leader increments a counter for every operation in its replication log, and a follower that applies the log in order is always causally consistent, though possibly behind.
+
+### Generators that are not causal
+
+Without a single leader - multi-leader or leaderless replication, or a partitioned database - people use various schemes:
+
+- Each node generates its own sequence; one produces only odd numbers, the other only even ones, or some bits of the number are reserved for a node id.
+- Stamp each operation with the wall-clock time, at fine enough granularity. This is what last-write-wins does.
+- Hand out blocks of numbers in advance: node A takes 1 to 1,000, node B takes 1,001 to 2,000, and each allocates from its block.
+
+All three scale better than routing everything through one counter, and all produce unique, roughly increasing numbers. But **none is consistent with causality**:
+
+- Nodes process operations at different rates, so the odd counter may lag far behind the even one, and an odd-numbered operation cannot be compared meaningfully with an even-numbered one.
+- Physical clocks are skewed; a later operation may get an earlier timestamp.
+- With blocks, an operation numbered 1,500 on node B may well have happened before one numbered 300 on node A.
+
+### Lamport timestamps
+
+There is a simple scheme that *is* consistent with causality, due to Leslie Lamport (1978), in one of the most cited papers of the field.
+
+- Every node has a unique id and keeps a counter of the operations it has processed.
+- A **Lamport timestamp** is the pair **(counter, node id)**. Two nodes may have the same counter value, but the node id makes every timestamp unique.
+- Comparison: the larger counter is the larger timestamp; with equal counters, the larger node id wins.
+- The key rule: **all participants, clients included, keep track of the highest counter they have come across and attach it to each request they send**. A node that receives a request or response carrying a counter greater than its own immediately raises its own counter to that maximum - and then increments for its next operation.
+
+So information about "how far the counters have got" spreads along every message. An effect, which was produced after receiving a message from its cause, always gets a larger timestamp than the cause.
 
 ```python-run
-class TotalOrderLog:
-    """Stand-in for a consensus-backed log: append returns a global sequence number."""
-    def __init__(self): self.entries = []
-    def append(self, msg):
-        self.entries.append(msg); return len(self.entries) - 1
+class Node:
+    def __init__(self, name): self.name, self.counter = name, 0
+    def local(self, what):
+        self.counter += 1
+        return (self.counter, self.name, what)
+    def send(self, what):
+        return self.local(what)                           # the message carries this timestamp
+    def receive(self, msg, what):
+        self.counter = max(self.counter, msg[0])          # fast-forward to what we have seen
+        return self.local(what)
 
-def claim_username(log, node, username):
-    my_seq = log.append({"claim": username, "by": node})        # 1. append
-    for seq, e in enumerate(log.entries):                        # 2. read the log in order
-        if e["claim"] == username:                               # 3. first claim wins
-            return seq == my_seq
-    return False
+a, b, c = Node("A"), Node("B"), Node("C")
+events = []
+events.append(a.local("A edits draft"))
+events.append(a.local("A edits draft again"))
+m1 = a.send("A sends draft to B");          events.append(m1)
+events.append(c.local("C does unrelated work"))
+events.append(b.receive(m1, "B receives draft"))          # jumps from 0 past 3
+m2 = b.send("B sends comments to C");       events.append(m2)
+events.append(c.receive(m2, "C receives comments"))       # jumps from 1 past 5
 
-log = TotalOrderLog()
-# two nodes race for the same name; the log decides the order for everybody
-r1 = claim_username(log, "node-1", "ada")
-r2 = claim_username(log, "node-2", "ada")
-r3 = claim_username(log, "node-2", "grace")
-print("node-1 claims 'ada'  :", r1)
-print("node-2 claims 'ada'  :", r2)
-print("node-2 claims 'grace':", r3)
+for ts in sorted(events):                                 # total order: by (counter, node id)
+    print(ts)
 ```
 
-This procedure ensures linearizable writes. It does not guarantee linearizable **reads**: if you read from a store that is asynchronously updated from the log, it may be stale. To make reads linearizable, you can sequence reads through the log (append a message, wait for it to be delivered, and perform the read then), fetch the position of the latest log message in a linearizable way and wait for all entries up to that position, or read from a replica that is synchronously updated on writes.
+Node B had done nothing, yet its first event gets counter 4, because it must come after the message it reacts to. C's unrelated work at counter 1 is concurrent with A's events; the total order places it somewhere, arbitrarily but deterministically.
 
-### 3.3 Implementing total order broadcast using linearizable storage
+**Lamport timestamps versus version vectors.** They serve different purposes. From two version vectors you can read off whether one operation built on the other or whether they were concurrent. A Lamport timestamp cannot - from two timestamps alone you cannot tell concurrency from causal order - but it always gives a total order, and it is far more compact. The practice problems `db-lamport-order` and `db-vector-clock-compare` let you implement both.
 
-The reverse construction also works. Assume you have a linearizable register that stores an integer and that has an atomic **increment-and-get** operation (or an atomic compare-and-set). For every message you want to send through total order broadcast, you increment-and-get the linearizable integer, and then attach the value you got from the register as a **sequence number** to the message. You can then send the message to all nodes (resending any lost messages), and the recipients will deliver the messages **consecutively by sequence number**.
+### A total order after the fact is not enough
 
-Unlike Lamport timestamps, the numbers you get from incrementing the linearizable register form a sequence with **no gaps**. Thus, if a node has delivered message 4 and receives an incoming message with a sequence number of 6, it knows that it must wait for message 5 before it can deliver message 6. The same is not the case with Lamport timestamps. This is the key difference between total order broadcast and timestamp ordering.
+Lamport timestamps yield a total order consistent with causality. That still does not solve some common problems. Take the classic: a system must guarantee that a username is claimed by one account only. Two users try to create the same name at the same moment.
 
-How hard could it be to make a linearizable integer with an atomic increment-and-get operation? If things never failed, it would be easy: keep it in a variable on one node. The problem lies in handling the situation when network connections to that node are interrupted, and restoring the value when that node fails. In general, if you think hard enough about linearizable sequence number generators, you inevitably end up with a **consensus algorithm**.
+It seems the total order settles it: the request with the lower timestamp wins. That works for deciding the winner **afterwards**, once all the create-username operations in the system have been collected and compared. But a node that has just received a request must decide **now** whether to accept it. At that moment it does not know whether some other node is concurrently handling a request for the same name with a lower timestamp. To be sure, it would have to ask every other node - and if one of them is down or unreachable, the system stops.
 
-This is no coincidence: it can be proved that a **linearizable compare-and-set (or increment-and-get) register and total order broadcast are both equivalent to consensus**. If you can solve one of these problems, you can transform it into a solution for the others.
+The problem is that the total order only **emerges** after all operations are known. To implement a uniqueness constraint you need to know when the order is **final**: when you are certain that nothing can still be inserted before a given operation. Knowing that is the subject of total order broadcast.
+
+```python-run
+# Two nodes each receive a "claim the name kiwi" request, concurrently.
+req_node1 = {"ts": (7, "node1"), "name": "kiwi", "user": "ana"}
+req_node2 = {"ts": (6, "node2"), "name": "kiwi", "user": "raj"}
+
+# Afterwards, with all requests on the table, the order is clear:
+winner = min([req_node1, req_node2], key=lambda r: r["ts"])
+print("in hindsight the winner is:", winner["user"])
+
+# But at decision time node1 only knows its own request:
+known_to_node1 = [req_node1]
+decision = min(known_to_node1, key=lambda r: r["ts"])["user"]
+print("node1, deciding immediately, tells", decision, "that the name is theirs  <- wrong")
+print("to be safe node1 must hear from every node that no lower timestamp exists -> blocks if any node is down")
+```
+
+## 3. Total order broadcast
+
+Single-leader replication determines a total order by choosing one node as leader and sequencing all operations on one CPU core. The difficulties are how to scale beyond one leader's throughput and how to fail over when it dies. In the distributed-systems literature the underlying problem is called **total order broadcast** or **atomic broadcast**.
+
+The usual formulation is a message-passing protocol that never violates two **safety** properties:
+
+- **Reliable delivery.** No message is lost: what one node gets, every node gets.
+- **Totally ordered delivery.** The sequence in which messages arrive is identical on all nodes.
+
+A correct algorithm must maintain both even when nodes or the network are faulty. Of course messages cannot be delivered while the network is interrupted; the algorithm keeps retrying, so that they get through, in the right order, once the network is repaired.
+
+### What it is good for
+
+- **Database replication.** Let each message be a write. Replicas that apply an identical sequence of writes end up identical, give or take some lag. This principle is **state machine replication**. ZooKeeper and etcd implement total order broadcast for exactly this.
+- **Serializable transactions.** Let each message be a deterministic stored-procedure transaction. Executing them in one agreed order on every node keeps all copies in step.
+- **A log.** Delivering a message is appending to a log - replication log, transaction log, write-ahead log. Since every node receives an identical sequence, every node that reads the log reads the same thing. The order is **fixed at the time of delivery**: a node may not insert a message at an earlier position if later messages have already been delivered. This is what makes it stronger than timestamp ordering.
+- **Fencing tokens.** Every request to acquire a lock is appended to the log, and the messages are numbered in the order they appear. The sequence number is a fencing token, because it increases monotonically. ZooKeeper's `zxid` is such a number.
+
+### Linearizable storage from total order broadcast
+
+Linearizable systems order all their operations totally. Is total order broadcast therefore the same thing? Not quite, but the two are close relatives.
+
+Total order broadcast is asynchronous: messages are guaranteed to be delivered reliably in a fixed order, with no guarantee about *when*; one recipient may lag behind the others. Linearizability is a recency guarantee: what you read is the most recent write.
+
+Given total order broadcast, linearizable storage can be built on top. Take the username problem. Assume an append-only log as shared storage:
+
+1. Append a message to the log, tentatively stating the username you want to claim.
+2. Read the log, and wait until the message you appended is delivered back to you.
+3. Check all messages claiming that username. If the first one is yours, you have it - commit the claim (perhaps by appending another message) and acknowledge to the client. If the first message for the name came from someone else, abort.
+
+Because log entries reach all nodes in the same order, all nodes agree, when there are several concurrent claims, on which came first. Choosing the first as the winner and aborting the rest makes all nodes agree on whether a write was committed or aborted. The same pattern implements a linearizable compare-and-set.
+
+```python-run
+class SharedLog:
+    """Stands in for total order broadcast: one agreed sequence, visible to every node."""
+    def __init__(self): self.entries = []
+    def append(self, msg): self.entries.append(msg); return len(self.entries) - 1
+
+log = SharedLog()
+
+def claim(node, user, name):
+    my_pos = log.append({"node": node, "user": user, "name": name})   # 1. append a tentative claim
+    return my_pos                                                     # (the node then waits for delivery)
+
+def outcome(my_pos):
+    me = log.entries[my_pos]                                          # 2. my own message has come back
+    first = next(e for e in log.entries if e["name"] == me["name"])   # 3. first claim for this name wins
+    return "granted" if first is me else f"rejected ({first['user']} was first)"
+
+# three concurrent claims arrive at different nodes; the log fixes one order for all of them
+p1 = claim("node1", "ana", "kiwi")
+p2 = claim("node2", "raj", "kiwi")
+p3 = claim("node3", "li",  "mango")
+for who, pos in (("ana", p1), ("raj", p2), ("li", p3)):
+    print(who, "->", outcome(pos))
+```
+
+Compare with the previous snippet: here node 2 does not need to poll anyone. It waits until its own entry is delivered; at that point everything before it in the log is final.
+
+That procedure makes **writes** linearizable. Reads need separate care, since a node reading its local state may be behind. Options:
+
+- Sequence the read through the log too: append a message, read the log, and perform the actual read when the message comes back. The message's position defines the point in time of the read. (Quorum reads in etcd work somewhat like this.)
+- If the log lets you fetch the position of the latest message in a linearizable way, query that position, wait until all entries up to it have been delivered to you, then read. (ZooKeeper's `sync()` operation follows this idea.)
+- Read from a replica that is updated synchronously on writes and therefore certain to be up to date. (Chain replication uses this.)
+
+### Total order broadcast from linearizable storage
+
+The construction also works in reverse. Assume a linearizable register holding an integer, with an atomic **increment-and-get** operation (or an atomic compare-and-set, which can do the same job).
+
+The algorithm is short: whenever a node wants to broadcast a message, it first performs increment-and-get on the register and uses the number it gets back as that message's sequence number. Then send the message to all nodes, resending if lost; recipients deliver messages **consecutively by sequence number**.
+
+Unlike Lamport timestamps, the numbers from a linearizable counter form a sequence **without gaps**. A node that has delivered message 4 and receives message 6 knows that it must wait for 5 before delivering 6. With Lamport timestamps there is no such knowledge - a node that has seen timestamp 4 and then 6 cannot tell whether a 5 exists. This absence of gaps is precisely what timestamp ordering lacks and total order broadcast has.
+
+How hard is it to build a linearizable integer with atomic increment-and-get? Trivial, if nothing ever failed: a variable on one node. The difficulty is what to do when the network connection to that node is interrupted, and how to restore the value when it crashes. Thinking hard enough about linearizable sequence number generators leads inevitably to a **consensus** algorithm.
+
+That is no coincidence. There is a formal result behind it: a linearizable register with compare-and-set (or increment-and-get), total order broadcast, and consensus are **all the same problem in different guises**: a solution to any one can be transformed into a solution for the others.
+
+```mermaid
+flowchart LR
+  TOB[Total order broadcast] <--> LIN[Linearizable compare-and-set register]
+  LIN <--> CONS[Consensus]
+  CONS <--> TOB
+  TOB --> U1[State machine replication]
+  LIN --> U2[Locks and unique constraints]
+  CONS --> U3[Leader election and atomic commit]
+```
 
 > [!INTERVIEW]
-> "How do you generate globally unique, ordered IDs?" Options and trade-offs: a single-leader counter (total order, bottleneck, single point of failure); **Snowflake-style** IDs (timestamp + machine id + sequence: scalable and roughly time-ordered, but *not* causally consistent); **Lamport timestamps** (causally consistent total order, but you only know the order after the fact); a **consensus-backed sequencer** such as ZooKeeper's `zxid` or an etcd revision (gap-free, finalised order: what you need for uniqueness and fencing).
+> "Can you use timestamps to enforce a unique username across data centres?" No: a timestamp order - even a causally consistent Lamport order - is only known once all operations have been gathered, and a uniqueness decision has to be made immediately. You need to know that the order is *final* up to your operation, which is what a totally ordered log (consensus) provides. A crisp way to put it: Lamport clocks tell you the order of the events you know about; total order broadcast tells you that there are no events you do not know about.
 
-## 4. Summary
+## Pitfalls
 
-- Causality gives a **partial order**. Linearizability gives a **total order** and implies causality. **Causal consistency** is the strongest model that stays available under partitions.
-- Sequence numbers from odd/even schemes, physical clocks or preallocated blocks are *not* causally consistent.
-- **Lamport timestamps** `(counter, nodeId)` with the max-on-receive rule give a causally consistent total order, but they cannot detect concurrency, and the order is known only after the fact.
-- **Total order broadcast** = reliable + identically ordered delivery. It is state machine replication, a log, and the basis for fencing tokens.
-- Total order broadcast, linearizable compare-and-set and **consensus** are equivalent problems.
+- **Using wall-clock timestamps as sequence numbers.** Clock skew breaks causality; a later operation can sort before an earlier one.
+- **Assuming per-node counters or pre-allocated blocks give a meaningful order.** They give uniqueness, nothing more.
+- **Expecting Lamport timestamps to detect concurrency.** They totally order events but cannot tell you that two events were concurrent; use version vectors for that.
+- **Forgetting the max rule.** A Lamport clock that only increments locally, without fast-forwarding on received messages, does not respect causality.
+- **Enforcing constraints from a non-final order.** Any scheme where the order is only complete "eventually" cannot make immediate uniqueness decisions.
+- **Demanding a total order where a causal one suffices.** A total order means funnelling everything through consensus, with its cost in throughput and availability.
+- **Reading local state after a linearizable write and assuming the read is linearizable too.** The reading node may lag; sequence the read or sync first.
+
+## Summary
+
+- Ordering exists to preserve **causality**. Causal order is a **partial order**: concurrent operations are incomparable. **Linearizability** imposes a **total order** and implies causal consistency, at a cost.
+- **Causal consistency** is the strongest model that remains available during network faults; it requires tracking which versions an operation depended on.
+- **Sequence numbers** from a single leader are consistent with causality. Per-node counters, physical timestamps and pre-allocated blocks are not.
+- **Lamport timestamps** - (counter, node id), with every node fast-forwarding to the highest counter it sees - give a compact total order consistent with causality, but cannot detect concurrency and do not tell you when the order is final.
+- **Total order broadcast** delivers the same messages to all nodes in the same, fixed order. It underlies state machine replication, serialisable execution, logs and fencing tokens.
+- Total order broadcast, a linearizable compare-and-set register and **consensus** are equivalent problems: each can be built from the others.
 
 ```quiz
 [
-  {"q": "Causality defines what kind of order on events?",
-   "options": ["A total order", "A partial order: concurrent events are incomparable", "No order", "A random order"],
+  {"q": "Why is causal order described as a partial order?",
+   "options": ["Because it only covers part of the database", "Because concurrent operations are not ordered relative to each other, while causally related ones are", "Because it ignores writes", "Because it applies only to a single node"],
    "answer": 1,
-   "explain": "Only causally related events are ordered; linearizability imposes a total order."},
-  {"q": "Which statement about causal consistency is made in DDIA?",
-   "options": ["It is weaker than eventual consistency", "It is the strongest consistency model that does not slow down due to network delays and remains available under network failures", "It requires consensus", "It is the same as linearizability"],
+   "explain": "If neither operation knew about the other, neither happened before the other. A partial order permits such incomparable pairs."},
+  {"q": "Which statement about linearizability and causal consistency is correct?",
+   "options": ["Causal consistency implies linearizability", "Linearizability implies causal consistency, but causal consistency can be achieved without the performance and availability cost of linearizability", "They are unrelated", "Neither can be achieved in a distributed system"],
    "answer": 1,
-   "explain": "Many systems that seem to need linearizability actually only need causal consistency."},
-  {"q": "A node with Lamport counter 5 receives a message carrying counter 9. What is its counter after processing the receive?",
-   "options": ["6", "9", "10", "14"],
-   "answer": 2,
-   "explain": "counter = max(5, 9) + 1 = 10."},
-  {"q": "What can you NOT determine from two Lamport timestamps?",
-   "options": ["Which one sorts first in the total order", "Whether the two events were concurrent or causally related", "Which node generated each", "Their counter values"],
+   "explain": "A total order consistent with real time preserves causality. The converse does not hold, and causal consistency is the strongest model that stays available under partitions."},
+  {"q": "Two nodes generate sequence numbers independently, one using odd numbers and the other even numbers. What is wrong with this scheme?",
+   "options": ["The numbers are not unique", "The numbers are unique but not consistent with causality, since one node's counter may lag far behind the other's", "It requires consensus", "It uses too much memory"],
    "answer": 1,
-   "explain": "Lamport timestamps always impose a total order; version vectors are needed to detect concurrency."},
-  {"q": "Why are Lamport timestamps insufficient to enforce a unique-username constraint?",
-   "options": ["They are not unique", "The total order is only known after collecting all operations; a node cannot decide immediately whether its claim is first", "They need synchronized clocks", "They cannot be compared"],
+   "explain": "Nodes advance at different rates, so a causally later operation on the slower node can have a smaller number."},
+  {"q": "What is the rule that makes Lamport timestamps consistent with causality?",
+   "options": ["Nodes synchronise their physical clocks with NTP", "Every node keeps the maximum counter it has seen and, on receiving a larger one in a message, raises its own counter to that value before incrementing", "Counters are reset after each message", "Only the leader may increment the counter"],
    "answer": 1,
-   "explain": "You need to know when the order is finalized, which is what total order broadcast provides."},
-  {"q": "The two safety properties of total order broadcast are...",
-   "options": ["Durability and isolation", "Reliable delivery and totally ordered delivery", "Availability and partition tolerance", "Monotonic reads and read-your-writes"],
+   "explain": "Carrying the maximum along with every message guarantees that an effect always gets a larger timestamp than its cause."},
+  {"q": "Given the Lamport timestamps of two events, what can you NOT determine?",
+   "options": ["Which one comes first in the total order", "Whether the two events were concurrent or causally related", "Which node generated each", "Whether the timestamps are equal"],
    "answer": 1,
-   "explain": "If a message is delivered to one node it is delivered to all, and all nodes deliver in the same order."},
-  {"q": "What is state machine replication?",
-   "options": ["Copying disk blocks", "Every replica applies the same deterministic operations in the same total order, so they stay consistent", "Using CRDTs", "Last write wins"],
+   "explain": "Lamport timestamps always produce an order, even for concurrent events. Detecting concurrency needs version vectors."},
+  {"q": "Why are Lamport timestamps insufficient to enforce a unique username at the moment a request arrives?",
+   "options": ["They are too large to store", "The total order is only known after collecting all operations; a node cannot know right away whether another node has a concurrent request with a lower timestamp", "They cannot be compared", "They require synchronised clocks"],
    "answer": 1,
-   "explain": "Total order broadcast delivers the ordered log that drives each replica's state machine."},
-  {"q": "How do sequence numbers from a linearizable increment-and-get differ from Lamport timestamps?",
-   "options": ["They are larger", "They have no gaps, so a node knows it must wait for message 5 before delivering 6", "They are random", "They need no coordination"],
+   "explain": "Immediate decisions need to know the order is final. That requires hearing from every node, or using total order broadcast."},
+  {"q": "Which two properties define total order broadcast?",
+   "options": ["Low latency and high throughput", "Reliable delivery to all nodes, and delivery of messages to every node in the same order", "Encryption and authentication", "Bounded delay and synchronised clocks"],
    "answer": 1,
-   "explain": "Gap-freeness lets recipients know the order is complete up to a point."}
+   "explain": "If a message is delivered to one node it is delivered to all, and all nodes see the same sequence. No timing guarantee is included."},
+  {"q": "What does it mean that total order broadcast is equivalent to consensus?",
+   "options": ["They use the same network packets", "An algorithm solving one can be converted into an algorithm solving the other, and likewise for a linearizable compare-and-set register", "Neither can be implemented", "Both are weaker than causal consistency"],
+   "answer": 1,
+   "explain": "Agreeing on the next message in the sequence is a consensus decision, and repeated consensus yields a totally ordered log. The three abstractions are interchangeable."}
 ]
 ```
 
-> **Source:** DDIA ch. 9, "Ordering Guarantees" (ordering and causality, sequence number ordering, Lamport timestamps, total order broadcast).
+> **Source:** DDIA ch. 9 (Consistency and Consensus) - ordering guarantees: ordering and causality, sequence number ordering, total order broadcast. Written in original wording with original examples.

@@ -1,6 +1,6 @@
 # Partitioning key-value data and hot spots
 
-For very large datasets or very high query throughput, replication is not enough. We must break the data into **partitions**, also known as **sharding**. The terminology varies by system:
+Copies alone do not help once the data or the query load is too big for any single machine. We must break the data into **partitions**, also known as **sharding**. The terminology varies by system:
 
 | System | Name for a partition |
 |---|---|
@@ -10,11 +10,11 @@ For very large datasets or very high query throughput, replication is not enough
 | Cassandra, Riak | vnode |
 | Couchbase | vBucket |
 
-Normally each record belongs to **exactly one partition**, and each partition is a small database of its own. The main reason to partition is **scalability**. Different partitions can live on different nodes in a shared-nothing cluster, so a large dataset is spread across many disks and the query load across many processors. Queries that touch a single partition execute independently on their node, and adding nodes scales throughput. Large, complex queries can be **parallelised** across nodes.
+The usual arrangement puts every record in **one partition and one only**; a partition then behaves like a little database in its own right. The main reason to partition is **scalability**. In a shared-nothing cluster the partitions are placed on separate nodes, which spreads the data over many disks and the work over many CPUs. Queries that touch a single partition execute independently on their node, and adding nodes scales throughput. Large, complex queries can be **parallelised** across nodes.
 
 ## 1. Partitioning and replication
 
-Partitioning is usually **combined with replication**: copies of each partition are stored on several nodes for fault tolerance. A node may store more than one partition. With leader–follower replication, each partition's leader lives on one node and its followers on others, and **each node may be the leader for some partitions and a follower for others**.
+Partitioning is usually **combined with replication**: copies of each partition are stored on several nodes for fault tolerance. A node may store more than one partition. With leader–follower replication, a partition has its leader on one node and followers elsewhere, so **the same node is typically leader for a few partitions and follower for several more**.
 
 ```mermaid
 flowchart TB
@@ -40,7 +40,7 @@ flowchart TB
   P4L --> P4F
 ```
 
-Everything from the replication chapter applies equally to replicating partitions. The choice of partitioning scheme is mostly independent of the choice of replication scheme.
+Everything from the replication chapter applies equally to replicating partitions. How you partition and how you replicate are largely separate decisions.
 
 ## 2. Partitioning of key-value data
 
@@ -54,18 +54,18 @@ Assign each partition a **continuous range of keys**, from some minimum to some 
 
 - Ranges are **not necessarily evenly spaced**, because data may not be evenly distributed. Volume 1 might cover A–B while volume 12 covers T–Z. Boundaries must **adapt to the data**, chosen by an administrator or automatically.
 - Used by **Bigtable**, its open-source equivalent **HBase**, RethinkDB, and MongoDB before 2.4.
-- Within each partition, keys are kept **sorted** (in SSTables or LSM-trees), so **range scans are easy**. You can treat the key as a concatenated index and fetch several related records in one query. A sensor network might use the timestamp `year-month-day-hour-minute-second` as the key, making "all readings from a month" a simple scan.
+- Within each partition, keys are kept **sorted** (in SSTables or LSM-trees), so **range scans are easy**. Because neighbouring keys are stored together, a compound key lets one range read return a group of related records. A sensor network might use the timestamp `year-month-day-hour-minute-second` as the key, making "all readings from a month" a simple scan.
 
 **Downside: hot spots from access patterns.** With timestamp keys, all writes for *today* go to the *same* partition, which is overloaded while the others sit idle. The fix is to put something other than the timestamp first, such as the **sensor name**: `sensor_name + timestamp`. Writes then spread across sensors. To fetch all sensors over a time range, you run a separate range query per sensor.
 
 ### 2.2 Partitioning by hash of key
 
-Because of skew and hot spots, many distributed datastores apply a **hash function** to the key to choose its partition. A good hash function takes skewed data and makes it **uniformly distributed**. A 32-bit hash maps any string to a seemingly random number between $0$ and $2^{32}-1$, and similar strings get evenly distributed hashes.
+Because of skew and hot spots, many distributed datastores apply a **hash function** to the key to choose its partition. A well-chosen hash function scatters even lopsided keys **evenly** over its output range. A 32-bit hash maps any string to a seemingly random number between $0$ and $2^{32}-1$, and similar strings get evenly distributed hashes.
 
 > [!WARNING]
 > The hash does not need to be cryptographically strong. Cassandra uses MD5 and MongoDB uses MD5, while Voldemort uses Fowler–Noll–Vo. It **must** be deterministic across processes, though. Java's `Object.hashCode()` and Ruby's `Object#hash` can return different values for the same key in different processes. Python's `hash()` of strings is randomised per process (`PYTHONHASHSEED`). They are unsuitable for partitioning.
 
-Each partition is assigned a **range of hashes** rather than a range of keys, and every key whose hash falls in a partition's range is stored there. Boundaries can be evenly spaced or chosen pseudorandomly (the latter is sometimes called **consistent hashing**).
+Partitions then own **intervals of hash values** instead of intervals of keys: a key is stored in whichever partition's interval contains its hash. Boundaries can be evenly spaced or chosen pseudorandomly (the latter is sometimes called **consistent hashing**).
 
 ```python-run
 import hashlib, bisect
@@ -87,11 +87,11 @@ print("hash-range, same writes:              ", dict(sorted(hash_part.items())))
 ```
 
 > [!NOTE]
-> **"Consistent hashing"** (Karger et al., 1997) originally meant a way of evenly distributing load across an internet-wide system of caches such as a CDN. It uses randomly chosen partition boundaries to avoid central control or distributed consensus. This *consistent* has nothing to do with replica consistency or ACID consistency. DDIA notes the term is confusing and prefers **hash partitioning**. We implement a consistent-hashing ring in this module's problems.
+> **"Consistent hashing"** (Karger et al., 1997) was first proposed for spreading requests evenly over a large fleet of web caches, as in a CDN. It uses randomly chosen partition boundaries to avoid central control or distributed consensus. This *consistent* has nothing to do with replica consistency or ACID consistency. DDIA notes the term is confusing and prefers **hash partitioning**. We implement a consistent-hashing ring in this module's problems.
 
-**What you lose: range queries.** Adjacent keys are now scattered across all partitions, so sort order is lost. In MongoDB with hash-based sharding, any range query has to be sent to all partitions. Riak, Couchbase and Voldemort do not support range queries on the primary key at all.
+**What you lose: range queries.** Adjacent keys are now scattered across all partitions, so sort order is lost. With hashed sharding enabled in MongoDB, a range query must be fanned out to every partition. Riak, Couchbase and Voldemort do not support range queries on the primary key at all.
 
-**Compound primary keys: the best of both.** **Cassandra** compromises. A table can have a compound primary key of several columns. Only the **first part** is hashed to determine the partition, while the other columns form a concatenated index for **sorting** the data within Cassandra's SSTables. A query cannot search for a range of values in the first column, but if it fixes the first column it can do an efficient range scan over the others.
+**Compound primary keys: the best of both.** **Cassandra** compromises. A table can have a compound primary key of several columns. Only the **first part** is hashed to determine the partition, while the other columns form a concatenated index for **sorting** the data within Cassandra's SSTables. Ranges over the first column are not possible, but once that column is pinned to one value the remaining columns can be scanned in order efficiently.
 
 Example: a social site stores updates with primary key `(user_id, update_timestamp)`. You can efficiently fetch all updates by one user within a time interval, sorted by timestamp. Different users are on different partitions, but within one user the updates are ordered.
 
@@ -109,9 +109,9 @@ SELECT * FROM updates WHERE user_id = ? AND ts > '2024-01-01';   -- single parti
 
 ## 3. Skewed workloads and relieving hot spots
 
-Hashing helps but **cannot eliminate hot spots entirely**. In the extreme case where all reads and writes are for the **same key**, every request goes to the same partition. On social media, a celebrity with millions of followers can cause a storm of activity when they post. Every comment on that post uses the same key (the post id), and hashing does not help because identical keys hash identically.
+Hashing helps but **cannot eliminate hot spots entirely**. Take the worst case: if every request targets **one single key**, they all land on one partition whatever the hash. On social media, a celebrity with millions of followers can cause a storm of activity when they post. Every comment on that post uses the same key (the post id), and hashing does not help because identical keys hash identically.
 
-Today most data systems cannot compensate automatically for such heavy skew, so it is up to the application. A simple technique: if one key is very hot, **add a random number to the beginning or end of the key**. A two-digit decimal suffix splits writes to one key evenly across 100 different keys, which can go to different partitions.
+Today most data systems cannot compensate automatically for such heavy skew, so it is up to the application. A simple technique: for a known hot key, **prepend or append a random number** to it. A two-digit decimal suffix splits writes to one key evenly across 100 different keys, which can go to different partitions.
 
 The trade-off: **reads now have extra work**. They must read all 100 keys and combine them. You also need bookkeeping to know which keys are split. It only makes sense for the small number of hot keys, since applying it to all keys would be overhead. Future systems may detect and handle skew automatically.
 

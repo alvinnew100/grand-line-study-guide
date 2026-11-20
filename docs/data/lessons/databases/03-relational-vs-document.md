@@ -20,7 +20,7 @@ The relational model dominated from the mid-1980s for transaction processing and
 - a need for greater scalability than relational databases offered at the time (very large datasets, very high write throughput),
 - a preference for free and open source software,
 - specialised query operations the relational model did not support well,
-- frustration with the restrictiveness of relational schemas and a desire for a more dynamic, expressive model.
+- a feeling that fixed relational schemas got in the way, and an appetite for data models that bend more easily.
 
 The likely future is **polyglot persistence**: relational databases used alongside a variety of non-relational stores.
 
@@ -83,7 +83,7 @@ graph LR
 ```
 
 > [!NOTE]
-> Document databases reopened a 1970s debate. CODASYL's network model and today's document stores both struggle with many-to-many relationships. The relational answer was declarative joins planned by an optimizer. For many-to-one and many-to-many, relational and document databases are not fundamentally different: both use a unique identifier to refer to the related item, called a *foreign key* in one and a *document reference* in the other.
+> Document databases reopened a 1970s debate. CODASYL's network model and today's document stores both struggle with many-to-many relationships. The relational answer was declarative joins planned by an optimizer. Once records point at other records, the two models handle it in much the same way: both use a unique identifier to refer to the related item, called a *foreign key* in one and a *document reference* in the other.
 
 ## 4. Relational vs document databases today
 
@@ -91,14 +91,14 @@ graph LR
 
 - If the data is **document-like**, a tree of one-to-many relationships usually loaded all at once, the document model is a good fit. **Shredding** it into many tables leads to cumbersome schemas and complicated code.
 - Limitations of documents: you cannot refer directly to a nested item (you say "the second position in the list for user 251", similar to an access path), and **join support** may be weak.
-- If the application uses **many-to-many** relationships, the document model becomes less appealing. Denormalisation leaves you keeping copies consistent, and application-side joins are slower and more complex than joins inside the database.
-- For **highly interconnected** data, the document model is awkward, the relational model is acceptable, and **graph** models are the most natural.
+- **Many-to-many** relationships take away most of the document model's charm. Denormalisation leaves you keeping copies consistent, and application-side joins are slower and more complex than joins inside the database.
+- When **almost everything links to everything else**, documents are a poor fit, tables cope, and a **graph** model feels the most natural.
 
 ### 4.2 Schema flexibility: schema-on-read vs schema-on-write
 
 Calling document databases "schemaless" is misleading. The code that reads the data assumes *some* structure, so there is an **implicit** schema that the database does not enforce.
 
-- **Schema-on-write** (relational): the schema is explicit and the database ensures all written data conforms. It is analogous to **static** type checking.
+- **Schema-on-write** (relational): the structure is declared up front and the database rejects any write that does not match it. It is analogous to **static** type checking.
 - **Schema-on-read** (document): the structure is implicit and interpreted only when data is read. It is analogous to **dynamic** type checking.
 
 The difference shows up when the format changes. Say you want to split `name` into `first_name` and `last_name`.
@@ -135,7 +135,7 @@ Locality is not unique to documents. Google **Spanner** can interleave child-tab
 
 ### 4.4 Convergence
 
-The models are converging. PostgreSQL (since 9.3), MySQL (5.7) and DB2 support JSON documents, including indexing inside them. Document stores such as RethinkDB support relational-like joins, and MongoDB drivers resolve references automatically (with `$lookup` in the aggregation pipeline). A hybrid of the relational and document models is a good route for databases to take.
+The models are converging. PostgreSQL (since 9.3), MySQL (5.7) and DB2 support JSON documents, including indexing inside them. Document stores such as RethinkDB support relational-like joins, and MongoDB drivers resolve references automatically (with `$lookup` in the aggregation pipeline). Databases that offer both styles side by side are probably heading in the right direction.
 
 ```python-run
 # Same data, two shapes: normalized (relational) vs embedded (document).

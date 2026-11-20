@@ -42,7 +42,7 @@ The vocabulary matters:
 | Term | Meaning |
 |---|---|
 | **Fault** | One component deviating from its spec, such as a disk dying or a process crashing |
-| **Failure** | The system *as a whole* stops providing the required service to the user |
+| **Failure** | Users can no longer get the service they came for: the whole system has let them down |
 
 Driving the probability of faults to zero is impossible, so the goal is to keep faults from turning into failures. A counterintuitive corollary is that you can *raise* reliability by deliberately injecting faults. Netflix's **Chaos Monkey** kills random production processes so that the fault-handling code gets exercised constantly instead of rotting until a real outage. Many critical bugs live in poorly tested error-handling paths.
 
@@ -64,7 +64,7 @@ Hardware faults are mostly random and independent. Software faults are **systema
 - A dependency slows down, stops responding or returns corrupt responses.
 - **Cascading failures**, where a fault in one component triggers faults in others.
 
-These bugs tend to lie dormant until an unusual circumstance triggers them, at which point it turns out the software was making some assumption about its environment that is no longer true. No silver bullet exists, but many small things help: thinking carefully about assumptions, thorough testing, process isolation, allowing processes to crash and restart, and measuring and alerting in production. A system that promises an invariant, such as "a queue's incoming messages equal outgoing messages", can check that invariant continuously.
+These bugs tend to lie dormant until an unusual circumstance triggers them, at which point it turns out the software was making some assumption about its environment that is no longer true. No silver bullet exists, but many small things help: questioning what the code assumes about its environment, testing heavily, isolating processes from one another, designing for crash-and-restart, and watching production with metrics and alerts. A system that promises an invariant, such as "a queue's incoming messages equal outgoing messages", can check that invariant continuously.
 
 ### 2.3 Human errors
 
@@ -73,7 +73,7 @@ People design, build and operate systems, and people make mistakes. One study of
 - **Design for the right thing to be easy.** Good abstractions, APIs and admin interfaces should make the correct action natural, without being so restrictive that people work around them.
 - **Sandboxes.** Give people non-production environments with real data where they can explore safely.
 - **Test thoroughly.** Use unit tests through whole-system integration tests, plus automated tests for corner cases that rarely come up in normal operation.
-- **Quick recovery.** Make it fast to roll back configuration changes, roll out new code gradually, and provide tools to recompute data in case the old computation was wrong.
+- **Quick recovery.** Undoing a bad config change should take seconds, new releases should reach a small slice of traffic first, and there should be a way to rebuild derived data when an earlier job turns out to have been buggy.
 - **Detailed monitoring** (*telemetry*): performance metrics and error rates.
 - **Good management practices and training.**
 
@@ -95,13 +95,13 @@ The majority of software cost is not initial development. It is **ongoing mainte
 - monitoring health and restoring service quickly when it is unhealthy,
 - tracking down causes of problems such as failures and degraded performance,
 - keeping software and platforms patched,
-- understanding how systems affect each other, so that a problematic change can be avoided before it causes damage,
+- knowing which systems depend on which, so that a risky change is caught before it hurts something downstream,
 - anticipating future problems such as capacity planning,
 - establishing good deployment and configuration practices,
 - complex maintenance tasks such as moving an application between platforms,
 - preserving the organisation's knowledge as people come and go.
 
-Data systems can make this easier by providing **visibility** into runtime behaviour, good support for **automation**, independence from any single machine, **documentation** with an easy-to-understand operational model ("if I do X, Y will happen"), **sensible defaults** with the freedom to override them, **self-healing** where appropriate with manual control when needed, and **predictable** behaviour that minimises surprises.
+Software helps its operators when it offers **visibility** (metrics and logs that show what it is doing), is easy to **automate**, keeps working while any one machine is taken out for maintenance, comes with **documentation** and a simple mental model of cause and effect ("if I do X, Y will happen"), ships **sensible defaults** that an administrator may still override, **heals itself** in routine cases while leaving a manual override, and behaves **predictably**.
 
 ### 3.2 Simplicity: managing complexity
 

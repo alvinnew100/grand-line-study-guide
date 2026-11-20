@@ -1,256 +1,261 @@
 # ACID, read committed and snapshot isolation
 
-Many things can go wrong in a data system. The database software or hardware may fail midway through a write. The application may crash partway through a series of operations. The network may cut the application off from the database. Several clients may write at the same time and overwrite each other's changes. A client may read data that is only partially updated. Race conditions can cause surprising bugs.
+Think about what can interrupt a simple operation such as "move 15 pallets from warehouse A to warehouse B" in an inventory system. The database process may crash after the first of the two updates. The application server may die between them. The network may drop the connection so the client cannot tell whether anything happened. Another client may be reading both stock levels at that very moment, or modifying one of them. A disk may fail a week later.
 
-For decades, the mechanism of choice has been the **transaction**: a way for an application to group several reads and writes into one logical unit. Conceptually, all the reads and writes in a transaction are executed as one operation. Either the whole transaction succeeds (**commit**) or it fails (**abort**, **rollback**). If it fails, the application can safely retry. Error handling becomes much simpler because there are no partial failures to think about.
+Handling each of these cases by hand in every piece of application code would be hopeless. A **transaction** is the database's offer to take that burden away: the application declares that a group of reads and writes belongs together, and the database promises that the group either takes effect completely or not at all, and that other clients will not see it half-done. If anything goes wrong the transaction **aborts**, nothing remains of it, and the application may safely try again.
 
-Transactions are not a law of nature. They were created to **simplify the programming model** for applications accessing a database. With them, the application can ignore certain error scenarios and concurrency issues because the database takes care of them. These are called **safety guarantees**.
+That promise is a simplification of the programming model, not a law of nature, and it comes in different strengths. This lesson pins down what the well-known acronym ACID really guarantees - less than its reputation suggests - and then studies the two isolation levels you are most likely to be running on today, often without knowing it: **read committed** and **snapshot isolation**.
 
-## 1. The meaning of ACID
+## 1. What ACID does and does not say
 
-The safety guarantees are often described with the acronym **ACID**, coined by Härder and Reuter in 1983. In practice, one database's ACID is not another's. The term has become mostly a marketing label. Systems that do not meet the criteria are sometimes called **BASE**: Basically Available, Soft state, Eventual consistency. That is even vaguer.
+The acronym dates from 1983 and was meant to give precise names to fault-tolerance mechanisms. In practice each vendor implements it differently, and "ACID compliant" on a product page tells you little. (Systems that do not offer it are sometimes labelled BASE - "basically available, soft state, eventual consistency" - which is vaguer still.) It is worth knowing exactly what each letter covers.
 
-### Atomicity
+### Atomicity - really "abortability"
 
-In general, *atomic* means something that cannot be broken into smaller parts. In multithreading it means another thread cannot see a half-finished result. **ACID atomicity is not about concurrency.** It describes what happens if a client makes several writes and a **fault** occurs partway through: a process crash, a network interruption, a full disk, or an integrity constraint violation. If the writes are grouped into an atomic transaction and it cannot be completed, the transaction is **aborted** and the database must **discard or undo** any writes made so far.
+In concurrent programming "atomic" means an operation that other threads cannot observe halfway. In ACID it means something else. It is about **faults in the middle of several writes**: if a transaction cannot be completed, the database discards every write it has made so far. The application then knows the state is as it was before, so a retry cannot apply half of the changes twice. The valuable property is the ability to abort cleanly.
 
-Atomicity makes retry safe: if a transaction aborted, the application can be sure it changed nothing. Kleppmann suggests **abortability** would have been a better name.
+### Consistency - the application's job
 
-### Consistency
+The word is overloaded in this field: replica consistency, consistent hashing, the C in CAP, and this one, which is unrelated to all of them. In ACID, consistency means that your **invariants** hold - statements that must always be true of the data, such as "debits and credits balance". But the database generally does not know your invariants, beyond the few you can declare as constraints. If the application writes data that violates them, the database will store it. Consistency is therefore something the *application* achieves, using atomicity and isolation as tools. The letter arguably does not belong in the list.
 
-*Consistency* is badly overloaded. It can mean replica consistency or eventual consistency (Chapter 5), the "consistent" in consistent hashing (Chapter 6), linearizability in CAP (Chapter 9), or, in ACID, an application-specific notion that the database is in a "good state".
+### Isolation - the subject of three lessons
 
-ACID consistency means certain **invariants** about the data must always hold. For example, in an accounting system, credits and debits across all accounts must always balance. If a transaction starts with a valid database and its writes preserve validity, the invariants are satisfied. That depends on the **application's** notion of invariants, and it is the application's responsibility to define transactions that preserve them. The database can check some specific invariants, such as foreign keys and uniqueness constraints, but generally the application defines what is valid. **Atomicity, isolation and durability are properties of the database, while consistency is a property of the application.** The C does not really belong in ACID. Joe Hellerstein has remarked that it was "tossed in to make the acronym work".
+Several clients working on the same records at once can trip over each other. The textbook definition of isolation is **serialisability**: the outcome is the same as if the transactions had run one after another, even though they in fact overlapped. That is the strongest guarantee and the easiest to reason about, but it costs performance, so most databases default to something weaker - and some that use the name "serializable" actually deliver snapshot isolation.
 
-### Isolation
+### Durability - a matter of degree
 
-Most databases are accessed by several clients at the same time. If they access the **same records**, you can run into race conditions. Example: two clients simultaneously increment a counter stored in the database. Each reads 42, adds 1 and writes 43. The counter should have reached 44.
+Once a transaction is reported as committed, its data should not disappear even if the machine crashes. On a single node that means the data has reached non-volatile storage, usually via a write-ahead log; in a replicated system it means the data has reached some number of other nodes. Neither is absolute:
 
-**Isolation** means concurrently executing transactions are isolated from each other and cannot step on each other's toes. The textbook formalisation is **serializability**: each transaction can pretend it is the only one running on the whole database. The database ensures that when the transactions have committed, the result is the same as if they had run **serially**, one after another, even though they may actually have run concurrently. In practice serializable isolation is rarely used because of its performance penalty. Oracle 11g's "serializable" is actually **snapshot isolation**, a weaker guarantee.
+- A write to disk does not help if the machine is gone or unreachable; replication does.
+- Replicas can all fail together: the whole site loses power, or one malformed request triggers the same crash on each of them.
+- Asynchronous replication can lose the latest writes on failover.
+- Disks and SSDs sometimes return corrupted data, and firmware has bugs; `fsync` has been found not to do what it promises on some systems.
 
-### Durability
+Durability is achieved by combining techniques - local disk, replication, backups - and "guaranteed" should be read as "made very unlikely".
 
-**Durability** is the promise that once a transaction has committed successfully, any data it wrote will not be forgotten, even after a hardware fault or database crash. On a single node this usually means the data has been written to non-volatile storage (HDD, SSD), typically along with a **WAL** for recovery. In a replicated database it may mean the data has been copied to some number of nodes.
+## 2. One object or several
 
-Perfect durability does not exist. DDIA lists ways it can fail: an fsync'd disk can still lose data in a power failure if the firmware is buggy; SSDs can lose data when unpowered for too long; disk sectors become corrupted silently; async replication loses recent writes when the leader fails; a correlated fault (a power outage, or a bug that crashes every node on a certain input) can take out all replicas at once. In practice, the best defence is a combination: writes to disk, replication to remote machines, and backups.
+Atomicity and isolation describe what happens when a transaction makes **several** writes. Consider an order system that stores each order line as a row and, for speed, keeps the order's total on the order row. Adding a line means inserting one row and updating one total.
+
+- Without **isolation**, another session can read in between and see the new line in the list while the total still shows the old amount.
+- Without **atomicity**, a failure after the insert leaves the total permanently wrong.
+
+Multi-object transactions need a way to say which operations belong together. Relational databases tie this to the client's connection: everything between `BEGIN` and `COMMIT`. Plenty of non-relational stores offer nothing comparable; their multi-key calls can apply to some of the keys and fail on the rest.
+
+Single objects need protection too. If you are halfway through writing a 20 kB document when the power fails, you do not want a spliced value; and a reader should not see a half-updated one. Storage engines therefore provide atomicity (through a log) and isolation (through a latch) for one object, and often add atomic increment and compare-and-set. These are useful, but they are not transactions in the usual sense: a transaction is primarily a way to group operations on **several** objects.
+
+Do applications really need that? Often yes: rows that reference each other through foreign keys, denormalised data that must be updated in several places, and secondary indexes that must change together with the row all involve more than one object.
+
+### Aborting and retrying
+
+The whole point of abort is that it is safe to try again. A few caveats spoil the simplicity:
+
+- If the transaction actually committed and only the acknowledgement was lost, a retry performs it twice, unless you deduplicate at the application level.
+- If the failure was due to overload, retrying makes things worse. Limit the attempts and back off exponentially.
+- Retrying helps with transient problems (a deadlock, a failover), not with permanent ones (a constraint violation).
+- Side effects outside the database - an email already sent - are not undone by the abort.
+
+## 3. Why weak isolation exists
+
+Concurrency bugs are timing-dependent, appear rarely, are hard to reproduce, and are hard to find by reading code. Databases have long tried to hide them behind isolation. Full serialisability has a real cost in throughput and latency, so systems offer **weaker levels** that prevent *some* anomalies and leave the rest to you. These weaker levels are harder to reason about than they look, and they have caused real money to be lost and real data to be corrupted. The only defence is to know which anomalies each level allows.
 
 ```mermaid
 flowchart LR
-  A[Atomicity: all or nothing on fault] --- C[Consistency: app invariants, app's job]
-  C --- I[Isolation: concurrent txns don't interfere]
-  I --- D[Durability: committed data survives crashes]
+  RU[Read uncommitted] -->|adds: no dirty reads| RC[Read committed]
+  RC -->|adds: consistent snapshot per transaction| SI[Snapshot isolation]
+  SI -->|adds: no write skew or phantoms| SER[Serializable]
 ```
 
-## 2. Single-object and multi-object operations
+## 4. Read committed
 
-Atomicity and isolation describe what the database should do when a client makes several writes in one transaction. **Multi-object transactions** are often needed when several pieces of data must be kept in sync.
+The most basic level in common use makes two promises:
 
-Example: an email app shows an unread-message counter, stored separately from the emails for performance. User 2 reads the mailbox after user 1 inserts a new email but **before** the counter is incremented. User 2 sees an unread message, but the counter says zero. Isolation would have prevented this, because user 2 would see both the email and the counter update or neither. And if the counter update fails, **atomicity** ensures the email insert is rolled back too.
+1. **No dirty reads.** You only ever see data that has been committed.
+2. **No dirty writes.** You only ever overwrite data that has been committed.
 
-Multi-object transactions need a way to determine which reads and writes belong to the same transaction. In relational databases this is based on the client's TCP connection: everything between `BEGIN TRANSACTION` and `COMMIT` belongs to one transaction. Many non-relational databases lack such grouping.
+**Dirty reads.** Suppose a transaction has written something but has not yet committed. If another transaction could already see it, two bad things could happen: it might see only part of a multi-object change (the new order line but not the new total), or it might see data that is subsequently rolled back and therefore never officially existed. Any decision based on it would be unfounded.
 
-**Single-object writes** need atomicity and isolation too. Writing a 20 kB JSON document should not leave a half-written document if the network drops after 10 kB. Storage engines almost universally provide atomicity on a single object (via the log) and isolation (via a lock on each object). Some databases also provide atomic operations such as **increment**, removing the need for a read-modify-write cycle, and **compare-and-set** (write only if the value has not been concurrently changed). These are useful, but they are not transactions in the usual sense.
+**Dirty writes.** Suppose two transactions update the same pair of rows. Booking the last seat on a course updates the seat row (who sits there) and the payment row (who is charged). If Ana's and Bo's bookings interleave their writes, the seat may end up assigned to Bo while Ana is charged for it. Forbidding a second write to a row while the first writer is still uncommitted rules that out.
 
-**Why multi-object transactions still matter:**
+### How it is implemented
 
-- Relational **foreign keys** across tables must stay valid when inserting several records that refer to each other.
-- In a **document** model, denormalised data that must be updated in several documents at once.
-- **Secondary indexes** must be updated whenever a value changes. Without isolation, a record may appear in one index but not another.
+- *Dirty writes* are prevented with **row-level locks**: a writer takes the lock on a row and holds it until commit or abort. A second writer waits.
+- *Dirty reads* could be prevented with the same lock, but then one long-running write would stall every reader of that row. So for each row being modified, the database keeps **both the old committed value and the new uncommitted one**. While the writing transaction is in progress, everyone else is served the old value. At commit, readers switch to the new one.
 
-**Handling errors and aborts.** The whole point of aborts is to enable safe retries. Datastores with leaderless replication work on a "best effort" basis and will not undo something already done. ORMs such as Rails' ActiveRecord and Django often *don't retry* aborted transactions and bubble up an exception. Retrying is not perfect either:
+Read committed is the default in PostgreSQL, Oracle, SQL Server and many others.
 
-- If the transaction actually succeeded but the network failed while acknowledging the commit, a retry performs it **twice**, unless there is app-level deduplication.
-- If the error is due to **overload**, retrying makes things worse. Limit retries and use exponential backoff.
-- Only retry **transient** errors (deadlock, isolation violation, temporary network trouble), not permanent ones such as a constraint violation.
-- If the transaction has **side effects outside the database** (sending an email), they happen even if the transaction aborts. Use **two-phase commit** (Chapter 9) if several systems must commit or abort together.
-- If the client process fails while retrying, any data it was trying to write is lost.
+### What read committed does not prevent
 
-## 3. Weak isolation levels
-
-If two transactions do not touch the same data, they can safely run in parallel. Concurrency issues (race conditions) come into play only when one transaction reads data that another modifies concurrently, or when two transactions modify the same data. Concurrency bugs are hard to find by testing because they are triggered only by unlucky timing.
-
-**Serializable** isolation removes the problem but has a performance cost that many databases do not want to pay. So systems commonly use **weaker isolation levels**, which protect against *some* concurrency issues but not all. These can produce subtle bugs that have caused real financial losses, auditor investigations and corrupted customer data. Rather than blindly relying on tools, we need a good understanding of the kinds of concurrency problems that exist and how to prevent them.
-
-### 3.1 Read committed
-
-The most basic level of transaction isolation is **read committed**. It makes two guarantees:
-
-1. **No dirty reads.** When reading from the database, you only see data that has been committed.
-2. **No dirty writes.** When writing to the database, you only overwrite data that has been committed.
-
-**Dirty reads.** Imagine a transaction has written some data but not yet committed or aborted. If another transaction can see that uncommitted data, that is a *dirty read*. Preventing dirty reads matters because:
-
-- A transaction updating several objects should not have another transaction see some updates but not others (the email and counter example).
-- If a transaction aborts, any writes it made are rolled back. With dirty reads, another transaction could see data that is **never actually committed**.
-
-**Dirty writes.** If two transactions concurrently update the same object, and the earlier write is part of a transaction that has not yet committed, the later write overwrites an uncommitted value. Read committed prevents this, usually by delaying the second write until the first transaction has committed or aborted.
-
-DDIA's example: Alice and Bob both try to buy the same car. Buying it requires two writes: the sale listing must be updated to reflect the buyer, and the sales invoice must be sent to the buyer. With dirty writes, the sale could be awarded to Bob while the invoice goes to Alice.
-
-> [!WARNING]
-> Read committed does **not** prevent the counter race (read 42, write 43, twice). The second write comes *after* the first transaction committed, so it is not a dirty write, but the result is still wrong. That is a **lost update** (next lesson).
-
-**Implementing read committed.** It is the default in Oracle 11g, **PostgreSQL**, SQL Server 2012, MemSQL and many others.
-
-- **Dirty writes** are prevented with **row-level locks**. To modify an object, a transaction must first acquire a lock on it and hold it until it commits or aborts. Only one transaction can hold the lock on a given object.
-- **Dirty reads** could be prevented with the same lock, by requiring readers to briefly acquire it. That works poorly: one long-running write transaction would make many read-only transactions wait. Instead, most databases **remember both the old committed value and the new value** set by the transaction that holds the write lock. While the transaction is ongoing, other readers get the old value. Only when the new value is committed do readers switch to it.
-
-### 3.2 Snapshot isolation and repeatable read
-
-Read committed seems to do everything a transaction needs: it allows aborts, prevents reading incomplete results and prevents concurrent writes from mixing. Plenty of bugs can still occur.
-
-**Read skew (non-repeatable read).** Alice has \$1,000 in two accounts, \$500 each. A transaction transfers \$100 from account 1 to account 2. If she looks at her balances at an unlucky moment, she may see account 1 *before* the incoming payment arrives (\$500) and account 2 *after* the outgoing transfer was made (\$400). That totals \$900, and \$100 seems to have vanished.
-
-```mermaid
-sequenceDiagram
-  participant Alice
-  participant DB
-  participant T as Transfer txn
-  Alice->>DB: SELECT balance FROM accounts WHERE id=1
-  DB-->>Alice: 500
-  T->>DB: UPDATE accounts SET balance=600 WHERE id=1
-  T->>DB: UPDATE accounts SET balance=400 WHERE id=2
-  T->>DB: COMMIT
-  Alice->>DB: SELECT balance FROM accounts WHERE id=2
-  DB-->>Alice: 400
-  Note over Alice: total = 900 ?!
-```
-
-For Alice this is temporary: reload a few seconds later and she sees consistent balances. Some situations cannot tolerate such temporary inconsistency:
-
-- **Backups.** A backup copies the whole database and may take hours while writes continue. Some parts would contain old data and others new. If you restore from it, the inconsistencies become **permanent**.
-- **Analytic queries and integrity checks.** A query that scans large parts of the database, or a periodic integrity check, returns nonsensical results if it observes different parts at different points in time.
-
-**Snapshot isolation** is the most common solution. Each transaction reads from a **consistent snapshot** of the database: it sees all data that was committed **at the start of the transaction**. Even if the data is later changed by another transaction, each transaction sees only the old data from that point in time. It is a boon for long-running, read-only queries such as backups and analytics. It is supported by PostgreSQL, MySQL InnoDB, Oracle, SQL Server and others.
-
-### 3.3 Implementing snapshot isolation: MVCC
-
-Like read committed, snapshot isolation implementations use **write locks** to prevent dirty writes. A key principle: **readers never block writers, and writers never block readers.** Because the database may need to keep several committed versions of an object (different in-progress transactions may need to see the state at different points in time), the technique is called **multi-version concurrency control (MVCC)**.
-
-If a database only needed read committed, keeping two versions would suffice: committed and overwritten-but-not-yet-committed. Storage engines that support snapshot isolation typically use MVCC for read committed too: read committed uses a **separate snapshot for each query**, while snapshot isolation uses **the same snapshot for an entire transaction**.
-
-PostgreSQL's implementation:
-
-- When a transaction starts, it gets a unique, always-increasing **transaction ID (txid)**.
-- Whenever a transaction writes, the data is tagged with the writer's txid.
-- Each row has a **`created_by`** field (PostgreSQL's `xmin`) with the txid that inserted it, and a **`deleted_by`** field (`xmax`), initially empty.
-- A **delete** does not remove the row. It sets `deleted_by` to the deleting txid. Later, when no transaction can access the deleted data any more, a **garbage collection** process (PostgreSQL's **VACUUM**) removes it and frees the space.
-- An **update** is translated into a delete plus an insert. Updating account 2's balance from 500 to 400 marks the old row deleted by txid 13 and creates a new row created by txid 13.
-
-### 3.4 Visibility rules for observing a consistent snapshot
-
-When a transaction reads, transaction IDs determine which objects it can see:
-
-1. At the start of each transaction, the database makes a list of all **other transactions that are in progress** (not yet committed or aborted). Writes by those transactions are **ignored**, even if they commit later.
-2. Writes made by **aborted** transactions are ignored.
-3. Writes made by transactions with a **later txid** (which started after the current transaction) are ignored, whether or not they have committed.
-4. All other writes are visible.
-
-Put another way, an object is visible if **both**:
-
-- at the time the reader's transaction started, the transaction that **created** the object had already **committed**, and
-- the object is **not marked for deletion**, or if it is, the transaction that requested deletion had **not yet committed** when the reader's transaction started.
+Because each statement sees whatever is committed *at the moment it runs*, two statements in the same transaction may see different states of the database.
 
 ```python-run
-# MVCC snapshot visibility (PostgreSQL-style xmin/xmax)
-committed = {1, 3, 5, 10, 13}      # transaction ids that have committed
-aborted   = {7}
+# A stock move of 15 pallets from warehouse A to warehouse B commits between two reads of an auditor.
+committed = {"A": 40, "B": 40}
 
-rows = [
-    # (value, created_by, deleted_by)
-    ("acct1=500", 3,  None),
-    ("acct2=500", 5,  13),         # deleted (updated) by txn 13
-    ("acct2=400", 13, None),       # new version created by txn 13
-    ("acct3=999", 7,  None),       # created by an aborted txn
-    ("acct4=50",  15, None),       # created by a txn that started later
-]
+def read(warehouse):                     # read committed: always the latest committed value
+    return committed[warehouse]
 
-def snapshot(my_txid, in_progress_at_start):
-    def committed_before_me(t):
-        return (t is not None and t in committed and t < my_txid
-                and t not in in_progress_at_start)
-    visible = []
-    for value, xmin, xmax in rows:
-        if not committed_before_me(xmin):
-            continue                     # creator not visible to me
-        if xmax is not None and committed_before_me(xmax):
-            continue                     # deletion visible to me -> row is gone
-        visible.append(value)
-    return visible
+seen_a = read("A")                     # auditor reads A = 40
+committed["A"] -= 15                   # stock-move transaction: both writes...
+committed["B"] += 15                   # ...commit atomically here
+seen_b = read("B")                     # auditor reads B = 55
 
-print("txn 12 (started while 13 not yet begun):", snapshot(12, set()))
-print("txn 14 (13 already committed)          :", snapshot(14, set()))
-print("txn 14 but 13 was in progress at start :", snapshot(14, {13}))
+print("auditor saw A =", seen_a, "B =", seen_b, "total =", seen_a + seen_b)
+print("real total at every instant was", sum(committed.values()))
 ```
 
-Txn 12 still sees `acct2=500` because txn 13 started later. Long-running reads therefore keep seeing a consistent past, and old row versions cannot be vacuumed while such readers exist.
+The auditor counted 95 pallets although there were 80 at every instant. The names for this are **non-repeatable read** and **read skew**. If the auditor is a person who can simply refresh the page, it is a brief curiosity. In other situations it is not tolerable:
 
-### 3.5 Indexes and snapshot isolation
+- **Backups.** A backup copies the whole database over hours. If it captures some tables before a change and others after it, restoring it makes the inconsistency permanent.
+- **Analytical queries and integrity checks.** A query that scans a large part of the database will return nonsense if it observes different parts at different times.
 
-How do indexes work in a multi-version database? One option: the index points to *all versions* of an object, and an index query filters out versions not visible to the current transaction. When garbage collection removes old versions, the corresponding index entries can be removed too. PostgreSQL has optimisations to avoid index updates when different versions of the same object fit on the same page (**HOT updates**).
+## 5. Snapshot isolation
 
-CouchDB, Datomic and LMDB take another approach with **append-only / copy-on-write B-trees**. Pages are not overwritten. Each write creates a copy of each modified page, and parent pages up to the root are copied to point to the new versions. Every write transaction creates a new B-tree **root**, and a particular root is a consistent snapshot of the database at the moment it was created. This requires background compaction and garbage collection.
+The remedy is to let each transaction read from a **consistent snapshot**: it sees all data that was committed when the transaction *started*, and nothing committed later, no matter how long it runs. It is as if time were frozen for the reader.
 
-### 3.6 Repeatable read and naming confusion
+Its defining trait: **a reader never has to wait for a writer, nor a writer for a reader**. A long analytical query can run alongside heavy write traffic, each unaffected by the other. Snapshot isolation is offered by PostgreSQL, MySQL/InnoDB, Oracle, SQL Server and others.
 
-Snapshot isolation is useful, especially for read-only transactions, but it is called different names in different databases. Oracle calls it **serializable**. PostgreSQL and MySQL call it **repeatable read**. The SQL standard does not have the concept of snapshot isolation because the standard is based on System R's 1975 definitions, before snapshot isolation was invented. It defines *repeatable read*, which looks superficially similar. The standard's definition is ambiguous and implementations vary widely in what they guarantee. Nobody really knows what "repeatable read" means.
+### Multi-version concurrency control
 
-| Anomaly | Read uncommitted | Read committed | Snapshot isolation | Serializable |
-|---|---|---|---|---|
-| Dirty write | prevented* | prevented | prevented | prevented |
-| Dirty read | possible | prevented | prevented | prevented |
-| Read skew | possible | possible | prevented | prevented |
-| Lost update | possible | possible | depends (auto-detected in PG/Oracle) | prevented |
-| Write skew | possible | possible | possible | prevented |
-| Phantom (read-write) | possible | possible | possible | prevented |
+Writers are handled as under read committed: row locks prevent dirty writes. Readers need no locks at all. The database simply keeps **several committed versions of each row**, since different in-progress transactions may need to see the database as of different moments. This is **multi-version concurrency control (MVCC)**. (Read committed can be built on the same machinery by taking a fresh snapshot for every statement; snapshot isolation uses one snapshot for the whole transaction.)
 
-\*Most databases prevent dirty writes even at the lowest level.
+In PostgreSQL's formulation:
+
+- Every transaction receives a unique, ever-increasing id when it starts.
+- Each row version carries `created_by`, the id of the transaction that inserted it, and `deleted_by`, initially empty.
+- A delete does not remove anything; it writes the deleter's id into `deleted_by`. An **update is a delete plus an insert**: the old version is marked, and a new version is added.
+- When no running transaction can still need an old version, a background garbage collector removes it.
+
+### Visibility rules
+
+At the start of a transaction the database notes which other transactions are in progress. Then, for every row version the transaction encounters:
+
+1. Writes by transactions that were **still in progress** at that moment are ignored, even if they commit later.
+2. Writes by **aborted** transactions are ignored.
+3. Writes by transactions with a **later id** (started afterwards) are ignored, committed or not.
+4. Everything else is visible.
+
+Put positively, a version is visible when both conditions hold:
+
+- the transaction that created it had already committed when the reader started; and
+- it has not been marked deleted, or the transaction that marked it had *not* yet committed when the reader started.
+
+```python-run
+# versions: (key, value, created_by, deleted_by)
+versions = []
+next_txid = 1
+status = {}                                   # txid -> "active" | "committed" | "aborted"
+
+def begin():
+    global next_txid
+    tx = {"id": next_txid, "in_progress": {t for t, s in status.items() if s == "active"}}
+    status[tx["id"]] = "active"; next_txid += 1
+    return tx
+
+def sees(tx, writer):
+    if writer == tx["id"]: return True                          # own writes
+    return writer < tx["id"] and writer not in tx["in_progress"] and status[writer] == "committed"
+
+def read(tx, key):
+    for k, value, created, deleted in versions:
+        if k == key and sees(tx, created) and (deleted is None or not sees(tx, deleted)):
+            return value
+    return None
+
+def write(tx, key, value):
+    for i, (k, v, c, d) in enumerate(versions):                 # mark the version we can see as deleted
+        if k == key and sees(tx, c) and d is None:
+            versions[i] = (k, v, c, tx["id"])
+    versions.append((key, value, tx["id"], None))
+
+def commit(tx): status[tx["id"]] = "committed"
+
+setup = begin(); write(setup, "A", 40); write(setup, "B", 40); commit(setup)
+
+observer = begin()                                              # snapshot taken here
+a = read(observer, "A")
+transfer = begin(); write(transfer, "A", 25); write(transfer, "B", 55); commit(transfer)
+b = read(observer, "B")                                         # still the old version
+print("observer:", a, b, "total", a + b)
+late = begin()
+print("new txn :", read(late, "A"), read(late, "B"))
+print("stored versions:", versions)
+```
+
+Under read committed the auditor counted 95; here the observer sees a coherent 80 because the stock move's writes are invisible to its snapshot. Notice that after the transfer the store holds four versions for two keys. The practice problem `db-mvcc-visibility` asks you to implement these rules.
+
+### Indexes under MVCC
+
+How do indexes cope with several versions of a row? One approach has the index point to all versions and lets the query filter out the invisible ones; when old versions are garbage-collected their index entries go too. PostgreSQL avoids index updates altogether when a new version fits on the same page as the old one and no indexed column changed. A different design uses **copy-on-write B-trees**: an update never overwrites a page but writes a new copy of each page from the leaf to the root. Every root is then a self-contained snapshot of the whole database at one moment, and no visibility filtering by transaction id is needed.
+
+### The naming mess
+
+The SQL standard predates snapshot isolation and does not mention it. Its levels were defined in terms of locking, and the definitions are ambiguous. Vendors therefore attached the standard's names to whatever they built:
+
+| Product | What it calls the level | What you get |
+|---|---|---|
+| PostgreSQL | `REPEATABLE READ` | Snapshot isolation |
+| MySQL InnoDB | `REPEATABLE READ` | A snapshot for reads, with weaker lost-update protection than PostgreSQL |
+| Oracle | `SERIALIZABLE` | Snapshot isolation |
+| SQL Server | `SNAPSHOT` | Snapshot isolation |
+
+Nobody can say precisely what "repeatable read" means without naming the product.
 
 > [!INTERVIEW]
-> When asked "What isolation level does PostgreSQL default to, and what can go wrong?", answer **Read committed**, with a fresh snapshot per *statement*. Non-repeatable reads, lost updates and write skew are possible. `REPEATABLE READ` in PostgreSQL is snapshot isolation and *does* detect lost updates (with a serialization error). `SERIALIZABLE` is SSI. In MySQL InnoDB, the default is REPEATABLE READ, which does *not* auto-detect lost updates.
+> When asked "which isolation level do you use?", avoid answering with a standard name alone. Say what the database's default actually is (read committed for PostgreSQL), which anomalies that still allows (non-repeatable reads, lost updates through read-modify-write, write skew), and how your code deals with the cases where that matters - atomic updates, `SELECT ... FOR UPDATE`, constraints, or a stronger level with retries.
 
-## 4. Summary
+## Pitfalls
 
-- Transactions simplify error handling (atomicity = abortability) and concurrency (isolation). Consistency is the application's responsibility, and durability is never absolute.
-- **Read committed**: no dirty reads, no dirty writes. Implemented with row locks for writes and by remembering the old committed value for reads.
-- **Snapshot isolation** gives each transaction a consistent point-in-time view, which prevents **read skew**. It is implemented with **MVCC** (xmin/xmax, visibility rules, vacuum).
-- Isolation-level names are inconsistent across databases. Learn the anomalies rather than the names.
+- **Treating "ACID" as a precise guarantee.** Check the default isolation level and the durability settings of your particular database.
+- **Assuming the database enforces your invariants.** Beyond declared constraints, consistency is your code's responsibility.
+- **Retrying blindly.** Without idempotence a retry after a lost acknowledgement duplicates the operation; without backoff it amplifies an overload.
+- **Running reports or backups under read committed.** Use a snapshot (a `REPEATABLE READ` transaction in PostgreSQL, or a dump tool that takes one).
+- **Long-running snapshot transactions.** They force the database to retain old row versions, causing bloat.
+- **Believing snapshot isolation is serialisable.** It still allows lost updates in some implementations and write skew in all of them - the topic of the next lesson.
+
+## Summary
+
+- A **transaction** groups reads and writes so that the application can ignore partial failure and, to a chosen degree, concurrency.
+- **Atomicity** means a failed transaction leaves nothing behind. **Consistency** means the application's invariants hold - which is the application's responsibility. **Isolation** means concurrent transactions do not interfere, with serialisability as the ideal. **Durability** means committed data survives, to the extent that disks, replicas and backups allow.
+- **Read committed** forbids dirty reads and dirty writes, using row locks for writers and "old value until commit" for readers. It still allows **read skew**.
+- **Snapshot isolation** gives each transaction a frozen, consistent view. It is implemented with **MVCC**: row versions tagged with creating and deleting transaction ids, plus **visibility rules**. Readers and writers never block each other.
+- Isolation level **names differ between products**; always check what your database actually provides.
 
 ```quiz
 [
-  {"q": "In ACID, what does atomicity actually guarantee?",
-   "options": ["Concurrent transactions do not see each other", "If a fault occurs mid-transaction, all its writes are discarded (abortability)", "Data survives crashes", "Invariants hold"],
+  {"q": "What does atomicity mean in the ACID sense?",
+   "options": ["Operations are invisible to other threads while in progress", "If a transaction cannot complete, all of its writes are discarded so it can be safely retried", "Data is stored in indivisible units", "Every transaction runs on a single CPU core"],
    "answer": 1,
-   "explain": "ACID atomicity is about handling faults, not concurrency; isolation handles concurrency."},
-  {"q": "Which ACID property is really a property of the application rather than the database?",
-   "options": ["Atomicity", "Consistency", "Isolation", "Durability"],
+   "explain": "ACID atomicity is about faults partway through a group of writes: all or nothing. Concurrency is the concern of isolation."},
+  {"q": "Why is the C in ACID described as a property of the application rather than of the database?",
+   "options": ["Databases cannot store consistent data", "The database does not know most invariants; the application must write transactions that preserve them", "Consistency only matters in distributed systems", "It refers to replica consistency"],
    "answer": 1,
-   "explain": "The application defines invariants and writes transactions that preserve them."},
-  {"q": "Read committed prevents which anomalies?",
-   "options": ["Dirty reads and dirty writes", "Lost updates and write skew", "Read skew", "Phantoms"],
-   "answer": 0,
-   "explain": "It does not prevent read skew, lost updates or write skew."},
-  {"q": "How do most databases prevent dirty reads without making readers wait?",
-   "options": ["Readers take the row lock", "They keep the old committed value and return it while the writer's transaction is in progress", "They abort writers", "They serialize all transactions"],
+   "explain": "Apart from declared constraints, the database stores whatever it is told. Atomicity and isolation are tools the application uses to keep its invariants."},
+  {"q": "Which two anomalies does read committed prevent?",
+   "options": ["Phantoms and write skew", "Dirty reads and dirty writes", "Lost updates and read skew", "Deadlocks and timeouts"],
    "answer": 1,
-   "explain": "Readers see the last committed value until the new one commits."},
-  {"q": "Alice sees $500 + $400 = $900 during a transfer. Which anomaly is this, and what prevents it?",
-   "options": ["Dirty write; read committed", "Read skew (non-repeatable read); snapshot isolation", "Lost update; atomic increment", "Phantom; predicate locks"],
+   "explain": "Readers see only committed data, and writers overwrite only committed data. Everything else is still possible."},
+  {"q": "How do most databases prevent dirty reads without making readers wait for writers?",
+   "options": ["They take a read lock on every row", "They keep the old committed value and serve it to readers until the writing transaction commits", "They abort the reader", "They delay the write until no reader is active"],
    "answer": 1,
-   "explain": "She saw different parts of the database at different points in time; a consistent snapshot fixes this."},
-  {"q": "Under MVCC, which writes are invisible to a transaction T?",
-   "options": ["Writes by transactions that committed before T started", "Writes by transactions in progress when T started, aborted transactions, and transactions with later txids", "All writes to rows T has read", "Only deletes"],
+   "explain": "Holding both the old and the new value lets readers proceed immediately with the committed one."},
+  {"q": "A backup runs for two hours under read committed while stock moves between warehouses continue. What can go wrong?",
+   "options": ["Nothing, backups are always consistent", "The backup may contain the removal of a move but not its arrival, or the reverse, because different tables were copied at different times", "The transfers are blocked for two hours", "The backup contains uncommitted data"],
    "answer": 1,
-   "explain": "These are exactly the visibility rules for a consistent snapshot."},
-  {"q": "In PostgreSQL MVCC, what does an UPDATE do internally?",
-   "options": ["Overwrites the row in place", "Marks the old row version deleted (xmax) and inserts a new version (xmin)", "Locks the whole table", "Writes only to the WAL"],
+   "explain": "This is read skew. A snapshot gives the backup one consistent point in time."},
+  {"q": "Under MVCC snapshot isolation, how is an UPDATE of a row represented internally?",
+   "options": ["The row is overwritten in place", "The old version is marked as deleted by the transaction and a new version is created", "The row is locked for all readers until commit", "The update is stored only in the index"],
    "answer": 1,
-   "explain": "VACUUM later removes versions no transaction can see."},
-  {"q": "What is PostgreSQL's 'REPEATABLE READ' level in DDIA's terms?",
-   "options": ["Read committed", "Snapshot isolation", "Serializable 2PL", "Read uncommitted"],
+   "explain": "Keeping the old version lets transactions with older snapshots continue to read it, which is why readers and writers do not block each other."},
+  {"q": "A transaction with id 20 started while transaction 15 was still in progress. Transaction 15 then commits. Does transaction 20 see its writes?",
+   "options": ["Yes, because 15 is smaller than 20", "Yes, because it committed", "No, writes by transactions that were in progress when the snapshot was taken stay invisible", "Only if it reads the row twice"],
+   "answer": 2,
+   "explain": "The snapshot is fixed at the start. Anything not yet committed at that moment is ignored for the whole transaction, even if it commits later."},
+  {"q": "What does PostgreSQL provide when you request REPEATABLE READ?",
+   "options": ["Two-phase locking", "Snapshot isolation", "Read uncommitted", "Serial execution"],
    "answer": 1,
-   "explain": "Isolation-level names vary across databases; Oracle calls snapshot isolation 'serializable'."}
+   "explain": "The standard's names are applied inconsistently. PostgreSQL's repeatable read is snapshot isolation, and Oracle calls the same thing serializable."}
 ]
 ```
 
-> **Source:** DDIA ch. 7, "Transactions" (The Slippery Concept of a Transaction; Weak Isolation Levels: read committed, snapshot isolation and repeatable read).
+> **Source:** DDIA ch. 7 (Transactions) - the meaning of ACID, single-object and multi-object operations, read committed, snapshot isolation and repeatable read. Written in original wording with original examples.

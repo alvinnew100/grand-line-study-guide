@@ -33,7 +33,7 @@ Different countries have different structures. The US has states, France has ré
 
 The property graph model is used by Neo4j, Titan/JanusGraph and InfiniteGraph. In it:
 
-- Each **vertex** has a unique id, a set of outgoing edges, a set of incoming edges, and a collection of key-value **properties**.
+- A **vertex** carries an identifier, the edges leaving it, the edges arriving at it, and a bag of key-value **properties**.
 - Each **edge** has a unique id, a **tail** vertex (where it starts), a **head** vertex (where it ends), a **label** describing the relationship, and properties.
 
 You can picture it as two relational tables:
@@ -85,7 +85,7 @@ MATCH
 RETURN person.name
 ```
 
-`-[:WITHIN*0..]->` means "follow a `WITHIN` edge **zero or more times**", like `*` in a regular expression. Because the query is declarative, the engine picks the execution strategy. It could start from every person and walk up, or start from the two location vertices and walk down the incoming `WITHIN` edges, which is probably cheaper.
+`-[:WITHIN*0..]->` means "follow a `WITHIN` edge any number of times, including none" - the same meaning `*` has in a regex. Because the query is declarative, the engine picks the execution strategy. It could start from every person and walk up, or start from the two location vertices and walk down the incoming `WITHIN` edges, which is probably cheaper.
 
 ## 3. Graph queries in SQL
 

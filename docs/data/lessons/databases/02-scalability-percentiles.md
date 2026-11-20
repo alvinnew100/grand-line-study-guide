@@ -1,6 +1,6 @@
 # Scalability: load parameters, percentiles and SLOs
 
-"Is X scalable?" is a meaningless question in isolation. **Scalability** describes how a system copes with *increased load*. It only makes sense as a specific question, such as: "If the system grows in a particular way, what are our options for coping?" Answering it takes two tools: a way to **describe load** and a way to **describe performance**.
+"Is X scalable?" is a meaningless question in isolation. **Scalability** describes how a system copes with *increased load*. It only makes sense as a specific question, such as: "Suppose this particular kind of load doubles - what could we do about it?" Answering it takes two tools: a way to **describe load** and a way to **describe performance**.
 
 ## 1. Describing load: load parameters
 
@@ -8,7 +8,7 @@
 
 - requests per second to a web server,
 - the ratio of reads to writes in a database,
-- the number of simultaneously active users in a chat room,
+- how many people are online in a chat room at once,
 - the cache hit rate,
 - the *distribution* of something, such as followers per user.
 
@@ -79,7 +79,7 @@ With load described, you can ask two questions:
 1. If a load parameter grows and resources stay fixed, how does performance degrade?
 2. If a load parameter grows, how much must resources grow to keep performance unchanged?
 
-Batch systems such as Hadoop care about **throughput**: records per second, or total job time. Online systems care about **response time**: the time between a client sending a request and receiving a response.
+Batch systems such as Hadoop care about **throughput**: records per second, or total job time. Online systems care about **response time**: the delay, measured at the client, from issuing a request until the answer is back.
 
 > [!NOTE]
 > **Latency vs response time.** Response time is what the client sees: service time plus network delay plus queueing delay. Latency, strictly, is the time a request spends *latent*, waiting to be handled. People use the terms loosely, but the distinction helps when you are debugging.

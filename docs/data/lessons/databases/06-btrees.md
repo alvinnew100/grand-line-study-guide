@@ -4,10 +4,10 @@ The log-structured indexes of the previous lesson are gaining ground, but the **
 
 ## 1. Pages, not segments
 
-Like SSTables, B-trees keep key-value pairs **sorted by key**, which allows efficient point lookups *and* range queries. That is where the similarity ends.
+A B-tree shares one property with SSTables: entries are **ordered by key**, so both single-key lookups *and* range scans are cheap. That is where the similarity ends.
 
 - Log-structured indexes break the database into variable-size **segments** (megabytes or more) and always write sequentially.
-- B-trees break the database into fixed-size **blocks** or **pages**, traditionally 4 KB (PostgreSQL uses 8 KB, InnoDB 16 KB), and read or write **one page at a time**. This matches the hardware, since disks are also arranged in fixed-size blocks.
+- A B-tree divides its file into **pages** (blocks) of one fixed size - 4 KB classically, 8 KB in PostgreSQL, 16 KB in InnoDB - and all I/O happens **a whole page at a time**. This matches the hardware, since disks are also arranged in fixed-size blocks.
 
 Each page has an address, and pages refer to each other like pointers, but on disk. One page is the **root**. A page contains keys and references to child pages, and each child covers a continuous **range** of keys. The keys between the references mark the range boundaries.
 
@@ -33,7 +33,7 @@ for b in (100, 300, 500):
 
 ## 2. Updates and page splits
 
-- **Update a value.** Search for the leaf containing the key, change the value in that page, and write the page back to disk. Any references to the page remain valid.
+- **Update a value.** Walk down to the leaf that holds the key, modify the entry there, and flush that one page. Any references to the page remain valid.
 - **Insert a key.** Find the page whose range covers the key and add it. If the page is **full**, **split** it into two half-full pages and update the parent to account for the new subdivision of key ranges. If the parent overflows it splits too, recursively, all the way up. If the root splits, the tree grows one level taller.
 
 This algorithm keeps the tree **balanced**: every leaf is at the same depth.
@@ -93,7 +93,7 @@ The B-tree's basic write operation **overwrites a page on disk in place**. Its l
 - A page split must write *several* pages: the two halves plus the updated parent. If the database crashes midway, the index is left **corrupted**, for example with an **orphan page** that is no parent's child.
 - The hardware itself may not write a page atomically (a **torn page**).
 
-The standard defence is a **write-ahead log (WAL)**, also called a *redo log*. It is an append-only file to which every B-tree modification must be written **before** it is applied to the pages themselves. After a crash, the database replays the WAL to restore the tree to a consistent state. PostgreSQL's WAL is also the basis of its replication and point-in-time recovery, and InnoDB adds a **doublewrite buffer** against torn pages.
+The standard defence is a **write-ahead log (WAL)**, also called a *redo log*. Every change to the tree is first appended to this log, and only **afterwards** are the tree pages touched. After a crash, the database replays the WAL to restore the tree to a consistent state. PostgreSQL's WAL is also the basis of its replication and point-in-time recovery, and InnoDB adds a **doublewrite buffer** against torn pages.
 
 **Concurrency control** is needed because several threads may access the tree at once and one could see it in an inconsistent state mid-split. B-trees protect themselves with **latches**, which are lightweight locks on pages. Log-structured engines have it easier, since merging happens in the background and new segments replace old ones atomically.
 
@@ -111,7 +111,7 @@ LMDB and some others avoid the WAL with **copy-on-write**. A modified page is wr
 
 ## 5. Comparing B-trees and LSM-trees
 
-The rule of thumb: **LSM-trees are typically faster for writes, B-trees are thought to be faster for reads.** Reads are slower on LSM because several structures and SSTables at different compaction stages may need checking. Benchmarks are sensitive to workload, so test with *your* data.
+The rule of thumb: **As a rule of thumb, LSM-trees win on write throughput and B-trees on read latency.** An LSM read may have to consult the memtable and a number of SSTables on different levels before it finds the key. Benchmarks are sensitive to workload, so test with *your* data.
 
 ### 5.1 Advantages of LSM-trees
 
@@ -149,7 +149,7 @@ A **primary key** index uniquely identifies a row. **Secondary indexes** (`CREAT
 The value in an index can be the row itself, or a reference to a row stored elsewhere in a **heap file**, which keeps rows in no particular order.
 
 - The **heap file** approach avoids duplicating data when there are several secondary indexes, since each just references the heap location. An update that does not change the size can overwrite in place. If the new value is larger it may need to move, and then either every index is updated or a forwarding pointer is left behind.
-- A **clustered index** stores the row *within* the index. InnoDB clusters on the primary key, and secondary indexes refer to the primary key rather than a heap location. SQL Server lets you choose one clustered index per table.
+- A **clustered index** stores the row *within* the index. In InnoDB the table is itself the primary-key index, and a secondary index stores primary-key values, not physical row addresses. SQL Server lets you choose one clustered index per table.
 - A **covering index** (an *index with included columns*) stores *some* columns in the index, so some queries can be answered from the index alone. The query is then said to be *covered*.
 
 Clustered and covering indexes speed reads but cost space and write overhead, and they complicate transactional guarantees because duplicated data must stay consistent.
@@ -161,13 +161,13 @@ Clustered and covering indexes speed reads but cost space and write overhead, an
 
 ### 6.4 Full-text search and fuzzy indexes
 
-Exact-key indexes cannot find misspellings or synonyms. Lucene supports searching for words within an edit distance. Its in-memory index is a **finite-state automaton** over the characters of keys, similar to a trie, which can be turned into a **Levenshtein automaton** for efficient fuzzy search.
+Exact-key indexes cannot find misspellings or synonyms. Lucene supports searching for words within an edit distance. The term dictionary it holds in memory is a trie-like **finite-state automaton** built from the keys' characters; converting it to a **Levenshtein automaton** makes search within a given edit distance fast.
 
 ### 6.5 Keeping everything in memory
 
 As RAM gets cheaper, many datasets fit entirely in memory, possibly spread across machines. Examples include Memcached (a cache whose data may be lost), VoltDB, MemSQL, Oracle TimesTen, RAMCloud, and Redis (weak durability through async disk writes). They achieve durability with battery-backed RAM, logs on disk, periodic snapshots or replication.
 
-Counter-intuitively, the speed of in-memory databases comes **not** from avoiding disk reads, since the OS caches hot disk blocks anyway. It comes from avoiding the **overhead of encoding in-memory data structures in a form that can be written to disk**. In-memory databases can also offer data models that are hard to build on disk, such as Redis's priority queues and sets. The **anti-caching** approach evicts least-recently-used records to disk and loads them back on access, which lets an in-memory design support datasets larger than RAM.
+Counter-intuitively, the speed of in-memory databases comes **not** from avoiding disk reads, since the OS caches hot disk blocks anyway. The gain comes from **never having to translate in-memory structures into an on-disk layout**. In-memory databases can also offer data models that are hard to build on disk, such as Redis's priority queues and sets. The **anti-caching** approach evicts least-recently-used records to disk and loads them back on access, which lets an in-memory design support datasets larger than RAM.
 
 ## 7. Pitfalls
 

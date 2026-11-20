@@ -764,8 +764,8 @@ Report every pair of transactions `(A, B)` that forms a potential write skew:
 
 Return the pairs as `[smaller_id, larger_id]`, sorted ascending.
 
-**Example (two doctors going off call):**
-`[[1, 0, 10, ["alice", "bob"], ["alice"]], [2, 1, 11, ["alice", "bob"], ["bob"]]]` → `[[1, 2]]`
+**Example (two admins giving up their admin role at once):**
+`[[1, 0, 10, ["mira", "tom"], ["mira"]], [2, 1, 11, ["mira", "tom"], ["tom"]]]` → `[[1, 2]]`
 """,
     starter='''def find_write_skew(txns: List[list]) -> List[List[int]]:
     pass
@@ -789,8 +789,8 @@ Return the pairs as `[smaller_id, larger_id]`, sorted ascending.
     return out
 ''',
     tests=[
-        [[[1, 0, 10, ["alice", "bob"], ["alice"]], [2, 1, 11, ["alice", "bob"], ["bob"]]]],
-        [[[1, 0, 5, ["alice", "bob"], ["alice"]], [2, 5, 9, ["alice", "bob"], ["bob"]]]],
+        [[[1, 0, 10, ["mira", "tom"], ["mira"]], [2, 1, 11, ["mira", "tom"], ["tom"]]]],
+        [[[1, 0, 5, ["mira", "tom"], ["mira"]], [2, 5, 9, ["mira", "tom"], ["tom"]]]],
         [[]],
         [[[1, 0, 10, ["x"], ["x"]]]],
         [[[1, 0, 10, ["x", "y"], ["x"]], [2, 1, 11, ["x", "y"], ["x"]]]],
@@ -864,7 +864,7 @@ Return the pairs as `[smaller_id, larger_id]`, sorted ascending.
             "You need the dependency in **both** directions. One direction only means the pair can still be ordered serially.",
         ],
         brute_force="Checking all pairs is already the straightforward solution, O(n^2) pairs. A production detector would index writes by key so it only examines transactions that touched related keys.",
-        approach="For every pair i < j: overlap test → disjoint-writes test → mutual read/write intersection test → record `[min id, max id]`; sort at the end.\n\nDry run (doctors): both read `{alice, bob}`; T1 writes `alice`, T2 writes `bob`. Concurrent; writes disjoint; T1's write hits T2's read and vice versa → skew. In the second test T2 starts exactly when T1 commits, so T2's snapshot already contains T1's write: no anomaly.",
+        approach="For every pair i < j: overlap test → disjoint-writes test → mutual read/write intersection test → record `[min id, max id]`; sort at the end.\n\nDry run (admins): both read `{mira, tom}`; T1 writes `mira`, T2 writes `tom`. Concurrent; writes disjoint; T1's write hits T2's read and vice versa → skew. In the second test T2 starts exactly when T1 commits, so T2's snapshot already contains T1's write: no anomaly.",
         complexity="O(n^2 * k) for n transactions with at most k keys each; O(k) extra space.",
         pitfalls="Treating `start == commit` of the other transaction as overlapping; forgetting to order the ids inside a pair; reporting write-write conflicts (those are lost-update candidates, which snapshot isolation already blocks).",
         follow_up="This pairwise rw-rw pattern is the simplest dangerous structure. Serializable snapshot isolation generalises it: it aborts a transaction that has both an incoming and an outgoing read-write dependency to concurrent transactions. Why can that abort transactions that were actually harmless?",

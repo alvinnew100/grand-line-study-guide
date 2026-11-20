@@ -4,7 +4,7 @@ The previous lesson partitioned records by **primary key**. Real applications al
 
 ## 1. Partitioning and secondary indexes
 
-A secondary index does not identify a record uniquely. It is a way of **searching for occurrences of a value**: all actions by user 123, all articles containing the word *hogwash*, all cars whose colour is *red*. Secondary indexes are the bread and butter of relational databases and common in document databases. Many key-value stores (HBase, Voldemort) avoided them because of the added complexity, while Riak has started adding them. They are the *raison d'être* of search servers such as Solr and Elasticsearch.
+A secondary index does not identify a record uniquely. It is a way of **searching for occurrences of a value**: all actions by user 123, all articles containing the word *hogwash*, all cars whose colour is *red*. Relational databases rely on secondary indexes constantly, and document stores usually have them too. Many key-value stores (HBase, Voldemort) avoided them because of the added complexity, while Riak has started adding them. For search servers like Solr and Elasticsearch they are the entire point.
 
 The problem is that secondary indexes **do not map neatly to partitions**. There are two main approaches.
 
@@ -30,17 +30,17 @@ flowchart TB
   P1 --> M
 ```
 
-Reading is the hard part. There is no reason all red cars would be in one partition, so a query must go to **all partitions** and combine the results. This is **scatter/gather**, and it makes secondary-index reads expensive. Even in parallel, it is prone to **tail latency amplification** (Chapter 1). It is still widely used: MongoDB, Riak, Cassandra, Elasticsearch, SolrCloud and VoltDB all use document-partitioned secondary indexes. Vendors recommend structuring the partitioning scheme so that secondary-index queries can be served from a single partition, which is not always possible when several indexes are used in one query.
+Reading is the hard part. There is no reason all red cars would be in one partition, so a query must go to **all partitions** and combine the results. This is **scatter/gather**, and it makes secondary-index reads expensive. Even in parallel, it is prone to **tail latency amplification** (Chapter 1). It is still widely used: MongoDB, Riak, Cassandra, Elasticsearch, SolrCloud and VoltDB all use document-partitioned secondary indexes. The usual advice is to pick a partition key that lets index queries be answered by one partition; with several indexes in one query that cannot always be arranged.
 
 ### 1.2 Term-partitioned (global) indexes
 
 Alternatively, build a **global index** covering data in all partitions. It cannot live on one node, because that node would become a bottleneck, so the global index is **partitioned too, but differently from the primary key index**.
 
-For example, red cars from all partitions appear under `color:red` in the index, and the index is partitioned so that colours starting with *a* to *r* live on partition 0 and *s* to *z* on partition 1. The **term** we are looking for determines the index partition, hence *term-partitioned*. You can partition by the term itself (good for range scans such as asking-price ranges) or by a hash of the term (more even load).
+The entry `color:red` then lists red cars from every partition, and the index itself is split by term: say, colours beginning with *a* to *r* on partition 0 and *s* to *z* on partition 1. The **term** we are looking for determines the index partition, hence *term-partitioned*. You can partition by the term itself (good for range scans such as asking-price ranges) or by a hash of the term (more even load).
 
 - **Reads are efficient.** Instead of scatter/gather over all partitions, a client queries only the partition holding the term.
 - **Writes are slower and more complicated.** One document write may affect **several index partitions**, one for every term in the document.
-- In an ideal world the index would always be up to date. In a term-partitioned index that would need a **distributed transaction** across all affected partitions, which most databases do not support (Chapter 9). In practice, global secondary index updates are often **asynchronous**: a read shortly after a write may not see the change in the index. Amazon **DynamoDB** global secondary indexes are normally updated within a fraction of a second but can lag more during infrastructure faults. Riak's search and Oracle's data warehouse also offer global indexes.
+- Ideally a write would show up in the index immediately. In a term-partitioned index that would need a **distributed transaction** across all affected partitions, which most databases do not support (Chapter 9). In practice, global secondary index updates are often **asynchronous**: a read shortly after a write may not see the change in the index. Amazon **DynamoDB** global secondary indexes are normally updated within a fraction of a second but can lag more during infrastructure faults. Riak's search and Oracle's data warehouse also offer global indexes.
 
 | | Local (document-partitioned) | Global (term-partitioned) |
 |---|---|---|
@@ -82,9 +82,9 @@ for n_from, n_to in [(10, 11), (10, 20), (100, 101)]:
 
 ### 2.2 Fixed number of partitions
 
-Create **many more partitions than there are nodes**, and assign several partitions to each node. A database on a 10-node cluster might have **1,000 partitions** from the outset, about 100 per node.
+Set up **far more partitions than nodes** from the start, so that each node holds a number of them. A database on a 10-node cluster might have **1,000 partitions** from the outset, about 100 per node.
 
-When a node is **added**, it **steals a few partitions** from every existing node until partitions are fairly distributed again. When a node is removed, the reverse happens. Only **entire partitions** move between nodes. The number of partitions and the assignment of keys to partitions do not change. The only change is the assignment of partitions to nodes. That reassignment is not instant, since transferring data takes time, so the old assignment serves reads and writes in the meantime.
+A **new node** **takes over a handful of partitions** from each of the others until the load is even again. When a node is removed, the reverse happens. Only **entire partitions** move between nodes. The number of partitions and the assignment of keys to partitions do not change. The only change is the assignment of partitions to nodes. That reassignment is not instant, since transferring data takes time, so the old assignment serves reads and writes in the meantime.
 
 ```mermaid
 flowchart LR
@@ -106,19 +106,19 @@ flowchart LR
 
 You can even account for **mismatched hardware** by giving more powerful nodes more partitions. Used by **Riak, Elasticsearch, Couchbase and Voldemort**. Kafka uses the same idea, since topics have a fixed partition count.
 
-The catch is that the number of partitions is usually **fixed when the database is set up**. Choose it high enough to accommodate future growth. Each partition carries management overhead, so do not choose it too high. If partitions are very large, rebalancing and recovery become expensive. If they are too small, they incur too much overhead.
+The drawback: the partition count is normally **chosen once, at setup time**. Choose it high enough to accommodate future growth. Each partition carries management overhead, so do not choose it too high. If partitions are very large, rebalancing and recovery become expensive. If they are too small, they incur too much overhead.
 
 ### 2.3 Dynamic partitioning
 
 For **key-range** partitioning, fixed boundaries would be very inconvenient: wrong boundaries could put all data in one partition. Databases such as **HBase** and **RethinkDB** create partitions **dynamically**:
 
 - When a partition grows beyond a configured size (HBase default: 10 GB), it is **split into two** halves, similar to a B-tree page split.
-- If lots of data is deleted and a partition shrinks below a threshold, it is **merged** with an adjacent one.
+- A partition that has shrunk past a lower bound after deletions is **merged** with a neighbour.
 - After a split, one half can be moved to another node to balance load.
 
-The number of partitions **adapts to the total data volume**. One caveat: an empty database starts with **a single partition**, because there is no a priori information about where to draw boundaries. All writes hit one node while the others sit idle until the first split. HBase and MongoDB allow **pre-splitting**, which configures an initial set of partitions on an empty database, though you need to know the key distribution.
+The partition count thereby **follows the amount of data**. One caveat: a fresh database has **just one partition**, since with no data yet nobody knows where sensible boundaries would be. All writes hit one node while the others sit idle until the first split. HBase and MongoDB allow **pre-splitting**, which configures an initial set of partitions on an empty database, though you need to know the key distribution.
 
-Dynamic partitioning also suits hash-partitioned data: MongoDB 2.4+ supports both key-range and hash partitioning with dynamic splitting either way.
+Dynamic partitioning also suits hash-partitioned data: From version 2.4 MongoDB offers range and hash partitioning alike, splitting dynamically in both cases.
 
 ### 2.4 Partitioning proportionally to nodes
 
@@ -182,9 +182,9 @@ flowchart LR
   end
 ```
 
-In every case, the key question is how the routing component **learns about changes** in the assignment of partitions to nodes. All participants must agree, or requests go to the wrong nodes. Agreement is a **consensus** problem (Chapter 9).
+Whichever variant is used, the hard part is the same: how does whoever does the routing **find out** that a partition has moved to another node? All participants must agree, or requests go to the wrong nodes. Agreement is a **consensus** problem (Chapter 9).
 
-Many systems rely on a separate **coordination service such as ZooKeeper** to track this cluster metadata. Each node registers itself in ZooKeeper, which keeps the authoritative mapping of partitions to nodes. Routing tiers and partition-aware clients **subscribe** to this information, and ZooKeeper notifies them whenever a partition changes owner or a node is added or removed.
+A common answer is to keep this metadata in a dedicated **coordination service such as ZooKeeper**. Each node registers itself in ZooKeeper, which keeps the authoritative mapping of partitions to nodes. Routing tiers and partition-aware clients **subscribe** to this information, and ZooKeeper notifies them whenever a partition changes owner or a node is added or removed.
 
 ```mermaid
 flowchart TB
@@ -207,7 +207,7 @@ Clients still need the IP addresses of the routing tier or of some nodes. Those 
 
 ### 3.1 Parallel query execution
 
-So far we have looked at simple queries that read or write a single key, plus scatter/gather for document-partitioned indexes. That is about the level of access NoSQL stores support. **Massively parallel processing (MPP)** relational databases, often used for analytics, support far more complex queries with joins, filters, grouping and aggregation. The query optimiser breaks a complex query into execution stages and partitions that can run in parallel on different nodes. Queries that scan large parts of the dataset benefit especially. Fast parallel execution of warehouse queries is a specialised topic. Batch processing (Chapter 10) covers some related techniques.
+Everything up to here concerned single-key reads and writes, with scatter/gather as the one exception for document-partitioned indexes. That is about the level of access NoSQL stores support. **Massively parallel processing (MPP)** relational databases, often used for analytics, support far more complex queries with joins, filters, grouping and aggregation. The query optimiser breaks a complex query into execution stages and partitions that can run in parallel on different nodes. Queries that scan large parts of the dataset benefit especially. Fast parallel execution of warehouse queries is a specialised topic. Batch processing (Chapter 10) covers some related techniques.
 
 ## 4. Pitfalls
 

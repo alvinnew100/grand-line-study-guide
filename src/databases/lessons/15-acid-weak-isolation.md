@@ -27,7 +27,7 @@ Several clients working on the same records at once can trip over each other. Th
 Once a transaction is reported as committed, its data should not disappear even if the machine crashes. On a single node that means the data has reached non-volatile storage, usually via a write-ahead log; in a replicated system it means the data has reached some number of other nodes. Neither is absolute:
 
 - A write to disk does not help if the machine is gone or unreachable; replication does.
-- Replication does not help against a correlated failure - a power outage, or a bug that crashes every node on the same input.
+- Replicas can all fail together: the whole site loses power, or one malformed request triggers the same crash on each of them.
 - Asynchronous replication can lose the latest writes on failover.
 - Disks and SSDs sometimes return corrupted data, and firmware has bugs; `fsync` has been found not to do what it promises on some systems.
 
@@ -40,7 +40,7 @@ Atomicity and isolation describe what happens when a transaction makes **several
 - Without **isolation**, another session can read in between and see the new line in the list while the total still shows the old amount.
 - Without **atomicity**, a failure after the insert leaves the total permanently wrong.
 
-Multi-object transactions need a way to say which operations belong together. Relational databases tie this to the client's connection: everything between `BEGIN` and `COMMIT`. Many non-relational stores have no such grouping, and a "batch" operation there may succeed for some keys and fail for others.
+Multi-object transactions need a way to say which operations belong together. Relational databases tie this to the client's connection: everything between `BEGIN` and `COMMIT`. Plenty of non-relational stores offer nothing comparable; their multi-key calls can apply to some of the keys and fail on the rest.
 
 Single objects need protection too. If you are halfway through writing a 20 kB document when the power fails, you do not want a spliced value; and a reader should not see a half-updated one. Storage engines therefore provide atomicity (through a log) and isolation (through a latch) for one object, and often add atomic increment and compare-and-set. These are useful, but they are not transactions in the usual sense: a transaction is primarily a way to group operations on **several** objects.
 
@@ -104,7 +104,7 @@ print("auditor saw A =", seen_a, "B =", seen_b, "total =", seen_a + seen_b)
 print("real total at every instant was", sum(committed.values()))
 ```
 
-The auditor counted 95 pallets although there were 80 at every instant. This anomaly is called a **non-repeatable read** or **read skew**. If the auditor is a person who can simply refresh the page, it is a brief curiosity. In other situations it is not tolerable:
+The auditor counted 95 pallets although there were 80 at every instant. The names for this are **non-repeatable read** and **read skew**. If the auditor is a person who can simply refresh the page, it is a brief curiosity. In other situations it is not tolerable:
 
 - **Backups.** A backup copies the whole database over hours. If it captures some tables before a change and others after it, restoring it makes the inconsistency permanent.
 - **Analytical queries and integrity checks.** A query that scans a large part of the database will return nonsense if it observes different parts at different times.
@@ -113,7 +113,7 @@ The auditor counted 95 pallets although there were 80 at every instant. This ano
 
 The remedy is to let each transaction read from a **consistent snapshot**: it sees all data that was committed when the transaction *started*, and nothing committed later, no matter how long it runs. It is as if time were frozen for the reader.
 
-The key principle is that **readers never block writers and writers never block readers**. A long analytical query can run alongside heavy write traffic, each unaffected by the other. Snapshot isolation is offered by PostgreSQL, MySQL/InnoDB, Oracle, SQL Server and others.
+Its defining trait: **a reader never has to wait for a writer, nor a writer for a reader**. A long analytical query can run alongside heavy write traffic, each unaffected by the other. Snapshot isolation is offered by PostgreSQL, MySQL/InnoDB, Oracle, SQL Server and others.
 
 ### Multi-version concurrency control
 
