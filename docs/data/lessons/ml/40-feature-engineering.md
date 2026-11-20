@@ -1,10 +1,10 @@
 # Representing data: categorical features, binning and polynomials
 
-So far we have assumed the data arrives as a 2-D array of floating-point numbers, where each column is a
+Until now every dataset in this track was a numeric table: rows of decimal values, with each column a
 **continuous feature**. Real data is rarely like that. It contains **categorical** (discrete) features
 such as a product's brand or colour, and the way you represent your data can matter more than which model
 you choose. The question of how best to represent data for a particular application is called **feature
-engineering**. It is one of the main tasks of data scientists working on real problems, and the subject of
+engineering**. On applied projects it takes up a large share of a practitioner's time, and it is the subject of
 chapter 4 of Müller & Guido.
 
 ## 1. Categorical variables
@@ -19,15 +19,15 @@ number, so $x$ must be numeric. A value like `"Masters"` cannot go in. We need a
 ### One-hot encoding (dummy variables)
 
 The most common approach is **one-hot encoding**, also called one-out-of-N encoding or dummy variables. A
-categorical feature is replaced by one new 0/1 feature **per category**. For `workclass` with values
-`Government Employee`, `Private Employee`, `Self Employed` and `Self Employed Incorporated`, you get four
+categorical feature is replaced by one new 0/1 feature **per category**. Say `workclass` takes the values
+`Public`, `Private`, `Freelance` and `Own company`. You get four
 new columns, and exactly one of them is 1 for each person.
 
-| workclass | Government Employee | Private Employee | Self Employed | Self Employed Incorporated |
+| workclass | is Public | is Private | is Freelance | is Own company |
 |---|---|---|---|---|
-| Government Employee | 1 | 0 | 0 | 0 |
-| Private Employee | 0 | 1 | 0 | 0 |
-| Self Employed | 0 | 0 | 1 | 0 |
+| Public | 1 | 0 | 0 | 0 |
+| Private | 0 | 1 | 0 | 0 |
+| Freelance | 0 | 0 | 1 | 0 |
 
 > [!NOTE]
 > In statistics it is common to encode $k$ categories with $k-1$ columns, to avoid making the design
@@ -116,7 +116,7 @@ The best representation depends on the model as well as on the data. Linear mode
 very differently to the same features.
 
 On the 1-D `wave` regression data, a linear model can only fit a straight line. A decision tree builds a
-far more complex piecewise-constant model. One way to make a linear model more powerful on continuous data
+far more complex piecewise-constant model. A simple trick that gives a linear model extra flexibility on a continuous input
 is **binning** (discretisation): split the feature's range into bins (say 10 equal-width bins from −3 to
 3), record which bin each point falls into, and one-hot encode the bin. The linear model then learns a
 separate constant for each bin.
@@ -147,7 +147,7 @@ for name, model, tr, te in [
 
 The book's conclusions:
 
-- The **linear model became much more flexible**. It now has a different value for each bin.
+- The **linear model became much more flexible**. Each bin now gets its own predicted level.
 - The **tree became less flexible**. Trees can already learn to split the data wherever is useful, so
   binning only removes information.
 - Binning helps mainly when you have good reasons to use a linear model (the dataset is very large and
@@ -155,8 +155,8 @@ The book's conclusions:
 
 ## 3. Interactions and polynomials
 
-Another way to enrich a representation, particularly for linear models, is to add **interaction** and
-**polynomial** features of the original data.
+Linear models in particular also benefit from two further kinds of derived feature: **interaction**
+terms and **polynomial** terms built from the original columns.
 
 **Interactions.** The binned linear model learns a constant per bin. We can give it back a slope by adding
 the original feature. But then there is a single slope shared by every bin. To get a *separate slope in

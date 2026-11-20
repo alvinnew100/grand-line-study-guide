@@ -18,7 +18,7 @@ Not every string column is "text". The book lists four kinds:
 | **text data** | tweets, chat logs, reviews, the collected works of Shakespeare, Wikipedia | the methods in this module |
 
 In text analysis the dataset is called the **corpus**, and each data point, represented as one text, is a
-**document**. The terms come from information retrieval (IR) and natural language processing (NLP).
+**document**. Both words are borrowed from the IR (information retrieval) and NLP (natural language processing) communities.
 
 ## 2. The running example: sentiment analysis
 
@@ -54,21 +54,21 @@ book strips out before doing anything else.
 
 ## 3. The bag-of-words representation
 
-The simplest and most effective way to represent text for ML is the **bag of words**. We discard most of
-the structure of the input (chapters, paragraphs, sentences, formatting) and only **count how often each
-word appears in each document**. The name is a mental image: every word of the document thrown into a bag,
+The simplest and most effective way to represent text for ML is the **bag of words**. Nearly all structure in the text is thrown away: chapters, paragraphs, sentences and formatting. What remains
+is **a count, per document, of the occurrences of every
+word**. The name is a mental image: every word of the document thrown into a bag,
 with the order lost.
 
 Computing it takes three steps:
 
-1. **Tokenisation.** Split each document into its words (*tokens*), for example on whitespace and
-   punctuation.
-2. **Vocabulary building.** Collect all words that appear in any document, and number them (say in
-   alphabetical order).
-3. **Encoding.** For each document, count how often each vocabulary word appears.
+1. **Tokenisation.** Cut every document into words (*tokens*), splitting at spaces and punctuation
+   marks, for instance.
+2. **Vocabulary building.** Gather every distinct word found anywhere in the corpus and give each a
+   number (sorted alphabetically, say).
+3. **Encoding.** Go through each document and record the number of occurrences of every word in the vocabulary.
 
-The output is one vector of word counts per document, with **one feature per unique word** in the whole
-corpus. The order of the words in the original string has no effect on the result.
+Each document becomes a single vector of counts, with **one feature per unique word** in the whole
+corpus. Shuffling the words of a document would leave its vector unchanged.
 
 ```mermaid
 flowchart LR
@@ -143,7 +143,7 @@ print("new review ->", pipe.fit(reviews, labels).predict(["a boring, awful waste
 
 ### Reducing the vocabulary with `min_df`
 
-A token that appears in a single document is unlikely to appear in the test set and so is not helpful.
+A token found in just one training document will probably never show up in test data, so it cannot help.
 `min_df=5` keeps only tokens that occur in **at least five documents**. In the book this cuts the features
 from 74,849 to **27,271**, about a third, with no loss of accuracy. Fewer features mean faster processing
 and a model that is easier to inspect.
@@ -155,8 +155,8 @@ out-of-vocabulary words a document contains.
 
 ## 4. Stopwords
 
-Another way to remove uninformative words is to discard words that are too frequent to be informative.
-There are two approaches:
+Uninformative words can also be removed from the other end, by dropping words so common that they tell us
+nothing. This can be done in two ways:
 
 - a language-specific list of **stopwords** ("the", "and", "of", …). scikit-learn's built-in English list
   has 318 words, and `stop_words="english"` applies it;
@@ -180,11 +180,11 @@ print("with stop_words:      ", list(CountVectorizer(stop_words="english").fit(d
 > Look at what the stopword list removed: "not" is gone. The two reviews above mean opposite things and
 > now look nearly the same. For sentiment analysis, negations matter. Check a stopword list before using it.
 
-## 5. Rescaling the data with tf-idf
+## 5. Reweighting counts with tf-idf
 
-Instead of *dropping* features judged unimportant, we can **rescale** them by how informative we expect
-them to be. The most common scheme is **term frequency–inverse document frequency (tf-idf)**. It gives a
-high weight to a term that appears **often in a particular document, but in few documents of the corpus**.
+Dropping unimportant features is one option. Another is to keep them all and **rescale** each one
+according to how much information it is likely to carry. The most common scheme is **term frequency–inverse document frequency (tf-idf)**. A term
+scores highly when it is **frequent inside one document and rare across the rest of the corpus**.
 Such a term is likely to describe the content of that document well.
 
 scikit-learn offers `TfidfTransformer`, which takes the sparse count matrix from `CountVectorizer`, and
@@ -255,10 +255,10 @@ print("most negative words:", [str(names[i]) for i in order[:6]])
 print("most positive words:", [str(names[i]) for i in order[::-1][:6]])
 ```
 
-## 7. Bag of words with more than one word: n-grams
+## 7. Beyond single words: n-grams
 
-The main weakness of a bag of words is that **word order is completely discarded**. "it's bad, not good at
-all" and "it's good, not bad at all" get exactly the same representation, although they mean the opposite.
+The main weakness of a bag of words is that **word order is completely discarded**. The reviews "bad, not
+good at all" and "good, not bad at all" receive identical vectors, although they mean the opposite.
 
 A way to capture some context is to count **pairs or triples of adjacent tokens** as well as single
 tokens. Single tokens are **unigrams**, pairs are **bigrams**, triples are **trigrams**, and in general
@@ -331,4 +331,4 @@ Use `min_df` together with n-grams to keep the vocabulary manageable.
 ]
 ```
 
-> **Source:** Müller & Guido, *Introduction to Machine Learning with Python*, ch. 7 ("Types of Data Represented as Strings", "Example Application: Sentiment Analysis of Movie Reviews", "Representing Text Data as a Bag of Words", "Stopwords", "Rescaling the Data with tf-idf", "Investigating Model Coefficients", "Bag-of-Words with More Than One Word (n-Grams)"); scikit-learn User Guide, "Text feature extraction".
+> **Source:** Müller & Guido, *Introduction to Machine Learning with Python*, ch. 7 ("Types of Data Represented as Strings", "Example Application: Sentiment Analysis of Movie Reviews", the sections on the bag-of-words representation, stopwords, tf-idf rescaling, model coefficients and n-grams); scikit-learn User Guide, "Text feature extraction".

@@ -9,13 +9,14 @@ build features that no algorithm would invent.
 Adding squared or cubed features helps linear regression. Other transformations are often useful too:
 applying **`log`, `exp` or `sin`** to a feature. Tree-based models only care about the *order* of the
 values in a feature, so a monotonic transform changes nothing for them. Linear models and neural networks
-are tied closely to the **scale and distribution** of each feature. If the relation between a feature and
+depend heavily on each feature's **scale and distribution**. If the relation between a feature and
 the target is nonlinear, a linear model struggles, especially in regression.
 
-Most models work best when each feature (and, in regression, the target too) is roughly **Gaussian**.
+Many models behave best when the features are roughly **Gaussian**, and for regression the same holds
+for the target.
 `log` and `exp` are a hacky but simple and effective way to get there. A common case is **count data**:
-"how often did user A log in?" Counts are never negative and often follow a skewed distribution, with many
-small values and a few very large ones.
+the number of logins of a user, say. A count cannot go below zero, and its distribution is usually lopsided:
+many small values and a few very large ones.
 
 ```python-run
 import numpy as np
@@ -54,9 +55,9 @@ sometimes on kernel methods and networks. Trees can usually discover important i
 
 ## 2. Automatic feature selection
 
-With so many ways to create features, it is tempting to make the data far wider than the original. But
+Since new features are so easy to generate, it is tempting to make the data far wider than the original. But
 more features make models more complex and raise the risk of overfitting. When adding features, or with
-high-dimensional data in general, it can be a good idea to **keep only the most useful features** and
+any wide dataset, it often pays to **keep the most useful features only** and
 discard the rest. The result is a simpler model that may generalise better, trains and predicts faster,
 and is easier to understand.
 
@@ -111,13 +112,13 @@ most of the noise is removed, though not perfectly.
 
 ### 2.2 Model-based selection
 
-Model-based selection uses a supervised model to judge the importance of each feature and keeps only the
-most important ones. The model used for selection **need not be the model used for the final prediction**.
+Model-based selection fits a supervised model, reads off how much each feature matters to it, and retains
+the top-ranked ones. The selecting model **does not have to be the one you use for the final prediction**.
 It must provide a measure of importance: tree-based models have `feature_importances_`, and linear models
 have coefficients whose absolute values can be used. An L1-penalised linear model is a natural choice,
 because it already sets many coefficients to zero.
 
-Unlike univariate selection, model-based selection **considers all features at once**, so it can capture
+In contrast to univariate tests, this approach **looks at every feature together**, so it can capture
 interactions, if the model can.
 
 ```python-run
@@ -142,13 +143,13 @@ comparable with the 50% kept by `SelectPercentile` above.
 
 ### 2.3 Iterative selection
 
-Iterative methods build a *series* of models with varying numbers of features. There are two basic
-approaches: start with no features and add them one at a time, or start with all features and remove them
+Iterative methods fit a whole *series* of models, each on a different number of features. They come in two
+flavours: start with no features and add them one at a time, or start with all features and remove them
 one at a time, until a stopping criterion is reached. Many models are built, so these methods are far more
 expensive.
 
-**Recursive feature elimination (RFE)** starts with all features, builds a model, and discards the least
-important feature according to that model. It then builds a new model on the remaining features, and
+**Recursive feature elimination (RFE)** begins with the full feature set, fits a model, and drops whichever feature
+that model ranks lowest. It then builds a new model on the remaining features, and
 repeats until the requested number is left. As with model-based selection, the model must provide
 importances.
 
@@ -173,10 +174,10 @@ print("test accuracy using RFE's internal model:", round(rfe.score(X_te, y_te), 
 
 ### When does selection help?
 
-The book's guidance: if you are unsure what to use as input to your models, automatic feature selection
-can be quite helpful. It is also good for reducing the number of features, either to **speed up
-prediction** or to get **more interpretable models**. In most real-world cases, though, feature selection
-is unlikely to produce large gains in accuracy. It remains a valuable tool for the feature engineer.
+The book's guidance: when you don't know which inputs your model should get, automatic selection
+is a useful aid. It also serves to cut down the number of features, either to **speed up
+prediction** or to get **more interpretable models**. On real problems, though, selection
+seldom produces large gains in accuracy. It remains a valuable tool for the feature engineer.
 
 > [!WARNING]
 > **Feature selection is a classic source of leakage.** Selecting the features most correlated with the
@@ -206,8 +207,8 @@ The first attempt uses the only obvious feature, the POSIX timestamp, a single i
 then predicts a flat line and gets a negative $R^2$. The reason is that the test timestamps are all later
 than any training timestamp, and **trees cannot extrapolate** beyond the range of features they have seen.
 
-This is where expert knowledge comes in. Looking at the data, two factors stand out: the **time of day**
-and the **day of the week**. The book's sequence of experiments:
+This is where expert knowledge comes in. Looking at the data, two things clearly drive demand: the **hour** at which a rental happens
+and the **weekday**. The book's sequence of experiments:
 
 | features | model | test $R^2$ (book) |
 |---|---|---|

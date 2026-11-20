@@ -8,8 +8,8 @@ words in most NLP applications.
 
 ## 1. Why tokenisation matters
 
-Feature extraction in `CountVectorizer` and `TfidfVectorizer` is relatively simple, and much more
-elaborate methods exist. The step that is most often improved is the first one: tokenisation, which
+`CountVectorizer` and `TfidfVectorizer` extract features in a fairly basic way, and far more
+sophisticated methods exist. The step that is most often improved is the first one: tokenisation, which
 decides *what counts as a word*.
 
 The IMDb vocabulary in the book contains singular and plural forms as separate entries ("drawback",
@@ -25,13 +25,13 @@ a form of **normalisation**. There are two ways to do it.
 
 | | **stemming** | **lemmatisation** |
 |---|---|---|
-| how | a rule-based heuristic that chops off common suffixes | a dictionary of known word forms, taking the role of the word in the sentence into account |
+| how | a rule-based heuristic that chops off common suffixes | a dictionary of known word forms, plus the grammatical role each word plays in its sentence |
 | result | a stem, which may not be a real word | the **lemma**, a real dictionary form |
 | example tool | the Porter stemmer (in `nltk`) | `spacy`, WordNet |
 | quality | fast and crude | slower, and usually better |
 
-The book compares them on the sentence *"Our meeting today was worse than yesterday, I'm scared of meeting
-the clients tomorrow."*
+The book compares them on one example sentence about a meeting, in which "meeting" occurs once as a noun
+and once as a verb. (The code below reuses that sentence.)
 
 - **Stemming** turns "was" into "wa" and always reduces "meeting" to "meet", whether it is a noun or a
   verb. It leaves "worse" as "wors".
@@ -171,10 +171,10 @@ allocation (LDA)**.
 
 ### Latent Dirichlet allocation
 
-Intuitively, LDA tries to find **groups of words (the topics) that appear together frequently**. It also
-requires that each document can be understood as a "mixture" of a subset of the topics.
+In plain terms, LDA looks for **sets of words that tend to occur in the same documents**. Those sets are
+the topics. It further assumes that every document blends only a few of them.
 
-It is important to understand that a "topic" for the model may not be what we would call a topic in
+Be careful with the word "topic". What the model finds need not match what we would call a topic in
 everyday speech. It is more like a component extracted by PCA or NMF, and it may or may not have a
 semantic meaning. Two topics might be the vocabulary of sports reports and of political news. But another
 topic might gather the words one particular reviewer likes to use, and another the typical phrasing of
@@ -254,8 +254,8 @@ print("a new document, half war and half music:", new.round(2))
 
 The book's assessment: topic models such as LDA are interesting ways to **understand large text corpora
 without labels**, or even with labels. Because LDA is randomised, different seeds can give quite different
-outcomes. Identifying topics is helpful, but any conclusions drawn from an unsupervised model should be
-taken with a grain of salt. Check your intuition by looking at the documents in a topic. The topic
+outcomes. Identifying topics is helpful, but treat whatever an unsupervised model suggests with caution.
+Confirm your reading of a topic by opening the documents that score highest on it. The topic
 mixtures from `transform` can also be used as a compact representation for supervised learning, which is
 most useful when few labelled examples are available.
 
