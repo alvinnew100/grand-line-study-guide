@@ -7,7 +7,25 @@ window.WebKit = (() => {
       ["log", "info", "warn", "error", "debug"].forEach((k) => (con[k] = (...a) => logs.push(a.map(fmt).join(" "))));
       con.table = (v) => logs.push(fmt(v));
       try {
-        if (!entry) { const r = new Function("console", code)(con); postMessage({ logs, value: r === undefined ? null : fmt(r) }); return; }
+        if (!entry) {
+          // Lesson snippets: allow top-level await, then keep collecting output from timers and promises
+          // until nothing has been logged for a moment (or 3 s have passed).
+          const AsyncFn = Object.getPrototypeOf(async function () {}).constructor;
+          const started = Date.now();
+          let last = Date.now();
+          Object.keys(con).forEach((k) => { const f = con[k]; con[k] = (...a) => { last = Date.now(); f(...a); }; });
+          const settle = (extra) => {
+            const tick = () => {
+              if (Date.now() - last > 300 || Date.now() - started > 3000) postMessage({ logs, ...extra });
+              else setTimeout(tick, 50);
+            };
+            tick();
+          };
+          new AsyncFn("console", code)(con).then(
+            (r) => settle({ value: r === undefined ? null : fmt(r) }),
+            (err) => settle({ fatal: String(err) }));
+          return;
+        }
         const fn = new Function("console", code + "\\n;return (typeof " + entry + " !== 'undefined') ? " + entry + " : null;")(con);
         if (typeof fn !== "function" ) throw new Error("Define a function (or class) named " + entry);
         const results = tests.map((t, i) => {

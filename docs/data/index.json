@@ -276,7 +276,7 @@
    "Haverbeke, Eloquent JavaScript (4th ed.), ch. 1-21",
    "MDN Web Docs (developer.mozilla.org)"
   ],
-  "words": 143755,
+  "words": 143758,
   "modules": 17,
   "lessons": 37,
   "problems": 35
@@ -295,6 +295,21 @@
   "modules": 6,
   "lessons": 18,
   "problems": 27
+ },
+ {
+  "id": "nodejs",
+  "title": "Node.js Design Patterns",
+  "icon": "🟩",
+  "blurb": "Node.js from the first script to production: the event loop, modules, callbacks, promises and streams, the classic design patterns in idiomatic JavaScript, scaling and messaging, with runnable models and judged problems.",
+  "color": "#3c873a",
+  "sources": [
+   "Casciaro & Mammino, Node.js Design Patterns (3rd ed.), ch. 1-13",
+   "Node.js API documentation (nodejs.org/docs/latest/api)"
+  ],
+  "words": 0,
+  "modules": 15,
+  "lessons": 0,
+  "problems": 7
  },
  {
   "id": "graphql",
@@ -384,7 +399,7 @@
    "OWASP Cheat Sheet Series — https://cheatsheetseries.owasp.org/",
    "MDN Web Docs, Security on the web — https://developer.mozilla.org/en-US/docs/Web/Security"
   ],
-  "words": 30575,
+  "words": 108136,
   "modules": 10,
   "lessons": 30,
   "problems": 26
@@ -519,7 +534,7 @@
    "MDN Web Docs (developer.mozilla.org)",
    "WCAG 2.2"
   ],
-  "words": 90017,
+  "words": 95876,
   "modules": 9,
   "lessons": 28,
   "problems": 33
