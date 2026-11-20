@@ -401,4 +401,4 @@ add memoisation and you have a DP.
 
 > **Source:** depth-first search and exhaustive enumeration as presented in Goodrich, Tamassia &
 > Goldwasser, *Data Structures and Algorithms in Python*, ch. 4 (recursion) and ch. 14 §14.3.1
-> (DFS); problem set and orde
+> (DFS); problem set and ordering from the NeetCode 150 "Backtracking" list.
