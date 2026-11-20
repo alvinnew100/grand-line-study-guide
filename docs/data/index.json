@@ -179,9 +179,9 @@
    "McDowell, Cracking the Coding Interview, 6th ed."
   ],
   "words": 0,
-  "modules": 7,
+  "modules": 17,
   "lessons": 0,
-  "problems": 46
+  "problems": 89
  },
  {
   "id": "sql",
@@ -250,17 +250,36 @@
   "problems": 25
  },
  {
+  "id": "java",
+  "title": "Java",
+  "icon": "☕",
+  "blurb": "Java from the first `javac` to code a senior reviewer would approve: objects, the stack and the heap, inheritance, exceptions, collections, generics, streams, threads and build tools, then the craft of writing good Java (factories, equals and hashCode, immutability, PECS, enums, concurrency) and the interview questions that come up again and again. Written for complete beginners, with runnable models.",
+  "color": "#e76f00",
+  "sources": [
+   "Kathy Sierra, Bert Bates & Trisha Gee, Head First Java (O'Reilly), all chapters and appendices (topic coverage and fact-checking only; all wording, programs and analogies are original)",
+   "Joshua Bloch, Effective Java, 3rd ed. (Addison-Wesley), items 1-90 (topic coverage and fact-checking only; all wording and examples are original)",
+   "Oracle Java SE documentation and the Java Language Specification, docs.oracle.com/en/java/",
+   "dev.java/learn, the official Java tutorials"
+  ],
+  "words": 194414,
+  "modules": 29,
+  "lessons": 63,
+  "problems": 20
+ },
+ {
   "id": "spring",
   "title": "Spring Boot",
   "icon": "🌱",
-  "blurb": "tmp",
+  "blurb": "From 'what is a framework?' to production Spring Boot 3: the container, dependency injection, AOP, web and REST, data access, transactions, Spring Data, testing, security and interview preparation. Every mechanism is modelled in runnable Python so you can watch it work.",
   "color": "#5aa02c",
   "sources": [
-   "tmp"
+   "Spilcă, Spring Start Here (Manning), ch. 1–15",
+   "Spring Framework reference documentation (docs.spring.io/spring-framework/reference)",
+   "Spring Boot reference documentation (docs.spring.io/spring-boot)"
   ],
-  "words": 0,
-  "modules": 1,
-  "lessons": 0,
+  "words": 108550,
+  "modules": 17,
+  "lessons": 35,
   "problems": 30
  },
  {
@@ -352,7 +371,7 @@
    "spec.graphql.org (GraphQL specification)",
    "apollographql.com/docs (Apollo Server, Client and Federation documentation)"
   ],
-  "words": 39451,
+  "words": 89413,
   "modules": 10,
   "lessons": 23,
   "problems": 27
@@ -398,9 +417,9 @@
    "Official docs: kubernetes.io/docs (concepts, tasks and API reference), gateway-api.sigs.k8s.io",
    "Project docs: helm.sh, kustomize.io, argo-cd.readthedocs.io, kserve.github.io, kubeflow.org"
   ],
-  "words": 18809,
+  "words": 72610,
   "modules": 21,
-  "lessons": 5,
+  "lessons": 20,
   "problems": 0
  },
  {
@@ -415,9 +434,9 @@
    "AWS Well-Architected Framework (docs.aws.amazon.com/wellarchitected)",
    "AWS Billing user guide: Free Tier (docs.aws.amazon.com/awsaccountbilling)"
   ],
-  "words": 0,
+  "words": 21966,
   "modules": 15,
-  "lessons": 0,
+  "lessons": 6,
   "problems": 33
  },
  {
@@ -465,10 +484,10 @@
    "Stripe engineering blog: rate limiters and idempotency (stripe.com/blog)",
    "RFC 9309 (robots.txt), RFC 9562 (UUIDs)"
   ],
-  "words": 69908,
-  "modules": 16,
-  "lessons": 20,
-  "problems": 23
+  "words": 101101,
+  "modules": 18,
+  "lessons": 29,
+  "problems": 32
  },
  {
   "id": "web-security",
