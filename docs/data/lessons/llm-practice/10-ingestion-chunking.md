@@ -10,14 +10,14 @@ Fix the pipeline from the bottom up.
 
 ```mermaid
 flowchart LR
-  subgraph Offline indexing
+  subgraph OFF[Offline indexing]
     S[sources: PDFs, HTML, wikis, tickets, code] --> P[parse and clean]
     P --> C[chunk]
     C --> M[attach metadata]
     M --> E[embed]
     E --> I[(vector index and keyword index)]
   end
-  subgraph Online query
+  subgraph ON[Online query]
     Q[user question] --> R[rewrite or expand]
     R --> H[hybrid retrieve]
     I --> H

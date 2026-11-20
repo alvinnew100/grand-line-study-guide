@@ -160,13 +160,13 @@ and run on serverless platforms without sticky sessions.
 sequenceDiagram
   participant C as Client
   participant S as Server
-  C->>S: server/discover with _meta (optional)
+  C->>S: optional server/discover with _meta
   S-->>C: supportedVersions, capabilities, serverInfo
   C->>S: tools/list with _meta
   S-->>C: tools, ttlMs, cacheScope
-  C->>S: tools/call with _meta (id 1)
+  C->>S: tools/call with _meta, id 1
   S-->>C: resultType input_required, inputRequests elicitation
-  C->>S: tools/call retry with inputResponses (id 2)
+  C->>S: tools/call retry with inputResponses, id 2
   S-->>C: resultType complete, content
 ```
 

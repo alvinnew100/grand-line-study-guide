@@ -11,7 +11,7 @@ high-signal tokens" that maximise the likelihood of the desired outcome.
 
 ```mermaid
 flowchart TB
-  subgraph Context window
+  subgraph CW[Context window]
     SP[System prompt and instructions]
     TD[Tool definitions, MCP servers, skills metadata]
     MEM[Memory files and notes]
@@ -20,7 +20,7 @@ flowchart TB
     RAG[Retrieved documents]
     U[Current user message]
   end
-  Context window --> M[Model] --> O[Next action or answer]
+  CW --> M[Model] --> O[Next action or answer]
 ```
 
 Everything in the window competes for the same finite resource. A typical long coding session is

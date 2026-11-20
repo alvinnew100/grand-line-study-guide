@@ -128,7 +128,7 @@ Common topologies:
 
 ```mermaid
 flowchart TB
-  subgraph Orchestrator-subagents
+  subgraph OS[Orchestrator and sub-agents]
     L[lead agent] --> S1[sub-agent: search A]
     L --> S2[sub-agent: search B]
     L --> S3[sub-agent: search C]

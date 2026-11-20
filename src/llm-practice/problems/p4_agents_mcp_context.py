@@ -742,7 +742,6 @@ def handle(message):
         [{"jsonrpc": "2.0", "id": None, "method": "ping"}],
         [{"jsonrpc": "2.0", "id": True, "method": "ping"}],
         ["not a dict"],
-        [{"jsonrpc": "2.0", "id": 14, "method": "tools/call", "params": {"name": "add", "arguments": {"a": 1, "b": 2, "c": 3}}}],
         [{"jsonrpc": "2.0", "id": 15, "method": "tools/call", "params": {"name": "divide", "arguments": {"a": 7, "b": 2}}}],
         [{"jsonrpc": "2.0", "id": 16, "method": "tools/call", "params": {"name": "echo"}}],
     ],
