@@ -209,6 +209,122 @@ evaluation of prompts — module 12.
 > signature, plots, eval report). Then explain how you'd *use* it: `search_runs` to select a champion,
 > lineage from registry version back to the run.
 
+## Organising experiments so they stay useful
+
+A tracker filled with thousands of unnamed runs is only slightly better than no tracker. Conventions
+that keep it navigable:
+
+- **One experiment per problem and stage**: `churn/dev`, `churn/hpo`, `churn/scheduled-retrain`. Dev
+  experiments can be noisy; scheduled retrains should be clean and queryable.
+- **Run names that say what changed**: `gbm-lr0.06-add-tenure-ratio`, not `run_17`.
+- **Mandatory tags** enforced by a wrapper: `git_sha`, `git_dirty`, `data_version`, `owner`,
+  `purpose` (`exploration` / `candidate` / `production-retrain`), `pipeline_run_id`.
+- **Parent/child (nested) runs** for sweeps and cross-validation: the parent summarises (best params,
+  mean and std across folds), the children hold details.
+
+```python
+with mlflow.start_run(run_name="cv-gbm") as parent:
+    scores = []
+    for fold, (tr, va) in enumerate(cv.split(X, y)):
+        with mlflow.start_run(run_name=f"fold-{fold}", nested=True):
+            model = make_model(params).fit(X.iloc[tr], y.iloc[tr])
+            s = average_precision_score(y.iloc[va], model.predict_proba(X.iloc[va])[:, 1])
+            mlflow.log_metric("pr_auc", s); scores.append(s)
+    mlflow.log_metrics({"cv_pr_auc_mean": float(np.mean(scores)), "cv_pr_auc_std": float(np.std(scores))})
+```
+
+### A tiny wrapper that enforces discipline
+
+Teams usually wrap the tracker so nobody forgets the essentials:
+
+```python
+import subprocess
+from contextlib import contextmanager
+import mlflow
+
+def _git(*args: str) -> str:
+    return subprocess.check_output(["git", *args], text=True).strip()
+
+@contextmanager
+def tracked_run(experiment: str, run_name: str, data_version: str, purpose: str = "exploration"):
+    dirty = bool(_git("status", "--porcelain"))
+    if dirty and purpose != "exploration":
+        raise RuntimeError("refusing to start a non-exploration run with uncommitted changes")
+    mlflow.set_experiment(experiment)
+    with mlflow.start_run(run_name=run_name) as run:
+        mlflow.set_tags({"git_sha": _git("rev-parse", "HEAD"), "git_dirty": dirty,
+                         "data_version": data_version, "purpose": purpose})
+        try:
+            yield run
+        except Exception as exc:                       # failed runs are data too
+            mlflow.set_tag("failure", type(exc).__name__)
+            raise
+```
+
+Refusing "official" runs from a dirty working tree is a cheap rule that eliminates the single most
+common reason a model cannot be reproduced: it was trained from code that was never committed.
+
+## Logging datasets and evaluation results
+
+MLflow can record **which dataset** a run used as a first-class input:
+
+```python
+dataset = mlflow.data.from_pandas(train_df, source="s3://acme/churn/train/2025-01-15/",
+                                  name="churn_train", targets="churned")
+mlflow.log_input(dataset, context="training")     # stores name, digest (hash), schema and source
+```
+
+and `mlflow.evaluate` computes a standard metric set and plots for a logged model against an evaluation
+dataset, optionally validating thresholds:
+
+```python
+result = mlflow.evaluate(model=f"runs:/{run_id}/model", data=test_df, targets="churned",
+                         model_type="classifier", evaluators=["default"])
+print(result.metrics["roc_auc"], result.metrics["precision_recall_auc"])
+```
+
+## Comparing runs honestly
+
+```python-run
+import numpy as np
+rng = np.random.default_rng(0)
+# Two candidate configurations, 5 seeds each, evaluated on the same pinned test set
+runs = {"A lr=0.05": 0.731 + rng.normal(0, 0.004, 5), "B lr=0.10": 0.735 + rng.normal(0, 0.004, 5)}
+for name, s in runs.items():
+    print(f"{name}: seeds={np.round(s, 3)}  mean={s.mean():.4f}  std={s.std(ddof=1):.4f}")
+a, b = runs.values()
+diff = b.mean() - a.mean()
+se = np.sqrt(a.var(ddof=1) / len(a) + b.var(ddof=1) / len(b))
+print(f"difference B-A = {diff:+.4f}, standard error = {se:.4f}, ratio = {diff/se:.1f}")
+print("verdict:", "likely real" if abs(diff) > 2 * se else "within noise - do not promote on this evidence")
+```
+
+A checklist before believing "run B is better":
+
+1. Same evaluation data version and same metric definition?
+2. Same preprocessing and feature set, except for the intended change?
+3. Is the difference larger than seed-to-seed variation?
+4. Does it hold on the important slices, not only overall?
+5. Was the test set used once, or was it effectively tuned on?
+6. Are latency, model size and training cost comparable — or is the gain bought with 5× the compute?
+
+## Operating the tracking server
+
+- **Access**: put the server behind authentication; scope who can delete experiments or change registry
+  aliases.
+- **Storage growth**: artifacts dominate. Do not log every epoch's checkpoint as an artifact; log the
+  best and last, and reference large external paths by URI. Set lifecycle rules on the artifact bucket
+  for runs tagged `exploration`.
+- **Database**: back up the backend store — it holds the lineage of every production model.
+- **Availability**: training should not fail at hour ten because the tracker blipped. Use client retries,
+  and for long jobs consider logging to local files and syncing.
+- **Self-hosted vs managed**: Databricks, Azure ML and SageMaker offer managed MLflow-compatible tracking;
+  W&B and Neptune are SaaS alternatives. The concepts in this lesson transfer unchanged.
+
+> [!TIP]
+> Track **failed and abandoned runs** too. Knowing that "target encoding of merchant ID was tried in
+> March and leaked" saves the next person a week.
+
 ## Summary
 
 - Tracking records inputs, outputs and metadata of every run so experiments are comparable and

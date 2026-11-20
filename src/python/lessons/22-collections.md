@@ -285,6 +285,91 @@ print(out[:k])
 > [!INTERVIEW]
 > Name the right container and its complexity: "I'll use a `deque` for the BFS queue since `popleft` is O(1) — a list's `pop(0)` is O(n)"; "a `Counter` for frequencies"; "`defaultdict(list)` to build the adjacency list"; "an `OrderedDict` gives O(1) LRU with `move_to_end` and `popitem(last=False)`". Saying *why* matters as much as using them.
 
+## Under the hood
+
+**`defaultdict` is a dict with one extra hook.** Ordinary `dict.__getitem__` calls a method named `__missing__` when a key is absent — if the class defines one. `defaultdict` implements `__missing__` to call the factory, store the result and return it. That explains why only `d[key]` triggers the default, while `d.get(key)` and `key in d` (which don't go through `__getitem__`) never do. You can use the same hook yourself, and unlike the zero-argument factory, your `__missing__` receives the key:
+
+```python-run
+class KeyDefault(dict):
+    """Like defaultdict, but the default depends on the missing key."""
+    def __init__(self, factory):
+        super().__init__()
+        self.factory = factory
+    def __missing__(self, key):
+        value = self[key] = self.factory(key)
+        return value
+
+squares = KeyDefault(lambda k: k * k)
+print(squares[7], squares[12], dict(squares), squares.get(99), 99 in squares)
+
+from collections import Counter
+print(Counter.__missing__(Counter(), "anything"))    # Counter's hook returns 0 and stores nothing
+```
+
+`Counter.__missing__` returns `0` *without* inserting, which is why reading a missing count doesn't grow a Counter the way it grows a defaultdict.
+
+**`deque` is a linked list of blocks.** Each block holds 64 item slots; appending at either end writes into the edge block and occasionally allocates a new one. No element ever moves, so both ends are O(1) — but reaching the middle means walking the chain, which is why `d[i]` is O(n). A list is the mirror image: one contiguous array, so O(1) indexing and O(n) front insertion.
+
+```python-run
+import timeit
+from collections import deque
+
+n = 20_000
+setup = f"from collections import deque; lst = list(range({n})); dq = deque(range({n}))"
+for label, stmt in [
+    ("list  middle index", f"lst[{n // 2}]"),
+    ("deque middle index", f"dq[{n // 2}]"),
+    ("list  insert front", "lst.insert(0, 0); lst.pop(0)"),
+    ("deque append front", "dq.appendleft(0); dq.popleft()"),
+]:
+    t = min(timeit.repeat(stmt, setup, number=2000, repeat=3))
+    print(f"{label}: {t / 2000 * 1e9:8.0f} ns")
+```
+
+**`OrderedDict`** keeps, in addition to the hash table, a doubly linked list threading the keys in order — so moving a key to either end or popping from the front is a few pointer updates. A plain dict stores entries in a compact array in insertion order; removing the *first* entry leaves a hole that later iteration must skip, which is why repeatedly popping the oldest item from a regular dict (`next(iter(d))`) degrades, while `OrderedDict.popitem(last=False)` stays O(1).
+
+## Which container? A decision table
+
+| You need | Use | Not |
+|---|---|---|
+| FIFO queue / BFS frontier | `deque` + `popleft()` | `list.pop(0)` |
+| LIFO stack | `list` + `append`/`pop` | `deque` (fine, but unnecessary) |
+| last N items | `deque(maxlen=N)` | manual slicing `lst = lst[-N:]` |
+| counts, most common | `Counter` | `dict` + `if key in` |
+| group items by key | `defaultdict(list)` | `setdefault` in a hot loop |
+| nested auto-creating dict | `defaultdict(lambda: defaultdict(int))` | chains of `if` checks |
+| LRU / move-to-front order | `OrderedDict` | `list.remove` + `append` (O(n)) |
+| immutable record, dict key | `namedtuple` / frozen dataclass | a list or dict |
+| thread-safe queue between threads | `queue.Queue` | a bare `deque` with your own locking |
+| priority order | `heapq` on a list | sorting after every insert |
+
+## Common mistakes and how to spot them
+
+```python-run
+from collections import defaultdict, Counter, deque
+
+graph = defaultdict(list, {"a": ["b"]})
+for node in list(graph):                 # list(): we may add keys while looping
+    for nb in graph[node]:
+        graph[nb]                        # touching a neighbour CREATES its entry
+print(dict(graph))                       # 'b' appeared, with an empty list
+
+c = Counter("aab")
+c["a"] -= 5
+print(c, +c, c.total() if hasattr(c, "total") else sum(c.values()))   # +c drops non-positive counts
+
+d = deque([1, 2, 3], maxlen=3)
+d.appendleft(0)                          # pushes OUT the right end, silently
+print(d)
+dd = defaultdict(list)
+print(dd == {}, repr(dd)[:28])           # converts cleanly: dict(dd) before returning or serialising
+```
+
+- A defaultdict that "contains keys nobody added": something *read* them with `[]`. For read-only phases, convert with `dict(d)` or set `d.default_factory = None` so missing keys raise again.
+- Negative or zero counts lingering in a Counter: use `+counter` to strip them, and remember `most_common` still lists them.
+- A bounded deque dropping data: that is its job — make sure the end you append to is the opposite of the end you can afford to lose.
+- `json.dumps` of a `defaultdict`/`Counter`/`OrderedDict` works (they are dicts), but a `deque` or `namedtuple` needs `list(...)` / `._asdict()` first.
+
 ## Pitfalls recap
 
 - `list.pop(0)` in a loop instead of `deque.popleft()`.

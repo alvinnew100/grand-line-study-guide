@@ -252,6 +252,87 @@ print(fib(80), len(fib.cache))
 
 Recursive calls inside `fib` look up the *global* name `fib`, which now refers to `wrapper` — so they hit the cache too. That's exactly how decorators work, which is the next lesson.
 
+## Under the hood: how the compiler classifies names
+
+Scope decisions are baked into the bytecode. The compiler sorts every name in a function into one of four categories and emits a different instruction for each — which you can see with `dis` and the code object's attributes:
+
+```python-run
+import dis
+
+g = "global"
+
+def outer():
+    captured = "enclosing"
+    def inner(param):
+        local = param + 1
+        return local, captured, g, len
+    return inner
+
+inner = outer()
+code = inner.__code__
+print("locals   (co_varnames):", code.co_varnames)     # LOAD_FAST: slots in the frame
+print("free     (co_freevars):", code.co_freevars)     # LOAD_DEREF: via closure cells
+print("globals/builtins (co_names):", code.co_names)   # LOAD_GLOBAL: dict lookups at run time
+print("outer's cell vars:", outer.__code__.co_cellvars)
+print(sorted({i.opname for i in dis.get_instructions(inner) if i.opname.startswith("LOAD")}))
+```
+
+- **Locals** live in an array in the frame, addressed by index — fast, and fixed at compile time (hence `UnboundLocalError` rather than a fallback to the global).
+- **Free variables** are reached through **cells**. The outer function stores `captured` in a cell instead of a plain slot *because* an inner function uses it; both functions share the cell.
+- **Globals and built-ins** are looked up by name at run time, first in the module's dict, then in `builtins`. That is why a global can be defined *after* the function that uses it, as long as it exists by the time the function is called.
+
+Because cells are shared and live, two closures created by the same call see each other's writes:
+
+```python-run
+def make_account(balance):
+    def deposit(n):
+        nonlocal balance
+        balance += n
+        return balance
+    def get():
+        return balance
+    return deposit, get
+
+deposit, get = make_account(100)
+deposit(50)
+print(get(), deposit.__closure__[0] is get.__closure__[0])   # the very same cell object
+```
+
+## Debugging scope problems
+
+A short checklist when a name misbehaves:
+
+1. **`NameError`**: the name doesn't exist in any LEGB scope *at the time the line runs*. Typo? Defined later in the file? Defined inside another function or an `if` branch that didn't execute?
+2. **`UnboundLocalError`**: search the function for an assignment to that name — including `+=`, `for name in`, `with ... as name`, `import name`, and `except ... as name`. Any of them makes it local.
+3. **A value is "stale" or "wrong"**: you may be reading a *shadowing* variable. `print(locals())` and `print(globals().get("x"))` show which one you are getting.
+4. **A built-in stopped working** (`'list' object is not callable`): you rebound `list`, `str`, `max`, `sum`, `type`, `id` or `input` earlier. `del name` (or restarting the notebook kernel) restores access to the built-in.
+
+```python-run
+total = 0
+def add_all(nums):
+    for total in nums:        # the loop variable makes 'total' LOCAL here
+        pass
+    return total              # last item, not a sum!
+print(add_all([1, 2, 3]), total)
+
+sum_ = sum                    # keep the builtin safe under another name if you must reuse 'sum'
+values = [1, 2, 3]
+print(sum_(values), "sum" in dir(__builtins__) or True)
+```
+
+## When to use what
+
+| Need | Tool |
+|---|---|
+| a tiny key/callback used once | `lambda` |
+| the same, but picklable or reused | `def`, or `operator.itemgetter` / `functools.partial` |
+| a function with one or two pieces of remembered state | closure with `nonlocal` |
+| several operations on shared state, or state you want to inspect | a class |
+| configuration fixed at creation | closure factory or `partial` |
+| shared mutable module state | avoid; pass it in explicitly |
+
+Closures and classes are interchangeable in principle ("a closure is a poor man's object, and vice versa"). Pick the one whose state is easiest for a reader — and a debugger — to see: closure state hides in `__closure__`, instance state sits in plain sight in `vars(obj)`.
+
 ## Pitfalls recap
 
 - Assigning to a name in a function makes it local everywhere in that function → `UnboundLocalError`.

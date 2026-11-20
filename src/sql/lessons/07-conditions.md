@@ -216,6 +216,123 @@ Read it clause by clause: an equality, a parenthesised OR of a match and a membe
 - **Text comparisons on numeric data** (`'10' < '9'`).
 - **Assuming LIKE's case behaviour** is the same everywhere.
 
+## Worked example: translating a requirement into a WHERE clause
+
+Requirements arrive in English, with all its ambiguity. Practise turning one into precise conditions. The request: *"Find active deposit accounts — checking, savings or money market — opened at the Woburn or Quincy branch before 2023, with at least \$2,000 available, excluding accounts opened by head tellers."*
+
+Break it into atomic conditions, classify each, and decide how they combine:
+
+| English | Condition | Type |
+|---|---|---|
+| active | `status = 'ACTIVE'` | equality |
+| checking, savings or money market | `product_cd IN ('CHK', 'SAV', 'MM')` | membership |
+| Woburn or Quincy branch | `open_branch_id IN (2, 3)` | membership |
+| opened before 2023 | `open_date < '2023-01-01'` | range |
+| at least 2,000 available | `avail_balance >= 2000` | range |
+| not opened by a head teller | `open_emp_id NOT IN (…head tellers…)` | membership (negated, subquery) |
+
+All six must hold, so they are joined by AND — the ORs are hidden inside the IN lists, which is exactly why IN is safer than writing the ORs yourself.
+
+```sql-run dataset=bank
+SELECT account_id, product_cd, open_branch_id, open_date, open_emp_id, avail_balance
+FROM account
+WHERE status = 'ACTIVE'
+  AND product_cd IN ('CHK', 'SAV', 'MM')
+  AND open_branch_id IN (2, 3)
+  AND open_date < '2023-01-01'
+  AND avail_balance >= 2000
+  AND open_emp_id NOT IN (SELECT emp_id FROM employee WHERE title = 'Head Teller')
+ORDER BY avail_balance DESC;
+```
+
+Check the boundary words. "Before 2023" is `< '2023-01-01'` (strict). "At least 2,000" is `>=` (inclusive). "Between 1 and 5" in everyday English is usually inclusive — the same as SQL's BETWEEN — but "between January and March" might or might not include March 31st at 3 pm; ask, or use an explicit half-open range and state your assumption.
+
+### A debugging technique: count as you add
+
+When a filter returns fewer rows than expected, do not stare at it — measure it. Add the conditions one at a time and watch the count fall:
+
+```sql-run dataset=bank
+SELECT COUNT(*) AS all_accounts,
+       SUM(status = 'ACTIVE') AS active,
+       SUM(status = 'ACTIVE' AND product_cd IN ('CHK','SAV','MM')) AS and_deposit,
+       SUM(status = 'ACTIVE' AND product_cd IN ('CHK','SAV','MM') AND open_branch_id IN (2,3)) AS and_branch,
+       SUM(status = 'ACTIVE' AND product_cd IN ('CHK','SAV','MM') AND open_branch_id IN (2,3)
+           AND open_date < '2023-01-01') AS and_date,
+       SUM(status = 'ACTIVE' AND product_cd IN ('CHK','SAV','MM') AND open_branch_id IN (2,3)
+           AND open_date < '2023-01-01' AND avail_balance >= 2000) AS and_balance
+FROM account;
+```
+
+The condition where the number drops unexpectedly is the one to inspect. (This relies on SQLite/MySQL treating a boolean as 1/0; elsewhere wrap each in `CASE WHEN … THEN 1 ELSE 0 END`.)
+
+## Precedence and De Morgan, with data
+
+The operator precedence in a WHERE clause, highest first: comparison operators (`=`, `<`, `LIKE`, `IN`, `BETWEEN`, `IS NULL`) → `NOT` → `AND` → `OR`. Three versions of a filter show how much the parentheses matter:
+
+```sql-run dataset=shop
+SELECT
+  SUM(country = 'Canada' OR country = 'Japan' AND city = 'Tokyo')    AS no_parens,
+  SUM((country = 'Canada' OR country = 'Japan') AND city = 'Tokyo')  AS or_grouped,
+  SUM(country = 'Canada' OR (country = 'Japan' AND city = 'Tokyo'))  AS and_grouped
+FROM customers;
+```
+
+`no_parens` equals `and_grouped`: every Canadian customer plus Tokyo customers. `or_grouped` is a different (and here much smaller) set — customers in Canada or Japan whose city is Tokyo.
+
+Negating a compound condition follows **De Morgan's laws**:
+
+- `NOT (a AND b)` ≡ `NOT a OR NOT b`
+- `NOT (a OR b)` ≡ `NOT a AND NOT b`
+
+So "not (cancelled or returned)" is "not cancelled **and** not returned":
+
+```sql-run dataset=shop
+SELECT SUM(NOT (status = 'cancelled' OR status = 'returned'))   AS negated_group,
+       SUM(status <> 'cancelled' AND status <> 'returned')      AS de_morgan,
+       SUM(status NOT IN ('cancelled', 'returned'))             AS not_in,
+       SUM(status <> 'cancelled' OR status <> 'returned')       AS common_mistake
+FROM orders;
+```
+
+The first three agree. The last — written with OR — is true for *every* row, since no status equals both values at once. It is one of the most frequent logic bugs in hand-written filters.
+
+## LIKE in practice
+
+A few more patterns worth having at your fingertips, and what each really matches:
+
+```sql-run dataset=shop
+SELECT name,
+       name LIKE 'The %'      AS starts_with_the,
+       name LIKE '% % %'      AS three_or_more_words,
+       name LIKE '%book%'     AS contains_book,
+       name LIKE '____'       AS exactly_four_chars,
+       name LIKE '%-%'        AS has_hyphen
+FROM products
+WHERE product_id IN (3, 8, 10, 15, 23, 26, 30);
+```
+
+Notice `'%book%'` matches *Chromebook Go* — LIKE has no notion of word boundaries. For "the word book", you would need `' ' || name || ' ' LIKE '% book %'` or a regular expression / full-text search.
+
+Searching for the wildcard characters themselves requires an escape:
+
+```sql-run dataset=shop
+SELECT '25% off' LIKE '%\%%' ESCAPE '\'  AS contains_percent,
+       'file_name' LIKE '%\_%' ESCAPE '\' AS contains_underscore,
+       'filename' LIKE '%\_%' ESCAPE '\'  AS no_underscore;
+```
+
+Case behaviour in SQLite, concretely — LIKE ignores ASCII case, `=` and GLOB do not:
+
+```sql-run dataset=shop
+SELECT 'Tokyo' LIKE 'tokyo' AS like_ci,
+       'Tokyo' = 'tokyo'    AS equals_cs,
+       'Tokyo' GLOB 't*'    AS glob_cs,
+       'Tokyo' = 'tokyo' COLLATE NOCASE AS equals_nocase;
+```
+
+> [!INTERVIEW]
+> Filtering questions often hide a trap in the wording: "customers **not** in the USA" (what about NULL country?), "orders in March" (timestamps on the 31st?), "names starting with A" (case?). State your interpretation, then write the condition — interviewers value the clarification as much as the query.
+
 ## Summary
 
 - Rows are kept when the WHERE expression is TRUE; AND binds tighter than OR, so parenthesise mixtures.

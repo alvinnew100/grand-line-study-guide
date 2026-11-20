@@ -198,6 +198,108 @@ path = snapshot_download("acme/churn-text-encoder", revision="3f2a9c1e5b7d0c4e8a
 
 Pinning `revision` to a commit hash is the Hub equivalent of deploying an image by digest.
 
+## Rollback, hands-on
+
+The reason to route deployment through a registry is that rollback becomes boring. A complete promotion
+and rollback with MLflow aliases:
+
+```python
+from mlflow import MlflowClient
+c = MlflowClient()
+
+def promote(name: str, version: int, approved_by: str) -> None:
+    try:
+        previous = c.get_model_version_by_alias(name, "champion").version
+        c.set_registered_model_alias(name, "previous_champion", previous)      # keep a pointer for rollback
+    except Exception:
+        previous = None
+    c.set_registered_model_alias(name, "champion", version)
+    c.set_model_version_tag(name, version, "promoted_by", approved_by)
+    c.set_model_version_tag(name, version, "replaced_version", str(previous))
+
+def rollback(name: str, reason: str) -> None:
+    bad = c.get_model_version_by_alias(name, "champion").version
+    good = c.get_model_version_by_alias(name, "previous_champion").version
+    c.set_registered_model_alias(name, "champion", good)
+    c.set_model_version_tag(name, bad, "rolled_back", reason)
+```
+
+Two practical details:
+
+- **Serving must notice.** A service that loaded `@champion` at startup keeps the old model in memory.
+  Either roll the pods (CD resolves the alias to a pinned version and triggers a rollout — the more
+  auditable option) or have the service poll the alias and hot-swap.
+- **Rollback is only safe if the old version is still compatible** with today's features and request
+  schema. That is why breaking schema changes need a MAJOR bump and a migration plan: deploy code that
+  can serve both schemas, then switch the model.
+
+```python-run
+# A registry in miniature: immutable versions, mutable aliases, audit log.
+class Registry:
+    def __init__(self): self.versions, self.aliases, self.audit = {}, {}, []
+    def register(self, run_id, metrics):
+        v = len(self.versions) + 1
+        self.versions[v] = {"run_id": run_id, "metrics": metrics}
+        self.audit.append(f"v{v} registered from run {run_id}")
+        return v
+    def set_alias(self, alias, v, who):
+        old = self.aliases.get(alias)
+        self.aliases[alias] = v
+        self.audit.append(f"{who}: alias '{alias}' v{old} -> v{v}")
+    def resolve(self, alias): return self.aliases[alias]
+
+r = Registry()
+v1 = r.register("run-a1", {"pr_auc": 0.712}); r.set_alias("champion", v1, "ci")
+v2 = r.register("run-b7", {"pr_auc": 0.731}); r.set_alias("challenger", v2, "ci")
+r.set_alias("previous_champion", r.resolve("champion"), "cd"); r.set_alias("champion", v2, "cd after canary")
+print("serving now loads version", r.resolve("champion"))
+# incident: v2 misbehaves in production
+r.set_alias("champion", r.resolve("previous_champion"), "on-call rollback")
+print("after rollback serving loads version", r.resolve("champion"))
+print(*r.audit, sep="\n")
+```
+
+The audit trail answers who changed what and when — the first question in any incident review.
+
+## Registry anti-patterns
+
+- **Registering everything.** The registry is for candidates; hundreds of unreviewed versions make it as
+  noisy as the experiment list.
+- **Mutable artifacts.** Overwriting the files behind a version destroys lineage. Versions are immutable;
+  publish a new one.
+- **Aliases moved by hand in a UI** with no record of evidence. Promotion should be an automated step
+  that attaches the validation report.
+- **Environment-specific copies** (`churn-staging`, `churn-prod` as separate models). Prefer one model
+  with aliases or tags per environment, so the bytes tested in staging are the bytes promoted.
+- **No link back to data.** A version that points to a run with no data version cannot be audited.
+- **Orphaned serving.** A model running in production that is not in the registry at all — usually a
+  hotfix deployed by hand.
+
+## Writing a useful model card: worked guidance
+
+Most model cards fail by being generic. Make each section answer a concrete question a reader has:
+
+| Reader | Question | Section must contain |
+|---|---|---|
+| Product manager | Can I use this for feature Y? | intended and out-of-scope uses, with examples |
+| Engineer integrating it | What do I send and get back? | input schema, output semantics, latency, version |
+| Risk / compliance | Where does it fail? Who is affected? | slice metrics, known failure modes, fairness analysis, data provenance |
+| On-call | What do I do when it misbehaves? | monitoring links, rollback procedure, owner contact |
+| Future maintainer | How was it built? | training data window, run ID, code SHA, retraining cadence |
+
+Two rules: **generate the factual parts automatically** from the run (metrics, data window, versions) so
+the card cannot drift from reality, and **write the judgement parts by hand** (limitations, ethical
+considerations, out-of-scope uses) and review them like code. Store the card with the model version so
+it is versioned with it.
+
+## Deprecating and retiring models
+
+A registry also governs the end of a model's life: mark versions `archived` when replaced, record why;
+find and notify consumers before retiring an endpoint (this is where knowing your consumers matters);
+keep artifacts for the retention period the business or regulator requires; delete training data and
+derived models when legal obligations (such as erasure requests) demand it — which requires knowing
+which models were trained on which data.
+
 ## Summary
 
 - A registry is the curated catalog of deployable models: versions are immutable, aliases are mutable

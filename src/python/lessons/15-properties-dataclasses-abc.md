@@ -344,7 +344,7 @@ class Item:
     tags: list = field(default_factory=list, repr=False)
 
 print(inspect.signature(Item.__init__))
-print([(f.name, f.type.__name__, f.default is not f.default_factory) for f in fields(Item)])
+print([(f.name, f.type.__name__, f.compare, f.repr) for f in fields(Item)])   # name, type, in ==?, in repr?
 print(sorted(n for n in vars(Item) if n.startswith("__") and n in
              ("__init__", "__repr__", "__eq__", "__hash__", "__match_args__")))
 i = Item("cola", 1.5)

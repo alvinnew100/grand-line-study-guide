@@ -239,6 +239,80 @@ print(P(1, 2) in s)
 > [!INTERVIEW]
 > Be ready to explain how a dict works: hash the key, index into a table, resolve collisions by probing, compare with `==` to confirm; keep the load factor low and resize geometrically for amortised O(1). Then the follow-ups: why must keys be immutable (their hash must not change), why are dicts ordered (compact insertion-ordered entry array since 3.6/3.7), and what's the worst case (O(n) with adversarial collisions; mitigated by hash randomisation).
 
+## Under the hood: watching a dict grow and collide
+
+You can observe the resizing behaviour from Python. The table's memory jumps in steps as entries are added, and — importantly — it does **not** shrink when you delete entries (deleted slots are just marked as dummies until the next resize):
+
+```python-run
+import sys
+d, last = {}, None
+for i in range(40):
+    d[i] = None
+    size = sys.getsizeof(d)
+    if size != last:
+        print(f"{len(d):>3} entries -> {size} bytes")
+        last = size
+for i in range(40):
+    del d[i]
+print("after deleting everything:", sys.getsizeof(d), "bytes;", "a fresh dict:", sys.getsizeof({}), "bytes")
+d = dict(d)          # rebuild (or use .copy()) to reclaim the space
+print("rebuilt:", sys.getsizeof(d), "bytes")
+```
+
+Collisions cost time, not correctness. This deliberately terrible hash sends every key to the same slot, so each insert must compare against the keys already there — lookups degrade from O(1) to O(n), and building the dict becomes O(n²):
+
+```python-run
+import time
+
+class BadKey:
+    def __init__(self, v): self.v = v
+    def __hash__(self): return 1                    # everything collides
+    def __eq__(self, other): return self.v == other.v
+
+class GoodKey(BadKey):
+    def __hash__(self): return hash(self.v)
+
+for cls in (GoodKey, BadKey):
+    t = time.perf_counter()
+    table = {cls(i): i for i in range(1500)}
+    print(f"{cls.__name__}: {(time.perf_counter() - t) * 1000:.1f} ms, lookup ok: {table[cls(700)] == 700}")
+```
+
+This is also what an attacker exploits with crafted keys, and why string hashing is randomised per process.
+
+### The mutated-key bug
+
+If an object's hash depends on mutable state and you change it while it is in a dict or set, the entry is stranded in the slot of its *old* hash:
+
+```python-run
+class Point:
+    def __init__(self, x, y): self.x, self.y = x, y
+    def __eq__(self, o): return (self.x, self.y) == (o.x, o.y)
+    def __hash__(self): return hash((self.x, self.y))
+
+p = Point(1, 2)
+seen = {p}
+p.x = 99                                   # mutation changes the hash
+print(p in seen, Point(1, 2) in seen, len(seen), any(q is p for q in seen))
+```
+
+The object is still physically in the set, yet neither its new nor its old value can find it. Rule: only hash on fields that never change — or make the class immutable (`@dataclass(frozen=True)`).
+
+## Choosing between list, set and dict
+
+| Question you keep asking | Structure | Cost |
+|---|---|---|
+| "What is at position i?" | `list` | O(1) |
+| "Have I seen x?" | `set` | O(1) avg |
+| "What value goes with key k?" | `dict` | O(1) avg |
+| "How many times did x occur?" | `Counter` | O(1) avg per update |
+| "Which items share property p?" | `defaultdict(list)` keyed by p | O(1) avg per insert |
+| "What is the smallest/next in order?" | sorted list + `bisect`, or `heapq` | O(log n) |
+
+Hash tables give up ordering by key: if you need "the largest key below x" or sorted traversal, a dict alone won't do — sort the keys when needed (O(n log n)) or maintain a sorted list.
+
+A practical debugging tip: when a lookup "mysteriously" fails, print `repr(key)` and `type(key)` for both the stored and the probing key. The usual culprits are `"42"` versus `42`, trailing whitespace or different case in strings, a `float` that isn't exactly the value you think (`0.1 + 0.2`), or a list where a tuple was intended.
+
 ## Pitfalls recap
 
 - `{}` is an empty dict; use `set()` for an empty set.

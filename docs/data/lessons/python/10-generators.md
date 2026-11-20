@@ -288,6 +288,101 @@ print(list(moving_average([1, 2, 3, 4, 5, 6], 3)))
 > [!INTERVIEW]
 > "What's a generator and why use one?" — a function with `yield` that returns a lazy iterator; it keeps its local state between `next()` calls, uses O(1) memory for streams, supports infinite sequences, and composes into pipelines. Know the difference between `return` (ends the generator, value carried in `StopIteration`) and `yield`, what `yield from` does (delegation + return value), and that generators are single-pass.
 
+## Under the hood: a suspended frame
+
+An ordinary call creates a frame, runs it, and throws it away. A generator object *keeps* its frame: local variables, the value stack and the position of the last executed instruction all survive between `next()` calls. `inspect` lets you look inside a paused generator — invaluable when debugging a pipeline:
+
+```python-run
+import inspect
+
+def accumulate(values):
+    total = 0
+    for v in values:
+        total += v
+        yield total
+
+g = accumulate([5, 10, 20])
+print(inspect.getgeneratorstate(g))                # GEN_CREATED: body not started
+next(g); next(g)
+print(inspect.getgeneratorstate(g), inspect.getgeneratorlocals(g))
+print("paused at line", g.gi_frame.f_lineno, "of", g.gi_code.co_name)
+list(g)
+print(inspect.getgeneratorstate(g), g.gi_frame)    # GEN_CLOSED: frame released
+```
+
+The four states are `GEN_CREATED`, `GEN_RUNNING`, `GEN_SUSPENDED` and `GEN_CLOSED`. Resuming is cheap — no new frame is built — which is why a generator loop is competitive with a hand-written iterator class and far shorter. Native coroutines (`async def`) are built on the same machinery: `await` suspends a frame exactly as `yield` does, and the event loop plays the role of the code calling `next()`.
+
+## Generator, list or iterator class?
+
+| | List / comprehension | Generator | Iterator class |
+|---|---|---|---|
+| Memory | O(n) | O(1) | O(1) |
+| Can iterate twice, index, `len()` | yes | no | only if you add it |
+| Starts work | immediately | on first `next()` | on first `next()` |
+| Infinite sequences | no | yes | yes |
+| Extra methods / inspectable state | — | awkward | natural |
+| Code size | smallest | small | largest |
+
+Rules of thumb: return a **list** when the result is small and callers will index, sort, reuse or measure it; write a **generator** when data is large, streamed, possibly infinite, or consumed once by the next stage; write a **class** when the iterator needs extra methods (`peek`, `reset`) or externally visible state. A function that sometimes needs both can expose a generator and let callers write `list(gen())`.
+
+Laziness also changes *when errors appear*. With a list, a bad record fails at construction; with a generator, it fails later, at whatever point the consumer reaches it — far from where the pipeline was assembled:
+
+```python-run
+def parse_all(rows):
+    for r in rows:
+        yield int(r)
+
+numbers = parse_all(["1", "2", "x", "4"])     # no error here
+print("pipeline built")
+try:
+    for n in numbers:
+        print("got", n)
+except ValueError as e:
+    print("failed mid-stream:", e)
+print("after the failure the generator is dead:", list(numbers))
+```
+
+Two consequences worth remembering: an exception **terminates** the generator (the remaining item `4` is never produced), and resources or variables the generator depends on must still be valid when it finally runs. A generator that reads from a file opened in a `with` block is useless after that block exits:
+
+```python-run
+import io
+
+def read_lines():
+    with io.StringIO("a\nb\n") as f:
+        return (line.strip() for line in f)     # lazy: nothing has been read yet
+
+try:
+    print(list(read_lines()))
+except ValueError as e:
+    print("ValueError:", e)                     # I/O operation on closed file
+
+def read_lines_ok():
+    with io.StringIO("a\nb\n") as f:
+        yield from (line.strip() for line in f)  # the with-block stays open while we iterate
+
+print(list(read_lines_ok()))
+```
+
+## Debugging lazy pipelines
+
+- Insert a pass-through "tap" stage that prints what flows by, instead of calling `list()` on an intermediate stage (which would consume it).
+- Use `itertools.islice(gen, 5)` to look at the first few items of something huge or infinite.
+- If output is empty, check each stage separately with a small literal input, and check for an already-exhausted source.
+- In pdb, `list(gen)` exhausts the generator you are inspecting; copy with `itertools.tee` first, or restart.
+
+```python-run
+def tap(items, label):
+    for item in items:
+        print(f"  [{label}] {item!r}")
+        yield item
+
+data = ["3", "", "7"]
+cleaned = (s for s in tap(data, "raw") if s)
+print(sum(int(s) for s in tap(cleaned, "non-empty")))
+```
+
+The interleaved output also makes the pull-based execution order visible: each item travels through every stage before the next one is read.
+
 ## Pitfalls recap
 
 - Expecting a generator function's body to run when called.

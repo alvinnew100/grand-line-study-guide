@@ -191,6 +191,108 @@ FROM predictions;
 | NULL arithmetic surprises | `COALESCE` with a sensible default |
 | Division by zero | `NULLIF(divisor, 0)` |
 
+## Worked example: an audit of NULLs in a table
+
+Before trusting any analysis, find out where the NULLs are. A profile of the `runs` table shows how to do it systematically:
+
+```sql-run dataset=mlops
+SELECT COUNT(*)                              AS total_rows,
+       COUNT(*) - COUNT(parent_run_id)       AS null_parent,
+       COUNT(*) - COUNT(learning_rate)       AS null_learning_rate,
+       COUNT(*) - COUNT(batch_size)          AS null_batch_size,
+       COUNT(*) - COUNT(ended_at)            AS null_ended_at,
+       COUNT(*) - COUNT(gpu_hours)           AS null_gpu_hours
+FROM runs;
+```
+
+`COUNT(*) - COUNT(col)` is the number of NULLs in `col`, because `COUNT(col)` skips them. Each NULL count has a *meaning* you should be able to state: no parent (not part of a sweep), no batch size (tree models — "not applicable"), no end time (still running — "not yet known"). When you cannot explain a NULL, you have found a data-quality problem.
+
+Next, see how those NULLs would distort a naive analysis. Average batch size by model type:
+
+```sql-run dataset=mlops
+SELECT model_type,
+       COUNT(*) AS runs,
+       COUNT(batch_size) AS runs_with_batch_size,
+       AVG(batch_size) AS avg_batch_size
+FROM runs
+GROUP BY model_type
+ORDER BY runs DESC;
+```
+
+Model types with no batch sizes show a NULL average — correct, and far better than a misleading 0. If a dashboard insisted on a number, `COALESCE(AVG(batch_size), 0)` would turn "undefined" into "zero", a lie that looks like data.
+
+## Three-valued logic, traced row by row
+
+Abstract truth tables stick better with real rows. Take five transactions and evaluate one condition and its negation:
+
+```sql-run dataset=bank
+SELECT txn_id, teller_emp_id,
+       teller_emp_id = 9          AS is_9,
+       NOT (teller_emp_id = 9)    AS not_9,
+       teller_emp_id = 9 OR teller_emp_id IS NULL AS is_9_or_missing,
+       COALESCE(teller_emp_id, -1) <> 9           AS not_9_incl_missing
+FROM txn
+WHERE txn_id IN (1, 2, 3, 4, 5)
+ORDER BY txn_id;
+```
+
+For the row whose teller is NULL, both `is_9` and `not_9` are NULL (UNKNOWN): the row belongs to *neither* the filter nor its negation. The last two columns show the two standard repairs — an explicit `OR … IS NULL`, or mapping NULL to a sentinel with COALESCE before comparing.
+
+The same thing happens inside `CASE`, joins, and CHECK constraints, with one important twist in each:
+
+| Context | What UNKNOWN does |
+|---|---|
+| `WHERE`, `HAVING`, join `ON` | row is **rejected** (treated like FALSE) |
+| `CASE WHEN cond` | branch is **not taken**; falls through to the next WHEN / ELSE |
+| `CHECK (cond)` | row is **accepted** (only FALSE violates a check) |
+| `UNIQUE` | NULLs do not collide with each other |
+
+That asymmetry between WHERE and CHECK surprises people: `CHECK (price > 0)` happily admits a NULL price.
+
+## NULL and joins
+
+A NULL foreign key never matches anything in an equality join, so the row silently disappears from an inner join:
+
+```sql-run dataset=bank
+SELECT (SELECT COUNT(*) FROM txn) AS all_txns,
+       (SELECT COUNT(*) FROM txn t JOIN employee e ON e.emp_id = t.teller_emp_id) AS joined_to_teller,
+       (SELECT COUNT(*) FROM txn t LEFT JOIN employee e ON e.emp_id = t.teller_emp_id) AS left_joined;
+```
+
+The inner join loses every ATM/online transaction. A total computed from that join would understate the bank's activity with no error and no warning. A LEFT JOIN keeps them (with NULL employee columns); the *Joins revisited* module covers it.
+
+To deliberately match NULL with NULL — for example when comparing two versions of a table column by column — use the null-safe comparison:
+
+```sql-run dataset=bank
+SELECT NULL = NULL                  AS plain_equals,
+       NULL IS NULL                 AS is_null,
+       NULL IS NOT DISTINCT FROM NULL AS null_safe_equals,
+       1 IS DISTINCT FROM NULL      AS one_differs_from_null;
+```
+
+## Choosing a NULL policy for a report
+
+There is no universally right treatment; there is only an explicit one. For any metric touching nullable columns, decide and document:
+
+1. **Exclude** rows with NULL (the default behaviour of aggregates) — "average latency of *labelled* predictions".
+2. **Impute** a value with COALESCE — "treat missing discount as 0".
+3. **Report NULL as its own category** — often the most honest:
+
+```sql-run dataset=bank
+SELECT COALESCE(b.name, '(ATM / online)') AS channel,
+       COUNT(*) AS txns,
+       ROUND(SUM(t.amount), 2) AS amount
+FROM txn t
+LEFT JOIN branch b ON b.branch_id = t.execution_branch_id
+GROUP BY channel
+ORDER BY txns DESC;
+```
+
+GROUP BY places all NULLs in one group, and COALESCE gives that group a readable label instead of a blank cell.
+
+> [!INTERVIEW]
+> Two NULL questions come up constantly. (1) *"What's the difference between COUNT(\*) and COUNT(column)?"* — rows versus non-NULL values. (2) *"Why does my NOT IN query return nothing?"* — a NULL in the subquery; fix with NOT EXISTS. Being able to explain *why* (UNKNOWN is not TRUE) is what distinguishes an understanding of three-valued logic from a memorised rule.
+
 ## Summary
 
 - NULL marks a missing value; it is never equal (or unequal) to anything, including NULL.

@@ -158,7 +158,131 @@ Neither representation dominates. Choosing well is about matching the operations
 > references into the middle and splice frequently, or need worst-case $O(1)$. Note that in Python,
 > `collections.deque` already gives $O(1)$ at both ends.
 
-## 5. Pitfalls
+## 5. Building both favourites lists on a linked structure
+
+The demo in section 2 used a Python list for clarity, which hides the point of the case study: with
+a **positional (doubly linked) list**, relocating an item costs $O(1)$ once it has been found — no
+shifting. The book's `FavoritesList` wraps a `PositionalList` (the *composition* pattern) and
+`FavoritesListMTF` inherits from it, overriding just two methods: `_move_up` and `top`. The cell
+below is a compact, self-contained version of both.
+
+```python-run
+class _Node:
+    __slots__ = "item", "prev", "next"
+    def __init__(self, item, prev=None, next=None):
+        self.item, self.prev, self.next = item, prev, next
+
+class FavoritesList:
+    """Items kept in nonincreasing order of access count, in a doubly linked list with sentinels."""
+    def __init__(self):
+        self._head, self._tail = _Node(None), _Node(None)
+        self._head.next, self._tail.prev = self._tail, self._head
+        self.steps = 0                               # nodes examined so far (our cost measure)
+
+    # ---- linked-list plumbing: all O(1) ----
+    def _unlink(self, node):
+        node.prev.next, node.next.prev = node.next, node.prev
+    def _insert_before(self, node, successor):
+        node.prev, node.next = successor.prev, successor
+        successor.prev.next = node
+        successor.prev = node
+
+    def _find(self, e):
+        walk = self._head.next
+        while walk is not self._tail:
+            self.steps += 1
+            if walk.item[0] == e:
+                return walk
+            walk = walk.next
+        return None
+
+    def _move_up(self, node):
+        """Move node toward the front while its count exceeds its predecessor's."""
+        walk = node.prev
+        if walk is self._head or walk.item[1] >= node.item[1]:
+            return                                    # already in the right place
+        while walk.prev is not self._head and walk.prev.item[1] < node.item[1]:
+            walk = walk.prev
+        self._unlink(node)
+        self._insert_before(node, walk)
+
+    def access(self, e):
+        node = self._find(e)
+        if node is None:
+            node = _Node([e, 0])
+            self._insert_before(node, self._tail)     # new items start at the back
+        node.item[1] += 1
+        self._move_up(node)
+
+    def top(self, k):
+        out, walk = [], self._head.next
+        while walk is not self._tail and len(out) < k:
+            out.append(tuple(walk.item)); walk = walk.next
+        return out
+
+class FavoritesListMTF(FavoritesList):
+    """Same interface, but uses the move-to-front heuristic."""
+    def _move_up(self, node):                         # override: straight to the front, O(1)
+        if node.prev is not self._head:
+            self._unlink(node)
+            self._insert_before(node, self._head.next)
+    def top(self, k):                                 # override: list is not sorted by count
+        temp, walk = [], self._head.next
+        while walk is not self._tail:
+            temp.append(tuple(walk.item)); walk = walk.next
+        out = []
+        for _ in range(min(k, len(temp))):            # k rounds of 'find the max': O(kn)
+            best = max(range(len(temp)), key=lambda i: temp[i][1])
+            out.append(temp.pop(best))
+        return out
+
+import random
+random.seed(3)
+pages = [f"p{i}" for i in range(200)]
+weights = [1 / (i + 1) for i in range(200)]           # Zipf-like popularity: a few pages dominate
+stream = random.choices(pages, weights, k=20000)
+bursty = [p for p in random.choices(pages, k=400) for _ in range(50)]   # 50 hits in a row per page
+for name, seq in [("zipf", stream), ("bursty", bursty)]:
+    a, b = FavoritesList(), FavoritesListMTF()
+    for p in seq: a.access(p); b.access(p)
+    print(f"{name:6s}: count-sorted scanned {a.steps:>9,} nodes; move-to-front scanned {b.steps:>9,}")
+print("top 3 agree:", sorted(a.top(3)) == sorted(b.top(3)))
+```
+
+### 5.1 Reading the experiment
+
+Two workloads, two different winners — which is exactly the lesson of the case study.
+
+- **Zipf-like, stationary popularity.** A handful of pages receive most of the hits and stay popular
+  forever. Keeping the list sorted by count places exactly those pages at the front and *keeps* them
+  there, so its scans are short. Move-to-front does almost as well, but every access to a rare page
+  drags that page to the very front, pushing the popular pages back by one position; MTF therefore
+  scans somewhat more.
+- **Bursty accesses (locality in time).** Each page is hit 50 times in a row and then abandoned. MTF
+  pays one long scan for the first hit and then finds the page at position 1 for the remaining 49.
+  The count-sorted list is hostage to history: pages that were popular long ago still occupy the
+  front, so the currently hot page sits behind them until its count catches up.
+
+So the count-sorted list answers "which items are popular **overall**?", and MTF answers "which
+items are popular **right now**?". When you cannot predict which regime you are in, MTF's
+2-competitiveness makes it the safer default.
+
+### 5.2 Cost summary for the two classes
+
+| Operation | `FavoritesList` (sorted by count) | `FavoritesListMTF` |
+|---|---|---|
+| find the element | $O(p)$ for position $p$; $O(n)$ worst case | $O(p)$; small when accesses have locality |
+| relocate after access | walk up past lower counts, then $O(1)$ splice | $O(1)$ splice to the front |
+| `top(k)` | $O(k)$ | $O(kn)$ as written; $O(n + k\log n)$ with a heap |
+| `remove(e)` | $O(n)$ to find, $O(1)$ to unlink | the same |
+
+Two other self-organising heuristics are worth knowing: **transpose** (swap the accessed item with
+its predecessor — cautious, converges slowly, but less disturbed by one-off accesses) and
+**frequency count** (which is exactly the count-sorted list). And if the *search* itself must be
+fast, pair the linked list with a hash map from element to node: the find drops to expected
+$O(1)$, and the list is used purely for ordering — the design of every LRU cache.
+
+## 6. Pitfalls
 
 - Assuming linked lists make "insert in the middle" cheap when you must first *search* for the
   spot ($O(n)$).
@@ -166,7 +290,7 @@ Neither representation dominates. Choosing well is about matching the operations
   purpose (fine for demos; use a linked/positional list or `OrderedDict.move_to_end` for real).
 - Forgetting that `top(k)` with MTF requires a selection step.
 
-## 6. Summary
+## 7. Summary
 
 - Sorted-by-count favourites: `access` $O(n)$, `top(k)` $O(k)$.
 - Move-to-front: `access` cost depends on recency (fast with locality), `top(k)` $O(kn)$; 2-competitive.

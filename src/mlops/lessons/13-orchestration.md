@@ -268,6 +268,85 @@ print("table:", table, "(no duplicates no matter how many attempts)")
 > Airflow (or Dagster) for data and trigger KFP/Vertex/SageMaker pipelines for training. Then mention
 > idempotency, logical dates and backfills — interviewers listen for these.
 
+## Backfills, catch-up and partitions: a worked scenario
+
+*A bug in `build_features` double-counted support tickets from 1 to 14 January. The fix is merged on the
+15th. What now?*
+
+1. **Scope the damage**: which partitions were written by the buggy code? (The pipeline run metadata
+   records the code version per run — lineage pays off.)
+2. **Backfill features** for those dates. Because the task is parameterised by logical date and
+   overwrites its partition, a backfill is just re-running the same task for each date:
+
+```bash
+airflow dags backfill churn_features --start-date 2025-01-01 --end-date 2025-01-14   # Airflow 2.x CLI
+airflow tasks clear churn_features --start-date 2025-01-01 --end-date 2025-01-14 --downstream   # or clear and let the scheduler rerun
+```
+
+3. **Propagate downstream**: predictions scored from the bad features are wrong too; rerun scoring for
+   those dates. Any model *trained* during that window used bad data; retrain it and compare.
+4. **Throttle**: fourteen days at once can overload the warehouse. Limit with `max_active_runs` or a
+   pool.
+
+```python-run
+# Why idempotent, date-parameterised tasks make backfills trivial.
+store = {}                                        # partition -> value
+def buggy(ds):  return {"tickets": 2 * int(ds[-2:])}       # double counting
+def fixed(ds):  return {"tickets": int(ds[-2:])}
+def run(task, ds): store[ds] = task(ds)                    # overwrite the partition
+
+days = [f"2025-01-{d:02d}" for d in range(1, 8)]
+for ds in days: run(buggy, ds)
+print("before:", {k[-2:]: v["tickets"] for k, v in store.items()})
+for ds in days: run(fixed, ds)                    # backfill = rerun the same task for each logical date
+print("after :", {k[-2:]: v["tickets"] for k, v in store.items()})
+print("rows:", len(store), "(no duplicates, no manual cleanup)")
+```
+
+Contrast with a task that *appends* rows for "today": a backfill would need manual deletes, and
+`datetime.now()` inside the task would make it impossible to recompute a past day at all.
+
+### Sensors, data-aware scheduling and SLAs
+
+Time-based schedules assume upstream data arrives on time. More robust options:
+
+- **Sensors** wait for a condition (a partition exists, a file landed) before downstream tasks run. Use
+  *deferrable* or reschedule-mode sensors so a waiting task does not occupy a worker slot.
+- **Data-aware scheduling** (Airflow datasets/assets, Dagster assets): a DAG runs when the data it
+  depends on is updated, not at a guessed clock time.
+- **SLAs and timeouts**: alert when the pipeline has not produced its output by a deadline; kill tasks
+  that hang.
+
+### Choosing task granularity
+
+| Too coarse (one giant task) | Too fine (hundreds of tiny tasks) |
+|---|---|
+| any failure reruns hours of work | scheduler overhead dominates; DAG is unreadable |
+| no parallelism | data passes through storage constantly |
+| logs are a haystack | hard to reason about failure boundaries |
+
+A good task is a **unit of retry**: it has a clear input, a durable output, and it is acceptable to rerun
+all of it when it fails. For training pipelines that usually means 5–10 tasks, not 2 and not 200.
+
+### Testing pipelines
+
+- **DAG integrity test** in CI: the DAG file imports without error, has no cycles, and every task has an
+  owner and retries configured.
+
+```python
+def test_dag_loads():
+    from airflow.models import DagBag
+    bag = DagBag(dag_folder="dags", include_examples=False)
+    assert not bag.import_errors
+    dag = bag.get_dag("churn_training")
+    assert dag is not None and all(t.retries >= 1 for t in dag.tasks)
+```
+
+- **Unit-test task logic as plain functions** — keep business logic out of operator boilerplate so it is
+  testable without a scheduler.
+- **End-to-end run on a small sample** in a staging environment before promoting a pipeline change
+  (this is the CI/CD-for-pipelines step that defines MLOps level 2).
+
 ## Summary
 
 - scikit-learn `Pipeline`s bundle preprocessing with the model and prevent CV leakage; workflow pipelines

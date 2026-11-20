@@ -274,6 +274,106 @@ Polymorphism means one interface, many implementations. In Python you don't need
 > [!INTERVIEW]
 > "Explain the MRO / diamond problem in Python." — Python computes a C3 linearisation (`Cls.__mro__`) so each class appears once, children before parents, and base order is preserved. `super()` delegates to the next class in the *instance's* MRO, which enables cooperative multiple inheritance where every `__init__` runs exactly once. Follow-up: "composition vs inheritance?" — prefer composition for has-a relationships and to avoid brittle hierarchies.
 
+## Computing the MRO by hand
+
+The C3 rule is: *the linearisation of a class is the class itself, followed by a merge of the linearisations of its bases and the list of bases*. The merge repeatedly takes the first **head** (first element of some list) that does not appear in the **tail** (everything after the first element) of any other list, and removes it everywhere. If no such head exists, the hierarchy is inconsistent.
+
+Worked example for `class D(B, C)` with `B(A)` and `C(A)` (writing `o` for `object`):
+
+```
+L[A] = A o
+L[B] = B A o
+L[C] = C A o
+L[D] = D + merge(B A o,  C A o,  B C)
+     take B   (not in any tail)         -> merge(A o,  C A o,  C)
+     A?       A is in the tail of "C A o": skip.  take C  -> merge(A o,  A o)
+     take A, then o
+L[D] = D B C A o
+```
+
+The step where `A` is rejected is the whole point: `A` may not appear until every class that inherits from it (`C` here) has been placed. Here is the algorithm in runnable form, checked against Python's own answer:
+
+```python-run
+def c3(cls):
+    def merge(seqs):
+        result, seqs = [], [list(s) for s in seqs if s]
+        while seqs:
+            for seq in seqs:
+                head = seq[0]
+                if not any(head in other[1:] for other in seqs):
+                    break
+            else:
+                raise TypeError("inconsistent hierarchy")
+            result.append(head)
+            seqs = [[c for c in s if c is not head] for s in seqs]
+            seqs = [s for s in seqs if s]
+        return result
+    return [cls] + merge([c3(base) for base in cls.__bases__] + [list(cls.__bases__)])
+
+class A: pass
+class B(A): pass
+class C(A): pass
+class D(B, C): pass
+class E(C, B): pass
+class F(D): pass
+
+for k in (D, E, F):
+    mine = c3(k)
+    print(k.__name__, [c.__name__ for c in mine], mine == list(k.__mro__))
+```
+
+`E(C, B)` gives `E C B A object`: swapping the base order swaps the priority. A class `G(D, E)` would be impossible, because `D` demands B-before-C and `E` demands C-before-B.
+
+## `super()` with and without arguments
+
+Inside a method, zero-argument `super()` is shorthand for `super(CurrentClass, self)`: "start looking in the MRO of `type(self)` *after* `CurrentClass`". The compiler makes this work by giving every method that mentions `super` a hidden closure cell named `__class__`. Knowing the explicit form lets you see — and occasionally control — where the search begins:
+
+```python-run
+class Base:
+    def who(self): return "Base"
+class Mid(Base):
+    def who(self): return "Mid > " + super().who()
+class Leaf(Mid):
+    def who(self): return "Leaf > " + super().who()
+
+x = Leaf()
+print(x.who())
+print(super(Leaf, x).who())          # start after Leaf  -> Mid's version
+print(super(Mid, x).who())           # start after Mid   -> skips Mid entirely
+print(Leaf.who.__closure__ is not None, "__class__" in Leaf.who.__code__.co_freevars)
+```
+
+`super()` also works for class methods and properties, and for any method — not just `__init__`. A subclass `__eq__`, `__repr__` or `save()` that extends the parent's behaviour should call `super()` the same way.
+
+## Debugging inheritance
+
+- **"Which implementation actually runs?"** Print `type(obj).__mro__`, then find the first class in it that defines the method: `next(c for c in type(obj).__mro__ if "name" in vars(c))`. `inspect.getsource(obj.method)` shows the winner's code.
+- **`AttributeError` for an attribute the parent sets**: the subclass defined `__init__` and never called `super().__init__(...)`.
+- **`TypeError: object.__init__() takes exactly one argument`**: in a cooperative chain, some class passed leftover keyword arguments all the way up to `object`. Each class must consume its own arguments before forwarding `**kwargs`.
+- **A parent method "ignores" the subclass's data**: name-mangled attributes (`__x`) are private to the class that defined them; use a single underscore for attributes subclasses should see.
+- **An overriding method is never called**: its name or signature doesn't match (a typo creates a *new* method instead of overriding). Type checkers support `@typing.override` (3.12+) to catch this.
+
+```python-run
+class Animal:
+    def speak(self): return "..."
+class Dog(Animal):
+    def speek(self): return "woof"        # typo: does not override
+d = Dog()
+print(d.speak())
+print([c.__name__ for c in type(d).__mro__ if "speak" in vars(c)], sorted(n for n in vars(Dog) if not n.startswith("_")))
+```
+
+## Inheritance, mixins, composition, protocols: choosing
+
+| Mechanism | Relationship | Coupling | Use when |
+|---|---|---|---|
+| Single inheritance | is-a | tight: subclass depends on parent internals | a true specialisation that must be substitutable for the parent |
+| Mixin | can-do | medium | adding one orthogonal capability to several unrelated classes |
+| Composition | has-a | loose: only the component's public interface | reusing behaviour, swapping implementations, limiting the exposed API |
+| Protocol / duck typing | behaves-like | none | callers only need certain methods; no shared code required |
+
+A useful test before subclassing: *would every method of the parent make sense on the child, forever?* A `Stack` that inherits from `list` fails it immediately — `insert(0, x)` breaks the stack discipline. If the answer is no, compose.
+
 ## Pitfalls recap
 
 - Forgetting to call `super().__init__()` in a subclass initialiser — parent attributes never get set.

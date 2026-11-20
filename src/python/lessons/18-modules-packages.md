@@ -223,6 +223,79 @@ print(len(secrets.token_hex(16)))
 > [!INTERVIEW]
 > "What happens when you import a module?" — check `sys.modules`; else find via `sys.path`, create the module, cache it, execute its code once, bind the name. "What is `if __name__ == '__main__'` for?" — run code only when the file is executed as a script, not when imported. "How do you fix a circular import?" — restructure, import the module instead of names, or defer the import. "Difference between a module and a package?" — file vs directory of modules (with `__init__.py`).
 
+## Seeing the import system at work
+
+A module object is little more than a namespace dict plus some metadata, and the *spec* records how it was found. These attributes are the first things to print when an import behaves strangely:
+
+```python-run
+import json, sys, collections.abc
+
+for name in ("json", "collections.abc", "sys"):
+    m = sys.modules[name]
+    spec = m.__spec__
+    print(f"{name:<16} package={m.__package__!r:<14} origin={str(spec.origin)[-28:]!r:<32} "
+          f"is_package={spec.submodule_search_locations is not None}")
+
+print(json.__name__, sorted(k for k in vars(json) if not k.startswith("_"))[:6])
+print(json.loads is sys.modules["json"].loads, "json.decoder" in sys.modules)
+```
+
+`json` is a *package* (its origin is an `__init__.py`), `collections.abc` is a submodule inside a package, and `sys` is built into the interpreter (no file at all). Importing `json` also imported `json.decoder`, because the package's `__init__` asked for it.
+
+The "bound at import time" behaviour of `from ... import` can be demonstrated directly:
+
+```python-run
+import sys, types
+
+config = types.ModuleType("config")
+config.DEBUG = False
+sys.modules["config"] = config
+
+import config as cfg
+from config import DEBUG            # copies the current reference into OUR namespace
+
+cfg.DEBUG = True                    # rebinding the attribute on the module...
+print(cfg.DEBUG, DEBUG)             # ...does not affect the name we imported earlier
+```
+
+And the partially-initialised-module mechanics behind circular imports, simulated with two in-memory modules:
+
+```python-run
+import sys, types
+
+def load(name, source):
+    mod = types.ModuleType(name)
+    sys.modules[name] = mod          # registered BEFORE its body runs, like the real import system
+    exec(source, mod.__dict__)
+    return mod
+
+b_src = "import mod_a\nprint('  while b loads, mod_a has VALUE:', hasattr(mod_a, 'VALUE'))\n"
+
+# mod_a starts loading: it is registered, then its first line is 'import mod_b' ...
+mod_a = types.ModuleType("mod_a"); sys.modules["mod_a"] = mod_a
+load("mod_b", b_src)                 # ... so b's body runs while a is still empty
+mod_a.VALUE = "a is ready"           # ... and only then does a's next line execute
+print("  afterwards:", sys.modules["mod_b"].mod_a.VALUE)
+```
+
+`import mod_a` inside `b` succeeded — the module object exists — but its attributes weren't there yet. With `from mod_a import VALUE`, that same moment would have raised the "partially initialized module" `ImportError`. Deferring the *use* of the attribute until call time is what makes `import module` cycles survivable.
+
+## Debugging imports: a checklist
+
+1. **Which interpreter is running?** `python -c "import sys; print(sys.executable)"`. A surprising number of `ModuleNotFoundError`s are the wrong virtual environment.
+2. **Which file was actually imported?** `print(module.__file__)`. If it points into your project instead of `site-packages` or the standard library, a local file is shadowing it.
+3. **Where is Python looking?** `print(sys.path)`. Remember that the first entry depends on *how* you launched: the script's directory for `python path/to/script.py`, the current directory for `python -m package.module`.
+4. **Is the package importable from the project root?** Run with `-m` from the root, or install the project in editable mode (`pip install -e .` / `uv sync`) so that it is on `sys.path` everywhere — never patch `sys.path` by hand in application code.
+5. **Trace it:** `python -v script.py` logs every import; `python -X importtime script.py` shows how long each one takes, which is how you find the import that makes your CLI start slowly.
+6. **`ImportError: cannot import name X`**: the module was found but has no such name — a typo, a version mismatch of a third-party library, or a circular import.
+
+## Designing a package's public surface
+
+- Decide what is public and re-export it from `__init__.py` (`from .models import Product`), list it in `__all__`, and prefix everything else with an underscore. Users then depend on `shop.Product`, and you remain free to reorganise internal modules.
+- Keep `__init__.py` light: every `import shop.anything` executes it, so heavy imports there slow down the whole package and invite cycles.
+- Let dependencies point one way — for example `routers → services → models` — and never back. Layers that only import "downwards" cannot form a cycle.
+- No work at import time beyond definitions: opening connections, reading files or parsing arguments at module level makes the module hard to test and slow to import. Put it in a function called from `main()`.
+
 ## Pitfalls recap
 
 - Naming your file after a stdlib or third-party module (`random.py`, `requests.py`).

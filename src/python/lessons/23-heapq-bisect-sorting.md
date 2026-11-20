@@ -259,6 +259,111 @@ print(int("101", 2), bin(5)[2:], str(123)[::-1], "racecar" == "racecar"[::-1])
 > [!INTERVIEW]
 > State costs as you code: "sorting is O(n log n) and stable", "heap push/pop are O(log n), heapify is O(n)", "`bisect` is O(log n) but `insort` is O(n) because of the shift". Know the max-heap trick (negate), the tuple tie-breaker trick, and the difference between `bisect_left` and `bisect_right` on duplicates.
 
+## Under the hood
+
+### How a heap keeps its shape
+
+A heap is a complete binary tree stored level by level in a list: the children of index `i` are at `2i + 1` and `2i + 2`, the parent at `(i - 1) // 2`. Only two repair operations exist. **Sift up** (after appending at the end): swap the new item with its parent while it is smaller. **Sift down** (after moving the last item to the root during a pop): swap it with its smaller child while it is larger. Each walks one root-to-leaf path, so both are O(log n).
+
+```python-run
+import heapq
+
+def push(heap, x):
+    heap.append(x)
+    i = len(heap) - 1
+    while i > 0 and heap[i] < heap[(i - 1) // 2]:          # sift up
+        parent = (i - 1) // 2
+        heap[i], heap[parent] = heap[parent], heap[i]
+        i = parent
+
+def pop(heap):
+    heap[0], heap[-1] = heap[-1], heap[0]
+    smallest = heap.pop()
+    i, n = 0, len(heap)
+    while True:                                            # sift down
+        left, right, least = 2 * i + 1, 2 * i + 2, i
+        if left < n and heap[left] < heap[least]: least = left
+        if right < n and heap[right] < heap[least]: least = right
+        if least == i:
+            return smallest
+        heap[i], heap[least] = heap[least], heap[i]
+        i = least
+
+mine, ref = [], []
+for x in [7, 2, 9, 4, 1, 8, 3]:
+    push(mine, x); heapq.heappush(ref, x)
+print(mine, mine == ref)
+print([pop(mine) for _ in range(len(mine))])
+```
+
+`heapify` runs sift-down from the last parent back to the root; because most nodes sit near the bottom and move only a step or two, the total is O(n) rather than O(n log n).
+
+A heap offers no efficient search, removal from the middle or priority update. The standard workaround is **lazy deletion**: push a new entry and, when popping, skip entries that are stale (as the Dijkstra example did with `if d > dist[u]: continue`).
+
+### Why Timsort is fast on real data
+
+Timsort scans for already-ordered **runs** (ascending, or strictly descending which it reverses), extends short ones with binary insertion sort, and merges runs with a stack discipline that keeps merges balanced. Data with existing order therefore needs far fewer comparisons than n log n:
+
+```python-run
+import random
+
+class Counted:
+    comparisons = 0
+    def __init__(self, v): self.v = v
+    def __lt__(self, other):
+        Counted.comparisons += 1
+        return self.v < other.v
+
+def count(values):
+    Counted.comparisons = 0
+    sorted(Counted(v) for v in values)
+    return Counted.comparisons
+
+n = 2000
+random.seed(0)
+shuffled = random.sample(range(n), n)
+print("already sorted :", count(range(n)))
+print("reversed       :", count(range(n, 0, -1)))
+print("two sorted runs:", count(list(range(0, n, 2)) + list(range(1, n, 2))))
+print("random         :", count(shuffled), f"(n log2 n is about {int(n * 11)})")
+```
+
+The same experiment shows the **key-function advantage**: `key` is computed once per element (n calls), then cheap comparisons of the cached keys follow — whereas a `cmp_to_key` comparator runs Python code for every one of the ~n log n comparisons.
+
+### The decorate-sort-undecorate idea
+
+`key=` automates an old idiom: pair each item with its sort key, sort the pairs, strip the keys. Doing it by hand reveals a pitfall that also bites heaps — when keys tie, tuple comparison moves on to the items themselves:
+
+```python-run
+people = [{"name": "ana", "age": 31}, {"name": "ben", "age": 31}]
+try:
+    sorted((p["age"], p) for p in people)              # tie on age -> compares the dicts
+except TypeError as e:
+    print("TypeError:", e)
+decorated = sorted((p["age"], i, p) for i, p in enumerate(people))   # index breaks ties, keeps stability
+print([p["name"] for _, _, p in decorated], [p["name"] for p in sorted(people, key=lambda p: p["age"])])
+```
+
+## Sort, heap or bisect? Choosing by workload
+
+| Workload | Best tool | Cost |
+|---|---|---|
+| order everything once | `sorted` / `list.sort` | O(n log n) |
+| the k smallest/largest of n, once | `heapq.nsmallest/nlargest` | O(n log k) |
+| just the min or max | `min` / `max` | O(n) |
+| repeatedly take the smallest while adding items | heap | O(log n) per operation |
+| many lookups in data that never changes | sort once + `bisect` | O(log n) per lookup |
+| lookups **and** many insertions, kept sorted | `bisect.insort` if n is small; otherwise a heap (if only the min matters) or the third-party `sortedcontainers.SortedList` | O(n) per insort |
+| membership only | `set` | O(1) avg |
+
+## Debugging these tools
+
+- **`TypeError: '<' not supported between instances of 'dict' and 'dict'`** (or of your class): a tie in the leading tuple fields forced a comparison of payloads — add a tie-breaker index or use `key=`.
+- **A "heap" returns items in the wrong order**: the list was modified without `heappush`/`heappop` (an `append`, a `sort(reverse=True)`, an item mutated in place), breaking the invariant; or you iterated over it with `for` expecting sorted order.
+- **`bisect` returns nonsense**: the list isn't sorted by the same ordering you search with — e.g. sorted descending, or sorted by a `key` you didn't pass to `bisect` (3.10+ accepts `key=`).
+- **Sorting numbers gives `[1, 10, 2]`**: they are strings; convert, or use `key=int`.
+- **Off-by-one with `bisect`**: decide whether equal elements should fall left or right of the insertion point, then test on a list with duplicates.
+
 ## Pitfalls recap
 
 - `x = lst.sort()` gives `None`.

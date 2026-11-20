@@ -303,6 +303,154 @@ except ValueError as e:
 > [!INTERVIEW]
 > "How does `with` work?" — it calls `__enter__`, binds its result, runs the block, then always calls `__exit__(exc_type, exc, tb)`; a truthy return suppresses the exception. "How would you write one?" — a class with those two methods, or `@contextlib.contextmanager` on a generator with `try/finally` around a single `yield`. Bonus: mention `ExitStack` for a dynamic number of resources, and `async with` (`__aenter__`/`__aexit__`).
 
+## How `@contextmanager` works inside
+
+The decorator is a small class that drives your generator through the protocol — a neat application of `next()`, `throw()` and `StopIteration` from the generators lesson. A simplified re-implementation:
+
+```python-run
+import functools
+
+class GeneratorContextManager:
+    def __init__(self, gen):
+        self.gen = gen
+    def __enter__(self):
+        return next(self.gen)                      # run up to the yield; its value goes to 'as'
+    def __exit__(self, exc_type, exc, tb):
+        if exc_type is None:
+            try:
+                next(self.gen)                     # resume after the yield: run the teardown
+            except StopIteration:
+                return False
+            raise RuntimeError("generator didn't stop")
+        try:
+            self.gen.throw(exc)                    # re-raise the block's exception AT the yield
+        except StopIteration:
+            return True                            # generator swallowed it -> suppress
+        except BaseException as raised:
+            if raised is exc:
+                return False                       # same exception came back out -> propagate
+            raise
+        raise RuntimeError("generator didn't stop after throw()")
+
+def my_contextmanager(func):
+    @functools.wraps(func)
+    def helper(*args, **kwargs):
+        return GeneratorContextManager(func(*args, **kwargs))
+    return helper
+
+@my_contextmanager
+def tag(name):
+    print(f"<{name}>")
+    try:
+        yield name.upper()
+    finally:
+        print(f"</{name}>")
+
+with tag("b") as t:
+    print("  inside, got", t)
+try:
+    with tag("i"):
+        raise KeyError("oops")
+except KeyError:
+    print("exception passed through the generator's finally and out again")
+```
+
+This makes two rules obvious. The teardown runs because `throw()` raises the exception *at the `yield`* — so without `try/finally` there, the code after `yield` is skipped. And each call creates a fresh generator, which can be driven only once: a generator-based manager is **single-use**.
+
+```python-run
+from contextlib import contextmanager
+
+@contextmanager
+def session():
+    print("open")
+    yield
+    print("close")
+
+cm = session()
+with cm:
+    pass
+try:
+    with cm:                       # the generator is already exhausted
+        pass
+except (RuntimeError, AttributeError) as e:    # the exact error type varies between versions
+    print(f"cannot re-enter: {type(e).__name__}: {e}")
+```
+
+Class-based managers can be designed for any of three levels: **single-use** (files), **reusable** (enter again after exit — the `Timer` above), or **reentrant** (nestable while already active — `threading.RLock`, `contextlib.suppress`).
+
+## Async context managers
+
+When setup or teardown must `await` — opening a network connection, committing a transaction — the protocol has an asynchronous twin: `__aenter__`/`__aexit__`, used with `async with`, or a generator decorated with `@asynccontextmanager`. FastAPI's *lifespan* handler and its `yield`-based dependencies are exactly this.
+
+```python-run
+import asyncio
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def db_connection(name):
+    print(f"  connecting to {name}")
+    await asyncio.sleep(0.01)                 # pretend handshake
+    conn = {"name": name, "open": True}
+    try:
+        yield conn
+    finally:
+        await asyncio.sleep(0.01)             # pretend graceful close
+        conn["open"] = False
+        print(f"  closed {name}")
+
+async def main():
+    async with db_connection("orders") as conn:
+        print("  using", conn["name"], conn["open"])
+    print("  open afterwards?", conn["open"])
+
+asyncio.run(main())
+```
+
+## One class, three usages
+
+Deriving from `contextlib.ContextDecorator` (which `@contextmanager` objects already do) lets the same manager wrap a block *or* a whole function:
+
+```python-run
+import time
+from contextlib import ContextDecorator
+
+class timed(ContextDecorator):
+    def __init__(self, label): self.label = label
+    def __enter__(self):
+        self.start = time.perf_counter(); return self
+    def __exit__(self, *exc):
+        print(f"{self.label}: {(time.perf_counter() - self.start) * 1000:.2f} ms")
+        return False
+
+with timed("block"):
+    sum(range(100_000))
+
+@timed("function")
+def work():
+    return sum(range(100_000))
+work()
+```
+
+## try/finally, context manager or decorator?
+
+| Situation | Best tool |
+|---|---|
+| one-off cleanup in a single place | `try/finally` |
+| the same acquire/release pair used in several places | context manager |
+| cleanup for an object that only has `close()` | `contextlib.closing(obj)` |
+| a variable number of resources, or conditional resources | `ExitStack` |
+| behaviour around *every call* of a function | decorator (or `ContextDecorator`) |
+| temporary change of global state in tests | `monkeypatch` / `unittest.mock.patch` (themselves context managers) |
+
+## Debugging context managers
+
+- **`AttributeError: __enter__`** (3.11+: `TypeError: ... does not support the context manager protocol`): the object after `with` isn't a context manager. Typical causes: forgetting to *call* the factory (`with session:` instead of `with session():`), or a function that returns `None`.
+- **`as` gives `None`**: `__enter__` forgot `return self`.
+- **Errors silently vanish inside a `with`**: some `__exit__` returns a truthy value — check for an accidental `return True` or returning the result of a call.
+- **`RuntimeError: generator didn't yield` / `didn't stop`**: the generator has zero or several `yield`s on the executed path (e.g., a `yield` inside a loop or under an `if`).
+- **Cleanup didn't run**: `yield` isn't wrapped in `try/finally`.
+- **`ValueError: I/O operation on closed file`**: the file object escaped its `with` block — do the reading inside the block, or return the data rather than the file.
+
 ## Pitfalls recap
 
 - Forgetting `try/finally` around `yield` in a `@contextmanager` generator — cleanup is skipped on error.

@@ -223,14 +223,113 @@ explicit stack (recursion lesson), and why depth-first search is naturally imple
 > "matching", "undo", or "next greater element" (monotonic stack). Recognise LIFO structure first;
 > the code is then short. Always handle the empty-stack case explicitly.
 
-## 7. Pitfalls
+## 7. Worked application: from infix to postfix
+
+Section 5 evaluated a postfix expression. But people write **infix** — `3 + 4 * 2` — where
+precedence and parentheses decide the order. Converting infix to postfix is another classic stack
+algorithm (Dijkstra's *shunting-yard* algorithm), and together with the postfix evaluator it gives a
+complete calculator.
+
+**Idea.** Operands go straight to the output. Operators wait on a stack until we know that nothing
+of higher precedence is coming to claim their right operand:
+
+1. **Operand:** append it to the output.
+2. **Operator `op`:** while the stack top is an operator whose precedence is **greater than or equal
+   to** `op`'s (for left-associative operators), pop it to the output. Then push `op`.
+3. **`(`:** push it. It acts as a wall: nothing below it may be popped until it is closed.
+4. **`)`:** pop operators to the output until the matching `(` is on top; discard the `(`.
+5. **End of input:** pop every remaining operator to the output.
+
+```python-run
+PREC = {'+': 1, '-': 1, '*': 2, '/': 2}
+
+def to_postfix(tokens, trace=False):
+    out, ops = [], []
+    for t in tokens:
+        if t in PREC:
+            while ops and ops[-1] != '(' and PREC[ops[-1]] >= PREC[t]:
+                out.append(ops.pop())            # the waiting operator binds at least as tightly
+            ops.append(t)
+        elif t == '(':
+            ops.append(t)
+        elif t == ')':
+            while ops[-1] != '(':
+                out.append(ops.pop())
+            ops.pop()                            # discard the '('
+        else:
+            out.append(t)                        # operand
+        if trace:
+            print(f"read {t:>2}   stack: {' '.join(ops):<8} output: {' '.join(out)}")
+    while ops:
+        out.append(ops.pop())
+    return out
+
+def eval_postfix(tokens):
+    S = []
+    for t in tokens:
+        if t in PREC:
+            right, left = S.pop(), S.pop()
+            S.append({'+': left + right, '-': left - right, '*': left * right, '/': left / right}[t])
+        else:
+            S.append(float(t))
+    return S.pop()
+
+expr = "3 + 4 * ( 2 - 1 ) / 5".split()
+post = to_postfix(expr, trace=True)
+print("postfix:", " ".join(post), "=", eval_postfix(post))
+for e in ["8 - 3 - 2", "2 * 3 + 4", "2 * ( 3 + 4 )", "( 1 + 2 ) * ( 3 + 4 ) - 5"]:
+    p = to_postfix(e.split())
+    print(f"{e:28s} -> {' '.join(p):22s} = {eval_postfix(p)}")
+```
+
+### Dry run: `3 + 4 * ( 2 - 1 ) / 5`
+
+| token | action | operator stack | output |
+|---|---|---|---|
+| 3 | operand → output | | 3 |
+| + | stack empty → push | + | 3 |
+| 4 | output | + | 3 4 |
+| * | `+` has lower precedence → push | + * | 3 4 |
+| ( | push | + * ( | 3 4 |
+| 2 | output | + * ( | 3 4 2 |
+| - | top is `(` → push | + * ( - | 3 4 2 |
+| 1 | output | + * ( - | 3 4 2 1 |
+| ) | pop until `(` | + * | 3 4 2 1 - |
+| / | `*` has equal precedence → pop it, then push `/` | + / | 3 4 2 1 - * |
+| 5 | output | + / | 3 4 2 1 - * 5 |
+| end | pop everything | | 3 4 2 1 - * 5 / + |
+
+Value: $3 + (4 \cdot (2 - 1)) / 5 = 3.8$.
+
+**Why `>=` and not `>`?** Subtraction and division are **left-associative**: `8 - 3 - 2` means
+`(8 - 3) - 2 = 3`. When the second `-` arrives, the first one — of *equal* precedence — must be
+output first, giving `8 3 - 2 -`. With `>` you would produce `8 3 2 - -`, which is
+`8 - (3 - 2) = 7`. (A right-associative operator such as exponentiation uses the strict test.)
+
+**Complexity.** Every token is pushed at most once and popped at most once, so both conversion and
+evaluation are $O(n)$ time with $O(n)$ extra space. This two-stack-pass design is essentially how
+simple interpreters work, and CPython's own evaluation loop is a stack machine executing postfix-like
+bytecode.
+
+### 7.1 Three implementations of the stack, compared
+
+| | Python list adapter (`ArrayStack`) | preallocated array of capacity $N$ | singly linked list (next module) |
+|---|---|---|---|
+| `push` / `pop` | $O(1)$ amortised | $O(1)$ worst case; `push` fails when full | $O(1)$ worst case |
+| memory | up to about $2n$ references after a resize | exactly $N$ cells, used or not | one node object per element (element + next) |
+| best when | default choice in Python | hard real-time, known bound | worst-case guarantees without a size bound |
+
+The interface — and therefore every application in this lesson — is identical for all three; that
+is the practical payoff of programming against an ADT.
+
+## 8. Pitfalls
 
 - Popping the operands in the wrong order for non-commutative operators.
 - Forgetting the final emptiness check in delimiter matching (`"(("` would wrongly pass).
 - Using `list.pop(0)` for a stack — that is the bottom, and it costs $O(n)$.
 - Letting `IndexError` escape from an empty pop instead of a meaningful exception.
 
-## 8. Summary
+## 9. Summary
 
 - Stack = LIFO; operations push, pop, top, is_empty, len — all $O(1)$ (push/pop amortised) with an
   array-based adapter over a Python list.

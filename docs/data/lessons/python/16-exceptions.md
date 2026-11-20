@@ -287,6 +287,102 @@ Notice the loop only retries the specific *transient* error; anything else would
 > [!INTERVIEW]
 > Typical questions: "What do `else` and `finally` do in a try statement?" (else: only on success; finally: always). "Why is a bare `except:` bad?" (catches `KeyboardInterrupt`/`SystemExit` and hides bugs). "EAFP vs LBYL?" "How do you create a custom exception?" (subclass `Exception`, ideally under a package base class). "What does `raise X from e` do?" (sets `__cause__`, preserving the original traceback).
 
+## Under the hood: unwinding, tracebacks and cost
+
+When `raise` executes, Python creates the exception instance and attaches a **traceback object** to it (`exc.__traceback__`): a linked list with one entry per frame the exception passes through. The interpreter then looks for a handler in the current frame; finding none, it discards that frame (running any `finally` blocks and `with` exits on the way) and repeats in the caller. This is **stack unwinding**.
+
+```python-run
+import traceback
+
+def level3(): return {}["missing"]
+def level2(): return level3()
+def level1(): return level2()
+
+try:
+    level1()
+except KeyError as exc:
+    tb, chain = exc.__traceback__, []
+    while tb:
+        chain.append(f"{tb.tb_frame.f_code.co_name}:{tb.tb_lineno}")
+        tb = tb.tb_next
+    print(" -> ".join(chain))
+    print(type(exc).__mro__[:4])
+    print(traceback.format_exception_only(exc)[0].strip(), "| args:", exc.args)
+```
+
+Two practical consequences:
+
+- **The exception object keeps every frame on its path alive** — including all their local variables — for as long as you hold on to it. That is why Python deletes the `as` name at the end of an `except` block, and why you should not stash exception objects in long-lived lists; store `str(e)` or `traceback.format_exc()` instead.
+- **`try` is nearly free; raising is not.** Since Python 3.11 entering a `try` block costs nothing at all ("zero-cost exceptions": handlers are found via a lookup table only when something is raised). Creating the exception, building the traceback and unwinding cost on the order of a microsecond.
+
+```python-run
+import timeit
+d = {"k": 1}
+hit = timeit.timeit(lambda: d["k"], number=200_000)
+def eafp_miss():
+    try:
+        return d["absent"]
+    except KeyError:
+        return None
+miss_eafp = timeit.timeit(eafp_miss, number=200_000)
+miss_lbyl = timeit.timeit(lambda: d.get("absent"), number=200_000)
+print(f"plain hit {hit:.3f}s | miss via exception {miss_eafp:.3f}s | miss via get() {miss_lbyl:.3f}s")
+```
+
+So EAFP is the right default when failures are *rare*; when "missing" is the common case inside a hot loop, `dict.get`, `in`, or `str.isdigit()` checks are faster.
+
+## Where should an exception be caught?
+
+Catch an exception at the level that has enough context to **do something useful** about it — retry, substitute a default, report to the user, roll back — and nowhere else. A good structure for most programs:
+
+| Layer | Typical behaviour |
+|---|---|
+| Low-level helpers | raise specific exceptions; don't catch what they can't handle |
+| Domain/service layer | translate low-level errors into domain errors (`raise OrderError(...) from e`) |
+| Boundary (CLI `main`, request handler, worker loop) | one broad `except Exception`: log with traceback, convert to an exit code / HTTP 500, keep the process alive |
+
+Web frameworks implement the bottom row for you: in FastAPI, raising `HTTPException(status_code=404)` anywhere beneath a route — or registering an exception handler for your own error class — becomes the HTTP response, so route code stays free of error plumbing.
+
+```python-run
+import logging, sys
+logging.basicConfig(stream=sys.stdout, format="%(levelname)s %(message)s", force=True)
+
+class OrderError(Exception): pass
+
+def load_price(catalog, sku):                      # low level: let KeyError happen
+    return catalog[sku]
+
+def order_total(catalog, items):                   # domain: translate, keep the cause
+    try:
+        return sum(load_price(catalog, sku) * qty for sku, qty in items)
+    except KeyError as e:
+        raise OrderError(f"unknown product {e}") from e
+
+def handle_request(catalog, items):                # boundary: decide what the user sees
+    try:
+        return {"status": 200, "total": order_total(catalog, items)}
+    except OrderError as e:
+        return {"status": 400, "error": str(e)}
+    except Exception:
+        logging.exception("unexpected failure")
+        return {"status": 500, "error": "internal error"}
+
+catalog = {"cola": 1.5}
+print(handle_request(catalog, [("cola", 2)]))
+print(handle_request(catalog, [("sake", 1)]))
+print(handle_request(catalog, [("cola", "two")])["status"])
+```
+
+The third request triggers a genuine bug-like failure (`TypeError`), which is logged with its traceback and reported generically, without leaking internals.
+
+## Debugging exception-handling code
+
+- **An error "disappears"**: search for `except Exception: pass`, a bare `except:`, or a `return` inside `finally`.
+- **The traceback points at your `raise NewError(...)` instead of the real cause**: you forgot `from e`; look for "During handling of the above exception" and read the *first* traceback.
+- **`except ValueError, TypeError:`** is a syntax error in Python 3 — a tuple is required: `except (ValueError, TypeError):`.
+- **A handler never runs**: an earlier, more general `except` clause already matched; order clauses from specific to general.
+- **You need the traceback as text** (for a log or an API response): `traceback.format_exc()` inside the handler.
+
 ## Summary
 
 Exceptions are objects in a class hierarchy; `raise` unwinds the stack to the nearest matching `except`. Use `try/except/else/finally` precisely: narrow try blocks, specific exception classes, cleanup in `finally` or `with`. Prefer EAFP, raise informative built-in or custom exceptions, chain with `from`, and never silently swallow errors.

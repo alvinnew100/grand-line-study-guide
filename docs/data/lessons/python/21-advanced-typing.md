@@ -302,6 +302,90 @@ In FastAPI, declaring `def create(item: Item)` on a route is enough for the fram
 > [!INTERVIEW]
 > "What's a Protocol and how does it differ from an ABC?" — structural (duck) typing checked statically vs nominal inheritance enforced at runtime. "What is a TypeVar for?" — to relate types within a signature (same `T` in and out) so generic code keeps precise types. "TypedDict vs dataclass vs Pydantic?" — static-only dict shape vs plain class vs runtime-validated model. "How does FastAPI use type hints?" — it inspects annotations to parse, validate (via Pydantic) and document request/response data.
 
+## What exists at runtime?
+
+Typing constructs are ordinary objects, and it helps to know which of them leave a trace when the program runs. Generic aliases such as `list[int]` are real objects that remember their parameters; the *instances* you create from them do not — this is called **type erasure**:
+
+```python-run
+from typing import Generic, TypeVar, get_origin, get_args, get_type_hints, Optional, Protocol
+
+T = TypeVar("T")
+class Box(Generic[T]):
+    def __init__(self, item: T) -> None:
+        self.item = item
+
+alias = Box[int]
+print(alias, get_origin(alias) is Box, get_args(alias))
+b = Box[int]("not an int")                 # no runtime check: parameters are erased
+print(type(b) is Box, b.item)
+
+print(get_origin(dict[str, list[int]]), get_args(dict[str, list[int]]))
+print(get_args(Optional[int]), get_args(int | None) == get_args(Optional[int]))
+
+def handler(user_id: int, tags: list[str] | None = None) -> dict[str, int]: ...
+for name, hint in get_type_hints(handler).items():
+    print(f"  {name}: {hint}")
+try:
+    isinstance([1, 2], list[int])
+except TypeError as e:
+    print("TypeError:", e)
+```
+
+`get_type_hints`, `get_origin` and `get_args` are the tools frameworks use to walk annotations: FastAPI sees `user_id: int` and converts the path segment; Pydantic sees `list[str] | None` and builds a validator for "list of strings or null". You cannot ask `isinstance(x, list[int])`, because checking element types would mean scanning the whole container — libraries that want that check do the scan themselves.
+
+Here is that idea in miniature: a validator that recursively follows an annotation, which is conceptually what Pydantic compiles from your model:
+
+```python-run
+from typing import get_origin, get_args, Union
+import types
+
+def conforms(value, hint) -> bool:
+    origin, args = get_origin(hint), get_args(hint)
+    if hint is None or hint is type(None):
+        return value is None
+    if origin in (Union, types.UnionType):
+        return any(conforms(value, a) for a in args)
+    if origin is list:
+        return isinstance(value, list) and all(conforms(v, args[0]) for v in value)
+    if origin is dict:
+        return isinstance(value, dict) and all(conforms(k, args[0]) and conforms(v, args[1]) for k, v in value.items())
+    if origin is tuple:
+        return isinstance(value, tuple) and len(value) == len(args) and all(map(conforms, value, args))
+    return isinstance(value, hint)
+
+checks = [
+    ([1, 2, 3], list[int]), ([1, "2"], list[int]), ({"a": [1.5]}, dict[str, list[float]]),
+    (None, int | None), ("x", int | None), ((1, "a"), tuple[int, str]),
+]
+for value, hint in checks:
+    print(f"{value!r:<16} {str(hint):<24} {conforms(value, hint)}")
+```
+
+## Reading checker errors on generics
+
+Three messages account for most of the confusion with advanced typing:
+
+- **`Argument 1 has incompatible type "list[Dog]"; expected "list[Animal]"`** — invariance. Mypy even adds a note suggesting `Sequence`. Fix the *parameter* annotation (accept `Sequence[Animal]` or `Iterable[Animal]`), not the call site.
+- **`Value of type variable "T" cannot be "str"`** — the argument violates the TypeVar's bound or constraints; check what `bound=` demands.
+- **`"Robot" is missing following "Speaker" protocol member: name`** (or "incompatible signature") — structural mismatch; the note lists exactly which member differs. Remember that attribute *types* and method signatures must match, not just names.
+
+When inference is unclear, insert `reveal_type(expr)`; the checker prints what it deduced and you can see where precision was lost (usually at an `Any` or an unannotated function).
+
+## Choosing among the tools
+
+| You want to express | Use |
+|---|---|
+| "same type in, same type out" | `TypeVar` |
+| "any type with method `m`" | `Protocol` (optionally as a TypeVar bound) |
+| "one of these exact values" | `Literal[...]` or an `Enum` |
+| "a dict with these keys" | `TypedDict` |
+| "an int that is a user id, not an order id" | `NewType` |
+| "a type plus validation metadata" | `Annotated[T, ...]` |
+| "must inherit from my base and share code" | ABC |
+| "validate untrusted input at runtime" | Pydantic model |
+
+How far to go? Precise types pay off most at **module boundaries** and in **library code** that many callers use; inside a short private function, inference already does the work. If an annotation takes longer to write than the function, simplify it — a readable `Callable[..., Any]` with a comment beats a wall of nested generics nobody maintains.
+
 ## Pitfalls recap
 
 - Using `Any` where a `TypeVar` would preserve the type.

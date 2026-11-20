@@ -197,6 +197,134 @@ ORDER BY margin DESC;
 - Sorting by position in saved queries.
 - Forgetting that NULL placement differs across engines.
 
+## Worked example: ranking questions with ORDER BY and LIMIT
+
+"Top N" and "bottom N" questions are the first place ORDER BY and LIMIT earn their keep, and they have more edge cases than they appear to. Take a concrete request: *the three highest-value transactions of March 2024, with the account's product.*
+
+```sql-run dataset=bank
+SELECT t.txn_id, t.txn_date, a.product_cd, t.txn_type_cd, t.amount
+FROM txn t
+JOIN account a ON a.account_id = t.account_id
+WHERE t.txn_date >= '2024-03-01' AND t.txn_date < '2024-04-01'
+ORDER BY t.amount DESC, t.txn_id
+LIMIT 3;
+```
+
+Trace the logical order: FROM/JOIN builds transaction–account pairs; WHERE keeps March; SELECT computes the five columns; ORDER BY sorts by amount (largest first) and breaks ties by `txn_id`; LIMIT keeps three rows. Remove the WHERE clause and the same query answers the question for the whole year — the sort and limit always apply to whatever survived the earlier steps.
+
+Now the variations interviewers ask for.
+
+**The single largest value** can use an aggregate instead of a sort — but an aggregate cannot tell you *which row* it came from:
+
+```sql-run dataset=bank
+SELECT MAX(amount) AS largest FROM txn;
+```
+
+**The N-th row** uses OFFSET. The second-largest amount:
+
+```sql-run dataset=bank
+SELECT amount
+FROM txn
+ORDER BY amount DESC, txn_id
+LIMIT 1 OFFSET 1;
+```
+
+**Top N of each group** cannot be done with LIMIT at all — LIMIT applies once, to the whole result. "The two largest transactions *per account*" needs a window function (`ROW_NUMBER() OVER (PARTITION BY account_id ORDER BY amount DESC)`), which the *Analytic functions* module covers. Recognising that boundary is itself a useful skill.
+
+**Top N, presented in a different order.** Sort twice by wrapping the first query:
+
+```sql-run dataset=shop
+SELECT name, price
+FROM (SELECT name, price FROM products ORDER BY price DESC LIMIT 5) AS top5
+ORDER BY name;
+```
+
+The inner query picks the five most expensive products; the outer query presents them alphabetically.
+
+## Sorting on several keys: a closer look
+
+Multi-key sorts are read left to right, and each key can have its own direction. A common report layout — group rows visually by one column and rank within it:
+
+```sql-run dataset=shop
+SELECT country, city, COUNT(*) AS customers
+FROM customers
+WHERE city IS NOT NULL
+GROUP BY country, city
+ORDER BY country ASC, customers DESC, city ASC;
+```
+
+Countries appear alphabetically; inside each country the busiest city comes first; cities with equal counts are alphabetical. The third key exists purely to make the output **deterministic** — without it, tied cities could swap places between runs, and a test comparing outputs would fail intermittently.
+
+> [!WARNING]
+> Sorting is only as stable as its keys. If the ORDER BY columns do not uniquely determine the order, the database is free to return tied rows in any order — and with `LIMIT`, to return a *different set* of rows each time. Always end ORDER BY with a unique column when the exact rows matter.
+
+### Sorting by something you do not display
+
+ORDER BY may use columns and expressions that are not in the select list (as long as the query is not DISTINCT or grouped in a way that makes them undefined):
+
+```sql-run dataset=bank
+SELECT fname, lname, title
+FROM employee
+ORDER BY start_date
+LIMIT 5;
+```
+
+The five longest-serving employees, with the hire date used for ordering but not shown. With `SELECT DISTINCT`, standard SQL requires the sort expressions to appear in the select list — otherwise "which of the merged rows' values should be used?" has no answer.
+
+## Pagination done properly
+
+Applications page through results constantly, so it is worth comparing the two approaches on the same data.
+
+**Offset pagination** — simple, lets the user jump to page 37, but each page costs as much as reading all the previous ones, and rows shift between pages if data changes while the user is browsing:
+
+```sql-run dataset=shop
+SELECT order_id, order_date, status
+FROM orders
+ORDER BY order_date DESC, order_id DESC
+LIMIT 5 OFFSET 10;
+```
+
+**Keyset (seek) pagination** — remember the sort key of the last row shown and ask for rows "after" it. Suppose the last row of the previous page was order 235 dated 2024-12-06:
+
+```sql-run dataset=shop
+SELECT order_id, order_date, status
+FROM orders
+WHERE (order_date, order_id) < ('2024-12-06', 235)
+ORDER BY order_date DESC, order_id DESC
+LIMIT 5;
+```
+
+The row-value comparison `(a, b) < (x, y)` means "a < x, or a = x and b < y" — exactly "comes after this row in a descending sort". With an index on `(order_date, order_id)` the database jumps straight to the right place, so page 10,000 is as fast as page 1. The trade-off: no jumping to an arbitrary page number. (Row-value comparisons work in SQLite, PostgreSQL and MySQL; on SQL Server expand them into the OR form.)
+
+| | Offset | Keyset |
+|---|---|---|
+| Jump to page N | yes | no (next/previous only) |
+| Cost of deep pages | grows with offset | constant |
+| Stable under inserts | no — rows shift | yes |
+| Needs | nothing | a unique, indexed sort key |
+
+## The evaluation order, applied
+
+The logical order is most useful as a debugging tool. Here are four error messages and the step that explains each.
+
+| Query fragment | Error (PostgreSQL / MySQL) | Why |
+|---|---|---|
+| `SELECT price - cost AS margin … WHERE margin > 50` | column "margin" does not exist | WHERE runs before SELECT |
+| `… WHERE COUNT(*) > 5` | aggregate functions are not allowed in WHERE | groups do not exist yet at WHERE |
+| `SELECT country, city, COUNT(*) … GROUP BY country` | column "city" must appear in GROUP BY | after grouping, `city` has many values per group |
+| `… WHERE ROW_NUMBER() OVER (…) = 1` | window functions are not allowed in WHERE | windows are computed in the SELECT step |
+
+In each case the fix follows from the order: move the condition to the step where its inputs exist (HAVING for aggregates), or compute the value in an inner query and filter in an outer one.
+
+```sql-run dataset=shop
+SELECT name, margin
+FROM (SELECT name, price - cost AS margin FROM products) AS m
+WHERE margin > 150
+ORDER BY margin DESC;
+```
+
+That inner-compute, outer-filter shape is portable to every engine and is the pattern you will reuse for window functions later.
+
 ## Summary
 
 - `ORDER BY` sorts by one or more keys, each ASC or DESC; keys can be expressions, aliases or (sparingly) positions.

@@ -181,6 +181,67 @@ In production, schema changes are managed as versioned **migrations** (Alembic, 
 - **Storing dates in non-ISO text** like `'03/07/2024'`: they sort wrongly and date functions can't parse them.
 - **Multi-valued columns** (`'staging,production'`): use a child table.
 
+## Worked example: reading a schema like a reviewer
+
+Type and constraint choices are easiest to judge on a real table. Here is the DDL of the `mlops.runs` table; read it the way a reviewer would.
+
+```sql-run dataset=mlops
+SELECT sql FROM sqlite_master WHERE name = 'runs';
+```
+
+What the definition tells you — and what it guarantees:
+
+- `run_id INTEGER PRIMARY KEY` — a surrogate key, auto-assigned.
+- `experiment_id INTEGER NOT NULL REFERENCES experiments(...)` — every run belongs to exactly one experiment; an orphan run is impossible.
+- `parent_run_id INTEGER REFERENCES runs(run_id)` — **nullable** and self-referencing: a run *may* have a parent (hyper-parameter sweeps), and most do not.
+- `learning_rate REAL`, `batch_size INTEGER` — nullable on purpose: tree models have no batch size. NULL here means "not applicable".
+- `status TEXT NOT NULL CHECK (status IN (...))` — a closed vocabulary. A typo such as `'FINSHED'` is rejected at write time instead of corrupting every dashboard that groups by status.
+- `ended_at DATETIME` — nullable: a running job has not ended. The pair (`status`, `ended_at`) carries an implicit rule — finished runs should have an end time — that the schema does *not* enforce. You can check it:
+
+```sql-run dataset=mlops
+SELECT status,
+       COUNT(*) AS runs,
+       SUM(ended_at IS NULL) AS without_end_time,
+       SUM(gpu_hours IS NULL) AS without_gpu_hours
+FROM runs
+GROUP BY status;
+```
+
+Only `RUNNING` jobs lack an end time, so the data obeys the rule today. To make the database guarantee it, add a table-level check: `CHECK (status = 'RUNNING' OR ended_at IS NOT NULL)`.
+
+Now see the type system react to input. Affinity quietly converts a numeric string:
+
+```sql-run dataset=mlops
+INSERT INTO runs (experiment_id, run_name, model_type, learning_rate, status, started_at, triggered_by)
+VALUES (1, 'typed-demo', 'xgboost', '0.05', 'RUNNING', '2024-12-01 08:00:00', 'priya');
+
+SELECT run_name, learning_rate, typeof(learning_rate) AS stored_as
+FROM runs WHERE run_name = 'typed-demo';
+```
+
+The text `'0.05'` was stored as a REAL because the column has REAL affinity. PostgreSQL would also accept this literal (untyped string literals are coerced to the column type), but would reject `'abc'` — which SQLite stores as text without complaint. That silent acceptance is the reason to add CHECKs such as `CHECK (typeof(learning_rate) IN ('real', 'null'))` or to use STRICT tables for anything important.
+
+> [!INTERVIEW]
+> A common design prompt is "create a table for X". Interviewers look for: a primary key; sensible types (no floats for money, a real timestamp type); NOT NULL on required columns; a UNIQUE constraint on the natural key; foreign keys; and a sentence on which columns are nullable *and why*.
+
+### Generated columns and defaults
+
+Two more column features are worth knowing. A **default** supplies a value when an INSERT omits the column (`DEFAULT CURRENT_TIMESTAMP`, `DEFAULT 0`). A **generated column** is computed from other columns of the same row and can never disagree with them:
+
+```sql-run dataset=shop
+CREATE TABLE line_demo (
+  quantity   INTEGER NOT NULL CHECK (quantity > 0),
+  unit_price REAL    NOT NULL,
+  discount   REAL    NOT NULL DEFAULT 0 CHECK (discount BETWEEN 0 AND 1),
+  line_total REAL GENERATED ALWAYS AS (ROUND(quantity * unit_price * (1 - discount), 2)) VIRTUAL
+);
+INSERT INTO line_demo (quantity, unit_price) VALUES (3, 19.99), (1, 249.0);
+INSERT INTO line_demo (quantity, unit_price, discount) VALUES (2, 89.0, 0.15);
+SELECT * FROM line_demo;
+```
+
+`line_total` is derived on read (`VIRTUAL`) or stored on write (`STORED`). Generated columns exist in SQLite 3.31+, MySQL 5.7+ and PostgreSQL 12+ (stored only), and are a clean way to keep a derived value without the risk of it drifting.
+
 ## Summary
 
 - Character types: `CHAR` (fixed), `VARCHAR` (variable), large text types; mind character sets and collations.

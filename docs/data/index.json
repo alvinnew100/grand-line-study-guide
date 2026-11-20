@@ -54,10 +54,10 @@
   "sources": [
    "Goodrich, Tamassia & Goldwasser, Data Structures and Algorithms in Python (Wiley, 2013), ch. 3-15"
   ],
-  "words": 77527,
-  "modules": 12,
-  "lessons": 36,
-  "problems": 32
+  "words": 83951,
+  "modules": 13,
+  "lessons": 38,
+  "problems": 33
  },
  {
   "id": "fastapi",
@@ -235,7 +235,7 @@
    "Goodrich, Tamassia & Goldwasser, Data Structures and Algorithms in Python, ch. 1-2",
    "The Python Tutorial, Language Reference (Data Model) and Library Reference, docs.python.org/3"
   ],
-  "words": 65486,
+  "words": 76895,
   "modules": 13,
   "lessons": 32,
   "problems": 26

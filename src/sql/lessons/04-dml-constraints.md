@@ -211,6 +211,109 @@ COMMIT;
 - **Updating a primary key.** Keys should be immutable; updating them breaks references (unless cascades are configured) and caches.
 - **Loading dates in local formats.** Convert to ISO first.
 
+## Worked example: loading and reconciling data
+
+Real DML rarely means typing one row. A typical task is loading a batch from a staging table into a clean table, skipping what is already there, updating what changed, and then proving the load did what you expect. Walk through one with the shop's messy `customer_imports`.
+
+**Step 1 — profile the source.** How many rows, how many distinct people?
+
+```sql-run dataset=shop
+SELECT COUNT(*) AS staged_rows,
+       COUNT(DISTINCT lower(trim(email))) AS distinct_emails,
+       SUM(email <> lower(trim(email))) AS rows_needing_cleanup
+FROM customer_imports;
+```
+
+**Step 2 — build the target with the rules you want enforced.** The UNIQUE constraint is what makes the load safe to repeat.
+
+**Step 3 — insert with a conflict rule.** `ON CONFLICT DO NOTHING` keeps the first copy of each email; a second run inserts nothing.
+
+```sql-run dataset=shop
+CREATE TABLE leads (
+  lead_id    INTEGER PRIMARY KEY,
+  email      TEXT NOT NULL UNIQUE CHECK (email = lower(trim(email))),
+  full_name  TEXT NOT NULL,
+  source     TEXT NOT NULL,
+  first_seen DATETIME NOT NULL
+);
+
+INSERT INTO leads (email, full_name, source, first_seen)
+SELECT lower(trim(email)), full_name, source, imported_at
+FROM customer_imports
+WHERE true
+ORDER BY imported_at
+ON CONFLICT (email) DO NOTHING;
+
+SELECT COUNT(*) AS leads_loaded FROM leads;
+```
+
+The number loaded equals the distinct-email count from step 1 — the first reconciliation check. Because rows were inserted in `imported_at` order, each lead kept its earliest source. (The odd-looking `WHERE true` is a SQLite parsing requirement: in `INSERT … SELECT … ON CONFLICT`, the SELECT needs a WHERE clause so that `ON` is not mistaken for a join condition.)
+
+**Step 4 — an update driven by another table.** Mark which leads are already customers. This is a correlated UPDATE; the `WHERE EXISTS` restricts it to rows that have a match.
+
+```sql-run dataset=shop
+CREATE TABLE leads AS
+SELECT DISTINCT lower(trim(email)) AS email, 0 AS is_customer FROM customer_imports;
+
+UPDATE leads
+SET is_customer = 1
+WHERE EXISTS (SELECT 1 FROM customers c WHERE lower(c.email) = leads.email);
+
+SELECT is_customer, COUNT(*) AS leads FROM leads GROUP BY is_customer;
+```
+
+**Step 5 — reconcile.** After any load, compare counts and totals between source and target. Three cheap checks catch most problems:
+
+| Check | Query shape |
+|---|---|
+| Row counts match expectation | `SELECT COUNT(*)` on source (distinct keys) and target |
+| No keys lost | `SELECT key FROM source EXCEPT SELECT key FROM target` returns nothing |
+| Totals agree | `SUM(amount)` on both sides |
+
+> [!TIP]
+> Design loads to be **idempotent** — safe to run twice. A unique key plus `ON CONFLICT`, or "delete the day's partition, then insert it", means a retry after a crash cannot create duplicates. This is the single most valuable habit in data engineering.
+
+## RETURNING: see what you changed
+
+SQLite (3.35+), PostgreSQL and MariaDB let a data-changing statement return the affected rows, which saves a second query and removes a race between "write" and "read back":
+
+```sql-run dataset=bank
+UPDATE account
+SET status = 'FROZEN'
+WHERE cust_id = 3 AND status = 'ACTIVE'
+RETURNING account_id, product_cd, avail_balance, status;
+```
+
+`INSERT ... RETURNING id` is the portable-ish way to learn a generated key (MySQL uses `LAST_INSERT_ID()`, SQL Server `OUTPUT inserted.id`).
+
+## Deleting safely
+
+Deletes are the least reversible DML. Three patterns keep them under control.
+
+**Delete in dependency order.** With foreign keys enforced, children go before parents:
+
+```sql-run dataset=shop
+PRAGMA foreign_keys = ON;
+DELETE FROM order_items WHERE order_id IN (SELECT order_id FROM orders WHERE status = 'cancelled');
+DELETE FROM orders WHERE status = 'cancelled';
+SELECT status, COUNT(*) AS orders FROM orders GROUP BY status;
+```
+
+Try swapping the two DELETE statements: the parent delete fails with `FOREIGN KEY constraint failed`, because cancelled orders still have items.
+
+**Soft delete.** Instead of removing the row, mark it — `discontinued = 1`, or a `deleted_at` timestamp — and filter in queries (ideally through a view). History and foreign keys stay intact, and "undelete" is an UPDATE. The cost is that every query must remember the filter.
+
+**Archive, then delete,** inside one transaction, so the row is never in neither place:
+
+```sql
+BEGIN;
+INSERT INTO orders_archive SELECT * FROM orders WHERE order_date < '2020-01-01';
+DELETE FROM orders WHERE order_date < '2020-01-01';
+COMMIT;
+```
+
+On very large tables, do this in batches of a few thousand rows, or — better — drop a whole partition (see *Partitioning*).
+
 ## Summary
 
 - `INSERT` adds rows (single, multi-row, or from a SELECT); omitted columns get defaults.

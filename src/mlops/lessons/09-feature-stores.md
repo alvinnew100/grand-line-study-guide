@@ -221,6 +221,75 @@ prediction with a request ID, collect outcomes, join, and feed both monitoring (
 retraining (module 10). Huyen (ch. 10) highlights user feedback — explicit (thumbs up/down) and implicit
 (edits, regenerations, abandonment) — as proprietary data that powers a "data flywheel".
 
+## Freshness, staleness and the online store
+
+An online feature is only as good as its age at the moment of prediction. Three clocks matter:
+
+- **Event time**: when the underlying fact happened (a purchase at 14:02:10).
+- **Availability time**: when the feature value containing that fact became readable in the online store
+  (14:02:11 for a streaming feature; tomorrow 03:00 for a daily batch feature).
+- **Prediction time**: when the model reads it.
+
+Training data must reproduce the *availability* delay, not just event time. If a daily feature is
+materialised at 03:00, a prediction made at 14:00 sees data up to yesterday midnight. A training join
+that uses everything "up to the prediction timestamp" is subtly fresher than serving ever is — a
+**time-travel skew** that inflates offline metrics. Fixes: join on the feature's `created`/availability
+timestamp rather than its event timestamp, or apply an explicit lag in the point-in-time join.
+
+```python-run
+import pandas as pd
+# A daily feature computed for each day and published at 03:00 the NEXT day
+feat = pd.DataFrame({
+    "customer_id": [1, 1, 1],
+    "feature_date": pd.to_datetime(["2025-01-10", "2025-01-11", "2025-01-12"]),
+    "purchases_7d": [3, 4, 9],
+})
+feat["available_at"] = feat["feature_date"] + pd.Timedelta(days=1, hours=3)
+
+label = pd.DataFrame({"customer_id": [1], "prediction_ts": pd.to_datetime(["2025-01-12 14:00"])})
+
+naive = pd.merge_asof(label, feat.sort_values("feature_date"), left_on="prediction_ts",
+                      right_on="feature_date", by="customer_id")
+correct = pd.merge_asof(label, feat.sort_values("available_at"), left_on="prediction_ts",
+                        right_on="available_at", by="customer_id")
+print("join on event/feature date  ->", int(naive.purchases_7d[0]), "(uses the 2025-01-12 value: not yet published at 14:00)")
+print("join on availability time   ->", int(correct.purchases_7d[0]), "(what the online store actually held)")
+```
+
+The naive join gives the model a value (9) that would not exist until the next morning; in production
+it would have seen 4.
+
+### Monitoring a feature store
+
+| Signal | Why |
+|---|---|
+| Materialisation lag (now − latest feature timestamp) per feature view | stale features silently degrade predictions |
+| Online read latency p99 and error/timeout rate | sits inside the serving latency budget |
+| Null / default rate at read time | missing entities, TTL expiry, failed jobs |
+| Offline vs online value parity on a sample | detects logic or pipeline skew |
+| Feature usage by model | find unused features to retire |
+
+Decide the **fallback** for a failed or slow lookup in advance: a default value the model saw during
+training (and was trained to handle), a cached last-known value, or a simpler model that does not need
+the feature. Returning zeros that the model never saw in training is a common silent failure.
+
+### Feature design checklist
+
+1. **Available at prediction time?** If not, it is leakage.
+2. **Stable definition**: named, versioned (`purchases_30d_v2`), documented with owner and source.
+3. **Cost vs value**: latency and compute to serve it against its measured importance.
+4. **Missing-value semantics**: explicit default and a missing indicator rather than silent zeros.
+5. **Entity coverage**: what happens for a brand-new user (cold start)?
+6. **Backfillable**: can it be computed point-in-time for history, or only from "now" onwards?
+7. **Privacy**: does it encode sensitive attributes or proxies for them?
+
+### Embeddings as features
+
+Embeddings (of users, items, text) are increasingly stored and served like features. They add two
+versioning concerns: the **embedding model version** must match between the stored vectors and whatever
+consumes them (mixing vectors from two encoder versions is meaningless), and re-embedding a corpus after
+an encoder upgrade is a backfill that must be swapped in atomically.
+
 ## Summary
 
 - Training/serving skew arises from duplicate logic, different sources, staleness, leakage and

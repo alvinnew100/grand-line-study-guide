@@ -177,6 +177,81 @@ ORDER BY runs DESC;
 - **Relying on dialect-specific functions** without realising it (`DATE_FORMAT` is MySQL; `strftime` is SQLite; `to_char` is PostgreSQL/Oracle).
 - **Thinking of SQL as a loop.** Think in sets: "the set of accounts whose balance exceeds X", not "for each account...".
 
+## Worked example: one question, three dialects
+
+To make "dialect" concrete, here is one business question — *how many orders were placed in each month of 2024, and what share were delivered?* — in the three dialects you are most likely to meet. Read them side by side and notice how little differs.
+
+**SQLite** (runnable here):
+
+```sql-run dataset=shop
+SELECT strftime('%Y-%m', order_date) AS month,
+       COUNT(*) AS orders,
+       ROUND(100.0 * SUM(CASE WHEN status = 'delivered' THEN 1 ELSE 0 END) / COUNT(*), 1) AS delivered_pct
+FROM orders
+WHERE order_date >= '2024-01-01' AND order_date < '2025-01-01'
+GROUP BY month
+ORDER BY month;
+```
+
+**PostgreSQL:**
+
+```sql
+SELECT to_char(order_date, 'YYYY-MM') AS month,
+       COUNT(*) AS orders,
+       ROUND(100.0 * COUNT(*) FILTER (WHERE status = 'delivered') / COUNT(*), 1) AS delivered_pct
+FROM orders
+WHERE order_date >= DATE '2024-01-01' AND order_date < DATE '2025-01-01'
+GROUP BY 1
+ORDER BY 1;
+```
+
+**MySQL:**
+
+```sql
+SELECT DATE_FORMAT(order_date, '%Y-%m') AS month,
+       COUNT(*) AS orders,
+       ROUND(100.0 * SUM(status = 'delivered') / COUNT(*), 1) AS delivered_pct
+FROM orders
+WHERE order_date >= '2024-01-01' AND order_date < '2025-01-01'
+GROUP BY month
+ORDER BY month;
+```
+
+The clauses, the grouping logic, the filter and the arithmetic are identical. Only two things changed: the **date-formatting function** (`strftime` / `to_char` / `DATE_FORMAT`) and the idiom for a **conditional count** (`CASE`, `FILTER`, or a boolean summed as 0/1). That is typical. When you port a query, the checklist is short:
+
+| Area | What to check |
+|---|---|
+| Date and time functions | formatting, truncation, intervals, "now" |
+| String functions | concatenation (`\|\|` vs `CONCAT`), substring, position, regular expressions |
+| Row limiting | `LIMIT`, `FETCH FIRST`, `TOP` |
+| Booleans | real type (PostgreSQL) vs 0/1 integers (MySQL, SQLite) |
+| Identifier quoting and case | `"x"`, `` `x` ``, `[x]`; case-folding rules |
+| Integer division | `7 / 2` is 3 in SQLite, PostgreSQL, SQL Server; 3.5 in MySQL, Oracle |
+| NULL ordering | first or last by default |
+| Missing features | e.g. no `FULL JOIN` in MySQL, no `ROLLUP` in SQLite |
+
+The portable core — the CASE version above — runs unchanged on all three, which is why this guide prefers standard constructs and flags the exceptions.
+
+## How to practise in this guide
+
+A few habits will make the rest of the track far more effective:
+
+1. **Predict before you run.** Before pressing Run, guess how many rows will come back and roughly what they will contain. A wrong prediction is the fastest way to find a gap in your understanding.
+2. **Change one thing.** Edit every example: remove a clause, flip a join, change a filter. See what breaks and read the error message — SQLite's messages (`no such column`, `near "FORM": syntax error`, `misuse of aggregate`) map directly onto the parse / bind stages described above.
+3. **Explore the schema first.** `SELECT * FROM some_table LIMIT 5` and `SELECT COUNT(*) FROM some_table` on every table you are about to use. Knowing the grain of each table prevents most join mistakes.
+4. **Solve problems without peeking,** then compare with the reference query and read the *pitfalls* note even when you got it right — several correct-looking alternatives are subtly wrong on edge cases.
+
+```sql-run dataset=bank
+-- A quick profile of a table you have never seen before
+SELECT COUNT(*)                         AS row_count,
+       COUNT(DISTINCT cust_id)          AS customers,
+       COUNT(DISTINCT product_cd)       AS products,
+       MIN(open_date)                   AS first_opened,
+       MAX(open_date)                   AS last_opened,
+       SUM(close_date IS NULL)          AS still_open
+FROM account;
+```
+
 ## Summary
 
 - SQL descends from Codd's DSL/Alpha via IBM's SQUARE and SEQUEL; ANSI/ISO standards since 1986 keep adding features (window functions arrived in SQL:2003).

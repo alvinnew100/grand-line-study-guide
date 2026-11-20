@@ -224,6 +224,137 @@ runs N times. Scheduled jobs belong in a dedicated scheduler/worker, not in the 
 > scheduling, rate limiting, or should scale independently of the web tier. With a queue the API returns
 > 202 and a job ID for polling or a webhook.
 
+## Worked example: the 202 job pattern end to end
+
+Here is the complete shape of an API for work that is too slow for a request: submit, poll, fetch the
+result. The queue and worker are in-process here so the cell can run; in production the queue would be
+Redis/SQS and the worker a separate process, but the HTTP contract is identical.
+
+```python
+@router.post("/reports", status_code=status.HTTP_202_ACCEPTED, response_model=JobStatus)
+async def submit_report(req: ReportRequest, response: Response, jobs: JobsDep, user: CurrentUser):
+    job = await jobs.enqueue("build_report", req.model_dump(), owner=user.id)
+    response.headers["Location"] = f"/v1/jobs/{job.id}"
+    response.headers["Retry-After"] = "2"            # a hint for how soon to poll
+    return job
+
+@router.get("/jobs/{job_id}", response_model=JobStatus)
+async def job_status(job_id: str, jobs: JobsDep, user: CurrentUser):
+    job = await jobs.get(job_id)
+    if job is None or job.owner != user.id:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job                                        # status: queued | running | succeeded | failed
+```
+
+```python-run
+import asyncio, itertools
+
+class JobStore:
+    """In-memory stand-in for a durable queue + results table."""
+    def __init__(self, max_queue=3):
+        self.queue = asyncio.Queue(maxsize=max_queue)
+        self.jobs, self.ids = {}, itertools.count(1)
+
+    def enqueue(self, payload):
+        if self.queue.full():
+            return None                                    # -> 503 + Retry-After (load shedding)
+        job_id = f"job-{next(self.ids)}"
+        self.jobs[job_id] = {"id": job_id, "status": "queued", "attempts": 0, "result": None}
+        self.queue.put_nowait((job_id, payload))
+        return self.jobs[job_id]
+
+async def worker(store, handler, max_attempts=3):
+    while True:
+        job_id, payload = await store.queue.get()
+        job = store.jobs[job_id]
+        job["status"] = "running"
+        for attempt in range(1, max_attempts + 1):
+            job["attempts"] = attempt
+            try:
+                job["result"] = await handler(payload)
+                job["status"] = "succeeded"
+                break
+            except Exception as exc:
+                job["status"] = "failed" if attempt == max_attempts else "retrying"
+                job["error"] = str(exc)
+                await asyncio.sleep(0.01 * 2 ** attempt)   # exponential backoff between attempts
+        store.queue.task_done()
+
+flaky_calls = 0
+async def build_report(payload):
+    global flaky_calls
+    await asyncio.sleep(0.02)
+    if payload.get("flaky"):
+        flaky_calls += 1
+        if flaky_calls < 3:
+            raise RuntimeError("upstream timeout")
+    if payload.get("poison"):
+        raise ValueError("malformed input")
+    return f"report for {payload['month']}"
+
+store = JobStore()
+w = asyncio.create_task(worker(store, build_report))
+
+# --- client: submit ---
+submitted = [store.enqueue(p) for p in ({"month": "jan"}, {"month": "feb", "flaky": True},
+                                        {"month": "mar", "poison": True}, {"month": "apr"})]
+print("POST /reports ->", ["202 " + j["id"] if j else "503 queue full" for j in submitted])
+
+# --- client: poll until every accepted job is terminal ---
+while any(j["status"] in ("queued", "running", "retrying") for j in store.jobs.values()):
+    await asyncio.sleep(0.03)
+    print("GET /jobs    ->", {j["id"]: j["status"] for j in store.jobs.values()})
+w.cancel()
+for j in store.jobs.values():
+    print(j["id"], j["status"], "attempts:", j["attempts"], "|", j["result"] or j.get("error"))
+```
+
+What the run demonstrates: the fourth submission is **shed** because the bounded queue is full; the
+flaky job succeeds on its third attempt thanks to retry with backoff; the poison job fails permanently
+after the attempt limit instead of blocking the queue forever. A real system sends such jobs to a
+**dead-letter queue** for inspection.
+
+Requirements a production version adds:
+
+- **Durability**: the queue and job records live outside the process, so a deploy loses nothing.
+- **Idempotent handlers**: most queues deliver *at least once* — a worker can crash after doing the work
+  but before acknowledging it, and the job runs again. Handlers must tolerate repeats (upserts, dedup keys).
+- **Visibility timeouts / heartbeats**: a job whose worker died becomes available again.
+- **Completion signals** beyond polling: a webhook callback, or SSE/WebSocket progress events.
+- **Ownership checks** on the status endpoint (job IDs must not be guessable or cross-tenant readable).
+
+## Choosing where work runs
+
+| Work | Mechanism | Why |
+|---|---|---|
+| < 50 ms, must be in the response | inline in the endpoint | simplest |
+| I/O fan-out to several services | `asyncio.gather`/`TaskGroup` with a semaphore | overlap the waiting |
+| Blocking library call | `def` endpoint or `run_in_threadpool` | keep the loop free |
+| Small follow-up, loss acceptable | `BackgroundTasks` | no infrastructure |
+| CPU-heavy, seconds | process pool or separate worker | bypass the GIL, protect latency |
+| Minutes, must not be lost, retries | task queue + 202 pattern | durability and isolation |
+| Periodic / scheduled | dedicated scheduler (cron, Celery beat, platform jobs) | exactly one runner, not one per worker |
+
+## Sizing limits: worked arithmetic
+
+Suppose each worker process has a thread pool of 40, a DB pool of 10 (+5 overflow), and an upstream API
+that allows your service 50 concurrent calls in total. You run 4 workers.
+
+- Sync endpoints that use the DB: up to 40 threads want a connection but only 15 exist per worker → up to
+  25 requests per worker wait for the pool (and fail after `pool_timeout`). Either raise the pool —
+  checking `4 × 15 = 60` against the database's connection limit — or lower the thread limiter so
+  queueing happens in one visible place.
+- Upstream calls: a per-process `Semaphore(12)` gives `4 × 12 = 48 ≤ 50`. A semaphore of 50 per process
+  would allow 200 and get you throttled. When the worker count autoscales, a per-process semaphore is no
+  longer a reliable global limit — use a Redis-based distributed limiter instead.
+- Queue length: with service time 100 ms and 12 slots, a worker completes ~120 calls/s. If you are willing
+  to let a request wait at most 500 ms, the queue should hold about `0.5 × 120 = 60` items; beyond that,
+  reject. **Bounded wait = queue length ÷ service rate** is the calculation behind every `maxsize`.
+
+Requests that arrive faster than the service rate for a sustained period cannot be saved by any queue;
+the queue only absorbs bursts. Deciding *what to refuse, and how politely* (429/503 with `Retry-After`) is
+the real design decision.
+
 ## Pitfalls
 
 - Treating `BackgroundTasks` as durable.
