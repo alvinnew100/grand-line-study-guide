@@ -134,6 +134,81 @@ Semantic similarity's weaknesses: its quality depends on the embedding model, co
 > [!INTERVIEW]
 > **"BLEU/ROUGE vs embedding similarity vs exact match: when would you use each?"** Exact match (with normalization) for short, closed-form answers such as math, entities and labels. Token F1 for extractive QA. Lexical metrics when wording matters and references are comprehensive (legacy translation and summarization). Embedding similarity when paraphrases should count. Functional correctness whenever the output can be executed or checked. For open-ended quality, none of these is enough on its own, so add AI judges or humans.
 
+## 4. Worked example: one answer, four metrics
+
+A question asks "Who developed the theory of general relativity?" The reference is "Albert Einstein". Consider four model outputs.
+
+| Output | Exact match | Token F1 | ROUGE-L F | Likely embedding similarity |
+|---|---|---|---|---|
+| "Albert Einstein" | 1 | 1.00 | 1.00 | very high |
+| "Einstein" | 0 | 0.67 | 0.67 | high |
+| "It was developed by Albert Einstein in 1915." | 0 | 0.40 | 0.40 | high |
+| "Isaac Newton" | 0 | 0.00 | 0.00 | moderate (both are famous physicists) |
+
+Token F1 for the second row: the prediction has 1 token and the reference has 2, with 1 in common. Precision is 1/1, recall is 1/2, and F1 is $2 \cdot 1 \cdot 0.5 / 1.5 = 0.67$. For the third row, the prediction has 8 tokens, 2 of them shared, so precision is 0.25, recall is 1.0 and F1 is 0.40.
+
+The table shows the trade-offs. Exact match rejects two correct answers. Token F1 and ROUGE-L give partial credit but **penalize a correct, complete sentence more than a terse fragment**, because extra words lower precision. Embedding similarity is forgiving of wording, but it gives "Isaac Newton" a non-trivial score, since the two answers are topically close. No single column tells you the third answer is right and the fourth is wrong. That is the gap that "contains the reference" checks and AI judges fill.
+
+```python-run
+import string
+from collections import Counter
+def norm(s):
+    s = "".join(c for c in s.lower() if c not in string.punctuation)
+    return [w for w in s.split() if w not in ("a", "an", "the")]
+def f1(pred, ref):
+    p, r = norm(pred), norm(ref)
+    common = sum((Counter(p) & Counter(r)).values())
+    if common == 0: return 0.0
+    P, R = common / len(p), common / len(r)
+    return 2 * P * R / (P + R)
+ref = "Albert Einstein"
+for out in ["Albert Einstein", "Einstein", "It was developed by Albert Einstein in 1915.", "Isaac Newton"]:
+    em = int(norm(out) == norm(ref)); contains = int(" ".join(norm(ref)) in " ".join(norm(out)))
+    print(f"EM={em}  contains={contains}  F1={f1(out, ref):.2f}  | {out}")
+```
+
+## 5. BLEU in a little more detail
+
+BLEU is still quoted often, so it is worth knowing what it computes. For each n-gram size (usually 1 to 4) it takes the **clipped precision**: the fraction of candidate n-grams that appear in a reference, where each reference n-gram can be matched only as many times as it occurs. Clipping stops a candidate such as "the the the the" from scoring perfect unigram precision against "the cat sat on the mat". The precisions are combined with a geometric mean, and a **brevity penalty** lowers the score of candidates shorter than the reference, because precision alone would reward saying very little.
+
+```python-run
+import math
+from collections import Counter
+def bleu1(cand, ref):
+    c, r = cand.lower().split(), ref.lower().split()
+    clipped = sum((Counter(c) & Counter(r)).values())          # a reference word is matched at most once per occurrence
+    precision = clipped / len(c)
+    bp = 1.0 if len(c) >= len(r) else math.exp(1 - len(r) / len(c))
+    return precision, bp, precision * bp
+ref = "the cat sat on the mat"
+for cand in ["the cat sat on the mat", "the the the the the the", "the cat", "a feline rested on a rug"]:
+    p, bp, s = bleu1(cand, ref)
+    print(f"precision {p:.2f}  brevity penalty {bp:.2f}  BLEU-1 {s:.2f} | {cand}")
+```
+
+The last candidate is a reasonable paraphrase and scores low. That is the central weakness of every lexical metric: it measures shared surface form, and meaning can be preserved with few shared words.
+
+## 6. Choosing a method
+
+| Situation | Reasonable first choice | Watch out for |
+|---|---|---|
+| Code, SQL, anything executable | Functional correctness (tests, execution accuracy) | Weak tests pass wrong code |
+| Short factual answers, labels, numbers | Exact match after normalization, plus "contains" | Formatting differences such as "1,975" vs "1975" |
+| Extractive QA | Exact match and token F1, max over references | Long correct answers get low precision |
+| Translation or summarization with good references | ROUGE or BLEU as a regression signal | Paraphrases score low, and references may be poor |
+| Paraphrase-tolerant comparison, retrieval, deduplication | Embedding cosine similarity | Topically close but wrong answers score high |
+| Open-ended quality with no reference | AI judge or human review (next lesson) | Judge bias and inconsistency |
+
+A practical pattern is to layer them. Use the cheapest exact check that applies to every example, add similarity scores as a trend signal, and reserve AI judges and humans for a sample and for the cases where the cheap metrics disagree.
+
+### Common failure modes
+
+- **A metric improves while the product gets worse.** The model learned to copy reference phrasing, which raises ROUGE, while becoming less accurate. Keep at least one metric tied to correctness.
+- **Unit tests that are too weak.** pass@k counts a solution as correct when it passes the tests you wrote. Add edge cases, and review a sample of passing solutions by hand.
+- **One reference where many answers are valid.** Scores then measure agreement with one annotator's wording. Collect several references or switch to a judge.
+- **Thresholds copied from another embedding model.** A cosine of 0.8 means different things for different models. Calibrate thresholds on labelled pairs from your own data.
+- **Comparing scores computed with different normalization.** Record the tokenizer, the normalization and the metric implementation with every result.
+
 ## Pitfalls
 
 - Using exact match without normalization ("Paris" vs "paris.").

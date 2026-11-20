@@ -201,6 +201,94 @@ On trees, the state is a node and the recurrence combines children (post-order t
 Robber III returns a pair `(rob this node, skip this node)` from each subtree. On general DAGs, any
 topological order works; Longest Increasing Path in a Matrix is DAG DP in disguise.
 
+### Tree DP worked example: House Robber III
+
+Houses form a binary tree; robbing a node forbids robbing its children. A single number per node is
+not enough — the parent needs to know the best value **with** and **without** the child robbed. So
+each subtree returns a pair, a tiny state machine living on a tree:
+
+- `take(node) = node.val + skip(left) + skip(right)`
+- `skip(node) = max(take(left), skip(left)) + max(take(right), skip(right))`
+
+```python-run
+class T:
+    def __init__(self, val, left=None, right=None):
+        self.val, self.left, self.right = val, left, right
+
+def rob_tree(root):
+    def go(node):                       # returns (take, skip)
+        if node is None:
+            return 0, 0
+        lt, ls = go(node.left)
+        rt, rs = go(node.right)
+        return node.val + ls + rs, max(lt, ls) + max(rt, rs)
+    return max(go(root))
+
+#        3
+#       / \
+#      2   3
+#       \   \
+#        3   1
+print(rob_tree(T(3, T(2, None, T(3)), T(3, None, T(1)))))   # 7 = 3 + 3 + 1
+#        3
+#       / \
+#      4   5
+#     / \   \
+#    1   3   1
+print(rob_tree(T(3, T(4, T(1), T(3)), T(5, None, T(1)))))   # 9 = 4 + 5
+```
+
+The post-order traversal *is* the topological order: children are finished before their parent. Each
+node is visited once, so the running time is O(n).
+
+## Practice: classify before you solve
+
+The fastest way to build family recognition is to classify problems without solving them. Try each
+prompt, then read the reasoning.
+
+| Prompt | Family | State | Why |
+|---|---|---|---|
+| "Fewest perfect squares summing to n" | Unbounded knapsack | `dp[a]` | squares are reusable "coins", amount is the budget |
+| "Min insertions to make a string a palindrome" | Interval | `dp[i][j]` | compare the two ends, shrink inward |
+| "Shortest string containing both a and b as subsequences" | Two-sequence | `dp[i][j]` | it's `len(a) + len(b) − LCS` |
+| "Paint n houses with 3 colours, no two neighbours equal, min cost" | State machine | `dp[i][colour]` | the mode is the previous colour |
+| "Can n ≤ 16 sticks form a square?" | Bitmask | `dp[mask]` | must know exactly which sticks are used |
+| "Count numbers ≤ N with no repeated digit" | Digit + bitmask | `(pos, tight, used digits)` | digit-by-digit with a 10-bit set |
+| "Max path sum from top to bottom of a triangle" | Grid | `dp[r][c]` | moves only go down / down-right |
+
+Two of these are worth a closer look because they show that **families combine**. "No repeated digit"
+needs both a digit-DP skeleton and a bitmask of used digits. "Paint houses" is a 1-D sequence whose
+state has a small extra mode — exactly the stock-with-cooldown shape.
+
+```python-run
+def perfect_squares(n):
+    squares = [k * k for k in range(1, int(n ** 0.5) + 1)]
+    dp = [0] + [n] * n                       # worst case: n ones
+    for a in range(1, n + 1):
+        dp[a] = 1 + min(dp[a - s] for s in squares if s <= a)
+    return dp[n]
+
+def paint_houses(costs):
+    best = [0, 0, 0]                         # best[c]: min cost so far with the last house coloured c
+    for r, g, b in costs:
+        best = [r + min(best[1], best[2]), g + min(best[0], best[2]), b + min(best[0], best[1])]
+    return min(best)
+
+print(perfect_squares(12), perfect_squares(13))          # 3 (4+4+4), 2 (4+9)
+print(paint_houses([[17, 2, 17], [16, 16, 5], [14, 3, 19]]))   # 10 = 2 + 5 + 3
+```
+
+### Common misclassifications
+
+- **Treating a subsequence problem as a substring problem** (or vice versa). Substrings are contiguous:
+  the recurrence resets on a mismatch. Subsequences carry the best value forward.
+- **Using a 1-D state when a mode is missing.** If your recurrence needs "but only if yesterday I
+  didn't …", that condition belongs in the state.
+- **Reaching for bitmasks when order doesn't matter.** Subset *sum* only needs the sum, not the
+  identity of the chosen items — that's knapsack (polynomial), not bitmask (exponential).
+- **Interval DP with a "first operation" split.** If the two sides still interact after the split, try
+  the *last* operation instead (lesson 11).
+
 ## Choosing the family: a quick decision table
 
 | You see… | Try… |

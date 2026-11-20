@@ -1,0 +1,377 @@
+# CNNs, RNNs, embeddings and attention
+
+A multilayer perceptron treats its input as a flat list of unrelated numbers. Images, text and audio have
+**structure**: neighbouring pixels belong together, and words come in order. The great successes of deep
+learning came from architectures that build this structure in. This lesson gives the intuition for the
+three families you must be able to explain (convolutional networks, recurrent networks and attention-based
+transformers) and for the **embeddings** that connect discrete symbols to all of them. Müller & Guido
+point to these in their outlook chapters as the natural next step after the MLP.
+
+## 1. Inductive bias: why architecture matters
+
+An **inductive bias** is an assumption a model makes before it sees any data. A fully connected layer
+assumes nothing about its inputs. It must learn from scratch that a cat in the top-left corner and a cat
+in the bottom-right corner are the same thing. A good architecture encodes what we already know.
+
+| data | structure | architecture | built-in assumption |
+|---|---|---|---|
+| tabular | none in particular | MLP, tree ensembles | none |
+| images | local patterns, the same everywhere | CNN | locality and translation equivariance |
+| sequences | order matters, variable length | RNN / LSTM | recency, a shared step function |
+| sets or sequences with long-range relations | any element may relate to any other | transformer (attention) | very little: learns relations from data |
+
+Weaker assumptions need more data. That is the transformer story: with enough data, the model with the
+fewest built-in assumptions wins.
+
+## 2. Convolutional neural networks (CNNs)
+
+### The convolution operation
+
+A **convolutional layer** slides a small matrix of weights, the **kernel** or filter (typically 3×3),
+across the image. At each position it computes the dot product between the kernel and the patch of image
+beneath it. The grid of results is a **feature map**. It shows where in the image the kernel's pattern
+occurs.
+
+$$\text{out}[i, j] = \sum_{u=0}^{k-1}\sum_{v=0}^{k-1} \text{kernel}[u, v]\cdot \text{image}[i+u,\ j+v] + b$$
+
+Two ideas make this powerful:
+
+- **Local connectivity.** Each output looks at a small patch only. Edges and textures are local.
+- **Weight sharing.** The *same* kernel is used at every position. A 3×3 kernel has 9 weights whether the
+  image is 28×28 or 4000×3000. A dense layer on a 224×224×3 image with 1,000 hidden units would need 150
+  million weights.
+
+Shifting the input shifts the feature map by the same amount. This property is called **translation
+equivariance**.
+
+```python-run
+import numpy as np
+
+def conv2d(image, kernel):
+    """'Valid' cross-correlation, which is what deep-learning libraries call convolution."""
+    k = kernel.shape[0]
+    h, w = image.shape[0] - k + 1, image.shape[1] - k + 1
+    out = np.zeros((h, w))
+    for i in range(h):
+        for j in range(w):
+            out[i, j] = np.sum(image[i:i + k, j:j + k] * kernel)
+    return out
+
+image = np.zeros((6, 6)); image[:, 3:] = 1.0           # dark on the left, bright on the right
+vertical_edge = np.array([[-1, 0, 1], [-1, 0, 1], [-1, 0, 1]], dtype=float)
+horizontal_edge = vertical_edge.T
+print("image:\n", image.astype(int))
+print("response to the vertical-edge kernel:\n", conv2d(image, vertical_edge).astype(int))
+print("response to the horizontal-edge kernel:\n", conv2d(image, horizontal_edge).astype(int))
+```
+
+The vertical-edge kernel responds strongly along the boundary, and the horizontal-edge kernel not at all.
+In a CNN the kernels are **learned**, not designed. The first layer typically ends up with edge and colour
+detectors much like these.
+
+### Hyperparameters and shapes
+
+- **Kernel size** $k$, **stride** $s$ (how far the kernel moves each step) and **padding** $p$ (zeros
+  added around the border). The output size along one dimension is
+
+$$\text{out} = \left\lfloor\frac{n + 2p - k}{s}\right\rfloor + 1 .$$
+
+- **Channels.** A colour image has 3 input channels. A layer applies many kernels, and each produces one
+  output channel. The number of parameters is $(k\cdot k\cdot c_{in} + 1)\cdot c_{out}$.
+- **Pooling** (max or average) downsamples a feature map, usually by 2. It shrinks the computation and adds
+  tolerance to small shifts.
+- The **receptive field**, the region of the input that influences one output unit, grows with depth. Early
+  layers see edges, middle layers see textures and parts, and deep layers see whole objects.
+
+```python-run
+def conv_out(n, k, s=1, p=0):
+    return (n + 2 * p - k) // s + 1
+
+n, channels, params = 32, 3, 0
+print(f"input: {channels} x {n} x {n}")
+for name, k, s, p, c_out in [("conv 3x3, 16 filters, padding 1", 3, 1, 1, 16), ("max-pool 2x2", 2, 2, 0, None),
+                             ("conv 3x3, 32 filters, padding 1", 3, 1, 1, 32), ("max-pool 2x2", 2, 2, 0, None)]:
+    n = conv_out(n, k, s, p)
+    if c_out:
+        params += (k * k * channels + 1) * c_out
+        channels = c_out
+    print(f"{name:34s} -> {channels} x {n} x {n}")
+print("convolution parameters:", params, " | a dense layer from the 3072 inputs to 100 units alone would have", 3072 * 100 + 100)
+```
+
+```python
+import torch
+from torch import nn
+
+class SmallCNN(nn.Module):
+    def __init__(self, n_classes=10):
+        super().__init__()
+        self.features = nn.Sequential(
+            nn.Conv2d(3, 16, kernel_size=3, padding=1), nn.ReLU(), nn.MaxPool2d(2),    # 3x32x32 -> 16x16x16
+            nn.Conv2d(16, 32, kernel_size=3, padding=1), nn.ReLU(), nn.MaxPool2d(2),   # -> 32x8x8
+        )
+        self.classifier = nn.Linear(32 * 8 * 8, n_classes)
+
+    def forward(self, x):                      # x: (batch, 3, 32, 32)
+        x = self.features(x)
+        return self.classifier(x.flatten(1))   # flatten all but the batch dimension
+```
+
+**Landmarks.** LeNet (1998, digits), AlexNet (2012, the result that started the deep-learning era), VGG
+(deep stacks of 3×3 convolutions) and **ResNet** (2015). ResNet's residual connections $y = x + F(x)$ let
+gradients flow through hundreds of layers. In practice you rarely train a CNN from scratch. You
+**fine-tune a pretrained network**.
+
+## 3. Recurrent neural networks (RNNs)
+
+A sequence has variable length, and order matters. An RNN processes it **one element at a time**, keeping
+a **hidden state** that summarises everything seen so far:
+
+$$h_t = \tanh(W_x x_t + W_h h_{t-1} + b)$$
+
+The same weights are used at every time step. This is weight sharing across *time*, as a CNN shares
+weights across space. The final hidden state can be used to classify the whole sequence, or every $h_t$
+can produce an output (tagging, language modelling).
+
+```mermaid
+graph LR
+  x1[x1] --> h1((h1))
+  x2[x2] --> h2((h2))
+  x3[x3] --> h3((h3))
+  h0((h0)) --> h1
+  h1 --> h2
+  h2 --> h3
+  h3 --> y[output]
+```
+
+```python-run
+import numpy as np
+rng = np.random.RandomState(0)
+d_in, d_hidden = 4, 3
+Wx, Wh, b = rng.randn(d_in, d_hidden) * 0.5, rng.randn(d_hidden, d_hidden) * 0.5, np.zeros(d_hidden)
+
+def rnn(sequence):
+    h = np.zeros(d_hidden)
+    for x_t in sequence:                         # one step per element, the same weights every time
+        h = np.tanh(x_t @ Wx + h @ Wh + b)
+    return h
+
+seq = rng.randn(5, d_in)
+print("final hidden state:                ", rnn(seq).round(3))
+print("same elements in reverse order:    ", rnn(seq[::-1]).round(3), "<- order matters")
+print("a sequence of a different length:  ", rnn(rng.randn(9, d_in)).round(3), "<- any length works")
+```
+
+### The long-range problem, LSTM and GRU
+
+Training an RNN means backpropagating through every time step ("backpropagation through time"). The
+gradient is multiplied by $W_h$ and by the tanh derivative at each step. Over 100 steps it **vanishes or
+explodes**, so a plain RNN cannot learn dependencies between distant positions.
+
+The **LSTM** (long short-term memory) adds a separate **cell state** that is updated *additively*, and
+three **gates**: learned sigmoid switches that decide what to forget, what to write and what to output.
+The additive path lets gradients survive across many steps. The **GRU** is a simpler variant with two
+gates.
+
+RNNs have two limits that remain even with gating. They are **sequential**: step $t$ needs step $t-1$, so
+they cannot be parallelised across the sequence, which makes training slow. And all the information about
+a long input must squeeze through one fixed-size hidden state. Both limits led to attention.
+
+## 4. Embeddings
+
+Networks need numeric input, but words, product ids and categories are discrete. One-hot vectors are
+huge, sparse, and treat every pair of items as equally different. An **embedding** is a learned lookup
+table that maps each discrete id to a **dense vector** of a few dozen to a few thousand dimensions.
+
+$$E \in \mathbb{R}^{|V|\times d},\qquad \text{embedding}(i) = E[i]$$
+
+Multiplying a one-hot vector by $E$ selects one row, so an embedding layer is a linear layer that is
+implemented as an index lookup. The table is trained by backpropagation along with the rest of the model.
+The result is that **items used in similar ways end up with similar vectors**. Distance in embedding space
+comes to reflect meaning.
+
+```python-run
+import numpy as np
+vocab = {"king": 0, "queen": 1, "man": 2, "woman": 3, "apple": 4, "pear": 5}
+# a hand-made 3-d embedding table so the geometry is easy to see: (royalty, gender, fruitiness)
+E = np.array([[0.9, 0.4, 0.0], [0.9, -0.4, 0.0], [0.1, 0.4, 0.0], [0.1, -0.4, 0.0], [0.0, 0.0, 0.9], [0.0, 0.1, 0.8]])
+
+def cosine(a, b):
+    return float(a @ b / (np.linalg.norm(a) * np.linalg.norm(b)))
+
+ids = np.array([vocab["king"], vocab["apple"]])
+print("lookup E[ids] has shape", E[ids].shape)                       # (sequence length, embedding dimension)
+one_hot = np.eye(len(vocab))[ids]
+print("identical to one_hot @ E:", np.allclose(one_hot @ E, E[ids]))
+print("cos(king, queen) =", round(cosine(E[0], E[1]), 2), " cos(king, apple) =", round(cosine(E[0], E[4]), 2), " cos(apple, pear) =", round(cosine(E[4], E[5]), 2))
+target = E[vocab["king"]] - E[vocab["man"]] + E[vocab["woman"]]
+best = max(vocab, key=lambda w: cosine(E[vocab[w]], target))
+print("king - man + woman is closest to:", best)
+```
+
+Embeddings are everywhere:
+
+- **Word embeddings** (word2vec, GloVe): trained so that words appearing in similar contexts get similar
+  vectors.
+- **Contextual embeddings** (BERT, GPT): the vector of a token depends on the sentence it is in.
+- **Sentence and document embeddings**: one vector per text, compared with cosine similarity. They are the
+  basis of semantic search and retrieval-augmented generation.
+- **Entity embeddings** for users, items and categorical features in recommender systems and tabular
+  models.
+
+## 5. Attention
+
+### The idea
+
+Instead of squeezing a sequence into one vector, let each position **look directly at every other
+position** and take what it needs. For each position we compute a **query** vector. Every position also
+offers a **key** and a **value**. The query is compared with all keys, the scores become weights through
+a softmax, and the output is the weighted average of the values:
+
+$$\operatorname{Attention}(Q, K, V) = \operatorname{softmax}\!\left(\frac{QK^\top}{\sqrt{d_k}}\right)V$$
+
+- $QK^\top$ holds the dot product of every query with every key: "how relevant is position $j$ to
+  position $i$?"
+- Dividing by $\sqrt{d_k}$ keeps the scores at a sensible scale. Without it, large dot products push the
+  softmax into a near one-hot regime where gradients vanish.
+- The softmax turns each row of scores into weights that sum to 1.
+- In **self-attention**, $Q$, $K$ and $V$ are three different learned linear projections of the *same*
+  sequence.
+
+```python-run
+import numpy as np
+
+def softmax(z):
+    z = z - z.max(axis=-1, keepdims=True)
+    e = np.exp(z)
+    return e / e.sum(axis=-1, keepdims=True)
+
+def attention(Q, K, V, causal=False):
+    scores = Q @ K.T / np.sqrt(Q.shape[-1])
+    if causal:                                             # position i may only look at positions <= i
+        scores = np.where(np.tril(np.ones_like(scores, dtype=bool)), scores, -np.inf)
+    weights = softmax(scores)
+    return weights @ V, weights
+
+tokens = ["the", "bank", "of", "the", "river"]
+X = np.array([[1.0, 0.0, 0.0, 0.0],      # hand-made 4-d vectors: "bank" and "river" share a direction
+              [0.0, 2.0, 0.0, 1.0],
+              [0.0, 0.0, 1.0, 0.0],
+              [1.0, 0.0, 0.0, 0.0],
+              [0.0, 2.0, 0.0, -1.0]])
+out, w = attention(X, X, X)
+print("attention weights of 'bank' over", tokens, ":\n ", w[1].round(2))
+print("new vector for 'bank' (a context-dependent mixture):", out[1].round(2))
+_, w_causal = attention(X, X, X, causal=True)
+print("with a causal mask, 'bank' can only see", tokens[:2], ":", w_causal[1].round(2))
+```
+
+After one attention step, the vector for "bank" already contains information from "river". That is how a
+transformer builds **contextual** representations. You implement this function in *ml-attention*.
+
+### From attention to the transformer
+
+A transformer block stacks a few components:
+
+```mermaid
+flowchart TD
+  I[Token embeddings + positional encoding] --> A[Multi-head self-attention]
+  A --> N1[Add residual and layer norm]
+  N1 --> F[Feed-forward network, applied to each position]
+  F --> N2[Add residual and layer norm]
+  N2 --> O[Output: one contextual vector per token]
+```
+
+- **Multi-head attention** runs several attention operations in parallel, each with its own projections,
+  so different heads can track different relations (syntax, coreference, position).
+- **Positional encodings** are added to the embeddings, because attention itself ignores order. Without
+  them a sentence would be a bag of words.
+- **Residual connections and layer normalisation** make deep stacks trainable.
+- A position-wise **feed-forward network** processes each token's vector after the mixing.
+
+Three variants:
+
+| variant | attention | trained to | examples | used for |
+|---|---|---|---|---|
+| **encoder-only** | bidirectional | predict masked tokens | BERT, RoBERTa | classification, embeddings, retrieval |
+| **decoder-only** | causal (left to right) | predict the next token | the GPT family, Llama, Claude | text generation, chat |
+| **encoder–decoder** | encoder bidirectional, decoder causal + cross-attention | map input to output sequence | T5, the original transformer | translation, summarisation |
+
+Why transformers won:
+
+- **Parallelism.** Every position is processed at once, with no recurrence, so training scales on GPUs.
+- **Direct long-range connections.** Any two positions are one step apart, where an RNN needs $n$ steps.
+- **Scalability.** Performance keeps improving with more data and parameters.
+
+The price is that self-attention costs $O(n^2)$ time and memory in the sequence length, which is why
+models have a limited context window.
+
+### Pretraining and transfer
+
+The dominant recipe today is **self-supervised pretraining** on huge unlabelled corpora, followed by
+adaptation: fine-tuning all the weights, training a small set of extra weights (LoRA adapters), or just
+writing a prompt. With the Hugging Face `transformers` library a pretrained model is a few lines:
+
+```python
+from transformers import pipeline, AutoTokenizer, AutoModel
+
+classifier = pipeline("sentiment-analysis")                 # downloads a small fine-tuned model
+classifier("This movie was a wonderful surprise.")          # [{'label': 'POSITIVE', 'score': 0.99...}]
+
+tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+model = AutoModel.from_pretrained("bert-base-uncased")
+batch = tokenizer(["The bank of the river."], return_tensors="pt", padding=True)
+hidden = model(**batch).last_hidden_state                   # shape (batch, tokens, 768): contextual embeddings
+```
+
+## 6. Choosing an architecture
+
+| problem | sensible first choice |
+|---|---|
+| tabular data | gradient-boosted trees; an MLP with entity embeddings as an alternative |
+| image classification / detection | a pretrained CNN (ResNet, EfficientNet) or vision transformer, fine-tuned |
+| text classification with little data | tf-idf + linear model, then a fine-tuned small BERT-style encoder |
+| semantic search / RAG | a sentence-embedding model + a vector index |
+| text generation, chat, flexible extraction | a pretrained decoder-only LLM, prompted or fine-tuned |
+| time series | gradient boosting on lag features first; then sequence models |
+
+> [!INTERVIEW]
+> **"Why did transformers replace RNNs?"** RNNs process tokens one after another, so they cannot be
+> parallelised across the sequence and they struggle with long-range dependencies, because information and
+> gradients must pass through every intermediate step. Self-attention connects every pair of positions
+> directly and computes all positions in parallel, which scales with modern hardware and data. The costs
+> are $O(n^2)$ attention and the need for positional encodings. Be ready to write the attention formula,
+> explain the $\sqrt{d_k}$ scaling and the causal mask, and say what queries, keys and values are.
+
+## Summary
+
+- Architectures encode assumptions: CNNs assume locality and translation equivariance, RNNs assume
+  sequential order, and transformers assume very little.
+- A convolution slides a small shared kernel over the input. Output size is $\lfloor(n+2p-k)/s\rfloor+1$.
+- RNNs carry a hidden state through time. LSTMs and GRUs add gates to fight vanishing gradients.
+- Embeddings map discrete ids to dense learned vectors in which similarity reflects meaning.
+- Attention computes a weighted average of values with weights from query–key similarity. Transformers
+  stack it with residuals, normalisation and feed-forward layers.
+
+```quiz
+[
+  {"q": "What are the two key ideas of a convolutional layer?", "options": ["Local connectivity and weight sharing", "Recurrence and gating", "Full connectivity and dropout", "Sorting and pooling"], "answer": 0,
+   "explain": "Each output sees a small patch, and the same kernel is reused at every position."},
+  {"q": "A 3×3 convolution with stride 1 and padding 1 is applied to a 32×32 input. The output size is…", "options": ["32×32", "30×30", "34×34", "16×16"], "answer": 0,
+   "explain": "(32 + 2·1 − 3)/1 + 1 = 32: padding 1 preserves the size for a 3×3 kernel."},
+  {"q": "How many parameters does a conv layer with 16 filters of size 3×3 on a 3-channel input have (with biases)?", "options": ["448", "144", "432", "27"], "answer": 0,
+   "explain": "(3·3·3 + 1) · 16 = 28 · 16 = 448."},
+  {"q": "Why do plain RNNs struggle with long sequences?", "options": ["Gradients vanish or explode when backpropagated through many time steps", "They have too many parameters per step", "They cannot handle variable lengths", "They ignore word order"], "answer": 0,
+   "explain": "The gradient is multiplied by the recurrent weights and activation derivatives at every step."},
+  {"q": "An embedding layer is equivalent to…", "options": ["a linear layer applied to one-hot vectors, implemented as a table lookup", "a convolution with kernel size 1", "a softmax over the vocabulary", "a fixed random projection that is never trained"], "answer": 0,
+   "explain": "Multiplying a one-hot vector by the embedding matrix selects one row."},
+  {"q": "In scaled dot-product attention, why divide the scores by sqrt(d_k)?", "options": ["To keep the scores from growing with dimension and saturating the softmax", "To make the weights sum to one", "To apply the causal mask", "To normalise the values V"], "answer": 0,
+   "explain": "Dot products of d_k-dimensional vectors have variance proportional to d_k; large scores give near one-hot softmax outputs with tiny gradients."},
+  {"q": "Why do transformers need positional encodings?", "options": ["Self-attention is otherwise insensitive to the order of the tokens", "To reduce the O(n²) cost", "To replace the embeddings", "To implement dropout"], "answer": 0,
+   "explain": "Attention treats its input as a set; position information must be added explicitly."},
+  {"q": "Which model family uses a causal mask and is trained to predict the next token?", "options": ["Decoder-only transformers such as GPT", "Encoder-only transformers such as BERT", "Convolutional networks", "k-means"], "answer": 0,
+   "explain": "The causal mask prevents each position from attending to later positions."}
+]
+```
+
+> **Source:** Müller & Guido, *Introduction to Machine Learning with Python*, ch. 2 ("Neural Networks (Deep Learning)"), ch. 7 ("Summary and Outlook": word embeddings, recurrent neural networks) and ch. 8 ("Neural Networks"); Goodfellow, Bengio & Courville, *Deep Learning*, ch. 9–10; Vaswani et al., "Attention Is All You Need"; Chip Huyen, *AI Engineering*, ch. 2 (model architecture); Hugging Face `transformers` documentation.

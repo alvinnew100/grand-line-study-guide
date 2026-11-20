@@ -213,6 +213,105 @@ Putting it all together for `GET /items/42?verbose=true`:
    middleware and Uvicorn to the socket.
 8. Background tasks and the exit code of `yield` dependencies run after the response is sent.
 
+## Middleware is just ASGI wrapping ASGI
+
+Because an ASGI app is "a callable taking `scope, receive, send`", a **middleware** is simply an app that
+holds another app and calls it — optionally replacing `send` or `receive` with wrappers to observe or
+change the messages. This is how every built-in middleware (CORS, GZip, sessions) is written, and seeing
+one removes the remaining mystery:
+
+```python-run
+import time
+
+async def hello_app(scope, receive, send):
+    await send({"type": "http.response.start", "status": 200,
+                "headers": [(b"content-type", b"text/plain")]})
+    await send({"type": "http.response.body", "body": b"hello"})
+
+class TimingMiddleware:
+    """Pure ASGI middleware: adds a header by intercepting the response.start message."""
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":                 # pass websockets / lifespan through untouched
+            return await self.app(scope, receive, send)
+        start = time.perf_counter()
+
+        async def send_wrapper(message):
+            if message["type"] == "http.response.start":
+                elapsed = f"{(time.perf_counter() - start) * 1000:.2f}ms".encode()
+                message = {**message, "headers": [*message["headers"], (b"x-process-time", elapsed)]}
+            await send(message)                     # forward (possibly modified) message outward
+
+        await self.app(scope, receive, send_wrapper)
+
+class RejectLargeBodies:
+    """Short-circuits: answers by itself without ever calling the inner app."""
+    def __init__(self, app, limit):
+        self.app, self.limit = app, limit
+
+    async def __call__(self, scope, receive, send):
+        length = int(dict(scope["headers"]).get(b"content-length", b"0"))
+        if length > self.limit:
+            await send({"type": "http.response.start", "status": 413, "headers": []})
+            await send({"type": "http.response.body", "body": b"Payload Too Large"})
+            return
+        await self.app(scope, receive, send)
+
+app = RejectLargeBodies(TimingMiddleware(hello_app), limit=1000)     # outermost first
+
+async def call(headers):
+    sent = []
+    async def receive(): return {"type": "http.request", "body": b"", "more_body": False}
+    async def send(m): sent.append(m)
+    await app({"type": "http", "method": "POST", "path": "/", "headers": headers}, receive, send)
+    start = sent[0]
+    print(start["status"], [k.decode() for k, _ in start["headers"]], sent[1]["body"])
+
+await call([(b"content-length", b"10")])
+await call([(b"content-length", b"999999")])
+```
+
+Two patterns appear: **wrapping `send`** to alter the response on its way out, and **short-circuiting**
+by responding without calling the inner app. Note that the timing header is missing on the 413 — the
+rejecting middleware is *outside* the timing one, so the latter never ran. Order is everything, a point
+the middleware lesson returns to.
+
+## Lifespan at the protocol level
+
+The third scope type explains FastAPI's `lifespan=` parameter. Before serving, the server calls the app
+once with `scope["type"] == "lifespan"` and exchanges four messages:
+
+```text
+server -> app : {"type": "lifespan.startup"}
+app -> server : {"type": "lifespan.startup.complete"}     (or lifespan.startup.failed)
+                ... the server now accepts connections ...
+server -> app : {"type": "lifespan.shutdown"}             (on SIGTERM / Ctrl-C)
+app -> server : {"type": "lifespan.shutdown.complete"}
+```
+
+FastAPI maps "before `yield`" in your lifespan context manager to the startup half and "after `yield`" to
+the shutdown half. Two practical consequences: if startup raises, Uvicorn logs the failure and exits
+instead of serving a half-initialised app; and with several workers the lifespan runs **once in each
+worker process**, not once overall.
+
+## Debugging at the boundary
+
+When behaviour is confusing, find out which layer is responsible:
+
+| Observation | Layer to suspect | How to check |
+|---|---|---|
+| Connection refused / reset | Uvicorn not listening where you think (host, port, container binding) | `curl -v http://127.0.0.1:8000/` from the same host or container |
+| 404 for a path you declared | Starlette routing (prefix, trailing slash, route order) | print `[r.path for r in app.routes]` |
+| 422 before your code runs | FastAPI/Pydantic validation | read `detail[].loc` in the response |
+| 500 with a traceback in logs | your endpoint or dependency | the traceback |
+| 502/504 from the proxy | app crashed, hung or exceeded proxy timeouts | app logs, proxy logs, blocked event loop |
+| Works with `curl`, fails in browser | CORS (a browser-only rule) | browser dev-tools network tab, the `OPTIONS` request |
+
+`curl -v` (or `httpx` in a REPL) showing raw request and response lines is the fastest way to see what
+actually crossed the wire, bypassing every assumption made by a browser or client library.
+
 ## Pitfalls
 
 - Running a FastAPI app with a WSGI server like plain Gunicorn sync workers — it won't work; you need an

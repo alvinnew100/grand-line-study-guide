@@ -265,6 +265,69 @@ print(area.__doc__)
 print(area.__annotations__)
 ```
 
+## Under the hood: what a function object carries
+
+`def` builds a **function object** from a compiled **code object**. Nearly everything discussed in this lesson is visible as an attribute, which is handy when debugging a signature problem:
+
+```python-run
+import inspect
+
+def order(item, qty=1, *extras, gift=False, note=None, **meta):
+    """Place an order."""
+    return item, qty, extras, gift, note, meta
+
+print(order.__name__, "|", order.__doc__)
+print("positional defaults:", order.__defaults__)        # for qty
+print("keyword-only defaults:", order.__kwdefaults__)    # for gift, note
+print("local variable names:", order.__code__.co_varnames)
+sig = inspect.signature(order)
+for name, p in sig.parameters.items():
+    print(f"  {name:<7} {p.kind.name:<22} default={p.default if p.default is not p.empty else '-'}")
+
+bound = sig.bind("cola", 3, "straw", "ice", gift=True, colour="red")
+bound.apply_defaults()
+print(dict(bound.arguments))
+```
+
+`inspect.signature(f).bind(...)` performs exactly the binding algorithm the interpreter uses, without calling the function — frameworks (FastAPI, pytest, click) rely on it to decide what to pass to your functions. Each *call* then creates a fresh **frame** holding that call's local variables; that is why two simultaneous calls (or recursive calls) never trample each other's locals, while the *defaults* — stored on the single function object — are shared.
+
+## Debugging argument errors
+
+`TypeError` messages from calls are precise once you know the vocabulary. Run this and match each message to its cause:
+
+```python-run
+def move(x, y, *, speed=1):
+    return x, y, speed
+
+calls = {
+    "too few":            lambda: move(1),
+    "too many positional": lambda: move(1, 2, 3),
+    "unknown keyword":    lambda: move(1, 2, velocity=3),
+    "given twice":        lambda: move(1, x=5, y=2),
+    "unpacked wrong size": lambda: move(*[1, 2, 3]),
+    "dict with bad key":  lambda: move(**{"x": 1, "y": 2, "z": 3}),
+}
+for label, call in calls.items():
+    try:
+        call()
+    except TypeError as e:
+        print(f"{label:<20} -> {e}")
+```
+
+Three situations account for most real-world confusion:
+
+1. **"takes 2 positional arguments but 3 were given"** on a *method* call that visibly passes two: the instance was passed as `self` — you forgot `self` in the method definition, or called an instance method on the class.
+2. **"got multiple values for argument"**: a positional argument already filled the parameter you also passed by keyword — common after reordering parameters, which is one more reason to make options keyword-only.
+3. **A function "returns None"**: a branch falls off the end without `return`, or you printed instead of returning. `print(result)` inside the function is not a return value.
+
+## Design guidelines for signatures
+
+- Put required, obvious parameters first; make everything optional or boolean **keyword-only** (`*,`), so call sites read as `resize(img, width=200, keep_ratio=True)`.
+- Prefer returning new values to mutating arguments; if you do mutate, say so in the name or docstring and return `None`, as `list.sort` does.
+- Accept the most general input that works (any iterable rather than specifically a list) and return a concrete, predictable type.
+- More than four or five parameters usually signals a missing object: group related values in a dataclass.
+- Avoid boolean "mode switches" that make one function do two jobs; two well-named functions are clearer.
+
 ## Pitfalls recap
 
 - **Mutable defaults** are shared across calls; use `None`.

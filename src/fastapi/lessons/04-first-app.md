@@ -319,6 +319,80 @@ thread pool. Rule of thumb (covered in depth in the async module): use `async de
 call inside is awaitable (async DB driver, `httpx.AsyncClient`); use `def` when you call blocking
 libraries (classic `requests`, most ML `model.predict` calls, synchronous DB drivers).
 
+## Tracing one request step by step
+
+Take this endpoint:
+
+```python
+@app.get("/users/{user_id}/items")
+def list_user_items(
+    user_id: Annotated[int, Path(ge=1)],
+    status: Literal["open", "closed"] = "open",
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    tag: Annotated[list[str], Query()] = [],
+):
+    ...
+```
+
+and the request `GET /users/7/items?limit=5&tag=red&tag=blue&debug=1`:
+
+1. **Routing.** Starlette tries routes in declaration order. The template compiles to a regular
+   expression roughly like `^/users/(?P<user_id>[^/]+)/items$`; it matches, capturing `user_id="7"` — a
+   string at this point.
+2. **Path parameters.** FastAPI validates `"7"` against `int` with `ge=1` → `7`.
+3. **Query parameters.** The query string parses to a multi-dict
+   `{"limit": ["5"], "tag": ["red", "blue"], "debug": ["1"]}`.
+   - `status` is absent → default `"open"`.
+   - `limit`: `"5"` → `5`, within `1..100`.
+   - `tag`: declared as a list → all occurrences → `["red", "blue"]`.
+   - `debug` is not declared → **silently ignored** (unless you use a query-parameter model with
+     `extra="forbid"`).
+4. **Call.** `list_user_items(user_id=7, status="open", limit=5, tag=["red", "blue"])`.
+5. **Response.** The return value is serialised to JSON with status 200.
+
+Now the failing variant `GET /users/0/items?limit=500&status=archived`. Validation does **not** stop at
+the first problem — all three are reported together, so a client can fix everything in one round trip:
+
+```json
+{"detail": [
+  {"type": "greater_than_equal", "loc": ["path", "user_id"], "msg": "Input should be greater than or equal to 1", "input": "0", "ctx": {"ge": 1}},
+  {"type": "literal_error", "loc": ["query", "status"], "msg": "Input should be 'open' or 'closed'", "input": "archived", "ctx": {"expected": "'open' or 'closed'"}},
+  {"type": "less_than_equal", "loc": ["query", "limit"], "msg": "Input should be less than or equal to 100", "input": "500", "ctx": {"le": 100}}
+]}
+```
+
+Reading a 422: `loc[0]` says which part of the request (`path`, `query`, `header`, `cookie`, `body`),
+the rest of `loc` is the field path, `type` is a stable code, `input` echoes what was received, and `ctx`
+carries the constraint that failed.
+
+## Debugging the classics
+
+| What you see | Cause | Fix |
+|---|---|---|
+| `422` with `"loc": ["query", "item"], "type": "missing"` on a POST with a JSON body | parameter annotated with a plain type or `dict`, so FastAPI looks in the query | annotate with a Pydantic model or `Body()` |
+| `422` with `"loc": ["body"], "type": "missing"` on a GET | a list/model parameter without `Query()` is treated as a body | add `Query()` |
+| `/users/me` returns a 422 about `user_id` | the parameterised route was declared first | declare fixed paths before `{param}` paths |
+| `307 Temporary Redirect` then failure in a client | trailing-slash mismatch (`/items` vs `/items/`) | call the declared form, or declare both / set `redirect_slashes=False` |
+| `405 Method Not Allowed` | the path exists, but not for this method | check the decorator (`@app.post` vs `@app.get`) |
+| `404` although the function exists | router never included, or prefix differs | inspect `app.routes` |
+| Parameter is always the default | name mismatch between URL and function (`item-id` vs `item_id`) | rename, or use `alias="item-id"` |
+
+A quick way to see exactly what FastAPI registered:
+
+```python
+for route in app.routes:
+    print(getattr(route, "methods", None), route.path, route.name)
+```
+
+## Path or query? A decision guide
+
+- Is the value part of the resource's **identity**, and is the request meaningless without it? → path
+  (`/users/7`).
+- Is it **optional**, a filter, a sort order, a page, a flag? → query (`?status=open&limit=20`).
+- Can there be **several** values? → repeated query keys (`?tag=a&tag=b`).
+- Is it **hierarchical** (belongs-to)? → nested path, one level (`/users/7/items`).
+- Is it large, structured or sensitive? → not in the URL at all; use the body or a header.
+
 ## Pitfalls
 
 - Declaring `/users/{user_id}` before `/users/me`.

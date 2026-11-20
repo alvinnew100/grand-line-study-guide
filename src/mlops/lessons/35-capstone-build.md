@@ -201,6 +201,7 @@ def main() -> None:
                                  signature=infer_signature(test_df[RAW_INPUTS], proba),
                                  input_example=test_df[RAW_INPUTS].head(3),
                                  pyfunc_predict_fn="predict_proba")
+        open(".last_run_id", "w").write(run.info.run_id)               # handed to promote.py in CI
         print(f"run_id={run.info.run_id} pr_auc={metrics['pr_auc']:.4f}")
 
 if __name__ == "__main__":

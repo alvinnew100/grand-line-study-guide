@@ -249,6 +249,94 @@ The private `_EMPTY = object()` sentinel is a pattern worth stealing: it lets `N
 > [!INTERVIEW]
 > "What's the difference between an iterable and an iterator?" — An iterable has `__iter__` returning a new iterator; an iterator has `__next__` (raising `StopIteration` at the end) and an `__iter__` that returns itself. Containers are iterables; iterators are single-pass cursors. Then show `m = map(...); list(m); list(m)` to demonstrate exhaustion.
 
+## Under the hood: what the built-in iterators store
+
+An iterator is a small object holding a reference to its source plus a cursor. For a list, the cursor is just an index — which explains precisely what goes wrong when you mutate a list during iteration:
+
+```python-run
+nums = [10, 20, 30, 40]
+it = iter(nums)
+print(next(it), next(it))            # cursor is now at index 2
+nums.insert(0, 5)                    # everything shifts right by one
+print(next(it))                      # index 2 now holds 20 again: an item is repeated
+nums.clear()
+print(list(it))                      # index is past the end: iteration just stops
+
+it = iter([1, 2, 3])
+print(it.__length_hint__())          # iterators may offer a size *hint* (used by list() to pre-allocate)
+```
+
+Removing an element while looping has the mirror effect: the items shift left, the index still advances, and one element is **skipped** — silently. Dicts and sets, whose internal layout can be rebuilt on insertion, detect the situation instead and raise `RuntimeError: ... changed size during iteration`.
+
+`for` compiles to two bytecode instructions around your loop body — `GET_ITER` (call `iter()`) and `FOR_ITER` (call `next()` and jump out on `StopIteration`):
+
+```python-run
+import dis
+def total(xs):
+    t = 0
+    for x in xs:
+        t += x
+    return t
+print([i.opname for i in dis.get_instructions(total) if "ITER" in i.opname])
+```
+
+Because the `StopIteration` is consumed inside the interpreter's loop, exhausting an iterator in a `for` loop is cheap; you only see the exception when you call `next()` yourself.
+
+## Sharing one iterator on purpose
+
+Since `iter(iterator)` returns the same object, several consumers can pull from one stream. This is a feature you can exploit:
+
+```python-run
+from itertools import islice
+
+lines = iter(["# header", "# units: m", "1.5", "2.5", "3.0"])
+
+header = []
+for line in lines:                   # consume the comment block...
+    if not line.startswith("#"):
+        first_value = line
+        break
+    header.append(line)
+rest = [float(x) for x in lines]     # ...and continue where the first loop stopped
+print(header, first_value, rest)
+
+it = iter(range(10))
+pairs = list(zip(it, it))            # the same iterator twice: consecutive pairs
+print(pairs)
+
+it = iter("abcdefg")
+print([a + b + c for a, b, c in zip(it, it, it)], list(it))   # leftover 'g' was consumed by zip!
+```
+
+The last line shows a subtle cost: `zip` pulled `g` from the first argument before discovering that the second was exhausted, so `g` is lost. When leftovers matter, use `itertools.zip_longest` or `islice`.
+
+## Iterable, iterator, sequence, generator: a comparison
+
+| | `__iter__` | `__next__` | `len()` / indexing | re-iterable | lazy |
+|---|---|---|---|---|---|
+| **Sequence** (`list`, `tuple`, `str`, `range`) | new iterator | no | yes | yes | no (`range`: yes) |
+| **Other containers** (`dict`, `set`) | new iterator | no | `len` only | yes | no |
+| **Iterator** (`map`, `zip`, `enumerate`, file) | returns self | yes | no | **no** | yes |
+| **Generator** (next lesson) | returns self | yes | no | **no** | yes |
+
+`collections.abc` lets you test for these roles structurally:
+
+```python-run
+from collections.abc import Iterable, Iterator, Sequence, Sized
+for obj in ([1, 2], (x for x in [1]), map(str, [1]), range(3), {1: 2}, "text", 42):
+    print(f"{type(obj).__name__:<10} iterable={isinstance(obj, Iterable)!s:<5} "
+          f"iterator={isinstance(obj, Iterator)!s:<5} sized={isinstance(obj, Sized)!s:<5} "
+          f"sequence={isinstance(obj, Sequence)}")
+```
+
+## Debugging iterator problems
+
+- **A loop body never runs, or a result is unexpectedly empty**: something upstream already consumed the iterator (a debugging `print(list(it))` is a classic way to *cause* this). Materialise once — `items = list(it)` — and use the list for both.
+- **`TypeError: 'X' object is not iterable`**: the value isn't what you think (often `None` or an `int`); print its type. **`'list' object is not an iterator`**: you called `next()` on a list — wrap it with `iter()` first.
+- **`TypeError: object of type 'generator' has no len()`** or "not subscriptable": convert with `list()`, or use `itertools.islice` to take a slice lazily.
+- **Infinite loop in your own iterator class**: `__next__` never raises `StopIteration`.
+- **Nested loops over your own container misbehave**: its `__iter__` returns `self`, so both loops share one cursor.
+
 ## Pitfalls recap
 
 - Reusing an exhausted iterator (map/zip/filter/generators/files).

@@ -118,6 +118,63 @@ Longer prompts cost more money (input tokens), more latency (prefill time) and p
 > [!INTERVIEW]
 > **"Our model has a 128K context window. Why not just put the whole knowledge base in the prompt instead of building RAG?"** Effective context is shorter than advertised (lost in the middle, RULER). Cost and latency grow with input tokens on every call. Most knowledge bases are larger than any context window and keep changing. Irrelevant context can distract the model and increase hallucination. Long context and RAG are complementary: use retrieval to choose what goes in, and long context to fit more of what matters. Validate with NIAH-style tests on your own data.
 
+## 5. Few-shot prompting: what goes wrong and how to fix it
+
+Few-shot examples are powerful because the model imitates them closely. That is also how they cause trouble. The patterns below are well documented in the prompting literature and are worth testing for whenever you add examples.
+
+| Failure | What it looks like | Mitigation |
+|---|---|---|
+| **Majority label bias** | Four of five examples are POSITIVE, and the model over-predicts POSITIVE | Balance the labels across examples |
+| **Recency bias** | The model favours the label of the last example | Shuffle example order, or test several orders and keep the most stable |
+| **Surface copying** | Every example answer is one sentence, so the model never writes two, even when needed | Vary length and format across examples in the ways you want the output to vary |
+| **Unrepresentative examples** | Examples are clean and short, but real inputs are long and messy | Draw examples from production data, including typos and edge cases |
+| **Format drift** | The examples use `Label:` and the final line uses `Answer:` | Build the prompt from one template so every shot has an identical structure |
+| **Leaking the answer** | An example is nearly identical to the test input | Deduplicate examples against your evaluation set |
+
+Example order and balance are cheap to test, because you only change the prompt. The demo below uses a stub model that copies the most recent label when it is unsure, to show how you would measure order sensitivity.
+
+```python-run
+import itertools
+examples = [("great battery", "POSITIVE"), ("screen cracked on day one", "NEGATIVE"),
+            ("fast delivery", "POSITIVE"), ("stopped charging", "NEGATIVE")]
+tests = [("love it", "POSITIVE"), ("broke quickly", "NEGATIVE"), ("works fine", "POSITIVE"), ("terrible support", "NEGATIVE"),
+         ("okay I guess", "POSITIVE"), ("does the job", "POSITIVE")]
+def stub_model(shots, text):
+    clear = {"love it": "POSITIVE", "broke quickly": "NEGATIVE", "works fine": "POSITIVE", "terrible support": "NEGATIVE"}
+    return clear.get(text, shots[-1][1])          # on ambiguous inputs it copies the label of the LAST example
+accs = [sum(stub_model(order, t) == y for t, y in tests) / len(tests) for order in itertools.permutations(examples)]
+print(f"accuracy over {len(accs)} example orders: min {min(accs):.2f}  max {max(accs):.2f}  mean {sum(accs)/len(accs):.2f}")
+print("Report the mean and the spread. A large spread means the prompt (or model) is order-sensitive.")
+```
+
+### How many examples?
+
+There is no fixed number. Start at zero-shot, add examples for the cases the model gets wrong, and stop when the evaluation score stops improving. Each example has a recurring cost, because it is sent with every request. If you find yourself needing dozens of examples to hold a format or style, the behaviour may be better taught by finetuning (Module 7), where the examples are paid for once.
+
+## 6. Budgeting the context window
+
+A context window is shared by everything in the request: the system prompt, examples, retrieved documents, conversation history, the user's message, and the **output**, which must also fit. Running out is a common production failure. The request is rejected, or the history is silently truncated and the model "forgets" its instructions.
+
+```python-run
+def slack(limit, system, examples, history, retrieved, user, max_output):
+    return limit - (system + examples + history + retrieved + user) - max_output
+limit = 8000
+parts = dict(system=900, examples=1200, history=1000, retrieved=2400, user=300, max_output=800)
+print(f"turn 0: slack {slack(limit, **parts)} tokens")
+for turn in range(1, 6):                          # each turn adds about 450 tokens of history
+    parts["history"] += 450
+    s = slack(limit, **parts)
+    print(f"turn {turn}: slack {s:5d}" + ("   <- over budget: summarize or drop old history" if s < 0 else ""))
+```
+
+Practical rules that follow from this:
+
+- **Reserve the output budget first.** A response cut off at the token limit often breaks structured output.
+- **Give each part a cap.** Decide how many tokens retrieval and history may use, and enforce it in code.
+- **Trim the least valuable content first.** Old conversation turns can be summarized (Module 6 covers memory strategies). The system prompt and the current question should never be the part that gets cut.
+- **Count tokens with the target model's tokenizer.** Word counts are off by a quarter or more, and by far more for code and non-English text.
+- **Remember the cost.** Everything in the window is paid for on every call. A 2,000-token block of examples at one million calls a day is two billion input tokens.
+
 ## Pitfalls
 
 - Hand-editing few-shot examples inside a giant string instead of keeping them as data.

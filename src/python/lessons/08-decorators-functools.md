@@ -350,6 +350,121 @@ This is a toy version of what Pydantic's `validate_call` and FastAPI's request p
 > [!INTERVIEW]
 > "Write a decorator that caches results / times a function / retries on failure" is a standard live-coding question. Hit these points: (1) the wrapper takes `*args, **kwargs`; (2) use `@functools.wraps`; (3) for parameters, add the outer factory layer; (4) return the result of the wrapped call; (5) mention `lru_cache` for memoisation and that its arguments must be hashable.
 
+## Decorators you already use
+
+Several built-ins are decorators, and seeing them as ordinary callables removes the mystery:
+
+| Decorator | What it returns |
+|---|---|
+| `@staticmethod`, `@classmethod` | descriptor objects that change how the function is bound |
+| `@property` | a descriptor that runs the function on attribute access |
+| `@dataclass` | the *same class*, with generated methods added |
+| `@functools.lru_cache` | a caching wrapper with `cache_info()` |
+| `@contextlib.contextmanager` | a factory of context managers built from a generator |
+| `@app.get("/items")` (FastAPI/Flask) | usually the original function, after **registering** it in a routing table |
+| `@pytest.fixture`, `@pytest.mark.parametrize` | the function tagged with metadata for the framework |
+
+Note the last two rows: a decorator need not wrap at all. *Registration* decorators record the function somewhere and return it unchanged — that's how web frameworks build their route tables at import time.
+
+```python-run
+ROUTES = {}
+
+def route(path, method="GET"):
+    def register(func):
+        ROUTES[(method, path)] = func
+        return func                      # unchanged: no wrapper, no overhead
+    return register
+
+@route("/")
+def home():
+    return "welcome"
+
+@route("/items", method="POST")
+def create_item():
+    return "created"
+
+def dispatch(method, path):
+    handler = ROUTES.get((method, path))
+    return handler() if handler else "404"
+
+print(dispatch("GET", "/"), dispatch("POST", "/items"), dispatch("GET", "/nope"), home.__name__)
+```
+
+## Decorating methods and coroutines
+
+A function-based decorator works on methods as is: `self` simply arrives as the first element of `*args`. Two special cases need care.
+
+**Order with other decorators.** `@property`, `@classmethod` and `@staticmethod` produce descriptors, not plain functions, so your decorator must sit *below* them (applied first, to the raw function):
+
+```python
+class Report:
+    @property          # outermost: turns the wrapped function into a property
+    @timed             # innermost: wraps the plain function
+    def total(self): ...
+```
+
+**Async functions.** A synchronous wrapper around a coroutine function returns the coroutine object immediately — so a timing decorator would measure microseconds, and a retry decorator would never see the exception. The wrapper itself must be `async` and `await` the call:
+
+```python-run
+import asyncio, functools, inspect, time
+
+def timed(func):
+    if inspect.iscoroutinefunction(func):
+        @functools.wraps(func)
+        async def async_wrapper(*args, **kwargs):
+            start = time.perf_counter()
+            try:
+                return await func(*args, **kwargs)       # await INSIDE the timing
+            finally:
+                async_wrapper.last = time.perf_counter() - start
+        return async_wrapper
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        start = time.perf_counter()
+        try:
+            return func(*args, **kwargs)
+        finally:
+            wrapper.last = time.perf_counter() - start
+    return wrapper
+
+@timed
+async def fetch():
+    await asyncio.sleep(0.05)
+    return "data"
+
+@timed
+def compute():
+    return sum(range(100_000))
+
+print(asyncio.run(fetch()), f"{fetch.last:.2f}s", compute() > 0, compute.last < 0.5)
+```
+
+## Debugging decorated code
+
+- **"NoneType is not callable"** at the call site: your decorator (or factory layer) forgot to `return wrapper` / `return decorator`.
+- **Every call returns `None`**: the wrapper forgot `return func(...)`.
+- **Tracebacks full of `wrapper`**: add `functools.wraps`; then names and docstrings are right, and `func.__wrapped__` gives you the original for testing or for bypassing a cache.
+- **Stale results from `lru_cache`**: the function isn't pure (it reads a file, the clock, a global). Call `func.cache_clear()`, or don't cache it. Mutating a cached *return value* (a list or dict) corrupts the cache for every later caller — return tuples or copies.
+- **Unit-testing the undecorated logic**: call `decorated.__wrapped__(...)`.
+
+```python-run
+from functools import lru_cache
+
+@lru_cache(maxsize=None)
+def defaults():
+    return ["a", "b"]            # a mutable object is cached and shared
+
+first = defaults()
+first.append("OOPS")
+print(defaults())                # every caller now sees the mutation
+print(defaults.__wrapped__())    # the original function, bypassing the cache
+```
+
+## When not to write a decorator
+
+Decorators hide control flow: a reader of `@cached @retried @logged def f()` cannot see what happens on a call without reading three other functions. Use them for genuinely **cross-cutting** concerns (logging, timing, caching, authorisation, registration, retries) applied uniformly to many functions. For behaviour specific to one function, call a helper explicitly inside it; for setup/teardown around a *block* of code rather than a whole function, a context manager is the better fit — and `contextlib.ContextDecorator` lets one object serve as both.
+
 ## Pitfalls recap
 
 - Forgetting to `return func(*args, **kwargs)` in the wrapper — every call returns `None`.

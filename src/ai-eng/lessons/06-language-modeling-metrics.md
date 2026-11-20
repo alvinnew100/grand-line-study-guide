@@ -119,6 +119,64 @@ print("B with 0.1 -> 0.01:", round(ppl([0.6, 0.6, 0.01, 0.8]), 4))
 > [!INTERVIEW]
 > **"What's the relationship between cross-entropy loss and perplexity, and what's a perplexity of 1?"** Perplexity is exp(cross entropy) in nats, or 2^(cross entropy) in bits. A perplexity of 1 means the model assigns probability 1 to every correct token, so it predicts perfectly (cross entropy 0). A uniform model over V tokens has perplexity V. Follow-up: perplexity is only comparable across models with the same tokenizer and evaluation context. Otherwise use bits-per-byte.
 
+## 6. Worked example: entropy, cross entropy and KL by hand
+
+Suppose a tiny language has three tokens with true probabilities $P = (0.5, 0.25, 0.25)$.
+
+- **Entropy**: $H(P) = 0.5\cdot1 + 0.25\cdot2 + 0.25\cdot2 = 1.5$ bits. An ideal code spends 1 bit on the common token and 2 bits on each rare one.
+- A model predicts $Q = (0.25, 0.25, 0.5)$. It has the right shape but puts the mass on the wrong token. **Cross entropy**: $H(P,Q) = 0.5\cdot2 + 0.25\cdot2 + 0.25\cdot1 = 1.75$ bits.
+- **KL divergence**: $1.75 - 1.5 = 0.25$ bits. That is the price of the model's mistake, on top of the 1.5 bits nobody can avoid.
+- **Perplexity**: the data's own perplexity is $2^{1.5} \approx 2.83$, and the model's is $2^{1.75} \approx 3.36$.
+
+Two things follow. A model's cross entropy can never be lower than the data's entropy, so a dataset has a floor that no model beats. And two models should be compared by the gap to that floor (the KL term), which is why absolute perplexity values mean little across datasets.
+
+```python-run
+import numpy as np
+P = np.array([0.5, 0.25, 0.25])
+def H(p): return float(-(p * np.log2(p)).sum())
+def CE(p, q): return float(-(p * np.log2(q)).sum())
+for name, Q in [("perfect model", P), ("wrong mass", np.array([0.25, 0.25, 0.5])),
+                ("uniform guess", np.ones(3) / 3), ("overconfident", np.array([0.98, 0.01, 0.01]))]:
+    ce = CE(P, Q)
+    print(f"{name:14s} cross entropy {ce:.3f} bits  KL {ce - H(P):.3f}  perplexity {2**ce:.3f}")
+```
+
+The overconfident model is the worst of the four. It is right about the most likely token, but it assigns 1% to tokens that occur 25% of the time, and cross entropy punishes confident mistakes heavily. This is the same reason one badly predicted token dominated the comparison in section 5.
+
+## 7. Computing perplexity in practice
+
+Turning the formula into a number you can trust takes some care.
+
+1. **Tokenize with the model's own tokenizer.** Perplexity is per token, and tokens are model-specific.
+2. **Get a logprob for every token, conditioned on the tokens before it.** With a hosted model you need an API that returns logprobs for the *given* text, not only for text it generates. Many chat APIs do not offer this.
+3. **Decide what the first token is conditioned on.** With a beginning-of-sequence token, the first real token gets a proper prediction. Without one, the first token is usually skipped. Either choice is fine if you apply it to every model you compare.
+4. **Handle texts longer than the context window.** The naive approach cuts the text into independent windows, so the first tokens of each window are predicted with almost no context and perplexity is inflated. A **sliding window with a stride** evaluates each token with a long left context and gives lower, more honest numbers. A smaller stride is more accurate and costs more compute.
+5. **Aggregate over tokens, not over documents.** Sum all negative logprobs, divide by the total token count, then exponentiate. Averaging per-document perplexities over-weights short documents. You will implement this in the `aie-perplexity` problem.
+
+```python-run
+import numpy as np
+rng = np.random.default_rng(0)
+# Toy model: a token is easier to predict the more left context it has (up to 50 tokens).
+def token_nll(context_len): return 3.0 - 2.0 * min(context_len, 50) / 50 + 0.05 * rng.normal()
+T, window, stride = 400, 100, 50
+chunked = [token_nll(i % window) for i in range(T)]                      # independent windows
+sliding = [token_nll(i if i < window else window - stride + (i - window) % stride) for i in range(T)]
+print(f"independent windows : perplexity {np.exp(np.mean(chunked)):.2f}")
+print(f"sliding, stride {stride}  : perplexity {np.exp(np.mean(sliding)):.2f}  (same model, same text)")
+```
+
+The same model on the same text gets two different perplexities. When someone reports a perplexity, the evaluation setup is part of the number.
+
+### What can go wrong
+
+| Symptom | Likely cause | What to do |
+|---|---|---|
+| Model A beats model B on perplexity but is worse in use | Different tokenizers, or B is post-trained | Compare bits-per-byte, and evaluate the task itself |
+| Perplexity rises after quantization | Precision loss changed the logits | Check task metrics before rejecting the quantized model |
+| Perplexity is suspiciously low on a benchmark | The benchmark was in the training data | Treat the benchmark score as contaminated |
+| Perplexity is `inf` | Some token got probability 0 | Check for a tokenizer mismatch or a truncated vocabulary |
+| Numbers differ between two runs of the "same" evaluation | Different context length, stride or BOS handling | Fix and record the setup |
+
 ## Pitfalls
 
 - Comparing perplexities across tokenizers or context lengths.

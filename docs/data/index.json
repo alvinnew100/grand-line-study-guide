@@ -8,7 +8,7 @@
   "sources": [
    "Chip Huyen, AI Engineering: Building Applications with Foundation Models (O'Reilly, 2025), ch. 1-10"
   ],
-  "words": 66890,
+  "words": 69301,
   "modules": 10,
   "lessons": 27,
   "problems": 24
@@ -25,7 +25,7 @@
   "words": 76298,
   "modules": 13,
   "lessons": 34,
-  "problems": 18
+  "problems": 26
  },
  {
   "id": "databases",
@@ -43,7 +43,7 @@
   "words": 73921,
   "modules": 13,
   "lessons": 33,
-  "problems": 5
+  "problems": 12
  },
  {
   "id": "dsa-foundations",
@@ -106,7 +106,7 @@
    "Chip Huyen, AI Engineering (O'Reilly) — background for deep learning and system design",
    "Goodfellow, Bengio & Courville, Deep Learning — background for the maths and optimisers"
   ],
-  "words": 53356,
+  "words": 63012,
   "modules": 10,
   "lessons": 26,
   "problems": 25
@@ -125,7 +125,7 @@
    "Sculley et al., Hidden Technical Debt in Machine Learning Systems (NeurIPS 2015)",
    "Official docs: MLflow, DVC, Docker, Kubernetes, KServe, GitHub Actions, Prometheus, Evidently, Feast, Airflow, Prefect, BentoML, Ray Serve, vLLM, Hugging Face"
   ],
-  "words": 51483,
+  "words": 76762,
   "modules": 13,
   "lessons": 37,
   "problems": 17
@@ -251,9 +251,9 @@
    "SQLite documentation (window functions, WITH clause, EXPLAIN QUERY PLAN)",
    "PostgreSQL and MySQL reference manuals (dialect notes)"
   ],
-  "words": 69278,
+  "words": 79753,
   "modules": 19,
-  "lessons": 34,
+  "lessons": 38,
   "problems": 40
  }
 ]
