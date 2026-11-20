@@ -1,269 +1,386 @@
 # VM concepts and address translation
 
-Processes in a system share the CPU and main memory with other processes. Sharing memory poses special challenges: as demand grows, processes slow down or cannot run at all, and memory is vulnerable to corruption: if one process inadvertently writes to memory used by another, that process may fail in bewildering ways. To manage memory more efficiently and with fewer errors, modern systems provide an abstraction of main memory known as **virtual memory (VM)**: an elegant interaction of hardware exceptions, hardware address translation, main memory, disk files and kernel software that provides each process with a large, uniform and private address space.
+> **Before this lesson:** You need hexadecimal and splitting a number into bit fields from [Bits, bytes, words and bit-level operations](#/lesson/csapp/bits-bytes), cache organisation (sets, tags, hits and misses) from [Cache memories](#/lesson/csapp/caches), and exceptions and faults from [Exceptions and the kernel](#/lesson/csapp/exceptions).
 
-With one clean mechanism, virtual memory provides three capabilities:
+## In plain words
 
-1. It uses main memory efficiently by treating it as a **cache** for an address space stored on disk, keeping only the active areas in main memory and transferring data back and forth as needed.
-2. It simplifies **memory management** by providing each process with a uniform address space.
-3. It **protects** the address space of each process from corruption by other processes.
+Every running program believes it has a huge stretch of memory to itself, with locations numbered from zero upward. That is an illusion, and a useful one. The location numbers a program uses are called **virtual addresses**. The real locations in the memory chips have **physical addresses**. On every memory access, the processor converts the first kind into the second using a lookup table kept by the operating system. Think of a hotel. Guests know their room as "the Garden Suite" and never need to know that it is room 417 this week; the reception desk keeps the list and can move a guest without the guest noticing. Memory is handed out in fixed-size chunks called **pages**, and the lookup table is the **page table**.
 
-Virtual memory works silently and automatically, so why should a programmer understand it? Because it is *central* (it pervades all levels of systems), *powerful* (it lets applications create and destroy chunks of memory, map them to disk files, and share memory with other processes) and *dangerous* (misused pointers produce segmentation faults, protection faults, or silent corruption that appears hours later).
+Why this matters at work: virtual memory is the reason one faulty program cannot damage another, the reason a program can ask for more memory than the machine has, and the cause of slowdowns when memory runs short. Converting an address by hand is a staple exam and interview task, and the ideas reappear in databases, virtual machines and containers.
 
-## 1. Physical and virtual addressing
+## Why look closer
 
-Main memory is an array of $M$ contiguous byte-size cells, each with a unique **physical address (PA)**. The simplest scheme, **physical addressing**, has the CPU place physical addresses directly on the memory bus. Early PCs did this, and digital signal processors, embedded microcontrollers and Cray supercomputers still do.
+Run the same program twice at once and print the address of one of its global variables. Both copies print the *same* number, yet each has its own independent value stored there. Allocate a 30 GB array on a laptop with 16 GB of RAM: the call succeeds. Write through a null pointer: instead of silently damaging something, the program is stopped on the spot. None of these would be possible if the addresses in your program were real locations in the memory chips. They are **virtual addresses**, and a cooperation between the CPU and the operating system translates every one of them, on every access, into a physical location. This lesson explains that machinery from the ground up: what a page table is, exactly how the translation arithmetic works, why a small cache called the TLB makes it fast, and why page tables are built as trees. Expect to do translations by hand; it is a staple of exams and systems interviews.
 
-Modern processors use **virtual addressing**: the CPU accesses main memory by generating a **virtual address (VA)**, which is converted to the appropriate physical address before being sent to main memory. This conversion is **address translation**. Dedicated hardware on the CPU chip, the **memory management unit (MMU)**, translates virtual addresses on the fly, using a lookup table stored in main memory whose contents are managed by the operating system.
+## 1. Two kinds of address
+
+Main memory is an array of bytes, each with a **physical address** (PA). The simplest machines, including many microcontrollers, let the CPU use those addresses directly.
+
+General-purpose systems instead have the CPU generate **virtual addresses** (VA). A hardware unit on the CPU chip, the **memory management unit** (MMU), converts each VA into a PA before the memory is accessed, using lookup tables that the operating system maintains in memory. The conversion is called **address translation**.
 
 ```mermaid
-graph LR
-  CPU -->|"virtual address (e.g. 4100)"| MMU
-  MMU -->|"physical address (e.g. 4)"| MEM[Main memory]
-  MEM -->|data word| CPU
+flowchart LR
+    CPU[CPU core] -- virtual address --> MMU
+    MMU -- physical address --> RAM[Main memory]
+    RAM -- data --> CPU
+    OS[OS-managed page tables] -. consulted by .-> MMU
 ```
 
-## 2. Address spaces
+An **address space** is an ordered set of addresses. With *n*-bit virtual addresses the virtual address space has $N = 2^n$ addresses; with *m* physical address bits, the physical space has $M = 2^m$. The two sizes are independent. The crucial conceptual step is separating a *data object* (some bytes) from its *attributes* (an address). Once those are separate, one object can have several addresses: the same physical byte may appear in many virtual address spaces, at different virtual addresses.
 
-An **address space** is an ordered set of nonnegative integer addresses $\{0, 1, 2, \dots\}$; if the integers are consecutive it is a **linear** address space. A CPU with virtual memory generates virtual addresses from a **virtual address space** of $N = 2^n$ addresses, called an $n$-bit address space (modern systems: 32 or 64 bits). The system also has a **physical address space** of $M$ bytes ($M = 2^m$ for simplicity).
+Virtual memory does three jobs at once, and it is easiest to learn it one job at a time.
 
-The key distinction: *data objects* (bytes) versus their *attributes* (addresses). Each byte of main memory has a virtual address chosen from the virtual address space and a physical address chosen from the physical address space; a data object can have multiple independent addresses.
+## 2. Job one: making RAM a cache for disk
 
-| Symbol | Meaning |
-|---|---|
-| $N = 2^n$ | Number of addresses in the virtual address space |
-| $M = 2^m$ | Number of addresses in the physical address space |
-| $P = 2^p$ | Page size (bytes) |
-| VPO, VPN | Virtual page offset (bytes); virtual page number |
-| TLBI, TLBT | TLB index; TLB tag |
-| PPO, PPN | Physical page offset; physical page number |
-| CO, CI, CT | Byte offset within cache block; cache index; cache tag |
+Think of a process's virtual memory as a big array of bytes stored on disk, with main memory acting as a cache for the portions in active use. As with any cache, the data is managed in fixed-size blocks. Here they are called **pages**: virtual memory is cut into **virtual pages** of $P = 2^p$ bytes, and physical memory into **physical pages**, also called **page frames**, of the same size. On x86-64 Linux the default is 4 KB.
 
-## 3. VM as a tool for caching
+At any moment each virtual page is in one of three states:
 
-Conceptually, a virtual memory is an array of $N$ contiguous bytes **stored on disk**. The contents of this array are cached in main memory. As with any cache, the data on disk (the lower level) is partitioned into fixed-size **blocks**, here called **virtual pages (VPs)**, each of $P = 2^p$ bytes. Physical memory is likewise partitioned into **physical pages (PPs)**, also $P$ bytes (also called **page frames**).
+- **Unallocated**: not yet created; it occupies no space anywhere.
+- **Cached**: allocated and currently held in a physical frame.
+- **Uncached**: allocated but living only on disk.
 
-At any time, the set of virtual pages is partitioned into three disjoint subsets:
+### Why this cache is designed so differently
 
-- **Unallocated**: pages not yet allocated (or created) by the VM system. No data, no space on disk.
-- **Cached**: allocated pages currently cached in physical memory.
-- **Uncached**: allocated pages not cached in physical memory.
+A miss in a hardware cache costs tens of nanoseconds. A miss here means going to disk, which is on the order of 100,000 times slower than RAM. That enormous penalty drives every design decision:
 
-### DRAM cache organization
+- pages are large (4 KB up to 2 MB or more), to amortise the cost of a fetch;
+- placement is **fully associative**: any virtual page may go in any frame, so no page is ever evicted merely because of where it must sit;
+- replacement policies are far more elaborate than hardware could afford, and are implemented in OS software;
+- writes are deferred (write-back): a modified page goes to disk only when it has to.
 
-Call the L1/L2/L3 caches "SRAM caches" and the VM system's cache of virtual pages in main memory the "DRAM cache". Their position in the hierarchy shapes the design: DRAM is at least 10× slower than SRAM, and **disk is about 100,000× slower than DRAM**. Misses in DRAM caches are therefore *enormously* expensive, and the cost of reading the first byte from a disk sector is about 100,000 times higher than reading successive bytes. Consequences:
+### The page table
 
-- **Large pages**: typically 4 KB to 2 MB.
-- **Fully associative**: any virtual page can be placed in any physical page.
-- **Sophisticated replacement algorithms** in the OS, far beyond what hardware does for SRAM caches, because replacing the wrong page is so costly.
-- **Write-back** rather than write-through, because of the large access time of disk.
+With full associativity, there is no index arithmetic that says where a page is; the system needs a directory. That directory is the **page table**: an array of **page table entries** (PTEs), one for every virtual page, stored in main memory and maintained by the kernel. In the basic picture, a PTE has a **valid bit** and an address field:
 
-### Page tables
+| Valid bit | Address field | Meaning |
+|---|---|---|
+| 1 | a physical page number | the page is cached in that frame |
+| 0 | null | the page is unallocated |
+| 0 | a disk location | the page is allocated but not in memory |
 
-The VM system needs a way to determine whether a virtual page is cached in DRAM, which physical page caches it, and, on a miss, where the page lives on disk and which victim to evict. This is provided by a combination of OS software, the MMU, and a data structure in physical memory called the **page table**, which maps virtual pages to physical pages. The address translation hardware reads the page table each time it converts a virtual address; the OS maintains its contents and transfers pages between disk and DRAM.
+### Hits and faults
 
-A page table is an array of **page table entries (PTEs)**. Each page in the virtual address space has a PTE at a fixed offset in the table. Assume each PTE has a **valid bit** and an $n$-bit address field:
+When the CPU touches a virtual address, the MMU uses the address to select a PTE.
 
-- valid = 1: the address field is the start of the physical page where the virtual page is cached.
-- valid = 0 with a null address: the virtual page is unallocated.
-- valid = 0 with an address: the page is allocated but uncached; the address points to its location on disk.
+**Page hit.** The valid bit is set. The MMU builds the physical address from the PTE and the access proceeds. The OS is not involved.
 
-### Page hits and page faults
+**Page fault.** The valid bit is clear. The MMU raises an exception, which transfers control to the kernel's **page fault handler**. The handler:
 
-**Page hit.** The CPU reads a word in a cached page. The translation hardware uses the virtual address to locate the PTE, sees the valid bit set, and uses the PTE's physical address to construct the physical address of the word.
+1. chooses a **victim** frame;
+2. if the victim page has been modified, writes it out to disk; either way, marks the victim's PTE invalid;
+3. reads the needed page from disk into the frame and updates its PTE;
+4. returns, which **restarts the faulting instruction**. This time the translation hits.
 
-**Page fault.** A DRAM cache miss is a **page fault**. The CPU references a word in an uncached page; the hardware finds the valid bit clear and triggers a page fault exception. The kernel's page fault handler selects a **victim page**; if the victim has been modified, the kernel copies it back to disk (**paging out**/**swapping out**); in either case it updates the victim's PTE to reflect that it is no longer cached. Then the kernel copies the needed page from disk to memory (**paging in**), updates its PTE, and returns. When the handler returns, it **restarts the faulting instruction**, which resends the faulting virtual address to the translation hardware. Now it is a page hit.
+Moving pages between disk and memory is called **paging** or **swapping**. Waiting until a page is actually touched before bringing it in is **demand paging**, and essentially all modern systems use it. Allocating new memory, for example when `malloc` grows the heap, creates room on disk and points PTEs at it; no frame is involved until the first touch.
 
-The strategy of waiting until the last moment to swap in a page, when a miss occurs, is **demand paging**. All modern systems use it.
+### Why this is not hopelessly slow
 
-**Allocating pages.** When the OS allocates a new page of virtual memory (for example, as a result of `malloc`), it creates room on disk and updates a PTE to point to the newly created page on disk.
+Disk-backed memory sounds like a recipe for disaster, and it would be without **locality**. Programs tend to work, over any short interval, on a fairly small set of active pages called the **working set** or resident set. Once the working set has been paged in, further references hit. Trouble arrives only when the working set is larger than physical memory: then pages are shuttled in and out continuously, a state called **thrashing**, and the program slows by orders of magnitude. If a machine suddenly crawls while its disk light stays on, suspect thrashing.
 
-### Locality to the rescue again
+```python-run
+from collections import OrderedDict
+import random
 
-Given the huge miss penalty, one might fear paging destroys performance. In practice VM works well because of **locality**. Although the total number of distinct pages a program references over its run might exceed physical memory, at any time it tends to work on a smaller set of active pages, the **working set** (resident set). After an initial overhead where the working set is paged in, subsequent references hit.
+def faults(trace, frames):
+    resident, count = OrderedDict(), 0            # least recently used page is evicted
+    for page in trace:
+        if page in resident:
+            resident.move_to_end(page)
+        else:
+            count += 1
+            if len(resident) == frames:
+                resident.popitem(last=False)
+            resident[page] = True
+    return count
 
-If the working set size exceeds the size of physical memory, the program can produce an unfortunate situation known as **thrashing**, where pages are swapped in and out continuously. A program that runs at a crawl may be thrashing.
+random.seed(11)
+focused   = [random.choice(range(6))  for _ in range(5000)]   # working set of 6 pages
+scattered = [random.choice(range(60)) for _ in range(5000)]   # working set of 60 pages
+for name, trace in (("working set 6 ", focused), ("working set 60", scattered)):
+    print(name, "-> faults with 8 frames:", faults(trace, 8), "of", len(trace))
+```
 
-## 4. VM as a tool for memory management
+With eight frames, the first workload faults six times in total; the second faults on most references. Same machine, same code, very different locality.
 
-Operating systems provide a **separate page table, and thus a separate virtual address space, for each process**. Multiple virtual pages (in different processes) can be mapped to the same shared physical page. Combining demand paging with separate address spaces simplifies:
+## 3. Job two: simplifying memory management
 
-- **Linking.** Each process can use the same basic format for its memory image, regardless of where code and data actually reside in physical memory (code always at `0x400000`). Linkers produce fully linked executables independent of the ultimate physical location.
-- **Loading.** To load `.text` and `.data` of an object file into a new process, the loader allocates virtual pages for them, marks them invalid (not cached), and points their PTEs to the appropriate locations in the object file. **The loader never actually copies any data from disk into memory**; pages are paged in on demand the first time each is referenced. Mapping a set of contiguous virtual pages to an arbitrary location in a file is **memory mapping** (`mmap`, next lesson).
-- **Sharing.** Normally each process has private code, data, heap and stack. But the OS can arrange for several processes to share a single copy of kernel code or of the C library's `printf` by mapping the appropriate virtual pages in different processes to the same physical pages.
-- **Memory allocation.** When a process requests additional heap space (`malloc`), the OS allocates $k$ contiguous *virtual* pages and maps them to $k$ arbitrary physical pages located anywhere in physical memory. They need not be contiguous.
+The operating system gives **every process its own page table**, and therefore its own virtual address space. Different processes' virtual pages can map to different frames, or to the same one. This one decision cleans up several otherwise messy problems:
 
-## 5. VM as a tool for memory protection
+- **Linking.** Every program can be laid out the same way: code at one standard address, data after it, stack at the top. The linker never needs to know where things will physically land.
+- **Loading.** To start a program, the loader allocates virtual pages for the code and data sections, marks them not-yet-cached, and points their PTEs at the right places in the executable file. Nothing is copied; pages arrive on demand.
+- **Sharing.** Processes normally have private code, data, heap and stack. Where sharing is wanted, such as for kernel code or the C library, the OS maps virtual pages in different processes to the same physical frames, so one copy serves all of them.
+- **Allocation.** When a process asks for more heap, the OS needs to find *k* frames, but they need not be contiguous. Any scattered *k* frames will do, because the page table makes them appear contiguous in the virtual space.
 
-A user process should not be allowed to modify its read-only code section, read or modify kernel code and data, read or write the private memory of other processes, or modify virtual pages shared with other processes unless all parties allow it. Because the translation hardware reads a PTE on **every** address the CPU generates, access control is easy: add **permission bits** to the PTE.
+## 4. Job three: protecting memory
+
+Because every access goes through a PTE, the PTE is the natural place to enforce access rules. Adding a few permission bits is enough:
 
 | Bit | Meaning |
 |---|---|
-| `SUP` | Whether the process must be running in kernel (supervisor) mode to access the page |
-| `READ` | Read access allowed |
-| `WRITE` | Write access allowed |
+| SUP | the page may be accessed only when the CPU is in kernel (supervisor) mode |
+| READ | reads are permitted |
+| WRITE | writes are permitted |
 
-If an instruction violates these permissions, the CPU triggers a general protection fault that transfers control to an exception handler in the kernel, which sends `SIGSEGV` to the offending process. Linux shells report this as a **"segmentation fault"**.
+Real processors add more, such as a bit that forbids executing data pages. If an instruction violates the permissions, say a user program stores into a read-only code page or touches a kernel page, the CPU raises a protection fault, and Linux delivers `SIGSEGV` to the process. The shell reports this as a "segmentation fault".
 
-## 6. Address translation
+This is how the system guarantees that a process cannot modify its own code, cannot read or write the kernel, cannot touch another process's private memory, and cannot write a shared page unless everyone involved has agreed.
 
-Formally, address translation is a mapping $\text{MAP}: \text{VAS} \to \text{PAS} \cup \{\varnothing\}$: MAP(A) = A' if the data at virtual address A is present at physical address A', and $\varnothing$ otherwise.
+## 5. The translation arithmetic
 
-A control register in the CPU, the **page table base register (PTBR)**, points to the current page table. The $n$-bit virtual address has two components: a $p$-bit **virtual page offset (VPO)** and an $(n-p)$-bit **virtual page number (VPN)**. The MMU uses the VPN to select the PTE. The physical address is the **physical page number (PPN)** from the PTE concatenated with the VPO. Since physical and virtual pages are both $P$ bytes, **the physical page offset (PPO) is identical to the VPO**.
+Here is the notation used for the rest of the lesson:
 
-```
-   n-1                p p-1            0
-  +--------------------+----------------+
-  |        VPN         |      VPO       |   virtual address
-  +--------------------+----------------+
-            |  page table lookup     | (unchanged)
-            v                        v
-  +--------------------+----------------+
-  |        PPN         |      PPO       |   physical address
-  +--------------------+----------------+
-   m-1                p p-1            0
-```
+| Symbol | Meaning |
+|---|---|
+| $n$, $m$ | bits in a virtual, physical address |
+| $p$ | bits in the page offset; page size $P = 2^p$ |
+| VPN, VPO | virtual page number, virtual page offset |
+| PPN, PPO | physical page number, physical page offset |
+| PTBR | page table base register: where the current page table lives |
 
-**Steps on a page hit** (handled entirely by hardware):
+A virtual address splits into two fields: the low $p$ bits are the VPO and the remaining $n - p$ bits are the VPN. Translation works like this:
 
-1. The processor generates a virtual address and sends it to the MMU.
-2. The MMU generates the PTE address (PTEA) and requests it from the cache/main memory.
-3. The cache/main memory returns the PTE to the MMU.
-4. The MMU constructs the physical address and sends it to the cache/main memory.
-5. The cache/main memory returns the requested data word to the processor.
+1. The MMU uses the VPN as an index into the page table, whose location comes from the PTBR, and reads the PTE.
+2. If the PTE is valid, it supplies the PPN.
+3. The physical address is the PPN followed by the offset.
 
-**Steps on a page fault** (hardware and kernel cooperate): steps 1–3 as above; (4) the valid bit in the PTE is zero, so the MMU triggers an exception, transferring control to the page fault handler; (5) the handler identifies a victim page in physical memory and, if modified, pages it out to disk; (6) the handler pages in the new page and updates the PTE in memory; (7) the handler returns to the original process, causing the faulting instruction to be **restarted**. The CPU resends the offending virtual address to the MMU; this time the page is cached, so it is a hit.
-
-```python-run
-def translate(va, page_table, p):
-    vpn, vpo = va >> p, va & ((1 << p) - 1)
-    pte = page_table.get(vpn)                      # None/-1 = not valid
-    if pte is None:
-        return f"VA {va:#06x}: VPN {vpn:#x} -> PAGE FAULT"
-    return f"VA {va:#06x}: VPN {vpn:#x}, VPO {vpo:#x} -> PPN {pte:#x} -> PA {(pte << p) | vpo:#06x}"
-# 64-byte pages (p = 6), part of the book's example page table
-pt = {0x00: 0x28, 0x02: 0x33, 0x03: 0x02, 0x05: 0x16, 0x08: 0x13, 0x09: 0x17, 0x0A: 0x09, 0x0D: 0x2D, 0x0E: 0x11, 0x0F: 0x0D}
-for va in (0x03d4, 0x0b8f, 0x0020, 0x02c1):
-    print(translate(va, pt, 6))
-```
-
-### Integrating caches and VM
-
-In a system with both VM and SRAM caches, should the caches be accessed with virtual or physical addresses? Most systems opt for **physical addressing**: it makes it straightforward for multiple processes to have blocks in the cache at the same time and to share blocks from the same virtual pages, and the cache need not deal with protection, since access rights are checked during translation. Address translation occurs *before* the cache lookup, and **page table entries themselves can be cached**, like any other data words.
-
-### Speeding up translation with a TLB
-
-Every time the CPU generates a virtual address, the MMU must refer to a PTE: in the worst case an additional fetch from memory costing tens to hundreds of cycles; if the PTE is in L1, a handful of cycles. Many systems eliminate even this cost with a small cache of PTEs inside the MMU called a **translation lookaside buffer (TLB)**.
-
-A TLB is a small, virtually addressed cache in which each line holds a block consisting of **a single PTE**. It usually has a high degree of associativity. With $T = 2^t$ sets, the **TLB index (TLBI)** is the $t$ least significant bits of the VPN, and the **TLB tag (TLBT)** is the remaining VPN bits.
-
-```
-  +--------------------+---------+----------------+
-  |        TLBT        |  TLBI   |      VPO       |
-  +--------------------+---------+----------------+
-  |<-------------- VPN --------->|
-```
-
-**TLB hit:** (1) the CPU generates a virtual address; (2) the MMU sends the VPN to the TLB; (3) the TLB returns the PTE; (4) the MMU translates to a physical address and sends it to the cache/main memory; (5) the data word is returned. All translation steps happen inside the on-chip MMU: fast.
-
-**TLB miss:** the MMU must fetch the PTE from the L1 cache/memory; the newly fetched PTE is stored in the TLB, possibly overwriting an existing entry.
-
-### Multi-level page tables
-
-A single page table can be huge. With a 32-bit address space, 4 KB pages and 4-byte PTEs, we would need a **4 MB** page table resident in memory at all times, per process, even if the application referenced only a small chunk of the address space. For 64-bit systems the problem is far worse: a 48-bit space with 4 KB pages has $2^{36}$ pages, and at 8 bytes per PTE a flat table would occupy 512 GB.
-
-The solution is a **hierarchy of page tables**. Consider a 32-bit virtual address space partitioned into 4 KB pages, with 4-byte PTEs, and a two-level hierarchy:
-
-- Each PTE in the **level 1 table** (1,024 entries, one 4 KB page) is responsible for mapping a **4 MB chunk** of the virtual address space, consisting of 1,024 contiguous pages. If every page in chunk $i$ is unallocated, level-1 PTE $i$ is null.
-- Otherwise level-1 PTE $i$ points to the base of a **level 2 page table**, each of whose 1,024 PTEs maps one 4 KB page.
-
-This reduces memory requirements in two ways. First, **if a PTE in the level 1 table is null, the corresponding level 2 page table does not have to exist at all**: a large saving, since most of the 4 GB virtual address space of a typical program is unallocated. Second, only the level 1 table needs to be in main memory at all times; level 2 tables can be created and paged in and out by the VM system as needed, so only the most heavily used are cached in main memory.
-
-With a $k$-level hierarchy, the virtual address is partitioned into $k$ VPNs and a VPO. VPN $i$ ($1 \le i \le k$) is an index into a page table at level $i$. Each PTE in a level $j$ table ($j < k$) points to the base of some page table at level $j+1$; each PTE in a level $k$ table contains either the PPN of a physical page or the address of a disk block. To construct the physical address, the MMU must access $k$ PTEs. This sounds expensive, but **the TLB comes to the rescue** by caching the PTEs from the page tables at the different levels; in practice, translation with multi-level page tables is not significantly slower than with single-level tables.
-
-```python-run
-# Size of the page-table structures for a sparse 32-bit process: 4 KB pages, 4-byte PTEs.
-PAGE, PTE = 4096, 4
-flat = (2**32 // PAGE) * PTE
-print("flat table:", flat // 1024, "KB")
-# Two-level: suppose the process uses 2 MB of code/data at the bottom and 64 KB of stack at the top.
-used_pages = set(range(0, 2 * 2**20 // PAGE)) | set(range(2**20 - 16, 2**20))
-l2_tables = {vpn >> 10 for vpn in used_pages}        # each L2 table covers 1024 pages (4 MB)
-print("two-level :", (1 + len(l2_tables)) * PAGE // 1024, "KB  (1 level-1 table +", len(l2_tables), "level-2 tables)")
-```
-
-## 7. Worked example: end-to-end address translation
-
-The book's small system: virtual addresses are 14 bits wide ($n = 14$), physical addresses 12 bits ($m = 12$), page size 64 bytes ($p = 6$). So VPN is 8 bits and VPO 6 bits; PPN is 6 bits and PPO 6 bits. The TLB is 4-way set associative with 16 entries (4 sets): TLBI is the low 2 bits of the VPN, TLBT the high 6. The L1 d-cache is physically addressed and direct-mapped with a 4-byte block size and 16 sets: CO = 2 bits, CI = 4 bits, CT = 6 bits.
-
-**CPU reads the byte at virtual address `0x03d4`.**
-
-1. `0x03d4` = `00 0011 1101 0100`. VPN = `00001111` = `0x0F`; VPO = `010100` = `0x14`.
-2. TLBI = low 2 bits of VPN = `11` = 3; TLBT = `000011` = `0x03`.
-3. The TLB's set 3 has a valid entry with tag `0x03`: **TLB hit**, returning PPN `0x0D`.
-4. PA = PPN `0x0D` (`001101`) concatenated with PPO `0x14` (`010100`) = `0011 0101 0100` = `0x354`.
-5. Cache: CO = `00` = 0; CI = `0101` = `0x5`; CT = `001101` = `0x0D`. Set 5 holds tag `0x0D` and is valid: **cache hit**. Byte at offset 0 is `0x36`, returned to the CPU.
-
-Other paths are possible: if the TLB misses, the MMU fetches the PPN from the page table's PTE; if that PTE is invalid, there is a page fault and the kernel must page in the appropriate page and rerun the load instruction; if the PTE is valid but the cache misses, the block is fetched from memory.
-
-## 8. Case study: Intel Core i7 / Linux
-
-The Core i7 supports a **48-bit (256 TB) virtual address space** and a **52-bit (4 PB) physical address space**, with a compatibility mode for 32-bit spaces. The TLBs are virtually addressed and 4-way set associative: L1 d-TLB 64 entries, L1 i-TLB 128 entries, L2 unified TLB 512 entries. The caches are physically addressed with 64-byte blocks. Page size can be 4 KB or 4 MB; Linux uses 4 KB.
-
-The Core i7 uses a **four-level page table hierarchy**. The 36-bit VPN is partitioned into four 9-bit chunks, each an offset into a page table (512 8-byte entries = one 4 KB page). The **CR3** control register contains the physical address of the level 1 page table; its value is part of each process context and is restored during each context switch.
+**The offset is never translated.** Since virtual and physical pages have the same size, the position of a byte within its page is the same in both: PPO = VPO. Only the page number changes.
 
 ```mermaid
-graph LR
-  VA["VA: VPN1 (9) | VPN2 (9) | VPN3 (9) | VPN4 (9) | VPO (12)"] --> T1
-  CR3 --> T1[L1 page table]
-  T1 --> T2[L2 page table]
-  T2 --> T3[L3 page table]
-  T3 --> T4[L4 page table]
-  T4 --> PA["PA: PPN (40) | PPO (12)"]
+flowchart LR
+    VA["virtual address = VPN | VPO"] --> IDX[VPN indexes page table]
+    PTBR[PTBR] --> IDX
+    IDX --> PTE[PTE: valid bit and PPN]
+    PTE --> PA["physical address = PPN | PPO"]
+    VA -- offset copied unchanged --> PA
 ```
 
-A level-1 PTE maps a 512 GB region, level 2 a 1 GB region, level 3 a 2 MB region, and level 4 a 4 KB page. PTE fields include: **P** (present), **R/W** (read-only or read-write), **U/S** (user or supervisor mode access), **A** (reference bit, set by the MMU on reads and writes, cleared by software), **D** (dirty bit, set on writes), and **XD** (execute disable, bit 63, new in 64-bit systems, which reduces the risk of buffer overflow attacks by restricting execution to the read-only code segment). The kernel uses A to implement its page replacement algorithm and D to decide whether a victim page must be written back before being replaced.
+On a **hit** the hardware does everything: the CPU sends the VA to the MMU, the MMU fetches the PTE from memory (via the cache), forms the PA, and memory returns the data. On a **fault** the hardware and the kernel cooperate: the MMU sees an invalid PTE, raises the exception, the handler evicts a victim, pages in the new page, updates the table, and the instruction is re-executed.
 
-A neat trick makes L1 cache access fast: with 4 KB pages, the 12-bit VPO is identical to the PPO. The L1 d-cache has 64 sets and 64-byte blocks, so its CI + CO need exactly 12 bits. When the CPU needs a virtual address translated, it sends the VPN to the MMU and the VPO to the L1 cache **simultaneously**: while the MMU requests the PTE from the TLB, the cache is already using the VPO bits to find the set and read out the tags. When the MMU gets the PPN back, the cache is ready to match it against the tags.
+### A complete example by hand
+
+Take a deliberately small machine:
+
+- 16-bit virtual addresses, 13-bit physical addresses;
+- 256-byte pages, so $p = 8$.
+
+Then the VPN is the top 8 bits of a virtual address (256 virtual pages) and the PPN is 5 bits (32 frames). Suppose part of the page table reads:
+
+| VPN | Valid | PPN |
+|---|---|---|
+| `0x2A` | 1 | `0x05` |
+| `0x2B` | 1 | `0x11` |
+| `0x2C` | 0 | – |
+| `0x7F` | 1 | `0x1E` |
+
+Translate **VA `0x2B7C`**:
+
+- VPN = `0x2B`, VPO = `0x7C`.
+- The PTE for `0x2B` is valid with PPN `0x11`.
+- PA = `0x11` followed by `0x7C` = **`0x117C`**. In bits: `1 0001 0111 1100`, thirteen bits as expected.
+
+Translate **VA `0x2C04`**: VPN = `0x2C`, whose PTE is invalid. **Page fault.** There is no physical address until the kernel has dealt with it.
+
+```python-run
+P_BITS = 8
+page_table = {0x2A: 0x05, 0x2B: 0x11, 0x7F: 0x1E}        # only valid entries are listed
+
+def translate(va):
+    vpn, vpo = va >> P_BITS, va & ((1 << P_BITS) - 1)
+    if vpn not in page_table:
+        return f"VA {va:#06x}: VPN {vpn:#04x} VPO {vpo:#04x} -> PAGE FAULT"
+    pa = (page_table[vpn] << P_BITS) | vpo
+    return f"VA {va:#06x}: VPN {vpn:#04x} VPO {vpo:#04x} -> PPN {page_table[vpn]:#04x} -> PA {pa:#06x}"
+
+for va in (0x2B7C, 0x2A00, 0x7FFF, 0x2C04):
+    print(translate(va))
+```
+
+## 6. Making translation fast
+
+### Page tables and the hardware caches
+
+PTEs live in ordinary memory, so fetching one may hit or miss in the L1 cache like any other read. Most systems place address translation *before* the cache lookup and index the caches with physical addresses. That keeps things simple when several processes share a frame, and the cache need not know anything about protection, because permissions have already been checked during translation.
+
+### The TLB
+
+Even an L1 hit for the PTE adds a cycle or two to every single memory reference. To avoid that, the MMU contains a small dedicated cache of recent translations: the **translation lookaside buffer** (TLB). Each TLB entry holds one PTE.
+
+The TLB is a set-associative cache keyed by the virtual page number. If it has $T = 2^t$ sets, then the low $t$ bits of the VPN form the **TLB index** (TLBI), selecting a set, and the remaining VPN bits form the **TLB tag** (TLBT), compared against the entries in that set.
+
+- **TLB hit**: the PPN comes straight out of the TLB. No memory access is needed for the translation, and everything happens inside the MMU.
+- **TLB miss**: the MMU fetches the PTE from the page table in memory, installs it in the TLB (possibly evicting another entry), and then proceeds.
+
+Because of locality, hits vastly outnumber misses. A TLB with 64 entries and 4 KB pages covers only 256 KB of address space at once, which is one reason large applications benefit from larger "huge" pages.
+
+Extend the hand example with a TLB that has 8 entries, 2-way set associative, so 4 sets and $t = 2$. For VA `0x2B7C`, the VPN is `0x2B` = `0010 1011`:
+
+- TLBI = low two bits = `11` = 3,
+- TLBT = remaining six bits = `001010` = `0x0A`.
+
+The MMU looks in set 3 for a valid entry with tag `0x0A`. If it is there, the PPN `0x11` is returned at once; otherwise the page table is consulted and the entry is loaded.
+
+```python-run
+P_BITS, T_BITS, WAYS = 8, 2, 2
+page_table = {0x2A: 0x05, 0x2B: 0x11, 0x7F: 0x1E, 0x2F: 0x09, 0x33: 0x02}
+tlb = [[] for _ in range(1 << T_BITS)]            # each set: list of (tag, ppn), most recent last
+
+def access(va):
+    vpn, vpo = va >> P_BITS, va & 0xFF
+    idx, tag = vpn & ((1 << T_BITS) - 1), vpn >> T_BITS
+    for entry in tlb[idx]:
+        if entry[0] == tag:
+            tlb[idx].remove(entry); tlb[idx].append(entry)
+            return f"{va:#06x}: TLBI {idx} TLBT {tag:#04x}  TLB hit            PA {(entry[1] << P_BITS) | vpo:#06x}"
+    if vpn not in page_table:
+        return f"{va:#06x}: TLBI {idx} TLBT {tag:#04x}  TLB miss, PAGE FAULT"
+    if len(tlb[idx]) == WAYS:
+        tlb[idx].pop(0)                           # evict least recently used entry of the set
+    tlb[idx].append((tag, page_table[vpn]))
+    return f"{va:#06x}: TLBI {idx} TLBT {tag:#04x}  TLB miss, table walk PA {(page_table[vpn] << P_BITS) | vpo:#06x}"
+
+for va in (0x2B7C, 0x2B10, 0x2F00, 0x3344, 0x2B7C, 0x2C04):
+    print(access(va))
+```
+
+Notice the fifth access. VPNs `0x2B`, `0x2F` and `0x33` all end in binary `11`, so they compete for the two entries of set 3, and the translation for `0x2B` has been pushed out by the time it is needed again.
 
 > [!INTERVIEW]
-> **"What happens on a memory access, end to end?"** The CPU issues a VA. The TLB is consulted with the VPN; on a hit the PPN is immediate. On a miss, a page walk reads the multi-level page table (4 levels on x86-64, starting at CR3). If the PTE is not present: page fault → kernel finds the page (file, swap, or zero-fill), possibly evicts a victim, updates the PTE, and the instruction restarts. With the PA, the L1/L2/L3 caches are checked, then DRAM. Permission bits are checked along the way; a violation raises SIGSEGV.
+> **"What is a TLB and why does a context switch affect it?"** The TLB is a small associative cache inside the MMU that maps virtual page numbers to page table entries, so most translations avoid reading the page table. Its entries are only valid for one address space. Switching to a different process changes the page table base register, so cached translations must be flushed or tagged with an address-space identifier. The refill misses afterwards are a hidden part of the cost of a context switch.
+
+## 7. Multi-level page tables
+
+A flat table needs one PTE for *every* virtual page, used or not. For a 32-bit address space with 4 KB pages and 4-byte entries that is $2^{20}$ entries, or 4 MB, per process, resident in memory at all times. For a 48-bit space with 8-byte entries it would be $2^{36} \times 8$ bytes = 512 GB per process, which is absurd.
+
+The fix is a **hierarchy**. With two levels on the 32-bit machine:
+
+- The **level 1 table** has 1,024 entries. Each one covers a 4 MB slice of the address space (1,024 pages).
+- If nothing in a slice is allocated, its level 1 entry is null, and no further table exists for it.
+- Otherwise the entry points to a **level 2 table** of 1,024 ordinary PTEs, one per page of the slice.
+
+This saves memory in two ways. First, a null level 1 entry eliminates an entire level 2 table, and since a typical address space is almost entirely unallocated, almost all of them are eliminated. Second, only the level 1 table has to stay in main memory at all times; level 2 tables can be created, paged in, or paged out as needed.
+
+```mermaid
+flowchart TD
+    L1[Level 1 table: 1024 entries] --> A[L2 table for 0 to 4 MB: code and data]
+    L1 --> B[L2 table for 4 to 8 MB: more data]
+    L1 -. null entries for the unused middle .-> N[nothing allocated]
+    L1 --> C[L2 table for the top 4 MB: stack]
+    A --> F1[frames]
+    B --> F2[frames]
+    C --> F3[frames]
+```
+
+```python-run
+PAGE, PTE = 4096, 4
+flat = (2**32 // PAGE) * PTE
+print(f"flat table      : {flat / 2**20:.0f} MB per process, always resident")
+
+# A sparse process: 6 MB of code+data at the bottom, 128 KB of stack at the very top.
+slice_bytes = 1024 * PAGE                               # one L2 table maps 4 MB
+l2_tables = -(-6 * 2**20 // slice_bytes) + 1            # ceil(6 MB / 4 MB) for the bottom, 1 for the stack
+two_level = 1024 * PTE + l2_tables * 1024 * PTE
+print(f"two-level tables: 1 level-1 + {l2_tables} level-2 = {two_level // 1024} KB")
+print(f"saving factor   : {flat // two_level}x")
+
+print(f"x86-64 flat table for 48-bit addresses: {2**36 * 8 / 2**30:.0f} GB per process")
+```
+
+In general, with *k* levels the VPN is cut into *k* fields. Field 1 indexes the level 1 table to find the level 2 table, field 2 indexes that to find the level 3 table, and so on until the last level yields the PPN. That sounds like *k* memory reads per translation, but the TLB caches the final result, and the upper-level entries are few and heavily reused, so they are nearly always in cache. In practice a multi-level walk costs little more than a flat lookup.
+
+### What real x86-64 looks like
+
+Current Intel and AMD processors in their common mode use:
+
+- 48-bit virtual addresses and up to 52-bit physical addresses;
+- 4 KB pages, so a 12-bit offset;
+- a 36-bit VPN divided into **four 9-bit fields**, one per level;
+- 8-byte PTEs, so each table holds 512 entries and fits exactly in one 4 KB page;
+- the CR3 register as the page table base, holding the physical address of the level 1 table.
+
+Each PTE carries, alongside the 40-bit frame number, a present bit, read/write and user/supervisor permission bits, an execute-disable bit, and two bits the hardware sets for the kernel's benefit: an **accessed** (reference) bit, set on any use, which page-replacement algorithms consult, and a **dirty** bit, set on a write, which tells the kernel whether a victim must be written back before its frame is reused.
+
+There is one more clever arrangement. Because the 12 offset bits are available before translation finishes, and an L1 data cache with 64 sets of 64-byte blocks needs exactly 6 index bits plus 6 block-offset bits, the CPU can begin selecting the L1 cache set using the VPO *while* the TLB is translating the VPN. When the PPN arrives, the cache tags are ready to be compared with it. Translation and cache lookup overlap in time.
+
+```python-run
+def split48(va):
+    off = va & 0xFFF
+    idx = [(va >> shift) & 0x1FF for shift in (39, 30, 21, 12)]
+    return idx, off
+
+for va in (0x00007F31A4C02A38, 0x0000000000401136):
+    idx, off = split48(va)
+    print(f"{va:#018x} -> level indexes {idx}, offset {off:#05x}")
+print("entries per table:", 4096 // 8, "| address space covered by one level-1 entry:", 2**39 // 2**30, "GB")
+```
 
 > [!INTERVIEW]
-> **"Why multi-level page tables?"** A flat table for a 48-bit space would need $2^{36}$ 8-byte entries = 512 GB per process. A tree only materializes tables for regions actually in use, so a small process needs a handful of 4 KB tables. Cost: a TLB miss requires up to 4 memory reads (mitigated by the TLB, page-walk caches, and huge pages which cut the walk short and extend TLB reach).
+> **"Why are page tables hierarchical?"** A flat table needs an entry for every virtual page whether used or not, which is megabytes per process on 32-bit systems and hundreds of gigabytes on 64-bit ones. A tree allocates lower-level tables only for regions that are actually mapped, so its size tracks the memory in use, not the size of the address space. The extra lookups are hidden by the TLB and by caching of upper-level entries.
 
-> [!INTERVIEW]
-> **"Why is a context switch between processes costlier than between threads?"** Switching processes changes CR3, i.e. the address space, so TLB entries are invalid (unless tagged with address-space IDs) and must be refilled by page walks; threads share the page tables.
+## 8. Pitfalls
 
-## 9. Summary
+- **Translating the offset.** Only the page number is mapped. The offset bits pass through untouched.
+- **Mixing up TLB fields.** The TLBI is the *low* bits of the VPN and the TLBT the high bits. Neither includes any offset bits.
+- **Using the wrong number of bits.** The physical address has $m$ bits. If your answer has more, a field was mis-split.
+- **Confusing TLB miss with page fault.** A TLB miss means the translation was not cached and costs a table walk. A page fault means the page is not in memory and costs a disk access. A page can be in memory while its translation is absent from the TLB.
+- **Believing a page fault is an error.** Legal faults happen constantly and invisibly. Only references to unmapped addresses or forbidden accesses become signals.
+- **Equating virtual size with RAM used.** Allocated-but-untouched pages consume no frames.
+- **Forgetting that the table is per process.** The same virtual address in two processes generally refers to different physical bytes.
 
-- VM gives each process a private, uniform virtual address space; the MMU translates VAs to PAs using page tables maintained by the OS.
-- A VA splits into VPN + VPO; the PTE supplies the PPN; PPO = VPO.
-- Main memory is a fully associative, demand-paged, write-back cache of virtual pages; misses are page faults handled by the kernel; locality (the working set) makes it efficient; thrashing occurs when the working set exceeds memory.
-- Per-process page tables simplify linking, loading, sharing and allocation; PTE permission bits provide protection.
-- TLBs cache PTEs (TLBI/TLBT from the VPN); multi-level tables make page tables compact. Core i7: 48-bit VAs, 4 levels × 9 bits, CR3 as the root.
+## Summary
 
-## Check yourself
+- The CPU issues virtual addresses; the MMU translates each to a physical address using OS-maintained page tables.
+- Virtual memory is managed in pages. A page table entry records whether a page is in memory and where; an invalid entry causes a page fault that the kernel resolves by paging the data in and restarting the instruction.
+- The design reflects the huge miss penalty: big pages, full associativity, smart replacement. Locality keeps the working set resident; exceeding memory causes thrashing.
+- Per-process page tables simplify linking, loading, sharing and allocation; permission bits in PTEs provide protection.
+- Translation splits the address into VPN and VPO, maps VPN to PPN, and keeps the offset unchanged.
+- The TLB caches translations, indexed by the low bits of the VPN and tagged by the rest.
+- Multi-level tables keep page table memory proportional to the address space actually used. x86-64 uses four levels of 9 bits with 4 KB pages.
+
+## Glossary
+
+- **Virtual address**: an address as seen by a program.
+- **Physical address**: an actual location in the memory hardware.
+- **Address translation**: converting a virtual address into a physical one.
+- **MMU (memory management unit)**: the hardware in the processor that performs address translation.
+- **Page**: a fixed-size chunk of memory, usually 4 kilobytes.
+- **Page table**: the per-process table recording where each virtual page currently resides.
+- **PTE (page table entry)**: one row of a page table, describing one virtual page.
+- **VPN / VPO**: virtual page number / virtual page offset: the two parts of a virtual address.
+- **PPN / PPO**: physical page number / physical page offset: the two parts of a physical address.
+- **Page fault**: the event raised when a program touches a page that is not in memory.
+- **Demand paging**: bringing a page into memory only when it is first used.
+- **Thrashing**: severe slowdown when the pages in active use do not fit in memory.
+- **TLB (translation lookaside buffer)**: a small cache of recent address translations.
+- **Multi-level page table**: a page table built as a tree so that unused regions take no space.
 
 ```quiz
 [
-  {"q": "With 4 KB pages and 32-bit virtual addresses, how many bits are the VPO and VPN?", "options": ["VPO 10, VPN 22", "VPO 12, VPN 20", "VPO 16, VPN 16", "VPO 20, VPN 12"], "answer": 1,
-   "explain": "4 KB = 2^12, so the offset is 12 bits and the remaining 20 are the virtual page number."},
-  {"q": "In the 14-bit VA / 64-byte page example, what are the VPN and VPO of 0x03d4?", "options": ["VPN 0x0F, VPO 0x14", "VPN 0x03, VPO 0xd4", "VPN 0x3D, VPO 0x4", "VPN 0x1E, VPO 0x14"], "answer": 0,
-   "explain": "0x03d4 = 00001111 010100: the low 6 bits (0x14) are the VPO, the upper 8 (0x0F) the VPN."},
-  {"q": "Why is the DRAM cache of virtual pages fully associative with large pages?", "options": ["Hardware simplicity", "The miss penalty (disk access) is enormous, so minimizing misses matters more than lookup cost", "Because SRAM caches are", "To support the TLB"], "answer": 1,
-   "explain": "Disk is ~100,000x slower than DRAM, so the design optimizes for the lowest possible miss rate."},
-  {"q": "What does a TLB cache?", "options": ["Data blocks", "Page table entries, keyed by virtual page number", "Instructions", "Disk sectors"], "answer": 1,
-   "explain": "Each TLB line holds a single PTE; the VPN is split into TLB index and tag."},
-  {"q": "After a page fault is handled, what does the CPU do?", "options": ["Skips the faulting instruction", "Restarts the faulting instruction, which now hits", "Terminates the process", "Flushes all caches"], "answer": 1,
-   "explain": "Faults return to the faulting instruction; the page is now cached so translation succeeds."},
-  {"q": "What is the main advantage of a multi-level page table?", "options": ["Faster translation on a TLB miss", "Page tables for unallocated regions need not exist, saving memory", "It eliminates page faults", "It removes the need for a TLB"], "answer": 1,
-   "explain": "A null entry in an upper-level table means the whole lower-level subtree is absent."},
-  {"q": "On the Core i7, which register holds the physical address of the top-level page table?", "options": ["%rsp", "CR3", "PTBR0", "%rip"], "answer": 1,
-   "explain": "CR3 points to the level-1 table and is switched on every process context switch."},
-  {"q": "A program's working set is larger than physical memory. What happens?", "options": ["Nothing", "Thrashing: pages are continuously swapped in and out", "The TLB overflows", "It is killed immediately"], "answer": 1,
-   "explain": "Constant paging dominates run time; the program crawls."}
+  {"q": "A system has 16-bit virtual addresses and 256-byte pages. What are the VPN and VPO of virtual address 0x7F3C?",
+   "options": ["VPN 0x7, VPO 0xF3C", "VPN 0x7F, VPO 0x3C", "VPN 0x7F3, VPO 0xC", "VPN 0x3C, VPO 0x7F"],
+   "answer": 1, "explain": "256-byte pages need 8 offset bits, so the low byte 0x3C is the VPO and the high byte 0x7F is the VPN."},
+  {"q": "With the same system, the PTE for VPN 0x7F is valid with PPN 0x1E. What physical address does 0x7F3C translate to?",
+   "options": ["0x1E7F", "0x3C1E", "0x1E3C", "0x7F1E"],
+   "answer": 2, "explain": "The physical address is the PPN followed by the unchanged offset: 0x1E then 0x3C."},
+  {"q": "A TLB has 4 sets. For VPN 0x2B (binary 0010 1011), what are the TLB index and tag?",
+   "options": ["Index 3, tag 0x0A", "Index 2, tag 0x0B", "Index 0x0A, tag 3", "Index 1, tag 0x15"],
+   "answer": 0, "explain": "Four sets need two index bits, the low bits of the VPN: 11 = 3. The remaining six bits 001010 = 0x0A form the tag."},
+  {"q": "Why is virtual memory organised as a fully associative cache with large pages?",
+   "options": ["Because RAM is slow", "Because a miss requires disk access and is enormously expensive, so reducing the miss rate matters far more than lookup simplicity", "Because page tables must fit in registers", "Because hardware cannot implement set-associative lookup"],
+   "answer": 1, "explain": "The miss penalty is roughly five orders of magnitude larger than a hit, which justifies any design choice that lowers the miss rate."},
+  {"q": "Which statement about a TLB miss is correct?",
+   "options": ["It always causes a page fault", "It means the PTE must be fetched from the page table, but the page itself may well be in memory", "It means the process is killed", "It flushes the L1 cache"],
+   "answer": 1, "explain": "The TLB only caches translations. On a miss the MMU reads the PTE; a page fault occurs only if that PTE is invalid."},
+  {"q": "What is the main benefit of a multi-level page table over a flat one?",
+   "options": ["Translations need fewer memory accesses", "Lower-level tables exist only for allocated regions, so table memory scales with what is in use", "The TLB is no longer needed", "Pages can be of any size"],
+   "answer": 1, "explain": "Null entries in upper levels remove entire lower-level tables for unused regions. The flat alternative needs an entry for every virtual page."},
+  {"q": "On x86-64 with 48-bit virtual addresses and 4 KB pages, how is the virtual address divided?",
+   "options": ["Two 18-bit indexes and a 12-bit offset", "Four 9-bit indexes and a 12-bit offset", "Three 12-bit indexes and a 12-bit offset", "One 36-bit index and a 12-bit offset used with a flat table"],
+   "answer": 1, "explain": "Each table holds 512 eight-byte entries, so each level consumes 9 bits; four levels use 36 bits, plus the 12-bit offset."},
+  {"q": "A user program tries to write to a page whose PTE has WRITE cleared. What happens?",
+   "options": ["The write is silently ignored", "The CPU raises a protection fault and the kernel typically sends SIGSEGV", "The page is swapped out", "The TLB entry is updated to allow it"],
+   "answer": 1, "explain": "Permission bits are checked on every translation. A violation traps to the kernel, which normally terminates the process with a segmentation fault (unless the page is copy-on-write)."}
 ]
 ```
 
-> **Source:** CS:APP 3e, §9.1–9.7 (Physical and virtual addressing; Address spaces; VM as a tool for caching, memory management and memory protection; Address translation; Case study: the Intel Core i7/Linux memory system).
+> **Source:** CS:APP 3e, §9.1–9.6

@@ -1,369 +1,435 @@
 # Sockets, clients, servers and HTTP
 
-The previous lesson described what an Internet connection *is*. This one shows how programs create and use connections: the **sockets interface**, a set of functions used together with the Unix I/O functions to build network applications. We build an echo client and server, then study HTTP, the protocol of the web, and walk through the design of **Tiny**, the book's small but functional web server that serves both static and dynamic content. Along the way you will see nearly every idea from the previous modules at work: file descriptors, `fork`, `execve`, `dup2`, `mmap`, signals and robust I/O.
+> **Before this lesson:** You need IP addresses, ports, connections and byte order from [Networks, IP addresses and DNS](#/lesson/csapp/networks-ip), and robust reading with short counts from [Unix I/O and robust reading](#/lesson/csapp/unix-io). Redirection with `dup2` from [File sharing, redirection and standard I/O](#/lesson/csapp/file-sharing) is used once.
 
-## 1. The sockets interface
+## In plain words
 
-From the perspective of the Linux kernel, a socket is an end point for communication. From the perspective of a Linux program, **a socket is an open file with a corresponding descriptor**. The overall choreography of a typical client-server transaction:
+A **socket** is a program's end of a network connection. Once two programs are connected, each reads and writes through its socket much as it would with a file. Setting up the connection resembles a telephone call. A **server** is a program that waits for requests: it gets a phone line, publishes its number, and waits for the phone to ring. A **client** is a program that makes requests: it dials the number. When the server picks up, the two can talk in both directions. **HTTP**, the Hypertext Transfer Protocol, is the agreed "language" that web browsers and web servers speak over such a connection: the browser sends a few lines of text asking for a page, and the server replies with a few lines of text followed by the page.
+
+Why this matters at work: every web application, programming interface and microservice rests on these calls, whether or not a framework hides them. Understanding them lets you diagnose connection errors, read a raw request when something misbehaves, and reason about server performance. Explaining what happens between typing a web address and seeing a page is a standard interview task.
+
+## Why look closer
+
+The previous lesson described the Internet as hosts with addresses, names, and connections between address:port endpoints. This lesson is about the programming interface that lets a process actually create one of those connections, and about the most widely used protocol spoken over them. By the end you should be able to read the source of a small web server and say what every system call is for, explain the difference between the two kinds of descriptor a server juggles, and write an HTTP request by hand.
+
+## 1. The sockets interface in one picture
+
+The **sockets interface** is a handful of functions that, together with `read`, `write` and `close`, are enough to build any networked program. To the kernel a socket is an endpoint of communication; to your program it is an open file with a descriptor.
 
 ```mermaid
 sequenceDiagram
-  participant C as Client
-  participant S as Server
-  Note over C: getaddrinfo, socket
-  Note over S: getaddrinfo, socket, bind, listen
-  Note over S: accept (blocks)
-  C->>S: connect (connection request)
-  Note over S: accept returns connfd
-  C->>S: rio_writen (request)
-  S->>C: rio_writen (response)
-  Note over C: rio_readlineb
-  C->>S: close (EOF)
-  Note over S: rio_readlineb returns 0, close connfd
-  Note over S: back to accept for the next client
+    participant C as Client
+    participant S as Server
+    Note over S: getaddrinfo, socket, bind, listen
+    Note over C: getaddrinfo, socket
+    S->>S: accept blocks
+    C->>S: connect
+    Note over C,S: connection established
+    C->>S: write request
+    S->>C: write response
+    C->>S: close, server reads EOF
+    Note over S: close connected descriptor, accept again
 ```
 
-### Socket address structures
+The client's side is short: make a socket, connect it. The server's side has more steps because a server must first announce where it can be reached.
 
-Internet socket addresses are stored in 16-byte structures of type `sockaddr_in`:
+## 2. Socket addresses
+
+Every function that names an endpoint takes a **socket address** structure. For IPv4 it looks like this:
 
 ```c
-/* IP socket address structure */
 struct sockaddr_in {
-    uint16_t        sin_family;    /* protocol family (always AF_INET) */
-    uint16_t        sin_port;      /* port number in network byte order */
-    struct in_addr  sin_addr;      /* IP address in network byte order */
-    unsigned char   sin_zero[8];   /* pad to sizeof(struct sockaddr) */
+    uint16_t       sin_family;   /* AF_INET */
+    uint16_t       sin_port;     /* port, network byte order */
+    struct in_addr sin_addr;     /* IPv4 address, network byte order */
+    unsigned char  sin_zero[8];  /* padding */
 };
-
-/* Generic socket address structure (for connect, bind, and accept) */
-struct sockaddr {
-    uint16_t  sa_family;           /* protocol family */
-    char      sa_data[14];         /* address data */
+struct sockaddr {                /* the generic type the API is declared with */
+    uint16_t sa_family;
+    char     sa_data[14];
 };
 ```
 
-The `connect`, `bind` and `accept` functions require a pointer to a protocol-specific socket address structure. The problem faced by the designers of the sockets interface was how to define these functions to accept *any* kind of socket address structure. Today we would use the generic `void *` pointer, which did not exist in C at that time. Their solution was to define sockets functions to expect a pointer to a generic `sockaddr` structure and then require applications to **cast** any pointers to protocol-specific structures to this generic structure. (The book abbreviates the cast with `typedef struct sockaddr SA;`.)
+The sockets API predates `void *` in C, so its designers declared functions to take a pointer to a generic `struct sockaddr` and required callers to cast their protocol-specific structure to it. That is why real code is full of `(struct sockaddr *)&addr` and why many codebases define a short alias for the type. The first field, the family, tells the kernel how to interpret the rest. IPv6 has its own larger `sockaddr_in6`, and `struct sockaddr_storage` is guaranteed big enough to hold any of them.
 
-### The five core functions
+## 3. The five core calls
 
 ```c
-int socket(int domain, int type, int protocol);                      /* clients and servers */
-int connect(int clientfd, const struct sockaddr *addr, socklen_t addrlen);   /* clients */
-int bind(int sockfd, const struct sockaddr *addr, socklen_t addrlen);        /* servers */
-int listen(int sockfd, int backlog);                                         /* servers */
-int accept(int listenfd, struct sockaddr *addr, int *addrlen);               /* servers */
+int socket(int domain, int type, int protocol);
+int connect(int clientfd, const struct sockaddr *addr, socklen_t addrlen);
+int bind(int sockfd, const struct sockaddr *addr, socklen_t addrlen);
+int listen(int sockfd, int backlog);
+int accept(int listenfd, struct sockaddr *addr, socklen_t *addrlen);
 ```
 
-- **`socket`** creates a **socket descriptor**. `clientfd = Socket(AF_INET, SOCK_STREAM, 0);` makes the socket an end point for a connection (`AF_INET` = 32-bit IP addresses, `SOCK_STREAM` = connection). The descriptor returned is only **partially opened** and cannot yet be used for reading and writing.
-- **`connect`** (client) attempts to establish an Internet connection with the server at socket address `addr`. It **blocks** until either the connection is successfully established or an error occurs. If successful, the `clientfd` descriptor is ready for reading and writing, and the resulting connection is characterized by the socket pair `(x:y, addr.sin_addr:addr.sin_port)`, where `x` is the client's IP address and `y` is the ephemeral port that uniquely identifies the client process on the client host.
-- **`bind`** (server) asks the kernel to associate the server's socket address in `addr` with the socket descriptor `sockfd`.
-- **`listen`** (server). Clients are **active** entities that initiate connection requests; servers are **passive** entities that wait for them. By default, the kernel assumes that a descriptor created by `socket` corresponds to an **active socket** that will live on the client end of a connection. A server calls `listen` to tell the kernel that the descriptor will be used by a server instead: it converts `sockfd` from an active socket to a **listening socket** that can accept connection requests from clients. The `backlog` argument is a hint about the number of outstanding connection requests that the kernel should queue up before it starts to refuse requests (typically set to a large value such as 1,024).
-- **`accept`** (server) waits for a connection request from a client to arrive on the listening descriptor `listenfd`, then fills in the client's socket address in `addr`, and returns a **connected descriptor** that can be used to communicate with the client using Unix I/O functions.
+**`socket`** creates an endpoint and returns a descriptor. With `AF_INET` and `SOCK_STREAM` it is a TCP socket over IPv4. The descriptor is only half open at this point: it cannot be read or written yet.
 
-### Listening vs. connected descriptors
+**`connect`** is the client's call. It blocks until a connection to the given server address is established or fails. On success the descriptor is ready for I/O, and the connection is named by the pair of the client's address and ephemeral port with the server's address and port.
 
-The distinction confuses many students:
+**`bind`** is the first of the server's three calls. It asks the kernel to associate the socket with a particular local address and port, so clients have somewhere to aim.
 
-- The **listening descriptor** serves as an end point for client **connection requests**. It is typically **created once** and exists for the **lifetime of the server**.
-- The **connected descriptor** is the end point of the **connection that is established** between the client and the server. It is created **each time the server accepts a connection request** and exists only as long as it takes the server to service a client.
+**`listen`** converts the socket from an *active* one (the default, something a client would connect from) into a **listening** socket that can receive connection requests. The `backlog` argument hints at how many pending connections the kernel should queue before turning new ones away.
 
-Why the distinction? It turns out to be quite useful, because it allows us to build **concurrent servers** that can process many client connections simultaneously. For example, each time a connection request arrives on the listening descriptor, we might fork a new process that communicates with the client over its connected descriptor (Module 12).
+**`accept`** blocks until a connection request arrives on the listening descriptor, then returns a brand new **connected descriptor** for talking to that client. It can also fill in the client's address.
+
+### Listening versus connected descriptors
+
+This distinction confuses nearly everyone at first, so it is worth being slow about it.
+
+| | Listening descriptor | Connected descriptor |
+|---|---|---|
+| Created by | `socket` + `bind` + `listen` | each successful `accept` |
+| How many | one per server port | one per client currently being served |
+| Lifetime | as long as the server runs | one client conversation |
+| Used for | `accept` only | `read` and `write` with that client |
+
+Why two? Because separating "the door" from "a conversation" is what makes concurrent servers possible. The server can hand each connected descriptor to a separate child process or thread while the listening descriptor stays free to accept the next arrival. If there were only one descriptor, a server could not begin a second conversation until the first one ended.
 
 ```mermaid
-graph LR
-  subgraph step1["1. Server blocks in accept"]
-    C1["Client: clientfd"] -.-> L1["Server: listenfd(3)"]
-  end
-  subgraph step2["2. Client calls connect"]
-    C2["Client: clientfd"] -->|connection request| L2["Server: listenfd(3)"]
-  end
-  subgraph step3["3. accept returns connfd"]
-    C3["Client: clientfd"] <-->|"established connection"| K3["Server: connfd(4)"]
-    L3["listenfd(3) keeps listening"]
-  end
+flowchart LR
+    subgraph Server process
+      L[listening fd 3]
+      A[connected fd 4]
+      B[connected fd 5]
+    end
+    X[Client X fd 3] --- A
+    Y[Client Y fd 3] --- B
+    Z[New client] -. connection request .-> L
 ```
 
-### Host and service conversion: getaddrinfo and getnameinfo
+## 4. Finding addresses without hard-coding them
 
-Linux provides two powerful functions for converting back and forth between binary socket address structures and the string representations of hostnames, host addresses, service names and port numbers. When used in conjunction with the sockets interface, they allow us to write network programs that are **independent of any particular version of the IP protocol**.
+Filling in `sockaddr_in` by hand ties a program to IPv4. The modern, protocol-independent route is `getaddrinfo`, which turns a host name (or numeric address string) and a service name (or port string) into a linked list of ready-to-use socket addresses:
 
 ```c
-int getaddrinfo(const char *host, const char *service,
-                const struct addrinfo *hints, struct addrinfo **result);
+#include <netdb.h>
+int  getaddrinfo(const char *host, const char *service,
+                 const struct addrinfo *hints, struct addrinfo **result);
 void freeaddrinfo(struct addrinfo *result);
 const char *gai_strerror(int errcode);
 
-int getnameinfo(const struct sockaddr *sa, socklen_t salen,
-                char *host, size_t hostlen, char *service, size_t servlen, int flags);
+struct addrinfo {
+    int              ai_flags;
+    int              ai_family;      /* AF_INET, AF_INET6, ... */
+    int              ai_socktype;    /* SOCK_STREAM, ... */
+    int              ai_protocol;
+    socklen_t        ai_addrlen;
+    struct sockaddr *ai_addr;        /* pass straight to connect or bind */
+    char            *ai_canonname;
+    struct addrinfo *ai_next;        /* next candidate */
+};
 ```
 
-`getaddrinfo` converts string representations of hostnames, host addresses, service names and port numbers into socket address structures. It is the modern replacement for the obsolete `gethostbyname` and `getservbyname` functions, and unlike them it is **reentrant** and works with any protocol. Given `host` (a domain name or a numeric address) and `service` (a service name like `http` or a decimal port number), it returns a `result` that points to a **linked list of `addrinfo` structures**, each of which points to a socket address structure that corresponds to `host` and `service`.
+Each list node carries exactly the arguments that `socket` and then `connect` or `bind` want, so the caller never looks inside the address. The `hints` argument narrows the answers. The fields people set most often:
 
-A client walks this list, trying each socket address in turn until the calls to `socket` and `connect` succeed. A server walks the list until `socket` and `bind` succeed. To avoid memory leaks, the application must eventually call `freeaddrinfo`.
+- `ai_socktype = SOCK_STREAM` so that each address appears once (for TCP) rather than once per socket type.
+- `ai_family` to restrict results to IPv4 or IPv6; leaving it unspecified returns both.
+- `AI_PASSIVE` in `ai_flags`, with `host` set to `NULL`, to request a wildcard address suitable for a *server* that should accept connections on any of the machine's interfaces.
+- `AI_ADDRCONFIG` to return only address families the local machine is actually configured to use.
+- `AI_NUMERICSERV` to insist that the service argument is a port number rather than a name such as `"http"`.
 
-The optional `hints` argument provides finer control over the list: `ai_family` (`AF_INET` restricts to IPv4, `AF_INET6` to IPv6), `ai_socktype` (`SOCK_STREAM` restricts the list to at most one `addrinfo` per unique address, usable as the end point of a connection), and `ai_flags`, a bit mask including:
+The function is thread-safe and reports failure through its return code, decoded with `gai_strerror`, not through `errno`. Always release the list with `freeaddrinfo`.
 
-- `AI_ADDRCONFIG`: return IPv4 addresses only if the local host is configured for IPv4 (similarly for IPv6); recommended when using connections.
-- `AI_CANONNAME`: point the first `addrinfo`'s `ai_canonname` field at the canonical (official) name of host.
-- `AI_NUMERICSERV`: force the `service` argument to be a port number.
-- `AI_PASSIVE`: return socket addresses that can be used by **servers as listening sockets**; `host` should then be NULL, and the address field is the **wildcard address** (`INADDR_ANY`), which tells the kernel that this server will accept requests to any of the IP addresses for this host.
+Its inverse, `getnameinfo`, converts a socket address back into host and service strings; with the flags `NI_NUMERICHOST` and `NI_NUMERICSERV` it skips DNS and returns the numeric forms, which is what a server usually wants when logging who connected.
 
-One of the elegant aspects of `getaddrinfo` is that the fields in an `addrinfo` structure are opaque in the sense that they can be passed directly to the sockets functions without any further manipulation by the application code: `ai_family`, `ai_socktype` and `ai_protocol` go to `socket`; `ai_addr` and `ai_addrlen` go to `connect` and `bind`.
+### Two reusable helpers
 
-`getnameinfo` is the inverse: it converts a socket address structure to the corresponding host and service name strings (with `NI_NUMERICHOST`/`NI_NUMERICSERV` flags to get numeric strings instead of names).
-
-### Helper functions: open_clientfd and open_listenfd
-
-The sockets interface is daunting at first, so the book wraps it:
+Almost every program wraps these calls in two small functions. Here they are called `dial` and `announce`.
 
 ```c
-int open_clientfd(char *hostname, char *port);   /* returns a connected descriptor, or -1 */
-int open_listenfd(char *port);                   /* returns a listening descriptor, or -1 */
-```
-
-`open_clientfd` establishes a connection with a server running on host `hostname` and listening for connection requests on port number `port`. It calls `getaddrinfo` (with `SOCK_STREAM`, `AI_NUMERICSERV`, `AI_ADDRCONFIG`), then walks the list: for each entry, `socket`; if that fails, try the next; then `connect`; on success break, otherwise `close` the descriptor and try the next. Finally it frees the list and returns the descriptor (or −1 if every entry failed).
-
-`open_listenfd` calls `getaddrinfo` with `AI_PASSIVE | AI_ADDRCONFIG | AI_NUMERICSERV` and a NULL host, walks the list calling `socket` and `bind` until one succeeds, and then calls `listen`. One detail: it uses **`setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, ...)`** to configure the server so that it can be terminated, be restarted, and begin accepting connection requests immediately. By default, a restarted server will deny connection requests from clients for approximately 30 seconds, which seriously hinders debugging.
-
-## 2. Example: echo client and server
-
-The best way to learn the sockets interface is to study example code. The **echo client**, after establishing a connection with the server, enters a loop that repeatedly reads a text line from standard input, sends the text line to the server, reads the echo line from the server, and prints the result to standard output. The loop terminates when `fgets` encounters EOF on standard input (the user types Ctrl+D or the redirected input file is exhausted). The client then closes the descriptor, which results in an **EOF notification being sent to the server**, detected when the server receives a return code of zero from its `rio_readlineb` function.
-
-The **echo server** opens a listening descriptor and enters an infinite loop: each iteration waits for a connection request from a client, prints the domain name and port of the connected client, and then calls the `echo` function that services the client. After the `echo` routine returns, the main routine closes the connected descriptor. The `echo` routine repeatedly reads and writes lines of text until `rio_readlineb` encounters EOF.
-
-```c
-void echo(int connfd) {
-    rio_t rio;
-    char line[MAXLINE];
-    size_t n;
-
-    Rio_readinitb(&rio, connfd);                              /* attach a read buffer to the socket */
-    while ((n = Rio_readlineb(&rio, line, MAXLINE)) != 0)     /* 0 means the client closed: EOF */
-        Rio_writen(connfd, line, n);                          /* send the same bytes back */
+int dial(const char *host, const char *port) {           /* client side */
+    struct addrinfo hints = {0}, *list, *p;
+    int fd = -1;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = AI_NUMERICSERV | AI_ADDRCONFIG;
+    if (getaddrinfo(host, port, &hints, &list) != 0) return -1;
+    for (p = list; p; p = p->ai_next) {                   /* try candidates in turn */
+        fd = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
+        if (fd < 0) continue;
+        if (connect(fd, p->ai_addr, p->ai_addrlen) == 0) break;
+        close(fd); fd = -1;                               /* failed: do not leak it */
+    }
+    freeaddrinfo(list);
+    return fd;
 }
 ```
 
-Note the `clientaddr` variable in the server is declared as `struct sockaddr_storage`: large enough to hold any type of socket address, which keeps the code protocol independent.
+`announce` is the mirror image for servers: call `getaddrinfo` with `AI_PASSIVE`, walk the list trying `socket` then `bind`, and finish with `listen`. One extra line matters in practice. Before `bind`, servers set the `SO_REUSEADDR` socket option with `setsockopt`. Without it, restarting a server shortly after stopping it fails with "address already in use" for up to a minute or so, because the kernel keeps the old port reserved while stray segments from previous connections die out.
 
-This simple echo server can handle only **one client at a time**. A server of this type that iterates through clients, one at a time, is called an **iterative server**. Module 12 shows how to build **concurrent servers** that handle multiple clients simultaneously.
+Notice the loop in `dial`. A name can resolve to several addresses, and the first may be unreachable. Robust clients try each until one works, closing the failed sockets as they go.
 
-> [!NOTE]
-> **What does EOF on a connection mean?** There is no such thing as an EOF character. EOF is a *condition* detected by the kernel. An application finds out about it when it receives a zero return code from the `read` function. For disk files, EOF occurs when the current file position exceeds the file length. For Internet connections, EOF occurs when a process **closes its end** of the connection; the process at the other end detects EOF when it attempts to read past the last byte in the stream.
+## 5. An echo service end to end
 
-Here is the same structure in Python, with the server and client in one process using threads so you can run it:
+The canonical first program is an echo server: whatever bytes the client sends, the server sends straight back. The server's main loop is `accept`, serve until end-of-file, `close`, repeat. Two facts about it are worth stating precisely.
+
+**How does the server know the client is finished?** When the client closes its end, the server's next `read` on the connected descriptor returns 0. That zero-byte return *is* end-of-file on a connection. There is no special EOF character.
+
+**Reads may come up short.** TCP is a stream of bytes with no record boundaries. If a client writes 2,000 bytes, the server may read 1,460 and then 540, or any other split, depending on packet sizes and timing. Code that assumes one `write` equals one `read` works on localhost and breaks over a real network. The remedy is to loop until you have what you need, or to use a buffered line reader (the earlier lesson on robust I/O covers both).
+
+The following demo runs a tiny echo exchange over a connected socket pair inside one process, including a deliberately fragmented send. It prints a fallback explanation if sockets are unavailable in your sandbox.
 
 ```python-run
-import socket, threading
+import socket
+
+def read_exactly(sock, n):
+    """Loop until n bytes have arrived or the peer closes."""
+    chunks, got, calls = [], 0, 0
+    while got < n:
+        part = sock.recv(n - got)
+        calls += 1
+        if not part:                      # zero bytes = peer closed
+            break
+        chunks.append(part); got += len(part)
+    return b"".join(chunks), calls
+
+def demo():
+    client, server = socket.socketpair()
+    message = b"systems programming is fun\n"
+    client.sendall(message[:9])           # the message leaves in two pieces
+    first = server.recv(100)
+    print("server's first recv saw only:", first)
+    client.sendall(message[9:])
+    rest, calls = read_exactly(server, len(message) - len(first))
+    server.sendall((first + rest).upper())
+    print("client got back:", client.recv(100))
+    client.close()
+    print("after client closes, server recv returns", server.recv(100), "-> that is EOF")
+    server.close()
+
 try:
-    listenfd = socket.socket(socket.AF_INET, socket.SOCK_STREAM)          # socket
-    listenfd.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    listenfd.bind(("127.0.0.1", 0))                                       # bind (port 0: kernel picks one)
-    listenfd.listen(1024)                                                 # listen
-    port = listenfd.getsockname()[1]
-
-    def serve_one():
-        connfd, addr = listenfd.accept()                                  # accept -> connected descriptor
-        with connfd, connfd.makefile("rb") as rio:
-            for line in rio:                                              # until EOF (client closed)
-                connfd.sendall(line.upper())
-        print("server: client", addr, "closed the connection (EOF)")
-
-    t = threading.Thread(target=serve_one); t.start()
-    clientfd = socket.create_connection(("127.0.0.1", port))             # getaddrinfo + socket + connect
-    print("socket pair:", clientfd.getsockname(), "<->", clientfd.getpeername())
-    with clientfd, clientfd.makefile("rb") as rio:
-        for msg in (b"hello\n", b"echo me\n"):
-            clientfd.sendall(msg)
-            print("client got:", rio.readline())
-    t.join(); listenfd.close()
-except Exception as e:
-    print("sockets are not available in this sandbox:", e)
+    demo()
+except Exception as exc:
+    print("sockets unavailable in this sandbox:", type(exc).__name__)
+    print("expected: a short first read, the upper-cased echo, then b'' for end-of-file")
 ```
 
-## 3. Web servers
+## 6. The web: HTTP in practice
 
-### Web basics
+Web clients and servers are ordinary socket programs that speak a text protocol called **HTTP**. The essentials of a classic exchange:
 
-Web clients and servers interact using a text-based application-level protocol known as **HTTP (Hypertext Transfer Protocol)**. HTTP is a simple protocol. A web client (a **browser**) opens an Internet connection to a server and requests some **content**. The server responds with the requested content and then closes the connection. The browser reads the content and displays it on the screen.
+1. The browser opens a connection to the server.
+2. It sends a **request** asking for some **content**.
+3. The server sends a **response** containing that content and, in the simplest case, closes the connection.
+4. The browser renders what it received.
 
-What distinguishes web services from conventional file retrieval services such as FTP? The main difference is that web content can be written in **HTML (Hypertext Markup Language)**. An HTML page contains instructions (tags) that tell the browser how to display various text and graphical objects, and, the real power of HTML, pages can contain **pointers (hyperlinks)** to content stored on any Internet host.
+### Content and MIME types
 
-### Web content
+To HTTP, content is a sequence of bytes labelled with a **MIME type** so the receiver knows how to interpret it:
 
-To web clients and servers, **content** is a sequence of bytes with an associated **MIME (Multipurpose Internet Mail Extensions) type**:
-
-| MIME type | Description |
+| MIME type | What it is |
 |---|---|
-| `text/html` | HTML page |
-| `text/plain` | Unformatted text |
-| `application/postscript` | PostScript document |
-| `image/gif` | Binary image encoded in GIF format |
-| `image/png` | Binary image encoded in PNG format |
-| `image/jpeg` | Binary image encoded in JPEG format |
+| `text/html` | an HTML page |
+| `text/plain` | unformatted text |
+| `application/json` | JSON data |
+| `image/png`, `image/jpeg` | images |
+| `application/octet-stream` | arbitrary bytes |
 
-Web servers provide content to clients in two different ways:
+A server produces content in one of two ways. **Static content** is a file read from disk and sent as is. **Dynamic content** is the output of a program the server runs at request time. Either way, every piece of content is associated with a file the server manages, and that file is named by a **URL**.
 
-- Fetch a disk file and return its contents to the client. The disk file is known as **static content** and the process of returning the file to the client is known as *serving static content*.
-- Run an executable file and return its output to the client. The output produced by the executable at run time is known as **dynamic content**, and the process of running the program and returning its output to the client is known as *serving dynamic content*.
+### Anatomy of a URL
 
-Every piece of content returned by a web server is associated with some file that it manages. Each of these files has a unique name known as a **URL (universal resource locator)**. For example, `http://www.google.com:80/index.html` identifies an HTML file called `/index.html` on Internet host `www.google.com` that is managed by a web server listening on port 80. The port number is optional and defaults to the well-known HTTP port 80.
+Take `http://shop.example.net:8080/cgi-bin/search?q=usb+cable&page=2`:
 
-URLs for executable files can include program arguments after the filename. A **`?`** character separates the filename from the arguments, and each argument is separated by an **`&`** character: `http://bluefish.ics.cs.cmu.edu:8000/cgi-bin/adder?15000&213` identifies an executable called `/cgi-bin/adder` that will be called with two argument strings, `15000` and `213`.
+- `http` is the scheme.
+- `shop.example.net` is the host; the **client** uses it to decide where to connect.
+- `8080` is the port (80 is assumed for `http` if omitted).
+- `/cgi-bin/search` is the path; the **server** uses it to locate a file or program.
+- Everything after `?` is the query string, with `&` separating arguments. Spaces and other special characters must be encoded, for example as `+` or `%20`.
 
-Clients and servers use different parts of the URL during a transaction. A client uses the prefix `http://www.google.com:80` to determine what kind of server to contact, where the server is, and what port it is listening on. The server uses the suffix `/index.html` to find the file on its filesystem and to determine whether the request is for static or dynamic content. Points to understand about how servers interpret the suffix:
+How a server maps the path to a file is a policy decision. Typical conventions: a designated directory (often `cgi-bin`) contains executables and everything else is static; the bare path `/` is expanded to a default page such as `/index.html`. Note that the leading `/` has nothing to do with the root of the server's filesystem. It is relative to whichever directory the server chose to publish.
 
-- There are no standard rules for determining whether a URL refers to static or dynamic content. Each server has its own rules for the files it manages. A classic (old-fashioned) approach is to identify a set of directories, such as `cgi-bin`, where all executables must reside.
-- The initial `/` in the suffix does **not** denote the Linux root directory. Rather, it denotes the home directory for whatever kind of content is being requested.
-- The minimal URL suffix is the `/` character, which all servers expand to some default home page such as `/index.html`. This explains why it is possible to fetch the home page of a site by simply typing a domain name into the browser: the browser appends the missing `/` to the URL and passes it to the server, which expands the `/` to some default filename.
+```python-run
+from urllib.parse import urlsplit, parse_qs
+url = "http://shop.example.net:8080/cgi-bin/search?q=usb+cable&page=2"
+u = urlsplit(url)
+print("client uses -> host:", u.hostname, " port:", u.port)
+print("server uses -> path:", u.path, " query:", u.query)
+print("decoded arguments:", parse_qs(u.query))
 
-### HTTP transactions
-
-Since HTTP is based on text lines transmitted over Internet connections, we can use the Linux `telnet` program to conduct transactions with any web server on the Internet.
-
-```
-linux> telnet www.example.net 80           # client: open a connection to the server
-Connected to www.example.net.
-GET / HTTP/1.1                             # client: request line
-Host: www.example.net                      # client: required HTTP/1.1 header
-                                           # client: an empty line ends the headers
-HTTP/1.1 200 OK                            # server: response line
-Date: Tue, 03 Mar 2020 10:15:00 GMT        # server: response headers
-Server: ExampleServer/1.0
-Content-Type: text/html                    #   the body is HTML
-Content-Length: 1256                       #   and is 1,256 bytes long
-                                           # server: an empty line ends the headers
-<html>                                     # server: response body starts
-...
-</html>
-Connection closed by foreign host.         # server closed the connection
+def classify(path, dynamic_prefix="/cgi-bin/"):
+    if path.endswith("/"):
+        path += "index.html"                  # default page
+    kind = "dynamic" if path.startswith(dynamic_prefix) else "static"
+    return kind, "." + path                   # resolved under the published directory
+for p in ("/", "/img/logo.png", "/cgi-bin/search"):
+    print(f"{p:18} ->", classify(p))
 ```
 
-(The host name and header values here are illustrative; try it against any plain-HTTP server.)
+### Requests
 
-**HTTP requests.** An HTTP request consists of a **request line**, followed by zero or more **request headers**, followed by an **empty text line** that terminates the list of headers. A request line has the form
-
-```
-method URI version
-```
-
-HTTP supports a number of different methods, including `GET`, `POST`, `OPTIONS`, `HEAD`, `PUT`, `DELETE` and `TRACE`. The workhorse **`GET`** method accounts for a majority of HTTP requests. It instructs the server to generate and return the content identified by the **URI (uniform resource identifier)**: the suffix of the corresponding URL that includes the filename and optional arguments. The `version` field indicates the HTTP version to which the request conforms (`HTTP/1.0` or `HTTP/1.1`; HTTP/1.1 defines additional headers supporting caching and security, and persistent connections that allow a client and server to perform multiple transactions over the same connection).
-
-Request headers have the form `header-name: header-data`. The **`Host`** header is required in HTTP/1.1 requests but not in HTTP/1.0 requests. It is used by **proxy caches**, which sometimes serve as intermediaries between a browser and the origin server that manages the requested file; the data in the Host header, which identifies the domain name of the origin server, allows a proxy in the middle of a proxy chain to determine if it might have a locally cached copy of the requested content.
-
-**HTTP responses.** A response consists of a **response line**, followed by zero or more **response headers**, followed by an empty line that terminates the headers, followed by the **response body**. A response line has the form
+An HTTP request is a **request line**, then zero or more **header lines**, then an empty line that marks the end of the headers. Each line ends with a carriage return and a line feed.
 
 ```
-version status-code status-message
+GET /docs/intro.html HTTP/1.1
+Host: shop.example.net
+User-Agent: handwritten/0.1
+Connection: close
+
 ```
 
-| Status code | Status message | Description |
+The request line has three parts: the **method**, the target, and the protocol version. `GET` asks for content and accounts for most traffic; `POST` submits data in a body; `HEAD` asks for the headers alone; `PUT` and `DELETE` are used by APIs. In HTTP/1.1 the `Host` header is mandatory. It lets one server at one IP address host many sites, and lets proxies know where to forward the request.
+
+### Responses
+
+A response has the same skeleton: a **status line**, headers, a blank line, then the body.
+
+```
+HTTP/1.1 200 OK
+Content-Type: text/html
+Content-Length: 1532
+
+<html>...
+```
+
+The two headers shown tell the client how to interpret the body and how many bytes to expect. The status code is a three-digit summary of what happened:
+
+| Code | Meaning | Typical cause |
 |---|---|---|
-| 200 | OK | Request was handled without error |
-| 301 | Moved permanently | Content has moved to the hostname in the Location header |
-| 400 | Bad request | Request could not be understood by the server |
-| 403 | Forbidden | Server lacks permission to access the requested file |
-| 404 | Not found | Server could not find the requested file |
-| 501 | Not implemented | Server does not support the request method |
-| 505 | HTTP version not supported | Server does not support the version in the request |
+| 200 | OK | request handled |
+| 301 | Moved Permanently | content lives at a new URL given in `Location` |
+| 400 | Bad Request | the server could not parse what you sent |
+| 403 | Forbidden | the server refuses to serve this file |
+| 404 | Not Found | no such file |
+| 500 | Internal Server Error | the server or its program failed |
+| 501 | Not Implemented | the server does not support that method |
 
-The two most important response headers are **`Content-Type`**, which tells the client the MIME type of the content in the response body, and **`Content-Length`**, which indicates its size in bytes. The empty text line that terminates the response headers is followed by the response body, which contains the requested content.
+Because the protocol is text, you can speak it by hand with `telnet` or `nc`, which is a superb debugging habit.
 
 ```python-run
 def parse_request(raw: bytes):
-    head, _, body = raw.partition(b"\r\n\r\n")
-    lines = head.decode().split("\r\n")
-    method, uri, version = lines[0].split()
-    headers = dict(line.split(": ", 1) for line in lines[1:])
-    path, _, query = uri.partition("?")
-    return method, path, query.split("&") if query else [], version, headers
+    head, _, body = raw.partition(b"\r\n\r\n")          # blank line ends the headers
+    lines = head.decode("ascii").split("\r\n")
+    method, target, version = lines[0].split(" ")
+    headers = {}
+    for line in lines[1:]:
+        name, _, value = line.partition(":")
+        headers[name.strip().lower()] = value.strip()
+    return method, target, version, headers, body
 
-req = b"GET /cgi-bin/adder?15000&213 HTTP/1.1\r\nHost: bluefish.ics.cs.cmu.edu:8000\r\nUser-Agent: demo\r\n\r\n"
-method, path, args, version, headers = parse_request(req)
-print(method, path, args, version, headers["Host"])
-is_dynamic = "cgi-bin" in path
-body = (f"The answer is: {args[0]} + {args[1]} = {int(args[0]) + int(args[1])}\r\n" if is_dynamic else "<html>static</html>").encode()
-response = (f"HTTP/1.0 200 OK\r\nServer: Tiny Web Server\r\nContent-length: {len(body)}\r\nContent-type: text/html\r\n\r\n").encode() + body
-print(response.decode())
+def respond(status, reason, body: bytes, ctype="text/plain"):
+    head = f"HTTP/1.1 {status} {reason}\r\nContent-Type: {ctype}\r\nContent-Length: {len(body)}\r\n\r\n"
+    return head.encode() + body
+
+pages = {"/hello.txt": b"hi there\n"}
+raw = b"GET /hello.txt HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
+method, target, version, headers, _ = parse_request(raw)
+print(method, target, version, headers)
+if method != "GET":
+    reply = respond(501, "Not Implemented", b"unsupported method\n")
+elif target not in pages:
+    reply = respond(404, "Not Found", b"no such file\n")
+else:
+    reply = respond(200, "OK", pages[target])
+print(reply.decode())
 ```
 
-### Serving dynamic content: CGI
+## 7. Dynamic content and CGI
 
-If we stop to think for a moment how a server might provide dynamic content to a client, certain questions arise. How does the client pass any program arguments to the server? How does the server pass these arguments to the child process that it creates? How does the server pass other information to the child that it might need to generate the content? Where does the child send its output? These questions are addressed by a de facto standard called **CGI (Common Gateway Interface)**.
+When the URL names a program, the server has to answer three questions: how do the client's arguments reach the program, how does the program learn anything else about the request, and where does the program's output go? An old and very simple convention called **CGI** (Common Gateway Interface) answers all three with ordinary Unix process machinery.
 
-- **How does the client pass program arguments to the server?** Arguments for `GET` requests are passed in the URI: a `?` separates the filename from the arguments, and each argument is separated by an `&`. Spaces are not allowed in arguments and must be represented with the `%20` string; similar encodings exist for other special characters. (Arguments for `POST` requests are passed in the request body rather than in the URI.)
-- **How does the server pass arguments to the child?** After a server receives a request such as `GET /cgi-bin/adder?15000&213 HTTP/1.1`, it calls **`fork`** to create a child process and calls **`execve`** to run the `/cgi-bin/adder` program in the context of the child. Programs like `adder` are often referred to as **CGI programs** because they obey the rules of the CGI standard. Before the call to `execve`, the child process sets the CGI **environment variable `QUERY_STRING`** to `15000&213`, which the `adder` program can reference at run time using `getenv`.
-- **How does the server pass other information to the child?** CGI defines a number of other environment variables that a CGI program can expect to be set when it runs: `SERVER_PORT` (port that the parent is listening on), `REQUEST_METHOD` (`GET` or `POST`), `REMOTE_HOST` and `REMOTE_ADDR` (domain name and dotted-decimal IP address of the client), `CONTENT_TYPE` and `CONTENT_LENGTH` (for `POST` requests: the MIME type and size in bytes of the request body).
-- **Where does the child send its output?** A CGI program sends its dynamic content to the **standard output**. Before the child process loads and runs the CGI program, it uses the Linux **`dup2`** function to redirect standard output to the connected descriptor that is associated with the client. Thus, anything that the CGI program writes to standard output goes directly to the client. Since the parent does not know the type or size of the content that the child generates, the child is responsible for generating the `Content-type` and `Content-length` response headers, as well as the empty line that terminates the headers.
+1. The server `fork`s a child.
+2. The child sets **environment variables** describing the request. For a `GET`, the text after the `?` goes into `QUERY_STRING`; others include `REQUEST_METHOD`, `CONTENT_LENGTH` and `REMOTE_ADDR`.
+3. The child uses `dup2` to make its standard output refer to the connected socket.
+4. The child calls `execve` to run the program.
+5. The program reads its arguments from the environment, writes headers such as `Content-Type`, a blank line, and the body to standard output, which is now the socket. It has no idea a network is involved.
+6. The parent waits for the child and closes its copy of the connected descriptor.
+
+For a `POST`, the request body is likewise attached to the child's standard input.
 
 ```mermaid
-sequenceDiagram
-  participant B as Browser
-  participant T as Web server (parent)
-  participant C as Child process
-  B->>T: GET /cgi-bin/adder?15000&213 HTTP/1.1
-  T->>C: fork
-  C->>C: setenv QUERY_STRING = 15000&213
-  C->>C: dup2(connfd, STDOUT_FILENO)
-  C->>C: execve /cgi-bin/adder
-  C->>B: headers and body written to stdout go straight to the client
-  T->>T: wait reaps the child
+flowchart LR
+    B[Browser] -- "GET /cgi-bin/add?7&35" --> S[Server]
+    S -- fork --> Ch["Child: set QUERY_STRING, dup2 socket onto stdout"]
+    Ch -- execve --> P[add program]
+    P -- "writes to stdout" --> B
 ```
 
-## 4. Putting it together: the Tiny web server
-
-The book develops a small but functioning web server called **Tiny**. It combines many of the ideas we have learned, such as process control, Unix I/O, the sockets interface and HTTP, in only about 250 lines of code. While it lacks the functionality, robustness and security of a real server, it is powerful enough to serve both static and dynamic content to real web browsers.
-
-- **`main`**: Tiny is an iterative server that listens for connection requests on the port passed in the command line. After opening a listening socket with `open_listenfd`, it executes the typical infinite server loop, repeatedly accepting a connection request, performing a transaction (`doit`), and closing its end of the connection.
-- **`doit`** handles one HTTP transaction. It reads and parses the request line. Tiny supports only the `GET` method; if the client requests another method (such as `POST`), it sends an error message (501) and returns to the main routine. Then it reads and ignores any request headers (`read_requesthdrs`), and parses the URI into a filename and a possibly empty CGI argument string, setting a flag that indicates whether the request is for static or dynamic content (`parse_uri`). If the file does not exist on disk, it immediately sends a 404. If the request is for static content, it verifies that the file is a regular file and that it has read permission (else 403) and serves it; if dynamic, it verifies that the file is executable and then serves the dynamic content.
-- **`clienterror`** sends an HTTP response to the client with the appropriate status code and status message in the response line, along with an HTML file in the response body that explains the error to the browser's user.
-- **`parse_uri`** assumes that the home directory for static content is its current directory and that the home directory for executables is `./cgi-bin`. Any URI that contains the string `cgi-bin` is assumed to denote a request for dynamic content. The default filename is `./home.html`.
-- **`serve_static`** sends an HTTP response whose body contains the contents of a local file. It determines the file type by inspecting the suffix in the filename (`get_filetype`: HTML, plain text, GIF, PNG, JPEG), sends the response line and response headers, and then sends the response body by **mapping the requested file into virtual memory with `mmap`** and copying it to the connected descriptor with `rio_writen`, then `munmap`s it (and closes the file descriptor as soon as the mapping exists, to avoid a potentially fatal leak).
-- **`serve_dynamic`** sends a response line indicating success, then **forks** a child. The child initializes the `QUERY_STRING` environment variable with the CGI arguments from the request URI, redirects standard output to the connected file descriptor with `dup2`, and loads and runs the CGI program with `execve`. Since the CGI program runs in the context of the child, it has access to the same open files and environment variables that existed before the call to `execve`; everything it writes to standard output goes directly to the client process, without any intervention from the parent. Meanwhile the parent blocks in a call to `wait`, waiting to reap the child when it terminates.
+CGI spawns a process per request, which is slow, so busy sites replaced it with persistent application servers long ago. It remains the clearest illustration of how environment variables, `fork`, `exec` and descriptor redirection compose.
 
 > [!WARNING]
-> **Dealing with prematurely closed connections.** A robust web server must be prepared for connections that are closed by the client before the server has finished. If a server writes to a connection that has already been closed by the client (say, because you clicked the "Stop" button on your browser), then the first such write returns normally, but the second write causes the delivery of a **`SIGPIPE`** signal whose default behavior is to terminate the process. If the `SIGPIPE` signal is caught or ignored, then the second write operation returns −1 with `errno` set to **`EPIPE`**. A robust server ignores or catches `SIGPIPE` and checks the return codes of its writes.
+> Anything derived from a request (path, query string, headers) is untrusted input. A server must never let a path containing `..` climb out of its published directory, must never paste query text into a shell command, and must bound every buffer it reads into. These are the classic ways small servers get compromised.
+
+## 8. What a minimal web server has to get right
+
+A teaching-sized web server fits in a few hundred lines: `announce` on a port, loop on `accept`, read the request line and headers, decide between static and dynamic, send a response, close. The details that separate a toy from something that survives real clients:
+
+- **Ignore `SIGPIPE`, check `write` results.** If the browser closes the connection early, the kernel sends `SIGPIPE` on the next write, and the default action kills the server. Ignore the signal and handle the `EPIPE` error instead.
+- **Tolerate short reads and partial lines.** Never assume the whole request arrives at once.
+- **Serve files efficiently.** Mapping the file with `mmap` or using `sendfile` avoids copying the content through a user buffer.
+- **Send `Content-Length`,** or the client cannot tell where the body ends unless you close the connection.
+- **Reap CGI children,** or they pile up as zombies.
+- **Handle more than one client at a time.** An iterative server stalls behind one slow connection. The next lesson fixes this three different ways.
 
 > [!INTERVIEW]
-> **"What is the difference between a listening socket and a connected socket?"** The listening socket (from `socket` + `bind` + `listen`) only receives connection requests and lives for the server's lifetime. Each `accept` returns a *new* connected socket for one client; all of them share the server's port, and are distinguished by the 4-tuple (client IP, client port, server IP, server port). This split is what lets a server hand each connection to a separate process, thread or event handler.
+> **"Walk me through what happens when you type a URL and press Enter."** A strong answer follows the layers: parse the URL; resolve the host with DNS; create a socket and `connect` (TCP handshake, plus TLS for https); send a `GET` request with a `Host` header; the server's `accept` returns a connected descriptor; the server parses the request, maps the path to a file or program, and writes status line, headers, blank line, body; the client reads until `Content-Length` bytes have arrived, then renders and fetches sub-resources. Mention the listening/connected descriptor split and you will stand out.
 
 > [!INTERVIEW]
-> **"Describe the structure of an HTTP request and response."** Request: `METHOD URI VERSION`, headers (`Host` mandatory in 1.1), blank line, optional body. Response: `VERSION STATUS MESSAGE`, headers (`Content-Type`, `Content-Length`), blank line, body. Know the status classes: 2xx success, 3xx redirection, 4xx client error (400, 403, 404), 5xx server error (500, 501, 503). HTTP is stateless; state is layered on with cookies or tokens. HTTP/1.1 added persistent connections; HTTP/2 multiplexes streams over one connection; HTTP/3 runs over QUIC/UDP.
+> **"Why does `accept` return a new descriptor instead of reusing the listening one?"** So that the listening socket can keep accepting while existing conversations continue, each on its own descriptor that can be handed to a worker and closed independently. The connected descriptors all share the server's port; the kernel distinguishes them by the client half of the socket pair.
 
-> [!INTERVIEW]
-> **"Why set SO_REUSEADDR on a server socket?"** After a server exits, its address stays in a TCP TIME_WAIT state for a while; without the option, `bind` on restart fails with "Address already in use".
+## 9. Pitfalls
 
-## 5. Summary
+- **Forgetting `listen`,** or calling `accept` on a socket that was never bound.
+- **Closing the listening descriptor instead of the connected one** at the end of a conversation.
+- **Leaking descriptors** on error paths in the address-list loop.
+- **Skipping `SO_REUSEADDR`** and then wondering why the server will not restart.
+- **Using `\n` instead of `\r\n`** in HTTP lines, or omitting the blank line after the headers so the peer waits forever.
+- **Checking `errno` after `getaddrinfo`.** It has its own error codes.
+- **Trusting the path.** Normalise it and confine it to the document root.
 
-- A socket is a descriptor. Client: `getaddrinfo` → `socket` → `connect`. Server: `getaddrinfo` → `socket` → `bind` → `listen` → loop of `accept`.
-- **Listening** descriptor: created once, receives connection requests. **Connected** descriptor: one per accepted client.
-- `getaddrinfo`/`getnameinfo` make code protocol independent; `open_clientfd` and `open_listenfd` package the boilerplate.
-- EOF on a connection is a condition: `read` returns 0 after the peer closes.
-- HTTP: text request line + headers + blank line; response line with status code, headers (`Content-Type`, `Content-Length`), blank line, body.
-- Static content = file bytes; dynamic content = output of a program. CGI: arguments after `?` separated by `&`, passed in `QUERY_STRING`; the child `dup2`s the connected descriptor onto stdout and `execve`s the program.
-- Tiny combines all of it in ~250 lines; real servers must also handle `SIGPIPE`/`EPIPE`, concurrency and security.
+## Summary
 
-## Check yourself
+- A client calls `socket` then `connect`. A server calls `socket`, `bind`, `listen`, then loops on `accept`.
+- The listening descriptor exists for the life of the server; each `accept` yields a separate connected descriptor for one client.
+- `getaddrinfo` and `getnameinfo` convert between names and socket addresses without tying code to IPv4 or IPv6; iterate over all returned candidates.
+- A TCP connection is a byte stream: reads may be short, and a read of zero bytes means the peer closed.
+- HTTP is text: request line, headers, blank line, optional body; responses carry a status code, `Content-Type` and `Content-Length`.
+- Static content is a file; dynamic content is program output. CGI passes arguments through environment variables and redirects the program's standard output to the socket.
+
+## Glossary
+
+- **Socket**: one endpoint of a network connection, used by a program like an open file.
+- **Socket address**: the structure holding an IP address and port that names an endpoint.
+- **`connect`**: the client's call to establish a connection to a server.
+- **`bind`**: the server's call to attach a socket to a particular address and port.
+- **`listen`**: the server's call marking a socket as ready to receive connection requests.
+- **`accept`**: the server's call that waits for a client and returns a new descriptor for talking to it.
+- **Listening descriptor**: the server's long-lived descriptor on which connection requests arrive.
+- **Connected descriptor**: the descriptor for one particular client's conversation.
+- **`getaddrinfo`**: the function that converts a host name and service into ready-to-use socket addresses.
+- **HTTP**: the text protocol used between web browsers and web servers.
+- **URL**: a web address, made up of a scheme, host, optional port, path and optional query.
+- **MIME type**: a label such as `text/html` that says what kind of content a response carries.
+- **Status code**: the three-digit number in an HTTP response reporting the outcome, such as 200 or 404.
+- **Static / dynamic content**: a file sent as it is / output produced by running a program for the request.
+- **CGI (Common Gateway Interface)**: an early convention for a web server to run a program and return its output.
 
 ```quiz
 [
-  {"q": "Which sequence of calls does a server make before it can accept connections?", "options": ["socket, connect, listen", "socket, bind, listen", "bind, socket, accept", "listen, bind, socket"], "answer": 1,
-   "explain": "Create the socket, bind it to the server's address/port, then mark it as a listening socket."},
-  {"q": "What does accept return?", "options": ["The listening descriptor", "A new connected descriptor for communicating with one client", "The client's port number", "0 on success"], "answer": 1,
-   "explain": "Each accepted connection gets its own connected descriptor; the listening descriptor stays open for further requests."},
-  {"q": "How does a server detect that the client has closed its end of the connection?", "options": ["It receives an EOF character", "read (or rio_readlineb) returns 0", "accept fails", "It receives SIGCHLD"], "answer": 1,
-   "explain": "EOF is a condition signalled by a zero return from read."},
-  {"q": "In the URL http://host:8000/cgi-bin/adder?15000&213, what does the '?' separate?", "options": ["Host from port", "The filename from the program arguments", "Two arguments", "Headers from body"], "answer": 1,
-   "explain": "'?' separates the file from its arguments; '&' separates arguments from each other."},
-  {"q": "How does a CGI program receive the arguments of a GET request?", "options": ["On its command line", "In the QUERY_STRING environment variable", "On standard input", "In a temporary file"], "answer": 1,
-   "explain": "The server sets QUERY_STRING before execve; POST bodies arrive on standard input."},
-  {"q": "How does a CGI program's output reach the client?", "options": ["The parent server copies it", "The child redirects stdout to the connected descriptor with dup2 before execve", "Through a temporary file", "Via a signal"], "answer": 1,
-   "explain": "After dup2(connfd, 1), anything written to standard output goes directly to the client."},
-  {"q": "Which header is required in an HTTP/1.1 request?", "options": ["Content-Length", "Host", "User-Agent", "Accept"], "answer": 1,
-   "explain": "The Host header identifies the origin server and is mandatory in HTTP/1.1."},
-  {"q": "A server writes twice to a connection the client has already closed. What happens on the second write by default?", "options": ["It returns 0", "The kernel sends SIGPIPE, terminating the process unless the signal is handled or ignored", "It blocks forever", "Nothing"], "answer": 1,
-   "explain": "The second write triggers SIGPIPE; if ignored, write returns -1 with errno EPIPE."}
+  {"q": "Which sequence of calls does a TCP server make before it can receive its first client?",
+   "options": ["socket, connect, accept", "socket, bind, listen, accept", "socket, listen, bind, connect", "bind, socket, accept, listen"],
+   "answer": 1, "explain": "The server creates the socket, binds it to a local address and port, marks it as listening, and then blocks in accept."},
+  {"q": "A server is currently talking to three clients on port 8080. How many descriptors related to that port does it hold?",
+   "options": ["One", "Three", "Four: one listening and three connected", "Six"],
+   "answer": 2, "explain": "There is one long-lived listening descriptor plus one connected descriptor returned by accept for each active client."},
+  {"q": "A server's read on a connected descriptor returns 0. What does that mean?",
+   "options": ["No data yet; try again", "The client has closed its end of the connection", "The read was interrupted by a signal", "The buffer was too small"],
+   "answer": 1, "explain": "On a connection, a zero-byte read is end-of-file: the peer has closed. A blocking read with no data waits instead of returning 0."},
+  {"q": "Why should a client loop over the list returned by getaddrinfo?",
+   "options": ["The list is sorted by port number", "A name may resolve to several addresses and the first may not be reachable", "Only the last entry is valid", "To convert each entry to network byte order"],
+   "answer": 1, "explain": "Each node is a candidate address. Robust clients try socket and connect on each until one succeeds, closing failed sockets."},
+  {"q": "In the URL http://h.example:8000/cgi-bin/sum?12&30, which part is passed to a CGI program in QUERY_STRING?",
+   "options": ["h.example:8000", "/cgi-bin/sum", "12&30", "sum?12&30"],
+   "answer": 2, "explain": "The text following the question mark is the query string; the server places it in the QUERY_STRING environment variable for GET requests."},
+  {"q": "How does a CGI program's output reach the browser?",
+   "options": ["The server reads a temporary file the program writes", "The child redirects standard output to the connected socket with dup2 before exec", "The program opens its own connection to the browser", "Through a shared memory segment"],
+   "answer": 1, "explain": "After fork, the child duplicates the connected descriptor onto descriptor 1, so the program's ordinary writes to standard output go straight to the client."},
+  {"q": "What marks the end of the header section in an HTTP request?",
+   "options": ["The Content-Length header", "An empty line (CRLF by itself)", "The closing of the connection", "A line containing END"],
+   "answer": 1, "explain": "Headers are terminated by a blank line. A GET request typically ends right there with no body."},
+  {"q": "Why do servers set SO_REUSEADDR before bind?",
+   "options": ["To allow two servers to share all traffic on a port", "To be able to restart immediately instead of failing with address already in use", "To enable IPv6", "To make accept non-blocking"],
+   "answer": 1, "explain": "After a server stops, the kernel keeps its port in a waiting state briefly. The option lets a new server bind to it right away."}
 ]
 ```
 
-> **Source:** CS:APP 3e, §11.4–11.6 (The sockets interface; Web servers: web basics, web content, HTTP transactions, serving dynamic content; Putting it together: the Tiny web server).
+> **Source:** CS:APP 3e, §11.4–11.6

@@ -1,308 +1,416 @@
 # Signals and nonlocal jumps
 
-Exceptions let the hardware and kernel interrupt a program; context switches let the kernel multiplex processes. **Linux signals** are a higher-level form of exceptional control flow that allows processes and the kernel to interrupt *other processes*. A signal is a small message notifying a process that an event of some type has occurred in the system. Signals are how Ctrl+C kills a program, how a shell learns that a background job finished, and how a segmentation fault becomes a termination. They are also among the trickiest parts of systems programming, because signal handlers run **concurrently** with the main program. This lesson covers the mechanics, the rules for writing correct handlers, and nonlocal jumps.
+> **Before this lesson:** You need processes, `fork`, `waitpid` and zombies from [Processes: fork, exec, wait](#/lesson/csapp/processes), and exceptions and kernel mode from [Exceptions and the kernel](#/lesson/csapp/exceptions).
 
-## 1. Signal terminology
+## In plain words
 
-Linux supports about 30 signal types. Each corresponds to some kind of system event. A selection:
+A **signal** is a short notification that the operating system delivers to a running program to say that something has happened. It carries almost no information beyond its type: "the user pressed Ctrl+C", "a helper program you started has finished", "you tried to use memory that is not yours". Think of a tap on the shoulder while you are busy. You may ignore it, stop working altogether, or pause, deal with it, and carry on. A program chooses its reaction to each type of signal in advance. If it chooses "deal with it", it names a small function, called a **signal handler**, that will run whenever that signal arrives.
 
-| Number | Name | Default action | Corresponding event |
+Why this matters at work: signals are how programs shut down cleanly when a server is stopped, how a terminal interrupts a stuck command, and how a parent program learns that its helpers have finished. Handlers can run at any moment, in the middle of anything, so they are a classic source of rare, hard-to-find bugs. Knowing the safe patterns is essential for writing dependable services.
+
+## Why look closer
+
+Press Ctrl+C and a runaway program stops. A background job finishes and your shell somehow knows to clean it up. A program dereferences a null pointer and is killed with a tidy message instead of taking the machine down. Behind all three is one mechanism: the **signal**, a small message the kernel delivers to a process to say that some event has occurred. Signals are the operating system's way of exposing exceptional control flow to ordinary programs. Hardware exceptions are handled inside the kernel and are normally invisible to user code; signals let the kernel, or another process, tap a program on the shoulder and make it run a function of its choosing.
+
+They are also one of the most error-prone parts of systems programming. A signal handler is a tiny concurrent program that can run between *any* two instructions of your main code, and the rules for writing one safely are subtle. This lesson explains the lifecycle of a signal, the system calls for sending, catching and blocking them, the classic bugs and how to avoid them, and closes with `setjmp`/`longjmp`, C's facility for jumping out of deeply nested calls.
+
+## 1. What a signal is
+
+Linux defines around thirty standard signal types, each with a number, a name and a default behaviour. The ones you will meet constantly:
+
+| Number | Name | Default action | Typical cause |
 |---|---|---|---|
-| 2 | `SIGINT` | Terminate | Interrupt from keyboard (Ctrl+C) |
-| 3 | `SIGQUIT` | Terminate and dump core | Quit from keyboard |
-| 4 | `SIGILL` | Terminate | Illegal instruction |
-| 6 | `SIGABRT` | Terminate and dump core | Abort signal from `abort` |
-| 8 | `SIGFPE` | Terminate and dump core | Floating-point exception (divide by zero) |
-| 9 | `SIGKILL` | Terminate (cannot be caught or ignored) | Kill program |
-| 11 | `SIGSEGV` | Terminate and dump core | Invalid memory reference (seg fault) |
-| 13 | `SIGPIPE` | Terminate | Wrote to a pipe with no reader |
-| 14 | `SIGALRM` | Terminate | Timer signal from `alarm` |
-| 15 | `SIGTERM` | Terminate | Software termination signal |
-| 17 | `SIGCHLD` | Ignore | A child process has stopped or terminated |
-| 18 | `SIGCONT` | Ignore | Continue process if stopped |
-| 19 | `SIGSTOP` | Stop until next SIGCONT (cannot be caught or ignored) | Stop signal not from terminal |
-| 20 | `SIGTSTP` | Stop until next SIGCONT | Stop signal from terminal (Ctrl+Z) |
+| 2 | `SIGINT` | terminate | Ctrl+C at the terminal |
+| 9 | `SIGKILL` | terminate | forced kill; cannot be caught or ignored |
+| 11 | `SIGSEGV` | terminate, dump core | invalid memory reference |
+| 13 | `SIGPIPE` | terminate | writing to a pipe or socket with no reader |
+| 14 | `SIGALRM` | terminate | timer set by `alarm` expired |
+| 15 | `SIGTERM` | terminate | polite request to exit; the default of the `kill` command |
+| 17 | `SIGCHLD` | ignore | a child stopped or terminated |
+| 18 | `SIGCONT` | continue | resume a stopped process |
+| 19 | `SIGSTOP` | stop | pause; cannot be caught or ignored |
+| 20 | `SIGTSTP` | stop | Ctrl+Z at the terminal |
+| 8 | `SIGFPE` | terminate, dump core | arithmetic error such as integer divide by zero |
 
-Low-level hardware exceptions are processed by the kernel's exception handlers and are normally invisible to user processes; signals provide a mechanism for exposing them. A divide by zero makes the kernel send `SIGFPE`; an illegal memory reference, `SIGSEGV`.
+Many signals are the user-visible face of a low-level exception. A divide error in the CPU becomes `SIGFPE`; an illegal memory reference becomes `SIGSEGV`. Others originate in software: the terminal driver produces `SIGINT`, the kernel produces `SIGCHLD` when a child ends, and any process can send signals to another with `kill`.
 
-The transfer of a signal to a destination process occurs in two distinct steps:
+## 2. The lifecycle: sent, pending, received
 
-- **Sending a signal.** The kernel *sends* (delivers) a signal to a destination process by updating some state in the context of the destination process. It is sent either because the kernel detected a system event, or because a process invoked the `kill` function. A process can send a signal to itself.
-- **Receiving a signal.** A destination process *receives* a signal when it is forced by the kernel to react in some way to the delivery. The process can ignore the signal, terminate, or **catch** it by executing a user-level function called a **signal handler**.
+Getting a signal to its destination is a two-step affair.
 
-A signal that has been sent but not yet received is a **pending signal**. At any point in time, there can be **at most one pending signal of a particular type**: if a process has a pending signal of type $k$, subsequent signals of type $k$ sent to it are *not queued*; they are simply **discarded**. A process can selectively **block** the receipt of certain signals; a blocked signal can be delivered but will not be received until the process unblocks it.
+**Sending.** The kernel sends (delivers) a signal to a destination process by updating a bit of state in that process's context. This happens either because the kernel detected a system event, or because some process asked it to with the `kill` function. A process may signal itself.
 
-For each process, the kernel maintains the set of pending signals in the **`pending` bit vector** and the set of blocked signals in the **`blocked` bit vector** (the *signal mask*). The kernel sets bit $k$ in `pending` whenever a signal of type $k$ is delivered and clears it whenever it is received.
+**Receiving.** The destination receives the signal when the kernel forces it to react in some way. The process can **ignore** the signal, **terminate**, or **catch** it by running a user-level function called a **signal handler**.
+
+A signal that has been sent but not yet received is **pending**. Here is the first surprising fact, and the root of several bugs:
+
+> At any moment there can be **at most one pending signal of a given type**. The pending state is a single bit per type, not a counter. If a signal of type *k* is already pending, further type-*k* signals sent to the process are discarded.
+
+A process can also **block** selected signal types. A blocked signal can still be sent and will sit pending, but it will not be received until the process unblocks it.
+
+So the kernel keeps two bit vectors per process: `pending`, the set of signals waiting, and `blocked`, the **signal mask**. The kernel sets bit *k* in `pending` when a type-*k* signal is sent and clears it when that signal is received.
 
 ```mermaid
-graph LR
-  E["Event: Ctrl+C, child exits, kill(), fault"] --> S["Kernel sends: set bit k in pending"]
-  S --> B{"bit k set in blocked?"}
-  B -->|yes| W["Stays pending until unblocked"]
-  B -->|no| R["Received on next switch to user mode"]
-  R --> A["Action: default, ignore, or run handler"]
-```
-
-## 2. Sending signals
-
-All mechanisms for sending signals rely on **process groups**. Every process belongs to exactly one process group, identified by a positive **process group ID**; by default a child belongs to the same group as its parent. `getpgrp()` returns it; `setpgid(pid, pgid)` changes it (`setpgid(0, 0)` creates a new group whose ID is the caller's PID).
-
-- **`/bin/kill` program**: `linux> /bin/kill -9 15213` sends signal 9 (`SIGKILL`) to process 15213. A negative PID sends the signal to every process in that process group: `/bin/kill -9 -15213`.
-- **From the keyboard.** Shells use the abstraction of a **job** for the processes created by evaluating one command line. At any time there is at most one **foreground job** and zero or more **background jobs**; `ls | sort` creates a foreground job of two processes connected by a pipe. The shell creates a separate process group for each job. Typing **Ctrl+C** causes the kernel to send `SIGINT` to every process in the foreground process group (default: terminate); **Ctrl+Z** sends `SIGTSTP` (default: stop).
-- **`kill` function**: `int kill(pid_t pid, int sig);`. If `pid > 0`, sends `sig` to process `pid`; if `pid == 0`, to every process in the caller's process group; if `pid < 0`, to every process in group `|pid|`.
-- **`alarm` function**: `unsigned int alarm(unsigned int secs);` arranges for the kernel to send `SIGALRM` to the calling process in `secs` seconds, cancelling any pending alarm.
-
-## 3. Receiving signals
-
-When the kernel switches a process $p$ from kernel mode to user mode (returning from a system call or completing a context switch), it checks the set of unblocked pending signals: **`pending & ~blocked`**. If it is empty (the usual case), control passes to the next instruction in $p$'s logical flow. Otherwise, the kernel chooses some signal $k$ in the set (typically the smallest $k$) and forces $p$ to **receive** it. Receipt triggers some **action**; once the action completes, control passes back to the next instruction $I_{next}$.
-
-Each signal type has a predefined **default action**, one of:
-
-- The process terminates.
-- The process terminates and dumps core.
-- The process stops (suspends) until restarted by a `SIGCONT`.
-- The process ignores the signal.
-
-A process can modify the default action with the `signal` function, **except for `SIGSTOP` and `SIGKILL`**, whose default actions cannot be changed:
-
-```c
-typedef void (*sighandler_t)(int);
-sighandler_t signal(int signum, sighandler_t handler);
-/* Returns: pointer to previous handler if OK, SIG_ERR on error */
-```
-
-- `handler == SIG_IGN`: signals of type `signum` are ignored.
-- `handler == SIG_DFL`: the default action is restored.
-- Otherwise `handler` is the address of a user-defined **signal handler**, called whenever the process receives a signal of type `signum`. Changing the default action by passing a handler address is **installing the handler**; invoking it is **catching the signal**; executing it is **handling the signal**.
-
-When the handler executes its `return`, control (usually) passes back to the instruction where the process was interrupted. Handlers can be interrupted by *other* handlers.
-
-```c
-void sigint_handler(int sig) {             /* SIGINT handler */
-    printf("Caught SIGINT!\n");
-    exit(0);
-}
-int main() {
-    if (signal(SIGINT, sigint_handler) == SIG_ERR)
-        unix_error("signal error");
-    pause();                               /* wait for the receipt of a signal */
-    return 0;
-}
+stateDiagram-v2
+    [*] --> Pending: kernel or kill sets the pending bit
+    Pending --> Pending: same type sent again, discarded
+    Pending --> Waiting: type is blocked
+    Waiting --> Pending: unblocked
+    Pending --> Received: process about to return to user mode
+    Received --> [*]: ignore, terminate, or run handler
 ```
 
 ```python-run
-# Python exposes the same mechanism. Here a process sends SIGINT to itself.
-import signal
-caught = []
-def handler(signum, frame):
-    caught.append(signum)
-try:
-    old = signal.signal(signal.SIGINT, handler)   # install the handler (returns the previous one)
-    signal.raise_signal(signal.SIGINT)            # send the signal to this process
-    signal.signal(signal.SIGINT, old)             # restore the previous action
-    print("caught:", caught, "| SIGINT is number", int(signal.SIGINT))
-except Exception as e:
-    print("signals are not available in this sandbox:", e)
+# One bit per signal type: watch three SIGCHLDs collapse into fewer deliveries.
+pending = set()
+handled = 0
+blocked = False
+
+def send(sig):
+    global pending
+    print(f"  send {sig}:", "already pending -> dropped" if sig in pending else "pending bit set")
+    pending.add(sig)
+
+def maybe_deliver():
+    global handled, blocked
+    if "SIGCHLD" in pending and not blocked:
+        pending.discard("SIGCHLD")
+        handled += 1
+        blocked = True                      # the handler's own type is blocked while it runs
+        print("  handler starts (run", handled, ")")
+
+send("SIGCHLD"); maybe_deliver()            # first child dies: handler begins
+send("SIGCHLD")                             # second child dies during the handler: pends
+send("SIGCHLD")                             # third child dies during the handler: lost
+blocked = False; maybe_deliver()            # handler returns, the pending one is delivered
+blocked = False; maybe_deliver()
+print("3 signals sent, handler ran", handled, "times")
 ```
 
-## 4. Blocking and unblocking signals
+## 3. Sending signals
 
-- **Implicit blocking.** By default, the kernel blocks any pending signals of the type **currently being processed by a handler**. If a handler for signal $s$ is running and another $s$ arrives, it becomes pending but is not received until the handler returns.
-- **Explicit blocking** with `sigprocmask` and helpers:
+### Process groups
+
+Signal delivery to multiple processes is organised around **process groups**. Every process belongs to exactly one group, identified by a positive integer group ID. A child inherits its parent's group by default; `setpgid(pid, pgid)` changes it, and `setpgid(0, 0)` puts the caller into a new group whose ID equals its own PID. `getpgrp()` reports the current group.
+
+Shells use groups to implement **jobs**. Each command line (which may be a pipeline of several processes) becomes one job in its own process group. At most one job is in the **foreground**; any number may be in the background.
+
+### Four ways to send
+
+- **From the keyboard.** Ctrl+C causes the kernel to send `SIGINT` to every process in the foreground process group; Ctrl+Z sends `SIGTSTP`, whose default action is to suspend them.
+- **With the `kill` program.** `kill -9 4242` sends signal 9 to process 4242. A negative PID addresses a whole group: `kill -9 -4242` signals every process in group 4242.
+- **With the `kill` function:**
+
+```c
+#include <signal.h>
+int kill(pid_t pid, int sig);
+```
+
+If `pid` is positive, the signal goes to that process; if zero, to every process in the caller's group; if negative, to every process in group `|pid|`.
+
+- **With `alarm`:** `alarm(secs)` arranges for the kernel to send `SIGALRM` to the calling process after that many seconds. A new call cancels any earlier pending alarm and returns the number of seconds that had been left on it.
+
+## 4. Receiving signals
+
+When does reception actually happen? At a specific moment: whenever the kernel is about to switch a process from kernel mode back to user mode, for instance when returning from a system call or completing a context switch, it examines the set of signals that are pending and not blocked, `pending & ~blocked`.
+
+- If the set is empty, control passes to the next instruction of the program as usual.
+- If not, the kernel picks one signal from the set (typically the lowest numbered) and forces the process to receive it. When that action is complete, the next is considered, and so on.
+
+Each signal type has a predefined **default action**, one of: terminate; terminate and dump core; stop until restarted by `SIGCONT`; or ignore.
+
+### Installing a handler
+
+A process can replace the default action for any signal except `SIGKILL` and `SIGSTOP`:
+
+```c
+#include <signal.h>
+typedef void (*sighandler_t)(int);
+sighandler_t signal(int signum, sighandler_t handler);
+```
+
+The second argument may be `SIG_IGN` to ignore the signal, `SIG_DFL` to restore the default, or the address of a function to be called when the signal arrives. Supplying the function is called **installing** the handler; its invocation is **catching** the signal; running it is **handling** the signal. The handler receives the signal number as its argument, so one function can serve several types. When it returns, control normally goes back to the instruction where the program was interrupted.
+
+Handlers can themselves be interrupted by handlers for *other* signal types, so they nest.
+
+```mermaid
+sequenceDiagram
+    participant M as Main program
+    participant K as Kernel
+    participant H as Handler
+    M->>K: interrupted or makes a system call
+    Note over K: finds SIGINT pending and unblocked
+    K->>H: arranges for handler to run in user mode
+    Note over H: handler executes
+    H->>K: returns via sigreturn
+    K->>M: resumes at the interrupted instruction
+```
+
+Python exposes the same mechanism through its `signal` module. Here a process signals itself.
+
+```python-run
+import os, signal
+
+def demo():
+    caught = []
+    def on_usr(signum, frame):
+        caught.append(signal.Signals(signum).name)
+    previous = signal.signal(signal.SIGINT, on_usr)       # install
+    try:
+        signal.raise_signal(signal.SIGINT)                # send to ourselves
+    finally:
+        signal.signal(signal.SIGINT, previous)            # restore
+    return caught
+
+try:
+    print("handler ran for:", demo())
+except Exception as exc:                                   # sandboxes without real signals
+    print("signals are not available here:", type(exc).__name__)
+    print("on a normal system the handler runs once and records SIGINT")
+```
+
+## 5. Blocking and unblocking
+
+There are two blocking mechanisms.
+
+- **Implicit.** While a handler for type *k* is running, the kernel blocks further type-*k* signals by default. A second arrival stays pending until the handler returns.
+- **Explicit.** A program manipulates its own mask with `sigprocmask` and a few helper functions that build signal sets:
 
 ```c
 int sigprocmask(int how, const sigset_t *set, sigset_t *oldset);
-int sigemptyset(sigset_t *set);              /* set = {} */
-int sigfillset(sigset_t *set);               /* set = all signals */
+int sigemptyset(sigset_t *set);
+int sigfillset(sigset_t *set);
 int sigaddset(sigset_t *set, int signum);
 int sigdelset(sigset_t *set, int signum);
 int sigismember(const sigset_t *set, int signum);
 ```
 
-`how` is `SIG_BLOCK` (`blocked = blocked | set`), `SIG_UNBLOCK` (`blocked = blocked & ~set`) or `SIG_SETMASK` (`blocked = set`). If `oldset` is non-NULL, the previous mask is saved there.
+`how` is `SIG_BLOCK` (add the given signals to the mask), `SIG_UNBLOCK` (remove them), or `SIG_SETMASK` (replace the mask outright). If `oldset` is non-null, the previous mask is stored there so that it can be restored later.
+
+The standard idiom for protecting a short region:
 
 ```c
-sigset_t mask, prev_mask;
-Sigemptyset(&mask);
-Sigaddset(&mask, SIGINT);
-Sigprocmask(SIG_BLOCK, &mask, &prev_mask);    /* block SIGINT, save previous mask */
-/* ... code region that will not be interrupted by SIGINT ... */
-Sigprocmask(SIG_SETMASK, &prev_mask, NULL);   /* restore previous mask */
+sigset_t mask, prev;
+sigemptyset(&mask);
+sigaddset(&mask, SIGINT);
+sigprocmask(SIG_BLOCK, &mask, &prev);    /* SIGINT now waits */
+/* ... code that must not be interrupted by SIGINT ... */
+sigprocmask(SIG_SETMASK, &prev, NULL);   /* restore; a pending SIGINT is delivered here */
 ```
 
-## 5. Writing signal handlers
+## 6. Writing handlers that are actually correct
 
-Signal handling is one of the thornier aspects of Linux system-level programming: (1) handlers run concurrently with the main program and share its global variables, so they can interfere with it and with other handlers; (2) the rules for how and when signals are received are often counterintuitive; (3) different systems can have different signal-handling semantics.
+Handlers are hard for three reasons: they run concurrently with the main program and share its global variables; the rules for when signals are received are unintuitive; and different systems have had different semantics. A handful of conservative guidelines covers most of the danger.
 
-### Safe signal handling
+**Keep handlers minimal.** The best handler sets a global flag and returns, leaving the real work to the main program, which checks the flag periodically.
 
-Conservative guidelines from the book:
+**Call only async-signal-safe functions.** A function is async-signal-safe if it can be called from a handler without risk, either because it is reentrant (uses only local variables) or because it cannot itself be interrupted by a handler. POSIX publishes the list. It includes `write`, `_exit`, `waitpid`, `kill`, `sigprocmask` and other raw system calls. It conspicuously excludes `printf`, `sprintf`, `malloc`, `free` and `exit`. The reason is concrete: if the main program is in the middle of `malloc`, holding the allocator's internal lock or with its lists half-updated, and a handler calls `malloc` again, the result is deadlock or a corrupted heap. To print from a handler, use `write` on a fixed message.
 
-- **G0. Keep handlers as simple as possible.** For example, set a global flag and return; the main program periodically checks (and resets) the flag.
-- **G1. Call only async-signal-safe functions in your handlers.** A function is *async-signal-safe* if it is reentrant (accesses only local variables) or cannot be interrupted by signal handlers. The list includes `_exit`, `write`, `wait`, `waitpid`, `sleep`, `kill`, `read`, `signal`, `sigprocmask`... but **not** `printf`, `sprintf`, `malloc` or `exit`. The only safe way to generate output from a handler is `write`. (The book's example `printf` handlers are for illustration; its `Sio` package provides safe output: `sio_puts`, `sio_putl`, `sio_error`.)
-- **G2. Save and restore `errno`.** Many async-signal-safe functions set `errno` on error; calling them in a handler might interfere with other parts of the program that rely on `errno`. Save it to a local on entry and restore it before returning (unnecessary if the handler terminates the process with `_exit`).
-- **G3. Protect accesses to shared global data structures by blocking all signals.** If a handler shares a data structure with the main program or another handler, both should temporarily block all signals while accessing it, so that the sequence of instructions needed is not interrupted halfway.
-- **G4. Declare global variables with `volatile`.** It tells the compiler never to cache the variable in a register, so the main program actually re-reads a flag a handler may have changed.
-- **G5. Declare flags with `sig_atomic_t`.** Reads and writes of this integer type are guaranteed atomic (uninterruptible), so a flag of type `volatile sig_atomic_t` can be read or written without blocking signals. (The guarantee applies only to individual reads and writes, not to `flag++` or `flag = flag + 10`.)
+**Save and restore `errno`.** Many safe functions set `errno` on failure. A handler that changes it can confuse the interrupted code, which may have been about to examine it. Copy `errno` to a local on entry and put it back before returning.
 
-### Correct signal handling: signals are not queued
+**Block signals while touching shared data.** If the main program and a handler both update a global structure, the main program should block the relevant signals around its accesses, and the handler should block all signals around its own. Otherwise an interruption in the middle of an update exposes a half-modified structure.
 
-The `pending` bit vector has exactly one bit per signal type. The crucial lesson: **the existence of a pending signal merely indicates that *at least one* signal has arrived.** You cannot use signals to count events.
+**Declare shared globals `volatile`.** Without it, an optimising compiler may decide that a variable the main loop reads is never changed by that loop and keep its value in a register, never noticing the handler's update.
 
-Consider a parent that installs a `SIGCHLD` handler to reap children, then forks three children that terminate at almost the same time. A first attempt at the handler:
+**Use `sig_atomic_t` for flags.** Reads and writes of this integer type are guaranteed to be uninterruptible, so a flag declared `volatile sig_atomic_t` can be set by a handler and tested by the main program without blocking signals. The guarantee covers a single read or a single write only, not compound operations such as `flag++`.
+
+### Signals are not queued: the reaping bug
+
+A parent creates several children and installs a `SIGCHLD` handler that calls `wait` once to reap one child. This looks right and is wrong. Suppose two children end while the handler is still dealing with the first. The first of those two sets the pending bit; the second finds it already set and is discarded. When the handler returns, it is invoked once more, reaps one child, and the last child remains a zombie forever.
+
+The lesson: **the arrival of a signal tells you that at least one event of that type occurred, not how many.** The handler must reap as many children as possible each time it runs:
 
 ```c
-void handler1(int sig) {
-    int olderrno = errno;
-    if ((waitpid(-1, NULL, 0)) < 0)          /* reap ONE child: WRONG */
-        sio_error("waitpid error");
-    Sio_puts("Handler reaped child\n");
-    Sleep(1);
-    errno = olderrno;
+void on_child(int sig) {
+    int saved = errno;
+    while (waitpid(-1, NULL, WNOHANG) > 0)
+        ;                                  /* reap every child that is ready */
+    errno = saved;
 }
 ```
 
-The first `SIGCHLD` is received and the handler runs (with `SIGCHLD` blocked). The second arrives and is marked pending. The third arrives while the second is still pending and is **discarded**. After the first handler returns, the kernel delivers the one pending signal; the handler reaps the second child. No more signals are pending: the third child is never reaped and remains a zombie.
+### Portability: use sigaction
 
-The fix: since one `SIGCHLD` may stand for several terminated children, **reap as many as possible each time** the handler is called:
+The `signal` function has behaved differently across Unix versions. On some old systems a handler was reset to the default after each delivery; on some, slow system calls such as `read` fail with `EINTR` when interrupted by a handler rather than restarting automatically. The portable solution is `sigaction`, which lets you state the semantics you want explicitly. Most codebases wrap it in a helper with the same shape as `signal` that requests: block only the type being handled, restart interrupted system calls where possible, and keep the handler installed until changed.
 
-```c
-void handler2(int sig) {
-    int olderrno = errno;
-    while (waitpid(-1, NULL, 0) > 0)          /* reap ALL available zombies */
-        Sio_puts("Handler reaped child\n");
-    if (errno != ECHILD)
-        Sio_error("waitpid error");
-    Sleep(1);
-    errno = olderrno;
-}
+## 7. Concurrency bugs with signals
+
+### A race between parent and child
+
+Consider a shell-like program that keeps a list of running jobs. The main loop forks a child and then adds it to the list; the `SIGCHLD` handler reaps finished children and removes them from the list.
+
+The hidden flaw: nothing forces the parent to run before the child. This interleaving is possible:
+
+1. the parent calls `fork`, and the kernel schedules the child first;
+2. the child runs to completion and terminates;
+3. the parent, on resuming, immediately receives `SIGCHLD`; the handler tries to remove a job that is not yet on the list, which does nothing;
+4. the parent now adds the job. It will never be removed, because the child is already gone.
+
+This is a **race**: correctness depends on the relative timing of two flows. Such bugs are miserable to find because the bad ordering may occur once in a million runs. The fix is to make the bad ordering impossible. Block `SIGCHLD` *before* calling `fork` and unblock it only *after* the job is recorded. The handler then cannot run in the window. One detail: children inherit the blocked set, so the child must unblock `SIGCHLD` before it calls `execve`.
+
+```mermaid
+flowchart TD
+    A[block SIGCHLD] --> B[fork]
+    B -- child --> C[unblock SIGCHLD, then execve]
+    B -- parent --> D[add job to list]
+    D --> E[unblock SIGCHLD]
+    E --> F[handler may now run and delete the job safely]
 ```
-
-(In a real shell, use `waitpid(-1, &status, WNOHANG | WUNTRACED)` in the loop so the handler does not block while other children are still running.)
 
 ```python-run
-# Model of the pending bit: three signals of the same type arrive while the first is being handled.
-def deliver(arrivals, handler_reaps_all):
-    zombies, pending, in_handler, reaped = 0, False, False, 0
-    for ev in arrivals + ["handler_done", "handler_done", "handler_done"]:
-        if ev == "child_exit":
-            zombies += 1
-            if in_handler: pending = True          # at most one pending signal: extra ones are lost
-            else: in_handler = True                # received immediately: handler starts
-        elif ev == "handler_done" and in_handler:
-            n = zombies if handler_reaps_all else min(1, zombies)
-            zombies -= n; reaped += n
-            in_handler, pending = pending, False   # run again only if one was pending
-    return reaped, zombies
-print("reap one per signal :", deliver(["child_exit"] * 3, False), "(reaped, zombies left)")
-print("reap all in a loop  :", deliver(["child_exit"] * 3, True))
+# Enumerate the two orderings of "parent adds job" and "handler deletes job".
+def run(order, block_sigchld):
+    jobs = set()
+    events = list(order)
+    if block_sigchld and events[0] == "delete":      # the signal stays pending until add is done
+        events = ["add", "delete"]
+    for e in events:
+        if e == "add": jobs.add(42)
+        else:          jobs.discard(42)
+    return jobs
+
+for order in (("add", "delete"), ("delete", "add")):
+    print(f"schedule {order}: without blocking -> leftover {run(order, False) or '{}'},"
+          f" with blocking -> leftover {run(order, True) or '{}'}")
 ```
 
-### Portable signal handling
+### Waiting for a signal without wasting CPU or losing it
 
-Unix signal semantics vary across systems: some older systems restore the default action after a signal is caught (so the handler must reinstall itself), and on some, slow system calls such as `read`, `write` and `accept` that are interrupted by a handler do not resume but return an error with `errno == EINTR`. POSIX defines **`sigaction`**, which lets programs specify the semantics they want. The book wraps it in a `Signal` function that installs handlers such that: only signals of the type currently being handled are blocked; signals are not queued (as always); interrupted system calls are **automatically restarted** whenever possible (`SA_RESTART`); and once installed, a handler stays installed.
+Sometimes the main program must pause until a handler has run, for example a shell waiting for its foreground job. The handler sets a global flag `done`. How should the main program wait?
 
-## 6. Synchronizing flows to avoid nasty concurrency bugs
+- `while (!done) ;` works but burns an entire CPU.
+- `while (!done) pause();` sleeps until any signal arrives, but hides a race: if the signal arrives after the test of `done` and before the call to `pause`, the program sleeps for a signal that has already come and may never wake.
+- `while (!done) sleep(1);` is correct but sluggish.
 
-Consider a shell that tracks its children in a job list. The parent calls `addjob(pid)` after `fork`; the `SIGCHLD` handler calls `deletejob(pid)` when it reaps a child.
+The right tool is `sigsuspend(&mask)`. It temporarily replaces the signal mask with `mask`, suspends the process until a signal is handled, and restores the original mask on return, with the first two steps performed **atomically**. The pattern: block `SIGCHLD`; then loop `while (!done) sigsuspend(&prev);` where `prev` is the earlier mask in which `SIGCHLD` is unblocked. Because the signal is blocked whenever the flag is being tested, it can only be delivered inside `sigsuspend`, and no wake-up can be lost.
 
-```c
-while (1) {
-    if ((pid = Fork()) == 0)
-        Execve("/bin/date", argv, NULL);        /* child */
-    Sigprocmask(SIG_BLOCK, &mask_all, &prev_all);
-    addjob(pid);                                 /* parent adds the child to the job list */
-    Sigprocmask(SIG_SETMASK, &prev_all, NULL);
-}
-```
+> [!INTERVIEW]
+> **"Why can't you call `printf` in a signal handler?"** `printf` is not async-signal-safe: it uses a shared buffer and takes a lock, and may call `malloc`. If the signal interrupts the main program while it is inside `printf` or `malloc`, the handler's call re-enters code whose data structures are in an inconsistent state or whose lock is already held by the same thread, causing corruption or deadlock. Handlers should restrict themselves to functions on the safe list, such as `write`, or set a `volatile sig_atomic_t` flag.
 
-There is a **race**: (1) the parent forks and the kernel schedules the child first; (2) the child terminates before the parent runs again, so the kernel delivers `SIGCHLD`; (3) when the parent becomes runnable, before executing a single instruction it receives the signal and the handler calls `deletejob` — which does nothing, because the job is not on the list yet; (4) the handler returns and the parent calls `addjob`, adding a nonexistent job that will never be removed. `deletejob` ran **before** `addjob`.
+> [!INTERVIEW]
+> **"What is the difference between `SIGTERM` and `SIGKILL`?"** Both terminate by default. `SIGTERM` can be caught, so a well-behaved service uses it to flush data, close connections and exit cleanly. `SIGKILL` cannot be caught, blocked or ignored; the kernel removes the process without running any of its code. The polite sequence is `SIGTERM`, wait, then `SIGKILL` only if needed.
 
-The fix: **block `SIGCHLD` before calling `fork`** and unblock it only after `addjob`. Because children inherit the blocked set, the child must unblock `SIGCHLD` before calling `execve`.
+## 8. Nonlocal jumps
 
-```c
-Sigprocmask(SIG_BLOCK, &mask_one, &prev_one);      /* block SIGCHLD */
-if ((pid = Fork()) == 0) {
-    Sigprocmask(SIG_SETMASK, &prev_one, NULL);     /* child: unblock SIGCHLD */
-    Execve("/bin/date", argv, NULL);
-}
-Sigprocmask(SIG_BLOCK, &mask_all, NULL);
-addjob(pid);                                        /* guaranteed to precede deletejob */
-Sigprocmask(SIG_SETMASK, &prev_one, NULL);         /* unblock SIGCHLD */
-```
-
-Races like this are hard to find because they depend on kernel scheduling decisions; the bug may show up once in a million runs.
-
-### Explicitly waiting for signals
-
-Sometimes the main program must wait for a handler to run, e.g. a shell waiting for the foreground job to terminate, with the handler setting a global `pid`. Options:
-
-- `while (!pid) ;` — correct but a wasteful spin loop.
-- `while (!pid) pause();` — a **race**: if `SIGCHLD` arrives after the `while` test but before `pause`, `pause` sleeps forever.
-- `while (!pid) sleep(1);` — correct but too slow; finer intervals just trade waste against latency.
-- **`sigsuspend(&mask)`**: temporarily replaces the blocked set with `mask` and suspends until a signal is received, **atomically**, equivalent to an uninterruptible `sigprocmask(SIG_SETMASK, &mask, &prev); pause(); sigprocmask(SIG_SETMASK, &prev, NULL);`. Block `SIGCHLD`, then loop `while (!pid) sigsuspend(&prev);`.
-
-## 7. Nonlocal jumps
-
-C provides a user-level form of ECF, the **nonlocal jump**, which transfers control directly from one function to another currently executing function without going through the normal call-and-return sequence.
+C offers a user-level form of exceptional control flow that transfers control from one function directly to another that is currently active further up the call chain, skipping the usual return sequence.
 
 ```c
 #include <setjmp.h>
-int  setjmp(jmp_buf env);                     /* returns 0 from the direct call, nonzero from longjmp */
-void longjmp(jmp_buf env, int retval);        /* never returns */
-int  sigsetjmp(sigjmp_buf env, int savesigs); /* versions usable from signal handlers */
-void siglongjmp(sigjmp_buf env, int retval);
+int  setjmp(jmp_buf env);
+void longjmp(jmp_buf env, int retval);
 ```
 
-`setjmp` saves the current **calling environment** (program counter, stack pointer, general-purpose registers) in `env` and returns 0. `longjmp` restores the environment from `env` and triggers a return *from the most recent `setjmp` call that initialized `env`*, which this time returns the nonzero `retval`. So **`setjmp` is called once but returns multiple times**, and **`longjmp` is called once and never returns**.
+`setjmp` saves the current calling environment (program counter, stack pointer and general-purpose registers) in `env` and returns 0. Later, `longjmp` restores that environment, which makes the *original `setjmp` call return a second time*, now with the non-zero value `retval`. People summarise the pair as: `setjmp` is called once and returns many times; `longjmp` is called once and never returns.
 
-Uses:
+Two uses stand out.
 
-- **Immediate return from a deeply nested function call**, usually on detecting an error, without unwinding the call stack by hand. Caveat: skipping intermediate calls can leak memory that those functions intended to free.
-- **Branching out of a signal handler** to a specific code location rather than returning to the interrupted instruction, with `sigsetjmp`/`siglongjmp`, e.g. a program that restarts itself when the user types Ctrl+C.
+**Escaping from deep nesting on error.** Suppose an error is detected six calls deep. Instead of having every level test and propagate a status code, the top level calls `setjmp` and the detecting function calls `longjmp`, landing straight back at the top.
 
-Exception mechanisms in C++ and Java are higher-level, more structured versions: a `catch` clause is like a `setjmp`, a `throw` like a `longjmp`.
+```c
+jmp_buf recover;
+void parse_field(void) { if (bad_input) longjmp(recover, 2); }
+int main(void) {
+    switch (setjmp(recover)) {
+    case 0:  parse_document(); break;        /* normal path; calls parse_field deep inside */
+    case 2:  report("malformed field"); break;
+    }
+}
+```
 
-## 8. Tools for manipulating processes
+**Leaving a signal handler for a chosen location.** The variants `sigsetjmp` and `siglongjmp` also save and restore the signal mask, so a handler can jump back to, say, the top of a command loop instead of resuming the interrupted instruction. This is how an interactive program can make Ctrl+C mean "abandon this command and prompt again".
 
-`strace` (prints each system call made by a program and its children), `ps` (lists processes, including zombies), `top` (resource usage), `pmap` (memory map of a process), and the `/proc` virtual filesystem.
+The danger is that everything in between is skipped. Intermediate functions do not get to free memory they allocated or release locks they hold, so `longjmp` is a ready source of leaks. Also, the function that called `setjmp` must still be active when `longjmp` runs; jumping into a frame that has already returned is undefined behaviour.
 
-> [!INTERVIEW]
-> **"What happens when you press Ctrl+C?"** The terminal driver turns the keystroke into `SIGINT` sent by the kernel to every process in the terminal's foreground process group. Each process, on its next return to user mode, receives it: by default it terminates; a program may install a handler (to clean up) or ignore it. `SIGKILL` (9) and `SIGSTOP` can be neither caught, blocked nor ignored, which is why `kill -9` always works, and why it should be the last resort: the target gets no chance to clean up. Prefer `SIGTERM` (15) first.
+The exception mechanisms of higher-level languages are structured, safer versions of the same idea: a `catch` clause plays the part of `setjmp`, and `throw` plays the part of `longjmp`, with the added guarantee that cleanup code runs on the way out.
 
-> [!INTERVIEW]
-> **"What can you safely do in a signal handler?"** Very little: call only async-signal-safe functions (`write`, `_exit`, `waitpid`…, not `printf`/`malloc`), save/restore `errno`, and ideally just set a `volatile sig_atomic_t` flag. The reason is reentrancy: the handler may interrupt the main program in the middle of `malloc` or `printf` while it holds a lock or has a data structure half-updated.
+```python-run
+# The same control shape using exceptions: jump from three calls deep straight to the top.
+class Jump(Exception):
+    def __init__(self, code): self.code = code
 
-## 9. Summary
+trace = []
+def level3(x):
+    trace.append("level3 entered")
+    if x < 0:
+        raise Jump(2)                       # the longjmp
+    trace.append("level3 finished")
+def level2(x): level3(x); trace.append("level2 finished")
+def level1(x): level2(x); trace.append("level1 finished")
 
-- Signals are sent (bit set in `pending`) and later received (action taken) when the process returns to user mode with `pending & ~blocked` nonzero.
-- Pending signals are **not queued**: handlers must loop to handle all outstanding events.
-- Default actions: terminate, dump core, stop, or ignore. `signal`/`sigaction` install handlers; `SIGKILL` and `SIGSTOP` cannot be overridden.
-- Handlers run concurrently with the main flow: keep them simple, use async-signal-safe functions, protect shared data by blocking signals, use `volatile sig_atomic_t` flags.
-- Avoid races by blocking signals around critical sequences (block `SIGCHLD` before `fork`); wait with `sigsuspend`.
-- `setjmp`/`longjmp` provide nonlocal jumps, the basis of language-level exceptions.
+for value in (5, -1):
+    trace.clear()
+    try:                                    # the setjmp point
+        level1(value)
+        outcome = "normal return"
+    except Jump as j:
+        outcome = f"landed at top with code {j.code}; intermediate cleanup was skipped"
+    print(value, "->", trace, "|", outcome)
+```
 
-## Check yourself
+## 9. Pitfalls
+
+- **Counting events by counting handler invocations.** Signals do not queue.
+- **Calling unsafe library functions in a handler.**
+- **Forgetting that the child inherits the signal mask and handlers** (handlers are reset on `execve`, the mask is not).
+- **Assuming the parent runs before the child after `fork`.**
+- **Using `pause` after testing a flag.** Use `sigsuspend`.
+- **Trying to catch `SIGKILL` or `SIGSTOP`.** It is not possible.
+- **Not handling `EINTR`** from slow system calls on systems that do not restart them.
+- **Leaving `SIGPIPE` at its default in a server.** One disconnected client kills the process; ignore the signal and check `write` for `EPIPE`.
+- **Using `longjmp` across code that owns resources.**
+
+## Summary
+
+- A signal is a small kernel-delivered message announcing an event. It is sent by setting a pending bit and received when the kernel, on returning to user mode, makes the process ignore it, terminate, or run a handler.
+- Only one signal of each type can be pending; extras are dropped. Blocked signals wait in the pending set.
+- Send with the keyboard, `kill` or `alarm`; install handlers with `signal` or, portably, `sigaction`; control the mask with `sigprocmask`.
+- Safe handlers are short, call only async-signal-safe functions, preserve `errno`, protect shared data by blocking signals, and communicate through `volatile sig_atomic_t` flags.
+- A `SIGCHLD` handler must reap in a loop. Block signals around `fork` to remove parent/child races, and wait with `sigsuspend`.
+- `setjmp` and `longjmp` provide nonlocal jumps for error recovery and for redirecting control out of handlers, at the price of skipped cleanup.
+
+## Glossary
+
+- **Signal**: a small message from the kernel telling a process that an event occurred.
+- **Signal handler**: a function a program registers to be run when a particular signal arrives.
+- **Default action**: what happens when a signal arrives and the program has not chosen a reaction, often termination.
+- **Pending signal**: a signal that has been sent but not yet acted on.
+- **Blocked signal**: a signal type the process has asked to hold back for now; it stays pending.
+- **Signal mask**: the set of signal types a process currently blocks.
+- **Process group**: a set of related processes that can be signalled together, such as one command pipeline.
+- **`SIGINT` / `SIGTERM` / `SIGKILL`**: interrupt from the keyboard / polite request to stop / forced stop that cannot be refused.
+- **`SIGCHLD`**: the signal a parent receives when one of its children stops or finishes.
+- **Async-signal-safe**: describes a function that may be called safely from inside a signal handler.
+- **Race**: a bug in which the result depends on the unpredictable timing of two activities.
+- **`sigsuspend`**: a call that waits for a signal without the risk of missing one that arrives at the wrong moment.
+- **Nonlocal jump (`setjmp`/`longjmp`)**: a way in C to jump from a deeply nested function straight back to an earlier point.
 
 ```quiz
 [
-  {"q": "Which two signals can be neither caught nor ignored?", "options": ["SIGINT and SIGTERM", "SIGKILL and SIGSTOP", "SIGSEGV and SIGFPE", "SIGCHLD and SIGCONT"], "answer": 1,
-   "explain": "The default actions of SIGKILL and SIGSTOP cannot be changed."},
-  {"q": "Three SIGCHLD signals arrive while a SIGCHLD handler is already running. How many more times will the handler be invoked?", "options": ["3", "2", "1", "0"], "answer": 2,
-   "explain": "Only one signal of a given type can be pending; the others are discarded. The handler runs once more."},
-  {"q": "What is the default action for SIGCHLD?", "options": ["Terminate", "Stop", "Ignore", "Dump core"], "answer": 2,
-   "explain": "By default SIGCHLD is ignored; shells install a handler to reap children."},
-  {"q": "When does the kernel check for signals to deliver to a process?", "options": ["Continuously", "When it switches the process from kernel mode to user mode", "Only at process creation", "Only when the process calls pause"], "answer": 1,
-   "explain": "On each return to user mode the kernel computes pending & ~blocked and forces receipt of a signal if nonzero."},
-  {"q": "Why is printf unsafe inside a signal handler?", "options": ["It is too slow", "It is not async-signal-safe: the handler may have interrupted printf or malloc mid-update, corrupting state or deadlocking", "It cannot write to stdout", "Handlers cannot call functions"], "answer": 1,
-   "explain": "printf uses shared buffers and locks; reentering it from a handler is undefined."},
-  {"q": "In the shell job-list example, how is the addjob/deletejob race eliminated?", "options": ["By sleeping after fork", "By blocking SIGCHLD before fork and unblocking it after addjob", "By using printf in the handler", "By ignoring SIGCHLD"], "answer": 1,
-   "explain": "With SIGCHLD blocked, the handler cannot run until the job has been added."},
-  {"q": "Why is 'while (!pid) pause();' incorrect for waiting for a handler to set pid?", "options": ["pause never returns", "If the signal arrives between the test and pause, the process sleeps forever", "pid is not volatile", "pause blocks signals"], "answer": 1,
-   "explain": "The check and the sleep are not atomic; sigsuspend makes unblock-and-wait atomic."},
-  {"q": "setjmp returns 0 the first time. What does it return after a longjmp(env, 3)?", "options": ["0", "1", "3", "It does not return"], "answer": 2,
-   "explain": "longjmp makes the earlier setjmp call return again, with the nonzero retval."}
+  {"q": "A process has SIGUSR1 blocked. Five SIGUSR1 signals are sent to it, and then it unblocks the signal. How many times does its handler run?",
+   "options": ["Five", "Once", "Zero", "It depends on the scheduler"],
+   "answer": 1, "explain": "The pending state is one bit per signal type. The first arrival sets it and the other four are discarded, so a single delivery occurs after unblocking."},
+  {"q": "Which signal can a process neither catch nor ignore?",
+   "options": ["SIGINT", "SIGTERM", "SIGKILL", "SIGCHLD"],
+   "answer": 2, "explain": "SIGKILL and SIGSTOP always perform their default action. This guarantees that the system can always terminate or stop a process."},
+  {"q": "At what moment does the kernel check for pending, unblocked signals for a process?",
+   "options": ["Continuously, after every instruction", "When it is about to return the process from kernel mode to user mode", "Only when the process calls pause", "Once per second"],
+   "answer": 1, "explain": "Reception happens at the kernel-to-user transition, such as the return from a system call or after a context switch."},
+  {"q": "Why should a SIGCHLD handler call waitpid in a loop with WNOHANG?",
+   "options": ["Because waitpid is slow", "Because one delivery may represent several terminated children, since signals of one type are not queued", "Because WNOHANG blocks other signals", "To avoid using errno"],
+   "answer": 1, "explain": "If several children end while the signal is pending or being handled, only one further delivery happens. Looping reaps all that are ready."},
+  {"q": "Which function is safe to call from a signal handler?",
+   "options": ["printf", "malloc", "write", "exit"],
+   "answer": 2, "explain": "write is on the async-signal-safe list. printf and malloc use shared state and locks, and exit runs cleanup code that is not safe."},
+  {"q": "A parent adds each child to a job list after fork, and its SIGCHLD handler removes finished children. How is the race between these avoided?",
+   "options": ["Call sleep after fork", "Block SIGCHLD before fork and unblock it after the job has been added", "Use a larger job list", "Install the handler after fork"],
+   "answer": 1, "explain": "With the signal blocked across fork and the insertion, the handler cannot run before the job is recorded. The child should unblock it before exec."},
+  {"q": "What is wrong with the loop while (!done) pause(); for waiting on a handler that sets done?",
+   "options": ["pause is not a real function", "The signal may arrive after the test but before pause, so the process can sleep indefinitely", "It uses too much CPU", "It blocks all signals"],
+   "answer": 1, "explain": "The test and the sleep are not atomic. sigsuspend closes the window by atomically unblocking and suspending."},
+  {"q": "How many times does a call to setjmp return if a later longjmp targets its buffer once?",
+   "options": ["Once", "Twice: first with 0, then with the value passed to longjmp", "Never", "Three times"],
+   "answer": 1, "explain": "The direct call returns 0. The longjmp restores the saved environment so that setjmp appears to return again with a non-zero value."}
 ]
 ```
 
-> **Source:** CS:APP 3e, §8.5–8.7 (Signals: terminology, sending, receiving, blocking, writing handlers, synchronizing flows, explicitly waiting for signals; Nonlocal jumps; Tools for manipulating processes).
+> **Source:** CS:APP 3e, §8.5–8.6

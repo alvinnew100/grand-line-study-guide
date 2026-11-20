@@ -1,244 +1,425 @@
 # Bits, bytes, words and bit-level operations
 
-Modern computers store and process information as two-valued signals: **bits**. Two-valued signals are easy to store and transmit reliably (high vs. low voltage, a magnetized domain pointing one way or the other), and when we group bits together and apply an *interpretation*, we can represent anything: unsigned integers, signed integers, real numbers, characters, instructions. This lesson covers the plumbing that everything else rests on: bytes, hexadecimal, word sizes, byte ordering, and the bit-level operations C gives you.
+> **Before this lesson:** Read [From source text to a running program](#/lesson/csapp/tour-hello) first. You need no mathematics beyond ordinary arithmetic; the lesson introduces counting in base 2 and base 16 from the beginning.
 
-## 1. Bytes, addresses and hexadecimal
+## In plain words
 
-Rather than individual bits, most computers use blocks of 8 bits, **bytes**, as the smallest addressable unit of memory. A machine-level program views memory as a very large array of bytes called **virtual memory**; every byte has a unique **address**, and the set of all possible addresses is the **virtual address space**. A C pointer's value is just the virtual address of the first byte of some block of storage. The C compiler associates *type information* with each pointer so it can generate the right machine code, but the machine code itself has no notion of types: it sees only bytes.
+Everything a computer stores is built from **bits**. A bit is a single yes-or-no value, written 0 or 1, like one light switch that is either off or on. One switch cannot say much, but a row of eight switches can be set in 256 different ways, and a row of that length is called a **byte**. Numbers, letters, photographs and programs are all long rows of switches. The computer does not know which is which; the program reading the row decides what the pattern means, in the same way that the marks "1/2" can mean a date, a fraction or a score depending on where you see them.
 
-Writing bytes in binary is verbose (00000000 to 11111111) and decimal is awkward to convert, so we use **hexadecimal**: base 16, digits `0–9` and `A–F`. One hex digit is exactly 4 bits, so a byte is two hex digits, ranging `00` to `FF`. In C, hex constants start with `0x`.
+Why this matters at work: bugs caused by misreading a row of bits are common and confusing, for example data that looks scrambled after travelling between two different machines. People who write network software, file formats, device controllers or graphics code set and test individual bits every day, and interviewers like bit puzzles because they show whether a candidate understands what the machine really stores.
 
-| Hex | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | A | B | C | D | E | F |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| Dec | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 |
-| Bin | 0000 | 0001 | 0010 | 0011 | 0100 | 0101 | 0110 | 0111 | 1000 | 1001 | 1010 | 1011 | 1100 | 1101 | 1110 | 1111 |
+## Why look closer
 
-**Converting.** Hex→binary: expand each digit to 4 bits (`0x173A4C` → `0001 0111 0011 1010 0100 1100`). Binary→hex: group into 4-bit chunks *from the right*, padding the leftmost chunk with zeros. A handy fact: $2^n$ with $n = i + 4j$ ($0 \le i \le 3$) is written as hex digit $2^i$ followed by $j$ zeros. So $2^{11} = 2^{3+4\cdot 2}$ is `0x800`.
+Open any file in a hex viewer and you see the same thing: rows of two-character codes such as `7f 45 4c 46`. A photograph, a spreadsheet, a compiled program and a love letter are indistinguishable at this level. All of them are sequences of bits, and what a given sequence *means* depends entirely on who is reading it and what they expect. That single idea, that information is bits plus a context for interpreting them, underlies everything else in this track. It explains why a program can print a negative number where you expected a large positive one, why data written on one machine can come out scrambled on another, and why a file sent over a network needs an agreed layout.
+
+This lesson builds fluency with the raw material. You will learn to read and write hexadecimal without effort, to know how many bytes each C type occupies, to predict the order in which those bytes sit in memory, and to manipulate individual bits with the operators `&`, `|`, `^`, `~`, `<<` and `>>`. The last skill is not a curiosity. Device drivers, network protocols, graphics code, compression, cryptography and hash functions are all written in it, and bit puzzles are a fixture of technical interviews.
+
+## 1. Why bits, and why groups of eight
+
+A digital circuit can reliably tell apart two conditions: a high voltage and a low one, a magnetised spot and its opposite, a charged capacitor and an empty one. Building hardware to distinguish ten levels would be far more delicate, so computers store and compute with two-valued signals: **bits**.
+
+One bit says very little. The power comes from grouping bits and agreeing on what each pattern stands for. With *k* bits there are $2^k$ distinct patterns, which could represent $2^k$ different numbers, characters, colours or instructions.
+
+The smallest group a program can address directly is the **byte**: eight bits, and therefore 256 patterns. A program views memory as an enormous array of bytes, each identified by a number called its **address**.
+
+## 2. Hexadecimal: a shorthand for bit patterns
+
+Writing a byte in binary takes eight digits (`10110101`), which is tedious and hard to read. Decimal (181) is compact but conceals the bits. **Hexadecimal**, base 16, is the compromise everyone uses. It has sixteen digits, `0`–`9` and then `A`–`F` for the values ten to fifteen, and its great virtue is that **one hex digit corresponds to exactly four bits**. A byte is therefore two hex digits, from `00` to `FF`. In C, hex constants begin with `0x`, and letter case does not matter: `0xfa1d`, `0xFA1D` and `0xFa1D` are the same number.
+
+Only six correspondences need real memorising; the rest are the decimal digits you already know:
+
+| Hex | A | B | C | D | E | F |
+|---|---|---|---|---|---|---|
+| Decimal | 10 | 11 | 12 | 13 | 14 | 15 |
+| Binary | 1010 | 1011 | 1100 | 1101 | 1110 | 1111 |
+
+**Hex to binary**: replace each digit by its four bits. `0x2D7` → `0010 1101 0111`.
+
+**Binary to hex**: split the bits into groups of four *starting from the right*, padding the leftmost group with zeros if needed, and translate each group. `1100101101` → `11 0010 1101` → `0011 0010 1101` → `0x32D`.
+
+**Powers of two** are especially easy. $2^n$ in binary is a 1 followed by *n* zeros. Write *n* as $4q + r$. The hex form is a leading digit of 1, 2, 4 or 8 (for *r* = 0, 1, 2, 3) followed by *q* zeros. So $2^{11}$, with $11 = 4 \cdot 2 + 3$, is `0x800`; and $2^{20}$ is `0x100000`.
+
+**Decimal to hex** takes arithmetic: divide by 16 repeatedly and collect the remainders, last one first. For 2,026: 2026 ÷ 16 = 126 remainder 10 (`A`); 126 ÷ 16 = 7 remainder 14 (`E`); 7 ÷ 16 = 0 remainder 7. Reading upward: `0x7EA`. To go back, multiply out: $7 \cdot 256 + 14 \cdot 16 + 10 = 2026$.
 
 ```python-run
-for x in (0x173A4C, 2**11, 314156, 0xFF):
-    print(f"{x:>8} = 0x{x:X} = 0b{x:b}")
-# group a binary string into hex digits from the right
-b = "1111001010110110110011"
-pad = (-len(b)) % 4
-b4 = "0"*pad + b
-print(" ".join(b4[i:i+4] for i in range(0, len(b4), 4)), "->", hex(int(b, 2)))
+def to_hex_by_groups(bits):
+    bits = bits.replace(" ", "")
+    bits = bits.zfill((len(bits) + 3) // 4 * 4)                 # pad on the LEFT to a multiple of 4
+    groups = [bits[i:i + 4] for i in range(0, len(bits), 4)]
+    return " ".join(groups), "0x" + "".join("0123456789ABCDEF"[int(g, 2)] for g in groups)
+
+print(to_hex_by_groups("1100101101"))
+print("0x2D7 in binary:", " ".join(f"{int(d, 16):04b}" for d in "2D7"))
+
+n, digits = 2026, []
+while n:
+    n, r = divmod(n, 16)
+    digits.append("0123456789ABCDEF"[r])
+print("2026 in hex by repeated division: 0x" + "".join(reversed(digits)), "| check:", hex(2026))
+for n in (11, 20, 30):
+    print(f"2^{n} = {2 ** n:#x}")
 ```
 
-## 2. Data sizes
+## 3. Words and the sizes of data
 
-Every computer has a **word size**, the nominal size of pointer data. Because a virtual address is encoded by one word, the word size $w$ determines the virtual address space: $0$ to $2^w - 1$. A 32-bit machine can address 4 GB; a 64-bit machine, in principle, 16 exabytes. Most 64-bit machines can also run 32-bit programs (compiled with `gcc -m32`).
+Every machine has a **word size**: the natural size of a pointer. Since an address must fit in a word, the word size sets the largest possible virtual address space. A machine with *w*-bit words can address $2^w$ bytes. For 32 bits that is 4 gigabytes, a limit that became a real obstacle in the 2000s. For 64 bits it is 16 exabytes, more than anyone can install. Most machines are now 64-bit, and they can still run programs compiled for 32 bits.
 
-Typical sizes in bytes of C data types:
+C's types have sizes that depend partly on the kind of program being compiled:
 
-| C declaration (signed) | Unsigned | 32-bit | 64-bit |
-|---|---|---|---|
-| `char` | `unsigned char` | 1 | 1 |
-| `short` | `unsigned short` | 2 | 2 |
-| `int` | `unsigned` | 4 | 4 |
-| `long` | `unsigned long` | 4 | **8** |
-| `int32_t` | `uint32_t` | 4 | 4 |
-| `int64_t` | `uint64_t` | 8 | 8 |
-| `char *` | | 4 | **8** |
-| `float` | | 4 | 4 |
-| `double` | | 8 | 8 |
+| Bytes on a 64-bit system | Types |
+|---|---|
+| 1 | `char`, `int8_t` |
+| 2 | `short`, `int16_t` |
+| 4 | `int`, `int32_t`, `float` |
+| 8 | `long`, `int64_t`, `double`, every pointer |
 
-> [!WARNING]
-> Code that assumes `sizeof(int) == sizeof(void *)` or that a `long` is 4 bytes breaks when moved between 32- and 64-bit machines. Use the fixed-size types `int32_t`, `int64_t` (from `<stdint.h>`) when the exact width matters. Also note the C standard does not even guarantee that plain `char` is signed.
-
-## 3. Addressing and byte ordering
-
-A multi-byte object is stored as a **contiguous sequence of bytes**, and its address is the *smallest* address of those bytes. If an `int x` is at address `0x100`, its 4 bytes occupy `0x100`–`0x103`. But in which order?
-
-- **Little endian**: least significant byte first (at the lowest address). Most Intel-compatible machines.
-- **Big endian**: most significant byte first. Many IBM and Oracle (Sun) machines; also "network byte order".
-- **Bi-endian**: many recent chips (ARM, for example) can be configured either way, though in practice the OS usually fixes one (Android and iOS run little endian).
-
-For `x = 0x01234567` at address `0x100`:
-
-| Address | 0x100 | 0x101 | 0x102 | 0x103 |
-|---|---|---|---|---|
-| Big endian | 01 | 23 | 45 | 67 |
-| Little endian | 67 | 45 | 23 | 01 |
-
-The terms come from *Gulliver's Travels*, where two factions fought over which end of a boiled egg to crack. The choice is arbitrary, and most of the time invisible. It matters in three situations:
-
-1. **Networking.** Binary data sent between machines of different endianness arrives reversed unless both sides convert to an agreed network standard (`htonl`, `ntohl`; see Module 11).
-2. **Reading machine code.** A disassembler line such as `01 05 43 0b 20 00  add %eax,0x200b43(%rip)` shows the constant `0x00200b43` stored as bytes `43 0b 20 00`: little endian.
-3. **Circumventing the type system.** Casts and unions that view an object through a different type expose the byte order.
-
-The book's `show_bytes` routine prints an object's bytes in address order by casting its address to `unsigned char *`:
-
-```c
-typedef unsigned char *byte_pointer;
-
-void show_bytes(byte_pointer start, size_t len) {
-    for (size_t i = 0; i < len; i++)
-        printf(" %.2x", start[i]);
-    printf("\n");
-}
-void show_int(int x) { show_bytes((byte_pointer) &x, sizeof(int)); }
-```
-
-We can mimic it in Python with `struct`:
+In a 32-bit program, `long` and pointers shrink to 4 bytes while everything else stays the same. That variability is a classic portability trap. Decades of code assumed that a pointer fits in an `int`, which was true on 32-bit systems and silently truncates addresses on 64-bit ones. The C standard only guarantees *minimum* ranges for the basic types. When the exact width matters, as in file formats and network messages, use the fixed-width types from `<stdint.h>`: `int32_t` is 32 bits everywhere.
 
 ```python-run
 import struct
-def show_bytes(fmt, x):
-    return " ".join(f"{b:02x}" for b in struct.pack(fmt, x))
-
-x = 12345          # 0x00003039
-print("int    little:", show_bytes("<i", x))
-print("int    big   :", show_bytes(">i", x))
-print("float  little:", show_bytes("<f", float(x)))  # 0x4640E400
-print("long   little:", show_bytes("<q", x))
+print("type      bytes   distinct values")
+for name, code in (("char", "b"), ("short", "h"), ("int", "i"), ("long long", "q"), ("float", "f"), ("double", "d")):
+    size = struct.calcsize("=" + code)
+    print(f"{name:10}{size:4}   2^{8 * size}")
+print("\na 32-bit pointer reaches", 2**32 // 2**30, "GiB; a 64-bit pointer reaches", 2**64 // 2**60, "EiB")
 ```
 
-Notice that the integer 12345 (`0x00003039`) and the float 12345.0 (`0x4640E400`) have completely different byte patterns, yet if you line up their binary representations you will find a run of 13 matching bits: the float's fraction field holds the integer's bits after the leading 1. You will see why in the floating-point lesson.
+## 4. Byte order
 
-### Strings and code
+A 4-byte `int` occupies four consecutive addresses, and its own address is the lowest of the four. That leaves a question with no naturally right answer: which end of the number goes at the lowest address?
 
-A C string is an array of characters terminated by a null byte (0). Since each ASCII character is one byte, **strings are independent of byte order and word size**: `"12345"` is `31 32 33 34 35 00` everywhere. Text data is therefore more portable than binary data. Machine code, by contrast, is *not* portable: different machine types use different instructions and encodings, and even the same processor running different OSes uses different coding conventions.
+Take the value `0x1A2B3C4D` stored at address `0x200`:
 
-## 4. Boolean algebra
+| Address | `0x200` | `0x201` | `0x202` | `0x203` |
+|---|---|---|---|---|
+| **Little-endian** | `4D` | `3C` | `2B` | `1A` |
+| **Big-endian** | `1A` | `2B` | `3C` | `4D` |
 
-George Boole's algebra on {0, 1} gives us four basic operations:
+- **Little-endian** machines put the *least* significant byte first. x86-64 does this, and so does ARM as configured in phones and nearly all current laptops.
+- **Big-endian** machines put the *most* significant byte first, matching how we write numbers. Some older processor families did this, and so do the Internet's protocols.
 
-| `~` (NOT) | `&` (AND) | `\|` (OR) | `^` (XOR) |
-|---|---|---|---|
-| ~0 = 1, ~1 = 0 | 1 only if both are 1 | 1 if either is 1 | 1 if exactly one is 1 |
+Neither is better. The names come from *Gulliver's Travels*, where two nations go to war over which end of a boiled egg to crack, a pointed comment on the argument. For most programming the order is invisible: you store an `int`, you load an `int`, and the machine is consistent with itself. It becomes visible in three situations.
 
-Extended to **bit vectors** of length $w$, the operations apply bit by bit. For example, with `a = 0110` and `b = 1100`: `a & b = 0100`, `a | b = 1110`, `a ^ b = 1010`, `~b = 0011`.
+1. **Exchanging binary data between machines.** If a little-endian sender writes an integer's bytes straight onto a network and a big-endian receiver reads them straight into an integer, the receiver sees a different number. The Internet's rule is that multi-byte header fields travel in big-endian order, called network byte order, and every host converts to and from its own format.
+2. **Reading raw bytes in a debugger or disassembly.** On x86-64, the instruction bytes `48 8b 05 78 56 34 12` load a register from memory at an offset of `0x12345678`; the four offset bytes appear reversed in the listing. Reading memory dumps on a little-endian machine means mentally flipping every multi-byte value.
+3. **Programs that look at an object through a different type.** Casting an `int *` to `unsigned char *` and reading the bytes one at a time exposes the storage order directly.
 
-Useful algebraic facts:
+```c
+void show_bytes(const void *obj, size_t len) {
+    const unsigned char *p = obj;
+    for (size_t i = 0; i < len; i++)
+        printf(" %.2x", p[i]);
+    printf("\n");
+}
+```
 
-- `&` distributes over `|` *and* `|` distributes over `&` (unlike integer arithmetic, where $a + (b \cdot c) \ne (a+b)(a+c)$).
-- With `^`, `&` and `~`, bit vectors form a **Boolean ring**: every element is its own additive inverse, `a ^ a = 0`. Hence `(a ^ b) ^ a = b`, the basis of the classic in-place swap trick.
-- **De Morgan's laws**: `~(a & b) == ~a | ~b` and `~(a | b) == ~a & ~b`. These let you build `&` from `~` and `|` alone, a favorite "data lab" puzzle.
-
-**Bit vectors as sets.** A $w$-bit vector encodes a subset of $\{0, \dots, w-1\}$: bit $i$ is 1 iff $i$ is in the set. Then `|` is union, `&` is intersection, `~` is complement. The vector `01101001` (bits 0, 3, 5, 6 set) represents $\{0, 3, 5, 6\}$. Real systems use exactly this: the signal masks in Module 8 are bit vectors selecting which signals are blocked.
-
-## 5. Bit-level operations in C
-
-C supports `|`, `&`, `~`, `^` on any integral type. A key idiom is **masking**: a mask is a bit pattern selecting a set of bits.
-
-| Expression | Effect |
-|---|---|
-| `x & 0xFF` | the least significant byte of `x`, all else zeroed |
-| `x \| 0xFF` | set the low byte to all ones |
-| `x ^ ~0xFF` | complement all but the low byte |
-| `~0` | all ones, *portably*, whatever the word size (better than writing `0xFFFFFFFF`) |
-| `x & (x - 1)` | clear the lowest set bit |
-| `x & -x` | isolate the lowest set bit |
+That function prints the bytes of any object in increasing address order. The same experiment in Python:
 
 ```python-run
-M32 = 0xFFFFFFFF
-x = 0x87654321
-print(hex(x & 0xFF))                    # 0x21
-print(hex((x ^ ~0xFF) & M32))            # 0x789abc21
-print(hex((x | 0xFF) & M32))             # 0x876543ff
-# bitAnd using only ~ and | (De Morgan)
-a, b = 0b0110, 0b1100
-print(bin((~(~a | ~b)) & 0xF))           # 0b100
-# x & (x-1) clears the lowest set bit -> power-of-two test
-for v in (1, 2, 3, 64, 96, 0):
-    print(v, "power of two?", v != 0 and (v & (v - 1)) == 0)
+import struct, sys
+value = 0x1A2B3C4D
+print("this machine is", sys.byteorder, "-endian")
+print("native layout :", struct.pack("=I", value).hex(" "))
+print("little-endian :", struct.pack("<I", value).hex(" "))
+print("big-endian    :", struct.pack(">I", value).hex(" "))
+
+# A big-endian reader misinterpreting little-endian bytes:
+misread = struct.unpack(">I", struct.pack("<I", value))[0]
+print(f"sent {value:#x} little-endian, read as big-endian: {misread:#x}")
+
+# The same integer and float values have unrelated bit patterns.
+print("int 2026  :", struct.pack(">i", 2026).hex(" "))
+print("float 2026:", struct.pack(">f", 2026.0).hex(" "))
 ```
+
+The last two lines make the "bits plus context" point again. The integer 2026 and the floating-point 2026.0 are stored as completely different bit patterns, because the two types use different encodings.
+
+### Text and code
+
+A **string** in C is an array of characters ending with a byte of zero. Each character is stored as its numeric code, most commonly ASCII, in which the digit characters `'0'` to `'9'` are `0x30` to `0x39` and the letters `'a'` to `'z'` are `0x61` to `0x7A`. So `"2026"` is the five bytes `32 30 32 36 00`. Because every character is a single byte, there is no byte-order question, and text is the most portable form of data. That is one reason so many protocols and file formats are textual.
+
+Machine code is the opposite. The same C function compiles to entirely different byte sequences for different processors, and even for the same processor under different operating systems, since conventions differ. Binary programs are rarely portable.
+
+## 5. Boolean algebra on bit vectors
+
+In the 1850s George Boole showed that logical reasoning could be treated as algebra over two values, true and false. In 1937 Claude Shannon noticed that the same algebra describes switching circuits. With 1 for true and 0 for false, there are four basic operations:
+
+| a | b | NOT a (`~`) | a AND b (`&`) | a OR b (`\|`) | a XOR b (`^`) |
+|---|---|---|---|---|---|
+| 0 | 0 | 1 | 0 | 0 | 0 |
+| 0 | 1 | 1 | 0 | 1 | 1 |
+| 1 | 0 | 0 | 0 | 1 | 1 |
+| 1 | 1 | 0 | 1 | 1 | 0 |
+
+XOR, exclusive or, is true when exactly one input is true: "one or the other but not both". It is equally well described as "are the two bits different?".
+
+These extend to **bit vectors**, strings of bits of some fixed length, by applying the operation to each position independently. With `a = 0110` and `b = 1100`: `a & b = 0100`, `a | b = 1110`, `a ^ b = 1010`, `~a = 1001`.
+
+### Bit vectors as sets
+
+A bit vector of width *w* can represent any subset of the numbers 0 to *w* − 1: bit *i* is 1 when *i* belongs to the set. Counting positions from the right, `01101001` stands for {0, 3, 5, 6}. Under this reading the Boolean operations are exactly the set operations: `|` is union, `&` is intersection, `~` is complement, and `^` is symmetric difference.
+
+This is no mere analogy. Operating systems represent sets of signals, sets of file descriptors and sets of permission flags as bit masks precisely because a whole set fits in a word and the set operations each cost one instruction.
+
+```python-run
+def as_set(bits):
+    return {i for i in range(bits.bit_length()) if bits >> i & 1}
+
+a, b = 0b01101001, 0b01010101
+print("a           =", sorted(as_set(a)))
+print("b           =", sorted(as_set(b)))
+print("a & b  (intersection)        :", sorted(as_set(a & b)))
+print("a | b  (union)               :", sorted(as_set(a | b)))
+print("a ^ b  (in exactly one)      :", sorted(as_set(a ^ b)))
+print("a & ~b (in a but not in b)   :", sorted(as_set(a & ~b & 0xFF)))
+
+READ, WRITE, EXEC = 0b100, 0b010, 0b001            # permission flags as a tiny set
+mode = READ | WRITE
+print("may write?", bool(mode & WRITE), "| may execute?", bool(mode & EXEC), "| after adding EXEC:", bin(mode | EXEC))
+```
+
+## 6. Bit-level operations in C
+
+C applies `&`, `|`, `^` and `~` to any integer type, bit by bit. The surest way to evaluate such an expression by hand is to expand the hex to binary, operate on the columns, and convert back.
+
+| Expression | In binary | Result |
+|---|---|---|
+| `~0x5A` | `~0101 1010` = `1010 0101` | `0xA5` |
+| `0x5A & 0x3C` | `0101 1010 & 0011 1100` = `0001 1000` | `0x18` |
+| `0x5A \| 0x3C` | `0101 1010 \| 0011 1100` = `0111 1110` | `0x7E` |
+| `0x5A ^ 0x3C` | `0101 1010 ^ 0011 1100` = `0110 0110` | `0x66` |
+
+### Masking
+
+The everyday use is **masking**: using a constant pattern, the mask, to select, set, clear or flip chosen bits of a word `x`.
+
+| Goal | Idiom | Why it works |
+|---|---|---|
+| keep only the low byte | `x & 0xFF` | AND with 1 keeps a bit, AND with 0 clears it |
+| clear the low byte | `x & ~0xFF` | the complemented mask has zeros exactly where we want to clear |
+| set bit *k* | `x \| (1 << k)` | OR with 1 forces a bit on |
+| clear bit *k* | `x & ~(1 << k)` | |
+| flip bit *k* | `x ^ (1 << k)` | XOR with 1 inverts, XOR with 0 leaves alone |
+| test bit *k* | `(x >> k) & 1` | move the bit to position 0 and isolate it |
+
+Writing `~0xFF` instead of `0xFFFFFF00` is deliberate: the complement adapts to the width of the type, so the same code is correct for 32-bit and 64-bit values. Likewise `~0` is a word of all ones at any width.
+
+### Properties of XOR
+
+XOR has an unusual property: every value is its own inverse. `a ^ a` is 0, and `a ^ 0` is `a`, so `(a ^ b) ^ b` gives back `a`. Several famous tricks come from that:
+
+- **Swapping without a temporary**: `x ^= y; y ^= x; x ^= y;` exchanges two variables. (It breaks if both names refer to the same storage, because the first step zeroes it. Treat it as a puzzle, not a technique.)
+- **Finding the odd one out**: XOR together a list in which every value appears twice except one; the pairs cancel and the lone value remains.
+- **Simple reversible scrambling and parity checks**: XOR with a key, then XOR with the same key to undo it.
+
+Experiment with individual bits here: toggle them and watch the hex, unsigned and signed interpretations change together.
 
 <div class="widget" data-widget="bits"></div>
 
-Use the explorer above: type a number, flip bits, and watch the unsigned and two's-complement readings change. Try setting only the top bit.
+```python-run
+x = 0x89ABCDEF
+print(f"x                 = {x:#010x}")
+print(f"low byte          = {x & 0xFF:#04x}")
+print(f"all but low byte  = {x & ~0xFF & 0xFFFFFFFF:#010x}")
+print(f"set bit 4         = {x | (1 << 4):#010x}")
+print(f"clear bit 0       = {x & ~(1 << 0) & 0xFFFFFFFF:#010x}")
+print(f"flip top bit      = {x ^ (1 << 31):#010x}")
+print(f"is bit 3 set?       {(x >> 3) & 1}")
 
-## 6. Logical operations are different
+a, b = 23, 42
+a ^= b; b ^= a; a ^= b
+print("after XOR swap:", a, b)
 
-C also has **logical** operators `||`, `&&`, `!`. They treat any nonzero argument as true and 0 as false, and always return 0 or 1. Two important differences from the bitwise ones:
+from functools import reduce
+print("the unpaired value in [7, 3, 9, 3, 7] is", reduce(lambda p, q: p ^ q, [7, 3, 9, 3, 7]))
+```
 
-1. `!0x41` is `0x00` but `~0x41` is `0xBE`. `0x69 && 0x55` is `0x01` but `0x69 & 0x55` is `0x41`.
-2. **Short-circuit evaluation**: if the first argument determines the result, the second is not evaluated. So `a && 5/a` never divides by zero, and `p && *p++` never dereferences a null pointer.
+## 7. Logical operators are a different thing
 
-A classic puzzle: `!(x ^ y)` is 1 exactly when `x == y`, using only bit-level and logical operations.
+C also has `&&`, `||` and `!`. They look related and behave quite differently:
 
-## 7. Shift operations
+- They treat **any non-zero value as true** and zero as false.
+- They always **produce exactly 0 or 1**.
+- `&&` and `||` **short-circuit**: if the left operand already decides the answer, the right operand is not evaluated at all.
 
-`x << k` shifts the bit vector left by $k$, dropping the $k$ most significant bits and filling the right with zeros. Right shift `x >> k` comes in two flavors:
+Compare:
 
-- **Logical** right shift fills the left with zeros.
-- **Arithmetic** right shift fills the left with $k$ copies of the *most significant bit*. This is what you want for signed integers (it divides by $2^k$, rounding toward $-\infty$, as the next lessons show).
+| Expression | Value | Reason |
+|---|---|---|
+| `0x5A & 0x24` | `0x00` | no bit position has a 1 in both |
+| `0x5A && 0x24` | `0x01` | both are non-zero, so both are true |
+| `~0x5A` | `0xA5` (as a byte) | every bit inverted |
+| `!0x5A` | `0x00` | a true value negated |
+| `!!0x5A` | `0x01` | the idiom for collapsing any non-zero value to 1 |
 
-For an 8-bit `x = 10010101`: `x << 4` = `01010000`, logical `x >> 4` = `00001001`, arithmetic `x >> 4` = `11111001`.
+Short-circuiting is relied on all the time for safety: in `p && *p` the pointer is dereferenced only if it is non-null, and in `n != 0 && total / n > limit` the division is skipped when `n` is zero.
 
-The C standard does not say which right shift signed data uses, but almost every compiler/machine combination uses **arithmetic** shifts for signed values. For unsigned values, right shifts **must** be logical. Java avoids the ambiguity with two operators, `>>` (arithmetic) and `>>>` (logical).
-
-> [!WARNING]
-> **Shifting by $k \ge w$ is undefined in C.** On many machines only the low $\log_2 w$ bits of the shift amount are used, so a 32-bit `int` shifted by 36 behaves like a shift by 4. Never rely on it. (Java defines exactly this mod-$w$ behavior.)
-
-> [!WARNING]
-> **Precedence trap.** `1<<2 + 3<<4` parses as `1 << (2+3) << 4` because `+` binds tighter than `<<`. The result is 512, not 52. When in doubt, parenthesize.
+Writing `&` where `&&` was meant is a classic bug, made worse because it often passes tests. `if (flags & ready)` and `if (flags && ready)` agree for many inputs and disagree when both are non-zero but share no bits.
 
 ```python-run
-def shr_logical(x, k, w=8):
-    return (x & ((1 << w) - 1)) >> k
+def c_and(a, b): return int(bool(a) and bool(b))        # C's &&
+def c_not(a):    return int(not a)                      # C's !
 
+a, b = 0x5A, 0x24
+print(f"a & b  = {a & b:#04x}     a && b = {c_and(a, b)}")
+print(f"~a     = {~a & 0xFF:#04x}     !a     = {c_not(a)}     !!a = {c_not(c_not(a))}")
+print("equality without ==  :  !(x ^ y) is", c_not(9 ^ 9), "for equal values and", c_not(9 ^ 8), "for different ones")
+```
+
+## 8. Shifts
+
+`x << k` moves the bits of `x` to the left by *k* places. The *k* highest bits fall off and zeros enter on the right. Arithmetically it multiplies by $2^k$, as long as nothing important is lost off the top.
+
+`x >> k` moves bits to the right, and there are two versions:
+
+- A **logical** right shift fills the vacated high positions with zeros.
+- An **arithmetic** right shift fills them with copies of the original top bit. For a two's-complement number that preserves the sign, so the operation divides by $2^k$, rounding toward minus infinity.
+
+| 8-bit value | `x << 3` | `x >> 2` logical | `x >> 2` arithmetic |
+|---|---|---|---|
+| `0010 1101` | `0110 1000` | `0000 1011` | `0000 1011` |
+| `1010 1101` | `0110 1000` | `0010 1011` | `1110 1011` |
+
+The two differ only when the top bit is 1. Which one does C use? For **unsigned** types, the standard requires a logical shift. For **signed** types it leaves the choice to the implementation, but practically every compiler uses an arithmetic shift, and programmers rely on that. Java removes the ambiguity with two operators: `>>` is arithmetic and `>>>` is logical.
+
+Two more rules prevent grief:
+
+- **Shifting by the full width or more is undefined in C.** On a 32-bit value, `x << 32` is not guaranteed to be zero. Many processors use only the low 5 bits of the shift count, so it behaves like a shift by 0. Keep shift amounts strictly below the word size.
+- **Shifts bind more loosely than addition.** `1 << 2 + 3` means `1 << 5`, which is 32, not 7. When in doubt, add parentheses.
+
+```python-run
+def shl(x, k, w=8):  return (x << k) & ((1 << w) - 1)
+def shr_logical(x, k, w=8):  return (x & ((1 << w) - 1)) >> k
 def shr_arith(x, k, w=8):
     x &= (1 << w) - 1
-    if x >> (w - 1):              # negative in two's complement
-        x -= 1 << w
-    return (x >> k) & ((1 << w) - 1)   # Python >> on ints is arithmetic
+    if x >> (w - 1):
+        x -= 1 << w                                    # reinterpret as negative
+    return (x >> k) & ((1 << w) - 1)                   # Python's >> on negatives is arithmetic
 
-x = 0b10010101
-print(f"{(x << 4) & 0xFF:08b}  << 4")
-print(f"{shr_logical(x, 4):08b}  logical >> 4")
-print(f"{shr_arith(x, 4):08b}  arithmetic >> 4")
-print("precedence:", 1<<2 + 3<<4)
+for x in (0b00101101, 0b10101101):
+    print(f"x = {x:08b}   x<<3 = {shl(x, 3):08b}   logical x>>2 = {shr_logical(x, 2):08b}   arithmetic x>>2 = {shr_arith(x, 2):08b}")
+
+print("-20 >> 2 arithmetic =", -20 >> 2, "(floor of -5.0)   |   -21 >> 2 =", -21 >> 2, "(floor of -5.25, not -5)")
+print("precedence: 1 << 2 + 3 =", 1 << 2 + 3, "  but (1 << 2) + 3 =", (1 << 2) + 3)
 ```
 
-## 8. Worked example: byte extraction and replacement
+## 9. Putting it together: working with bytes inside a word
 
-Problems like "replace byte $i$ of $x$ with $b$" combine masking and shifting:
+Two small functions combine everything in the lesson. Number the bytes of a word from 0 at the least significant end.
+
+**Extract byte *i*.** Shift it down to the bottom, then mask off everything else. Converting a byte index to a bit count is a multiplication by 8, which is a left shift by 3.
 
 ```c
-unsigned replace_byte(unsigned x, int i, unsigned char b) {
-    unsigned mask = 0xFFu << (i << 3);         // i*8 via shift
-    return (x & ~mask) | ((unsigned) b << (i << 3));
+unsigned get_byte(unsigned x, int i) {
+    return (x >> (i << 3)) & 0xFF;
 }
-// replace_byte(0x12345678, 2, 0xAB) == 0x12AB5678
-// replace_byte(0x12345678, 0, 0xAB) == 0x123456AB
 ```
 
-Byte $i$ (counting from the least significant) occupies bits $8i$ to $8i+7$. The mask isolates those bits; `& ~mask` clears them; shifting `b` into position and OR-ing installs the new value. Note that "byte 0" here means the *least significant* byte, independent of byte order in memory: shifts and masks operate on *values*, not on memory layout.
+**Replace byte *i* with `b`.** Build a mask covering that byte, clear the byte with the complemented mask, and OR in the new value shifted into place.
+
+```c
+unsigned put_byte(unsigned x, int i, unsigned char b) {
+    unsigned mask = 0xFFu << (i << 3);
+    return (x & ~mask) | ((unsigned)b << (i << 3));
+}
+```
+
+```mermaid
+flowchart LR
+    X["x = 0x12345678"] --> C["x & ~mask = 0x1234 00 78"]
+    M["mask = 0xFF << 8 = 0x0000FF00"] --> C
+    B["b << 8 = 0x0000AB00"] --> O["OR = 0x1234AB78"]
+    C --> O
+```
+
+```python-run
+def get_byte(x, i):
+    return (x >> (i << 3)) & 0xFF
+
+def put_byte(x, i, b):
+    mask = 0xFF << (i << 3)
+    return (x & ~mask & 0xFFFFFFFF) | (b << (i << 3))
+
+x = 0x12345678
+print("bytes, least significant first:", [f"{get_byte(x, i):#04x}" for i in range(4)])
+print(f"put_byte(x, 1, 0xAB) = {put_byte(x, 1, 0xAB):#010x}")
+print(f"put_byte(x, 3, 0x00) = {put_byte(x, 3, 0x00):#010x}")
+
+# Reversing byte order, as needed when converting between little- and big-endian:
+swapped = sum(get_byte(x, i) << (8 * (3 - i)) for i in range(4))
+print(f"byte-swapped x       = {swapped:#010x}")
+```
 
 > [!INTERVIEW]
-> Bit-manipulation questions are common. Know: `x & (x-1)` (clear lowest set bit; power-of-two test), `x & -x` (lowest set bit), XOR swap and "find the element appearing once", population count (Kernighan's loop runs once per set bit), and how to test endianness at run time (store `int x = 1` and look at the first byte through a `char *`: 1 means little endian).
+> **"How do you test whether a number is a power of two?"** `x != 0 && (x & (x - 1)) == 0`. Subtracting one from a number turns its lowest 1 bit into 0 and all the zeros below it into ones, so `x & (x - 1)` erases the lowest 1 bit. A power of two has exactly one such bit, so the result is zero. The same step, repeated until the value reaches zero, counts the 1 bits in a word in as many iterations as there are ones.
 
-## 9. Summary
+> [!INTERVIEW]
+> **"What is endianness, and when does it matter?"** It is the order in which the bytes of a multi-byte value are laid out in memory: least significant byte at the lowest address (little-endian, as on x86-64 and typical ARM) or most significant first (big-endian, as in network protocols). It is invisible inside one machine and matters whenever raw bytes cross a boundary: network packets, binary file formats, memory dumps, or code that reinterprets an object's bytes through a different pointer type. The remedy is an agreed external order with explicit conversion.
 
-- Memory is a byte array; addresses name bytes; pointers are addresses plus a compile-time type.
-- Hex is shorthand for 4-bit groups. Word size bounds the address space; `long` and pointers are 8 bytes on x86-64.
-- Multi-byte objects are stored contiguously; **little endian** stores the least significant byte at the lowest address.
-- Bitwise `& | ^ ~` act per bit and support masking; logical `&& || !` return 0/1 and short-circuit.
-- Left shift fills with zeros; right shift is logical (unsigned) or arithmetic (signed, in practice). Shifts by $\ge w$ are undefined.
+## 10. Pitfalls
 
-## Check yourself
+- **Grouping bits from the left** when converting binary to hex. Always group from the right.
+- **Assuming the size of `long` or of a pointer.** Use `sizeof` and the `<stdint.h>` types.
+- **Sending raw structs between machines.** Byte order, and padding too, may differ.
+- **Using `&` or `|` where `&&` or `||` was intended**, losing both the 0-or-1 result and the short-circuit protection.
+- **Comparing a masked value to 1.** `x & 0x08` yields `0x08` when the bit is set, not 1. Compare with zero, or shift first.
+- **Right-shifting a negative signed value and expecting zeros** in the high bits.
+- **Shifting by the type's width or more.**
+- **Forgetting that shifts have lower precedence than `+` and `-`,** and that `&` has lower precedence than `==`: `x & mask == 0` parses as `x & (mask == 0)`.
+- **Writing a wide mask as a literal** such as `0xFFFFFF00` when `~0xFF` would be correct at every width.
+
+## Summary
+
+- All data is bits; meaning comes from the context in which they are interpreted. Memory is an array of bytes, each with an address.
+- Hexadecimal maps one digit to four bits, so conversion to and from binary is by substitution.
+- The word size is the size of a pointer and bounds the address space. C type sizes vary between 32-bit and 64-bit programs; fixed-width types remove the guesswork.
+- Multi-byte values are stored little-endian or big-endian. The difference matters when bytes leave the machine or are inspected directly.
+- `&`, `|`, `^` and `~` act on each bit position and correspond to set intersection, union, symmetric difference and complement. Masks select, set, clear and flip bits.
+- `&&`, `||` and `!` work on truth values, return 0 or 1 and short-circuit.
+- Left shifts fill with zeros. Right shifts are logical for unsigned values and, in practice, arithmetic for signed ones.
+
+## Glossary
+
+- **Bit**: one binary digit, 0 or 1.
+- **Byte**: a group of eight bits; the smallest unit of memory a program can address.
+- **Address**: the number that identifies one byte's position in memory.
+- **Binary**: the base-2 number system, which uses only the digits 0 and 1.
+- **Hexadecimal (hex)**: the base-16 number system, with digits 0 to 9 and A to F; one hex digit stands for four bits.
+- **Word size**: the number of bits in a pointer on a given machine, 64 on most current computers.
+- **Pointer**: a value that holds the address of some other piece of data.
+- **Endianness**: the order in which the bytes of a multi-byte value are stored: least significant byte first (little-endian) or most significant first (big-endian).
+- **Bitwise operator**: an operator such as `&`, `|`, `^` or `~` that works on each bit position separately.
+- **Mask**: a constant bit pattern used to pick out, set, clear or flip particular bits.
+- **Shift**: moving all the bits of a value left or right by some number of positions.
+- **Short-circuit evaluation**: the rule that `&&` and `||` skip their right-hand side when the left-hand side already decides the answer.
 
 ```quiz
 [
-  {"q": "The int 0x01234567 is stored at address 0x100 on a little-endian machine. What byte is at 0x100?", "options": ["0x01", "0x23", "0x45", "0x67"], "answer": 3,
-   "explain": "Little endian puts the least significant byte, 0x67, at the lowest address."},
-  {"q": "What is 0x69 && 0x55 in C?", "options": ["0x41", "0x7D", "0x01", "0x00"], "answer": 2,
-   "explain": "Logical AND of two nonzero values yields 1. The bitwise AND would be 0x41."},
-  {"q": "For the 8-bit value 10010101, what does an arithmetic right shift by 4 give?", "options": ["00001001", "11111001", "01010000", "10011001"], "answer": 1,
-   "explain": "Arithmetic shift copies the sign bit (1) into the four vacated positions."},
-  {"q": "What does x & (x - 1) compute?", "options": ["x with its lowest set bit cleared", "x with its highest bit cleared", "Always 0", "x rounded to a power of two"], "answer": 0,
-   "explain": "Subtracting 1 flips the lowest 1 and all zeros below it; ANDing clears exactly that lowest 1."},
-  {"q": "Which expression yields all ones regardless of word size?", "options": ["0xFFFFFFFF", "~0", "!0", "-0"], "answer": 1,
-   "explain": "~0 complements every bit of 0 at whatever width the type has; !0 is just 1."},
-  {"q": "Why are ASCII strings portable across byte orders?", "options": ["Compilers reverse them", "Each character is one byte and strings are arrays, so there is no multi-byte ordering", "Strings are stored big endian", "They are not portable"], "answer": 1,
-   "explain": "Endianness concerns the order of bytes within a multi-byte scalar; a char array has no such ordering issue."},
-  {"q": "What is 1<<2 + 3<<4 in C?", "options": ["52", "512", "28", "Undefined"], "answer": 1,
-   "explain": "Addition binds tighter: 1 << (2+3) << 4 = 1 << 5 << 4 = 512."},
-  {"q": "On x86-64 Linux, sizeof(long) and sizeof(char *) are:", "options": ["4 and 4", "4 and 8", "8 and 8", "8 and 4"], "answer": 2,
-   "explain": "Both are 8 bytes in the LP64 model used by 64-bit Linux."}
+  {"q": "What is the hexadecimal form of the binary number 1011110011?",
+   "options": ["0xBCC", "0x2F3", "0xBC3", "0x5E6"],
+   "answer": 1, "explain": "Group from the right: 10 1111 0011, pad to 0010 1111 0011, giving 2, F, 3."},
+  {"q": "What is 2 to the power 14 in hexadecimal?",
+   "options": ["0x1000", "0x2000", "0x4000", "0x8000"],
+   "answer": 2, "explain": "14 = 4*3 + 2. A remainder of 2 gives a leading digit of 4, followed by three zeros."},
+  {"q": "The 4-byte value 0xCAFE1234 is stored at address 0x500 on a little-endian machine. Which byte is at address 0x501?",
+   "options": ["0xCA", "0xFE", "0x12", "0x34"],
+   "answer": 2, "explain": "Little-endian stores the least significant byte first: 34 at 0x500, 12 at 0x501, FE at 0x502, CA at 0x503."},
+  {"q": "What is the value of 0x6C & 0x39?",
+   "options": ["0x28", "0x7D", "0x55", "0x01"],
+   "answer": 0, "explain": "0110 1100 AND 0011 1001 = 0010 1000, which is 0x28."},
+  {"q": "For x = 0x30 and y = 0x0C, what are x & y and x && y?",
+   "options": ["0x00 and 0", "0x00 and 1", "0x3C and 1", "0x0C and 0"],
+   "answer": 1, "explain": "The two values share no 1 bits, so the bitwise AND is zero. Both are non-zero, so the logical AND is 1."},
+  {"q": "Which expression clears bit 5 of x and leaves the other bits unchanged?",
+   "options": ["x | (1 << 5)", "x ^ (1 << 5)", "x & ~(1 << 5)", "x & (1 << 5)"],
+   "answer": 2, "explain": "The complemented mask has a 0 only at position 5, so ANDing with it forces that bit to 0 and preserves the rest."},
+  {"q": "The 8-bit pattern 1001 0110 is shifted right by 3 arithmetically. What is the result?",
+   "options": ["0001 0010", "1111 0010", "1011 0000", "0111 0010"],
+   "answer": 1, "explain": "An arithmetic shift replicates the original top bit, which is 1, into the three vacated positions: 111 followed by 10010."},
+  {"q": "Why does the expression x & (x - 1) equal zero for a power of two?",
+   "options": ["Subtraction always clears the top bit", "It removes the lowest 1 bit of x, and a power of two has only one", "Powers of two are even", "The AND of any two consecutive numbers is zero"],
+   "answer": 1, "explain": "x - 1 flips the lowest 1 bit and the zeros below it, so the AND erases that bit. If it was the only 1 bit, nothing remains."}
 ]
 ```
 
-> **Source:** CS:APP 3e, §2.1 (Information storage: hexadecimal, data sizes, addressing and byte ordering, strings, code, Boolean algebra, bit-level, logical and shift operations in C).
+> **Source:** CS:APP 3e, §2.1

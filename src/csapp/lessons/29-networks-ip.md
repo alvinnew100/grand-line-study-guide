@@ -1,274 +1,383 @@
 # Networks, IP addresses and DNS
 
-Network applications are everywhere: every time you browse the web, send an email or play an online game, you are using one. Interestingly, all network applications are based on the same basic programming model, have similar overall logical structures, and rely on the same programming interface. And they draw on almost everything from the earlier modules: processes, signals, byte ordering, memory mapping and dynamic storage allocation all play important roles. This lesson lays the groundwork: the client-server model, how networks and internets are structured, IP addresses and byte order, domain names and DNS, and what an Internet connection is. The next lesson builds on it with the sockets interface and a working web server.
+> **Before this lesson:** You need byte order (big-endian and little-endian) and hexadecimal from [Bits, bytes, words and bit-level operations](#/lesson/csapp/bits-bytes), and file descriptors with `read` and `write` from [Unix I/O and robust reading](#/lesson/csapp/unix-io).
 
-## 1. The client-server programming model
+## In plain words
 
-Every network application is based on the **client-server model**. An application consists of a **server process** and one or more **client processes**. A server manages some **resource**, and it provides some **service** for its clients by manipulating that resource. A web server manages a set of disk files that it retrieves and executes on behalf of clients; an FTP server manages disk files that it stores and retrieves for clients; an email server manages a spool file that it reads and updates for clients.
+A **network** is a set of computers connected so that they can send data to one another. The Internet is a very large network made by joining many smaller ones. The postal system is a helpful comparison. Every building has an address, so a letter can be delivered; a computer's equivalent is its **IP address**, a number. A large building has many flats, so the envelope also needs a flat number; on a computer that is the **port**, which selects one program among those running. Nobody memorises long numbers, so there is a directory that turns names such as `example.org` into addresses; that directory is the **Domain Name System**, or DNS. And a letter passes through several sorting offices on its way; on a network those are **routers**.
 
-The fundamental operation in the client-server model is the **transaction**, which consists of four steps:
+Why this matters at work: nearly all modern software talks over a network. When something fails, you need to tell a name-lookup problem from an unreachable machine from a program that is not listening on the expected port. The vocabulary in this lesson is used daily by anyone building or operating services, and "what happens when you type a web address?" is among the most common interview questions.
 
-1. When a client needs service, it initiates a transaction by **sending a request** to the server. (When a web browser needs a file, it sends a request to a web server.)
-2. The server receives the request, interprets it, and **manipulates its resources** in the appropriate way. (The web server reads a disk file.)
-3. The server **sends a response** to the client and then waits for the next request. (The web server sends the file back.)
-4. The client receives the response and **manipulates it**. (The browser displays the page.)
+## Why look closer
+
+Almost nothing you build today lives on one machine. A phone app calls a backend, the backend calls a database, the database replicates to another region. Yet from the point of view of a C program, talking to a machine on another continent looks surprisingly like writing to a file: you obtain a small integer descriptor, you call `read` and `write` on it, and you close it when you are finished. This lesson fills in everything that sits underneath that descriptor: what a network physically is, how separate networks are stitched into an internet, what an IP address and a port actually are, why byte order suddenly matters, and how names such as `example.org` get turned into numbers. The next lesson builds real clients and servers on top of this vocabulary.
+
+## 1. The shape of every network application
+
+Nearly every networked program follows one pattern. A **server** is a process that owns something worth asking for: files on a disk, rows in a database, the ability to send mail. A **client** is a process that wants some of it. They interact in a four-beat exchange that people call a **transaction** (nothing to do with database transactions; there is no atomicity here):
 
 ```mermaid
 sequenceDiagram
-  participant C as Client process
-  participant S as Server process
-  participant R as Resource
-  C->>S: 1. client sends request
-  S->>R: 2. server processes request
-  S->>C: 3. server sends response
-  Note over C: 4. client processes response
+    participant C as Client process
+    participant S as Server process
+    C->>S: 1. request
+    Note over S: 2. server works on its resource
+    S->>C: 3. response
+    Note over C: 4. client uses the answer
 ```
 
-> [!NOTE]
-> **Clients and servers are processes, not machines** (or "hosts", as machines are often called in this context). A single host can run many different clients and servers concurrently, and a client and server transaction can be on the same or different hosts. The model is the same regardless of the mapping to hosts. (These client-server transactions are also *not* database transactions: they have no atomicity or other such properties; a transaction here is simply a sequence of steps.)
+Two details in that picture are easy to get wrong:
 
-## 2. Networks
+- Client and server are **processes**, not computers. One laptop can run a web server, a database server and six clients all at once. Conversely, one "service" may be thousands of server processes on thousands of machines. When someone says "the server is down", ask which process they mean.
+- The roles are per conversation. A web application is a server to your browser and, in the same breath, a client of its database.
 
-Clients and servers often run on separate hosts and communicate using the hardware and software resources of a **computer network**. To a host, a network is just another I/O device that serves as a source and sink for data. An adapter plugged into an expansion slot on the I/O bus provides the physical interface to the network. Data received from the network are copied from the adapter across the I/O and memory buses into memory, typically by a DMA transfer; similarly, data can be copied from memory to the network.
+## 2. What a network is, from the host's side
 
-Physically, a network is a hierarchical system organized by geographical proximity.
+To the operating system, a network is one more I/O device. A **network adapter** (NIC) plugs into the I/O bus exactly as a disk controller does. Bytes arriving off the wire are copied by the adapter into main memory, usually with DMA and an interrupt to tell the kernel they have landed; outgoing bytes travel the opposite way. That is the whole reason the file-like `read`/`write` interface works: the kernel already knows how to present devices as byte sources and sinks.
 
-**Ethernet segments.** At the lowest level is a **LAN (local area network)** that spans a building or a campus. The most popular LAN technology by far is **Ethernet**. An **Ethernet segment** consists of some wires (usually twisted pairs) and a small box called a **hub**. Each wire has the same maximum bit bandwidth, typically 100 Mb/s or 1 Gb/s. One end is attached to an adapter on a host, the other to a port on the hub. A hub slavishly copies every bit that it receives on each port to every other port: **every host sees every bit**.
+### Local area networks
 
-Each Ethernet adapter has a globally unique **48-bit address** stored in nonvolatile memory on the adapter (the MAC address). A host can send a chunk of bits called a **frame** to any other host on the segment. Each frame includes some fixed number of **header** bits that identify the source and destination of the frame and the frame length, followed by a **payload** of data bits. Every host adapter sees the frame, but only the destination host actually reads it.
+The smallest useful network covers a room, a floor, or a building. The dominant technology is **Ethernet**. Its essentials:
 
-**Bridged Ethernets.** Multiple Ethernet segments can be connected into larger LANs, called **bridged Ethernets**, using wires and small boxes called **bridges**. Bridges make better use of the available wire bandwidth than hubs: using a clever distributed algorithm, they automatically learn over time which hosts are reachable from which ports and then **selectively copy frames** from one port to another only when necessary.
+- Every adapter is manufactured with a globally unique 48-bit hardware address (the MAC address), stored in non-volatile memory on the card.
+- Hosts transmit data in chunks called **frames**. A frame carries a small header naming the source adapter, the destination adapter and the length, followed by the payload.
+- In the oldest arrangement, hosts connect to a **hub**, a dumb repeater that copies every incoming bit to every other port. Every host therefore sees every frame and must discard the ones not addressed to it.
+- Modern installations use **switches** (the older term is bridges). A switch watches the source addresses of frames passing through, learns which adapter lives behind which port, and from then on forwards a frame only out of the port where the destination lives. Less wasted traffic, more privacy, and separate conversations can run in parallel.
 
-**Routers and internets.** At a higher level in the hierarchy, multiple incompatible LANs can be connected by specialized computers called **routers** to form an **internet (interconnected network)**. Each router has an adapter (port) for each network that it is connected to. Routers can also connect high-speed point-to-point phone connections, which are examples of networks known as **WANs (wide area networks)**, so called because they span larger geographical areas than LANs.
+From now on we can draw an entire switched LAN as a single line with hosts hanging off it; the wiring inside does not matter to the layers above.
 
-> [!NOTE]
-> **Internet vs. internet.** Lowercase *internet* describes the general concept; uppercase *Internet* describes a specific implementation, the global IP Internet.
+### Joining LANs: routers
+
+A LAN technology only understands its own frames and its own addresses. A Wi-Fi network cannot hand a frame to a fiber-optic long-haul link; the formats, sizes and addressing differ. The device that bridges incompatible networks is a **router**: a specialised computer with one adapter on each network it touches. A collection of networks joined by routers is an **internet** with a lowercase i (short for internetwork). Long-distance links between routers form **wide area networks**.
 
 ```mermaid
 graph LR
-  H1[Host] --- LAN1((LAN))
-  H2[Host] --- LAN1
-  LAN1 --- R1[Router]
-  R1 --- WAN1((WAN))
-  WAN1 --- R2[Router]
-  R2 --- LAN2((LAN))
-  LAN2 --- H3[Host]
-  LAN2 --- H4[Host]
+    A[Host A] --- L1((LAN 1 Ethernet))
+    B[Host B] --- L1
+    L1 --- R1[Router 1]
+    R1 --- W((WAN link))
+    W --- R2[Router 2]
+    R2 --- L2((LAN 2 Wi-Fi))
+    L2 --- C[Host C]
 ```
 
-### Protocols and encapsulation
+## 3. Protocols and encapsulation
 
-The crucial property of an internet is that it can consist of **different LANs and WANs with radically different and incompatible technologies**. How is it possible for some source host to send data bits to another destination host across all of these incompatible networks? The solution is a layer of **protocol software** running on each host and router that smooths out the differences between the networks. This software implements a *protocol* that governs how hosts and routers cooperate in order to transfer data. The protocol must provide two basic capabilities:
+How can Host A send data to Host C when the two sit on networks with different frame formats? The trick is a layer of **protocol software** running on every host and every router that hides the differences. That protocol has to supply two things:
 
-- **Naming scheme.** Different LAN technologies have different and incompatible ways of assigning addresses to hosts. The internet protocol smooths these differences by defining a uniform format for host addresses. Each host is then assigned at least one of these **internet addresses** that uniquely identifies it.
-- **Delivery mechanism.** Different networking technologies have different and incompatible ways of encoding bits on wires and of packaging these bits into frames. The internet protocol smooths these differences by defining a uniform way to bundle up data bits into discrete chunks called **packets**. A packet consists of a **header**, which contains the packet size and addresses of the source and destination hosts, and a **payload**, which contains data bits sent from the source host.
+1. **A uniform naming scheme.** Each host gets at least one *internet address* whose format is the same everywhere, regardless of what kind of LAN it is plugged into.
+2. **A uniform delivery mechanism.** Data is cut into **packets**, each consisting of a header (source and destination internet addresses, size, bookkeeping) and a payload. Every host and router knows how to read that header.
 
-**How data travels from host A on LAN1 to host B on LAN2** (eight steps in the book):
+The key manoeuvre is **encapsulation**: a packet from one layer becomes the payload of the layer below. Follow 300 bytes of application data from A to C:
 
-1. The client on host A invokes a system call that copies the data from the client's virtual address space into a kernel buffer.
-2. The protocol software on host A creates a LAN1 frame by appending an **internet header** and a **LAN1 frame header** to the data. The internet header is addressed to internet host B; the LAN1 frame header is addressed to the **router**. It then passes the frame to the adapter. The payload of the LAN1 frame is an internet packet, whose payload is the actual user data. This kind of **encapsulation** is one of the fundamental insights of internetworking.
-3. The LAN1 adapter copies the frame to the network.
-4. When the frame reaches the router, the router's LAN1 adapter reads it from the wire and passes it to the protocol software.
-5. The router fetches the destination internet address from the internet packet header and uses this as an index into a **routing table** to determine where to forward the packet, which in this case is LAN2. The router then strips off the old LAN1 frame header, prepends a new LAN2 frame header addressed to host B, and passes the resulting frame to the adapter.
-6. The router's LAN2 adapter copies the frame to the network.
-7. When the frame reaches host B, its adapter reads the frame from the wire and passes it to the protocol software.
-8. Finally, the protocol software on host B strips off the packet header and frame header. The protocol software will eventually copy the resulting data into the server's virtual address space when the server invokes a system call that reads the data.
+1. The application on A hands 300 bytes to the kernel through a system call.
+2. A's protocol software prepends an internet header addressed to C, producing a packet. It then wraps that packet in a LAN 1 frame whose hardware destination is **Router 1**, not C, because C is not reachable on LAN 1.
+3. A's adapter puts the frame on the wire.
+4. Router 1's LAN 1 adapter receives the frame, strips the frame header, and passes the packet up to its protocol software.
+5. The router reads the destination internet address, consults its **routing table**, and decides the packet should leave on the WAN interface. It wraps the *unchanged* packet in a new frame suitable for that link.
+6. The same happens at Router 2, which finally builds a LAN 2 frame addressed to C's adapter.
+7. C's protocol software strips the frame header, then the internet header, and delivers 300 bytes to the waiting application.
+
+The lesson to hold on to: **the frame header is rewritten at every hop; the internet packet rides through untouched** (apart from small fields such as a hop counter).
 
 ```python-run
-# Encapsulation as nested envelopes.
-def frame(lan_header, payload):  return {"frame_hdr": lan_header, "payload": payload}
-def packet(src, dst, data):      return {"ip_hdr": {"src": src, "dst": dst}, "payload": data}
+# Encapsulation as nested wrappers. Each hop replaces only the outer (frame) layer.
+def packet(src_ip, dst_ip, data):
+    return {"ip_src": src_ip, "ip_dst": dst_ip, "payload": data}
 
-pkt = packet("host A", "host B", "GET /index.html")
-f1 = frame({"lan": "LAN1", "to": "router"}, pkt)             # addressed to the router at the LAN level
-print("on LAN1:", f1)
-# The router keeps the internet packet, swaps the frame header.
-f2 = frame({"lan": "LAN2", "to": "host B"}, f1["payload"])
-print("on LAN2:", f2)
-print("delivered to the server:", f2["payload"]["payload"])
+def frame(src_mac, dst_mac, pkt):
+    return {"mac_src": src_mac, "mac_dst": dst_mac, "payload": pkt}
+
+pkt = packet("10.1.0.7", "172.20.5.9", b"x" * 300)
+hops = [("aa:01", "r1:01", "LAN 1"), ("r1:02", "r2:01", "WAN"), ("r2:02", "cc:09", "LAN 2")]
+for src, dst, net in hops:
+    f = frame(src, dst, pkt)
+    inner = f["payload"]
+    print(f"{net:6}: frame {f['mac_src']} -> {f['mac_dst']} | packet {inner['ip_src']} -> {inner['ip_dst']} "
+          f"| {len(inner['payload'])} data bytes")
+print("The inner packet never changed:", f["payload"] is pkt)
 ```
 
-This glosses over many difficult issues. What if different networks have different maximum frame sizes? How do routers know where to forward frames? How are routers informed when the network topology changes? What if a packet gets lost? Nonetheless, the example captures the essence of the internet idea, and **encapsulation is the key**.
+Real internets add many complications this sketch ignores: networks disagree about the largest frame they can carry (so packets may need to be fragmented), routers must somehow learn their tables, and topology changes while packets are in flight. Encapsulation is nevertheless the idea that makes the whole thing possible.
 
-## 3. The global IP Internet
+## 4. The global IP Internet
 
-Each Internet host runs software implementing the **TCP/IP protocol** (Transmission Control Protocol/Internet Protocol), which is supported by almost every modern computer system. Internet clients and servers communicate using a mix of **sockets interface** functions and Unix I/O functions. The sockets functions are typically implemented as system calls that trap into the kernel and call various kernel-mode functions in TCP/IP.
+The Internet with a capital I is the most successful internet ever built. Every host on it runs the **TCP/IP** family of protocols, and applications reach those protocols through the **sockets interface** together with ordinary Unix I/O calls. The pieces are layered:
 
-TCP/IP is actually a family of protocols, each contributing different capabilities:
+| Protocol | Delivers between | Guarantees |
+|---|---|---|
+| **IP** | hosts | None. A datagram may be lost, duplicated, or arrive out of order. "Best effort." |
+| **UDP** | processes | Adds port numbers to IP so a datagram reaches a specific process. Still unreliable. |
+| **TCP** | processes | A reliable, ordered, two-way stream of bytes over a **connection**. |
 
-- **IP** provides the basic naming scheme and a delivery mechanism that can send packets, known as **datagrams**, from one Internet host to any other host. The IP mechanism is **unreliable** in the sense that it makes no effort to recover if datagrams are lost or duplicated in the network.
-- **UDP (Unreliable Datagram Protocol)** extends IP slightly, so that datagrams can be transferred from **process to process**, rather than host to host.
-- **TCP** is a complex protocol that builds on IP to provide **reliable full duplex (bidirectional) connections between processes**.
+IP supplies the naming scheme and host-to-host delivery from Section 3. TCP is built on top of IP and does the hard work of retransmitting lost segments, putting them back in order, and throttling senders. Throughout these lessons we treat TCP/IP as one bundle and use only TCP.
 
-To simplify, the book treats TCP/IP as a single monolithic protocol and discusses only some of the basic capabilities that TCP and IP provide to application programs. From a programmer's perspective, we can think of the Internet as a worldwide collection of hosts with the following properties:
+From the programmer's chair the Internet is a set of hosts with three properties:
 
-- The set of hosts is mapped to a set of 32-bit **IP addresses**.
-- The set of IP addresses is mapped to a set of identifiers called **Internet domain names**.
-- A process on one Internet host can communicate with a process on any other Internet host over a **connection**.
+1. Each host is named by a 32-bit **IP address**.
+2. IP addresses are given human-friendly aliases called **domain names**.
+3. A process on one host talks to a process on another over a **connection**.
+
+The following sections take these one at a time.
 
 > [!NOTE]
-> **IPv4 and IPv6.** The original Internet protocol with its 32-bit addresses is IPv4. In 1996 the IETF proposed IPv6 with 128-bit addresses as its successor. Adoption has been slow; the book (like most introductory treatments) concentrates on IPv4 but writes its code to be protocol independent, which is the modern practice.
+> The 32-bit scheme is IPv4. Its successor IPv6 uses 128-bit addresses and now carries a large share of traffic. The concepts are identical; only the address width and the textual notation differ. Modern code should be written so that it works with both, which the `getaddrinfo` function in the next lesson makes easy.
 
-### IP addresses
+## 5. IP addresses and the byte-order trap
 
-An IP address is an unsigned 32-bit integer. Network programs store IP addresses in the **IP address structure**:
+An IPv4 address is an unsigned 32-bit number. For historical reasons the sockets API wraps it in a one-member struct:
 
 ```c
-/* IP address structure */
 struct in_addr {
-    uint32_t s_addr;    /* address in network byte order (big-endian) */
+    uint32_t s_addr;   /* always stored big-endian */
 };
 ```
 
-(Storing a scalar address in a structure is an unfortunate artifact from the early implementations of the sockets interface; it is too late to change now.)
+Here is the catch. Hosts on the Internet disagree about byte order: x86 and most ARM configurations are little-endian, some other architectures are big-endian. If each machine put multi-byte integers on the wire in its native order, a little-endian sender and a big-endian receiver would read different numbers from the same four bytes. TCP/IP settles the matter by decree: any integer carried in a packet header travels in **network byte order**, which is **big-endian**, most significant byte first. The address inside `struct in_addr` and the 16-bit port number in a socket address are both kept in network order *even while they sit in your program's memory*.
 
-Because Internet hosts can have different host byte orders, TCP/IP defines a uniform **network byte order (big-endian byte order)** for any integer data item, such as an IP address, that is carried across the network in a packet header. Addresses in IP address structures are always stored in (big-endian) network byte order, even if the host byte order is little-endian. Unix provides functions for converting between network and host byte order:
+Four tiny conversion functions bridge the gap. Read the names as "host to network long/short" and the reverse:
 
 ```c
 #include <arpa/inet.h>
-uint32_t htonl(uint32_t hostlong);     /* host to network, 32 bits */
-uint16_t htons(uint16_t hostshort);    /* host to network, 16 bits */
-uint32_t ntohl(uint32_t netlong);      /* network to host, 32 bits */
-uint16_t ntohs(uint16_t netshort);     /* network to host, 16 bits */
+uint32_t htonl(uint32_t hostlong);     uint16_t htons(uint16_t hostshort);
+uint32_t ntohl(uint32_t netlong);      uint16_t ntohs(uint16_t netshort);
 ```
 
-There are no equivalent functions for 64-bit values.
-
-IP addresses are typically presented to humans in a form known as **dotted-decimal notation**, where each byte is represented by its decimal value and separated from the other bytes by a period. For example, `128.2.194.242` is the dotted-decimal representation of the address `0x8002c2f2`. On Linux, `hostname -i` shows the dotted-decimal address of your own host.
-
-Application programs can convert back and forth between IP addresses and dotted-decimal strings using `inet_pton` ("presentation to network") and `inet_ntop` ("network to presentation"):
-
-```c
-int inet_pton(AF_INET, const char *src, void *dst);                       /* 1 if OK, 0 if src invalid, -1 on error */
-const char *inet_ntop(AF_INET, const void *src, char *dst, socklen_t size);
-```
-
-| Hex address | Dotted-decimal address |
-|---|---|
-| `0x0` | `0.0.0.0` |
-| `0xffffffff` | `255.255.255.255` |
-| `0x7f000001` | `127.0.0.1` |
-| `0xcdbca079` | `205.188.160.121` |
-| `0x400c950d` | `64.12.149.13` |
-| `0xcdbc9217` | `205.188.146.23` |
+On a big-endian machine they return their argument unchanged. On a little-endian machine they reverse the bytes. Calling them unconditionally makes your code portable. There is no 64-bit variant in the classic API.
 
 ```python-run
-import socket, struct
-def hex2dd(h): return socket.inet_ntoa(struct.pack(">I", int(h, 16)))        # network order = big endian
-def dd2hex(d): return hex(struct.unpack(">I", socket.inet_aton(d))[0])
-for h in ("0x0", "0xffffffff", "0x7f000001", "0x8002c2f2"):
-    print(f"{h:>10} -> {hex2dd(h)}")
-for d in ("205.188.160.121", "64.12.149.13", "205.188.146.23"):
-    print(f"{d:>16} -> {dd2hex(d)}")
-# htonl on a little-endian host swaps the bytes; on a big-endian host it does nothing.
-x = 0x8002c2f2
-print("host-order bytes  :", struct.pack("<I", x).hex(" "))
-print("network-order bytes:", struct.pack(">I", x).hex(" "), "= what htonl guarantees is sent")
+import struct, sys
+port = 8080                      # 0x1F90
+addr = 0xC0A80164                # 192.168.1.100
+
+print("this machine is", sys.byteorder, "endian")
+print("port, native order :", struct.pack("=H", port).hex(" "))
+print("port, network order:", struct.pack("!H", port).hex(" "))
+print("addr, native order :", struct.pack("=I", addr).hex(" "))
+print("addr, network order:", struct.pack("!I", addr).hex(" "))
+
+# What a little-endian server sees if the programmer forgets htons(8080):
+wrong = struct.unpack("!H", struct.pack("<H", port))[0]
+print("forgetting htons(8080) binds to port", wrong)
 ```
 
-The problem `csapp-dotted-decimal` has you write these conversions by hand with shifts and masks.
+That last line is a real and common bug: the server starts without complaint, but on port 36895 instead of 8080, and every client gets "connection refused".
 
-### Internet domain names
+### Dotted-decimal notation
 
-Internet clients and servers use IP addresses when they communicate with each other. However, large integers are difficult for people to remember, so the Internet also defines a separate set of more human-friendly **domain names**, as well as a mechanism that maps the set of domain names to the set of IP addresses. A domain name is a sequence of words (letters, numbers and dashes) separated by periods, such as `whaleshark.ics.cs.cmu.edu`.
+People do not read 32-bit hex comfortably, so each byte is written in decimal with dots in between. `0xC0A80164` becomes `192.168.1.100`: `0xC0` = 192, `0xA8` = 168, `0x01` = 1, `0x64` = 100. Converting by hand is a favourite quiz item, so practise both directions:
 
-The set of domain names forms a hierarchy, and each domain name encodes its position in the hierarchy:
+- `10.0.0.255` → `0x0A0000FF`
+- `0xAC10FE01` → `172.16.254.1`
+
+In C, `inet_pton` ("presentation to network") parses a dotted string into a binary address already in network order, and `inet_ntop` goes back the other way:
+
+```c
+int inet_pton(int af, const char *src, void *dst);                         /* 1 ok, 0 bad string, -1 error */
+const char *inet_ntop(int af, const void *src, char *dst, socklen_t size); /* NULL on error */
+```
+
+The `af` argument is `AF_INET` for IPv4 or `AF_INET6` for IPv6. The older `inet_aton`/`inet_ntoa` pair handles IPv4 only, and `inet_ntoa` returns a pointer to a static buffer, which makes it unsafe with threads.
+
+```python-run
+import ipaddress
+for text in ("192.168.1.100", "10.0.0.255", "127.0.0.1", "172.16.254.1"):
+    ip = ipaddress.IPv4Address(text)
+    print(f"{text:15} = {int(ip):#010x}  wire bytes = {ip.packed.hex(' ')}")
+
+print(ipaddress.IPv4Address(0xAC10FE01), "<- from 0xAC10FE01")
+net = ipaddress.ip_network("192.168.1.0/24")
+print(net, "holds", net.num_addresses, "addresses;",
+      ipaddress.ip_address("192.168.1.100") in net, "that .100 is inside it")
+print("IPv6 loopback, full form:", ipaddress.IPv6Address("::1").exploded)
+```
+
+> [!INTERVIEW]
+> **"Why do we need `htons` on the port but not on the bytes of the message body?"** Byte order only matters for multi-byte *integers that both ends interpret numerically*. Header fields such as addresses and ports are interpreted by the kernel and by routers, so the standard fixes their order. Your payload is an opaque byte stream to TCP; if you put binary integers into it, choosing and documenting their byte order is your protocol's job. Text protocols such as HTTP sidestep the question altogether.
+
+## 6. Domain names and DNS
+
+Numbers are fine for routers and terrible for people, and they change when a service moves to a different host. So the Internet maintains a second namespace of **domain names**: dot-separated labels such as `docs.python.org`. The names form a tree read from right to left:
 
 ```mermaid
 graph TD
-  root["(unnamed root)"] --> mil & edu & gov & com
-  edu --> mit & cmu & berkeley
-  cmu --> cs & ece
-  cs --> ics & pdl
-  ics --> whaleshark["whaleshark: 128.2.210.175"]
-  cs --> www["www: 128.2.131.66"]
-  com --> amazon
-  amazon --> wwwa["www: 176.32.103.205"]
+    root[unnamed root] --> org
+    root --> com
+    root --> edu
+    root --> uk
+    org --> python
+    python --> docs
+    python --> www
+    com --> example
+    edu --> mit
+    mit --> csail
 ```
 
-The nodes of the tree represent domain names that are formed by the path back to the root; subtrees are **subdomains**. The first level in the hierarchy is an unnamed root node. The next level is a collection of **first-level domain names** defined by a nonprofit organization called **ICANN**: `com`, `edu`, `gov`, `org`, `net`... At the next level are **second-level domain names** such as `cmu.edu`, which are assigned on a first-come first-serve basis by various authorized agents of ICANN. Once an organization has received a second-level domain name, it is free to create any other new domain name within its subdomain, such as `cs.cmu.edu`.
+Directly beneath the root are the **top-level domains** (`com`, `org`, `edu`, country codes, and many newer ones). Below them are second-level domains that organisations register on a first-come basis, and beneath those the owner can create whatever subdomains it likes.
 
-The Internet defines a mapping between the set of domain names and the set of IP addresses. Until 1988 this mapping was maintained manually in a single text file called `HOSTS.TXT`. Since then, the mapping has been maintained in a distributed worldwide database known as **DNS (Domain Name System)**. Conceptually, the DNS database consists of millions of **host entries**, each of which defines the mapping between a set of domain names and a set of IP addresses. You can explore DNS mappings with the `nslookup` program.
+The mapping between names and addresses is stored in a planet-wide distributed database, the **Domain Name System**. Before DNS existed (it arrived in the mid-1980s) the whole mapping lived in one text file, `HOSTS.TXT`, that sites periodically downloaded. That approach collapsed under growth. DNS instead delegates: each zone of the tree is served by its owner's name servers, and resolvers cache the answers.
 
-Properties of the mapping worth knowing:
+The mapping is not one-to-one, and the exceptions matter in practice:
 
-- Each Internet host has the locally defined domain name **`localhost`**, which always maps to the **loopback address `127.0.0.1`**. It provides a convenient and portable way to reference clients and servers that are running on the same machine, which is especially useful for debugging.
-- In the simplest case there is a **one-to-one mapping** between a domain name and an IP address (`whaleshark.ics.cs.cmu.edu` → `128.2.210.175`).
-- In some cases **multiple domain names are mapped to the same IP address** (`cs.mit.edu` and `eecs.mit.edu` → `18.62.1.6`).
-- In the most general case, **multiple domain names are mapped to the same set of multiple IP addresses** (`www.twitter.com` and `twitter.com` → several addresses): the basis of DNS load balancing.
-- Some **valid domain names are not mapped to any IP address** (`edu`, `ics.cs.cmu.edu`).
+| Situation | Example | Why it exists |
+|---|---|---|
+| One name, one address | a small personal site | the simple case |
+| Many names, one address | `example.com` and `www.example.com` | aliases; virtual hosting of many sites on one machine |
+| One name, many addresses | any large website | load spreading and redundancy; the answer can differ per query and per region |
+| A name with no address | a bare organisational domain | valid name used only for mail or delegation |
+
+Every host also knows the name `localhost`, which resolves to the **loopback address** `127.0.0.1`. Traffic sent there never leaves the machine, which makes it ideal for running a client and a server side by side while debugging.
+
+On the command line, `nslookup`, `dig` or `host` will query DNS for you. From a program, use `getaddrinfo`, covered in the next lesson. The demo below tries a real lookup and falls back gracefully when the sandbox has no network.
 
 ```python-run
 import socket
-try:
-    print("localhost ->", socket.gethostbyname("localhost"))
-    for fam, typ, proto, canon, addr in socket.getaddrinfo("localhost", 80, type=socket.SOCK_STREAM):
-        print("getaddrinfo:", fam.name, addr)
-except Exception as e:
-    print("name lookup is not available in this sandbox:", e, "(localhost normally maps to 127.0.0.1)")
+def lookup(name):
+    try:
+        infos = socket.getaddrinfo(name, 80, type=socket.SOCK_STREAM)
+        return sorted({info[4][0] for info in infos})
+    except Exception as exc:          # no network, or no resolver in this sandbox
+        return f"unavailable here ({type(exc).__name__})"
+
+for name in ("localhost", "example.org"):
+    print(f"{name:12} ->", lookup(name))
+
+# A toy resolver showing the right-to-left walk through the hierarchy.
+zones = {".": {"org": "org-servers"}, "org-servers": {"example": "example-servers"},
+         "example-servers": {"www": "93.184.215.14"}}
+def resolve(name):
+    server = "."
+    for label in reversed(name.split(".")):
+        print(f"  ask {server!r:18} about {label!r}")
+        server = zones[server][label]
+    return server
+print("www.example.org ->", resolve("www.example.org"))
 ```
 
-### Internet connections
+## 7. Connections, sockets and ports
 
-Internet clients and servers communicate by sending and receiving streams of bytes over **connections**. A connection is **point-to-point** in the sense that it connects a pair of processes. It is **full duplex** in the sense that data can flow in both directions at the same time. And it is **reliable** in the sense that, barring some catastrophic failure such as a cable cut by the proverbial careless backhoe operator, the stream of bytes sent by the source process is eventually received by the destination process **in the same order it was sent**.
+An IP address gets a packet to the right host. But a host runs many processes, so one more number is needed to pick the process. That number is the 16-bit **port**.
 
-A **socket** is an end point of a connection. Each socket has a corresponding **socket address** that consists of an Internet address and a 16-bit integer **port**, denoted by the notation `address:port`.
+- A **socket** is one endpoint of a connection. Its **socket address** is the pair *IP address : port*.
+- A **connection** is point-to-point (exactly two endpoints), full-duplex (bytes flow both ways simultaneously), and reliable (bytes come out in the order they went in, or the connection reports failure).
+- A connection is identified by the addresses of *both* endpoints, the **socket pair**: `(client IP : client port, server IP : server port)`.
 
-- The port in the **client's** socket address is assigned automatically by the kernel when the client makes a connection request, and is known as an **ephemeral port**.
-- The port in the **server's** socket address is typically some **well-known port** that is permanently associated with the service. Web servers typically use port **80**, email servers port **25**. Associated with each service with a well-known port is a corresponding well-known **service name**: `http` for the web service, `smtp` for email. The mapping between well-known names and well-known ports is contained in a file called `/etc/services`.
+Where do the port numbers come from?
 
-A connection is **uniquely identified by the socket addresses of its two end points**. This pair of socket addresses is known as a **socket pair** and is denoted by the tuple
+- The **server's port** is chosen in advance so clients can find it. Services have conventional **well-known ports**: 22 for SSH, 25 for SMTP mail, 53 for DNS, 80 for HTTP, 443 for HTTPS. On Unix-like systems, the file `/etc/services` lists the registered name-to-port mapping, and ports below 1024 traditionally require elevated privileges to bind.
+- The **client's port** is picked by the client's kernel at the moment it connects. It is called an **ephemeral port** because it lives only as long as the connection.
 
+```mermaid
+graph LR
+    subgraph Client host 203.0.113.25
+      P1[browser tab 1<br/>port 51200]
+      P2[browser tab 2<br/>port 51201]
+    end
+    subgraph Server host 198.51.100.7
+      W[web server<br/>port 443]
+    end
+    P1 --- W
+    P2 --- W
 ```
-(cliaddr:cliport, servaddr:servport)
+
+Because the pair as a whole is the identity, a single server port can carry any number of simultaneous connections: every one differs in at least the client half. The kernel demultiplexes each arriving TCP segment by looking up all four values.
+
+```python-run
+# The kernel's demultiplexing table, in miniature: 4-tuple -> which socket gets the bytes.
+table = {}
+def accept(client_ip, client_port, server_ip="198.51.100.7", server_port=443):
+    key = (client_ip, client_port, server_ip, server_port)
+    table[key] = f"conn#{len(table) + 1}"
+    return key
+
+accept("203.0.113.25", 51200)
+accept("203.0.113.25", 51201)          # same client host, different ephemeral port
+accept("192.0.2.44",   51200)          # same client port number, different host
+for key, sock in table.items():
+    print(sock, key)
+print("distinct connections on one server port:", len(table))
 ```
-
-For example, a web client on host `128.2.194.242` with ephemeral port 51213 connected to a web server on host `208.216.181.15` at port 80 forms the connection `(128.2.194.242:51213, 208.216.181.15:80)`.
-
-Because the whole tuple identifies the connection, a server can hold thousands of connections on its single port 80: they differ in the client address or the client port. Two tabs in your browser talking to the same server simply use two different ephemeral ports.
-
-> [!NOTE]
-> **Origins of the Internet.** The Internet grew out of the ARPANET, begun in 1969 with four nodes. TCP/IP was adopted as its standard on January 1, 1983. A key design decision was *end-to-end* reliability: the network core (IP) stays simple and unreliable, and the hosts (TCP) do the work of making it reliable, which let the network grow across any link technology.
 
 > [!INTERVIEW]
-> **"What happens when you type a URL into a browser?"** (1) Parse the URL; (2) resolve the host name via DNS (browser/OS cache, then a recursive resolver walking root → TLD → authoritative servers); (3) open a TCP connection to the IP on port 80/443 (three-way handshake; TLS handshake for HTTPS); (4) send an HTTP request; (5) the server processes it and returns a response; (6) the browser parses HTML, fetches sub-resources, renders. Each layer encapsulates the one above: HTTP in TCP segments in IP datagrams in Ethernet/Wi-Fi frames.
+> **"How many TCP connections can a server accept on port 443?"** Not 65,535. The port space limits how many connections one *client address* can open to one server address and port, because the client's port is the only part that varies. Across all client addresses the theoretical count is vast; the practical limits are file descriptors, memory per connection and kernel tuning. Mentioning the 4-tuple is what the interviewer is listening for.
 
-> [!INTERVIEW]
-> **"TCP vs. UDP?"** TCP: connection-oriented, reliable, ordered byte stream with flow and congestion control; costs a handshake and head-of-line blocking. UDP: connectionless datagrams, no delivery or ordering guarantees, minimal overhead; used for DNS queries, real-time media and games, and as the substrate for QUIC. **"Why network byte order?"** Hosts differ in endianness, so multi-byte header fields (addresses, ports, lengths) are standardized as big-endian; forgetting `htons(port)` on an x86 machine makes port 80 (`0x0050`) become 20480 (`0x5000`).
+## 8. Putting the pieces together
 
-> [!WARNING]
-> A classic bug: storing a port with `addr.sin_port = 80;` instead of `htons(80)`. It compiles, runs, and listens on the wrong port.
+Type `https://docs.python.org/` into a browser and all of this happens before any page content moves:
 
-## 4. Summary
+1. The browser (a client process) asks the resolver to turn `docs.python.org` into one or more IP addresses. The answer may come from a local cache or from a walk down the DNS tree.
+2. The browser asks its kernel for a socket and requests a connection to *that address : 443*. The kernel picks an ephemeral port for the local end.
+3. TCP segments are wrapped in IP packets, which are wrapped in frames for the local network and sent to the default router.
+4. Each router along the path unwraps the frame, reads the destination IP address, chooses an outgoing interface, and re-wraps.
+5. The server's kernel matches the arriving segments to a listening socket on port 443 and creates a connection identified by the full socket pair.
+6. From here on both processes read and write bytes on descriptors.
 
-- Network applications follow the **client-server model**: clients send requests, servers manipulate resources and respond. Clients and servers are processes.
-- Networks are hierarchical: Ethernet segments (hubs), bridged Ethernets, and internets joined by routers. Protocol software provides a uniform **naming scheme** and **delivery mechanism**; data is **encapsulated** in packets inside frames.
-- TCP/IP: IP (unreliable host-to-host datagrams), UDP (process-to-process datagrams), TCP (reliable full-duplex connections).
-- IP addresses are 32-bit integers stored in **network (big-endian) byte order**; `htonl`/`ntohl`/`htons`/`ntohs` convert; dotted decimal is the human form.
-- DNS maps hierarchical domain names to IP addresses; `localhost` is `127.0.0.1`.
-- A connection is identified by its **socket pair** `(cliaddr:cliport, servaddr:servport)`; clients use ephemeral ports, servers well-known ports.
+## 9. Pitfalls
 
-## Check yourself
+- **Forgetting byte-order conversion.** Assigning a port or address to a socket address field without `htons`/`htonl` works on big-endian test machines and fails silently elsewhere.
+- **Converting twice.** Functions like `inet_pton` already produce network order. Passing their result through `htonl` flips it back.
+- **Assuming a host has one address, or a name has one address.** Laptops have Wi-Fi, Ethernet, loopback and VPN interfaces; big sites return different addresses on every lookup. Code should iterate over all results.
+- **Treating an IP address as an identity.** Address translation at home routers and carrier gateways means thousands of machines can share one public address, and one machine's address can change mid-session.
+- **Confusing the two kinds of address.** Hardware addresses matter only within a single LAN and change at every hop; IP addresses are end-to-end.
+- **Believing TCP preserves message boundaries.** It is a byte stream. One `write` of 300 bytes may surface as three `read`s of 100. The next lesson deals with this.
+- **Hard-coding IPv4.** Using `AF_INET`-only structures and `inet_ntoa` locks out IPv6 users. Prefer protocol-independent calls.
+
+## Summary
+
+- Network software is organised as clients requesting and servers responding; both are processes.
+- A host sees the network as an I/O device. LANs deliver frames between adapters; routers join LANs into internets.
+- Encapsulation lets a uniform internet packet cross dissimilar networks: the frame wrapper changes hop by hop while the packet inside stays the same.
+- IP provides best-effort host-to-host datagrams; UDP adds ports; TCP adds reliable, ordered, bidirectional byte streams.
+- IPv4 addresses are 32-bit numbers kept in big-endian network byte order. Use `htonl`, `htons`, `ntohl`, `ntohs` for integers and `inet_pton`/`inet_ntop` for text.
+- DNS is a distributed, hierarchical database mapping names to addresses, with many-to-one and one-to-many mappings both common.
+- A socket is an address:port endpoint; a connection is named by the pair of its two sockets, which lets one server port serve many clients.
+
+## Glossary
+
+- **Network**: computers connected so they can exchange data.
+- **Client / server**: the program that asks for something / the program that provides it.
+- **LAN (local area network)**: a network covering a small area such as an office or home.
+- **Frame**: a chunk of data in the form used on one particular local network.
+- **Router**: a device that passes data from one network to another.
+- **Protocol**: an agreed set of rules for how data is formatted and exchanged.
+- **Packet**: a chunk of data with a header saying where it comes from and where it is going.
+- **Encapsulation**: wrapping one layer's packet inside another layer's packet or frame.
+- **IP (Internet Protocol)**: the protocol that delivers packets between computers, without guarantees.
+- **TCP (Transmission Control Protocol)**: the protocol that provides a reliable, ordered stream of bytes between two programs.
+- **IP address**: the number identifying a computer on the Internet.
+- **Network byte order**: big-endian order, which the Internet uses for numbers in packet headers.
+- **Domain name**: a readable name such as `example.org`.
+- **DNS (Domain Name System)**: the worldwide directory that converts domain names to IP addresses.
+- **Port**: a 16-bit number identifying one program's endpoint on a computer.
+- **Socket**: one end of a network connection, identified by an IP address and a port.
 
 ```quiz
 [
-  {"q": "What is the dotted-decimal form of 0x7f000001?", "options": ["1.0.0.127", "127.0.0.1", "127.1.0.0", "7.15.0.1"], "answer": 1,
-   "explain": "Bytes 0x7f, 0x00, 0x00, 0x01 in order: the loopback address."},
-  {"q": "In what byte order are IP addresses and ports carried in packet headers?", "options": ["Little endian", "Big endian (network byte order)", "Host byte order", "It depends on the router"], "answer": 1,
-   "explain": "TCP/IP defines network byte order as big endian for all header integers."},
-  {"q": "Which protocol provides reliable, ordered, full-duplex byte streams between processes?", "options": ["IP", "UDP", "TCP", "Ethernet"], "answer": 2,
-   "explain": "TCP builds reliable connections on top of unreliable IP datagrams."},
-  {"q": "When a router forwards an internet packet from LAN1 to LAN2, what does it change?", "options": ["The user data", "The internet (IP) header's destination", "The frame header: it strips the LAN1 header and adds a LAN2 header", "Nothing"], "answer": 2,
-   "explain": "The packet is re-encapsulated in a frame appropriate for the next network."},
-  {"q": "What uniquely identifies a TCP connection?", "options": ["The server's port", "The client's IP address", "The socket pair (cliaddr:cliport, servaddr:servport)", "The domain name"], "answer": 2,
-   "explain": "Both end points' socket addresses together identify the connection, so many clients can use the same server port."},
-  {"q": "Who chooses the client's port number in a typical connection?", "options": ["The programmer, always 80", "The kernel, which assigns an ephemeral port", "The server", "DNS"], "answer": 1,
-   "explain": "Clients get an automatically assigned ephemeral port; servers use well-known ports."},
-  {"q": "On a little-endian x86-64 host, what does htons(0x1234) return?", "options": ["0x1234", "0x3412", "0x4321", "0x2143"], "answer": 1,
-   "explain": "The two bytes are swapped so that the big-endian (network) representation is produced."},
-  {"q": "Which statement about DNS is FALSE?", "options": ["Several domain names can map to one IP address", "One domain name can map to several IP addresses", "Every valid domain name maps to an IP address", "localhost maps to 127.0.0.1"], "answer": 2,
-   "explain": "Some valid names, such as edu, have no address mapping."}
+  {"q": "A router forwards a packet from an Ethernet LAN onto a long-haul link. Which statement is accurate?",
+   "options": ["It rewrites the destination IP address to the next router's address", "It discards the old frame header and wraps the same IP packet in a new frame for the next link", "It forwards the original frame unchanged", "It splits the TCP stream into two connections"],
+   "answer": 1, "explain": "Frames are local to one network. The router strips the incoming frame, keeps the IP packet essentially intact, and encapsulates it in a frame suited to the outgoing network."},
+  {"q": "What is the dotted-decimal form of the address 0x0A0000FF?",
+   "options": ["255.0.0.10", "10.0.0.255", "100.0.0.255", "10.0.0.15"],
+   "answer": 1, "explain": "Read the bytes from most significant to least: 0x0A = 10, 0x00, 0x00, 0xFF = 255."},
+  {"q": "On a little-endian host, a programmer stores port 8080 (0x1F90) into a socket address without calling htons. Which port does the kernel use?",
+   "options": ["8080", "36895 (0x901F)", "0", "The call fails with an error"],
+   "answer": 1, "explain": "The kernel interprets the two bytes in network (big-endian) order. The native little-endian layout is 90 1F, which reads as 0x901F = 36895. No error is reported."},
+  {"q": "Which protocol provides reliable, ordered delivery of a byte stream between two processes?",
+   "options": ["IP", "UDP", "TCP", "Ethernet"],
+   "answer": 2, "explain": "IP and UDP are best-effort datagram services. TCP layers retransmission, ordering and flow control on top of IP."},
+  {"q": "Two tabs of the same browser both connect to 198.51.100.7:443. How does the server's kernel tell the two connections apart?",
+   "options": ["By the hardware address in the frame", "By the client's ephemeral port, which differs in the two socket pairs", "It cannot; the second connection is refused", "By the domain name the client looked up"],
+   "answer": 1, "explain": "A connection is identified by the full pair of socket addresses. The client kernel assigns each connection its own ephemeral port, so the pairs differ."},
+  {"q": "Which statement about domain names and IP addresses is FALSE?",
+   "options": ["Several domain names may map to the same IP address", "One domain name may map to several IP addresses", "Every valid domain name maps to exactly one IP address", "localhost maps to the loopback address 127.0.0.1"],
+   "answer": 2, "explain": "The mapping is many-to-many, and some valid names have no address record at all."},
+  {"q": "Why does inet_pton not need to be followed by htonl?",
+   "options": ["Because addresses are stored in host order", "Because it already writes the address in network byte order", "Because htonl only works on ports", "Because IPv4 addresses are only one byte"],
+   "answer": 1, "explain": "The function converts the textual presentation form directly into the binary network-order form. Converting again would reverse the bytes on a little-endian host."},
+  {"q": "What does a switch do that a hub does not?",
+   "options": ["It converts frames into IP packets", "It learns which hardware address is reachable on which port and forwards frames selectively", "It assigns IP addresses to hosts", "It encrypts frames"],
+   "answer": 1, "explain": "A hub repeats every bit on every port. A switch learns adapter locations from traffic and sends each frame only where it needs to go."}
 ]
 ```
 
-> **Source:** CS:APP 3e, §11.1–11.3 (The client-server programming model; Networks; The global IP Internet: IP addresses, Internet domain names, Internet connections).
+> **Source:** CS:APP 3e, §11.1–11.3

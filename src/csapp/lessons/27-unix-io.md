@@ -1,326 +1,353 @@
 # Unix I/O and robust reading
 
-**Input/output (I/O)** is the process of copying data between main memory and external devices such as disk drives, terminals and networks. An input operation copies data from an I/O device to main memory; an output operation copies data from memory to a device. All language run-time systems provide higher-level facilities (ANSI C's standard I/O library with `printf` and `scanf`, C++'s `<<` and `>>`), and on Linux these are implemented using the **system-level Unix I/O functions** provided by the kernel.
+> **Before this lesson:** You need system calls and the `errno` convention from [Exceptions and the kernel](#/lesson/csapp/exceptions), and bytes and hexadecimal from [Bits, bytes, words and bit-level operations](#/lesson/csapp/bits-bytes). The examples are short C functions.
 
-Most of the time the higher-level functions work well. So why learn Unix I/O?
+## In plain words
 
-- **Understanding Unix I/O helps you understand other systems concepts.** I/O is integral to the operation of a system; we often encounter circular dependencies between I/O and other ideas. Process creation involves I/O (descriptors are inherited), and I/O involves processes.
-- **Sometimes you have no choice but to use Unix I/O.** The standard I/O library provides no way to access file **metadata** such as file size or creation time, and it has problems that make it risky for **network programming**.
+**Input/output**, shortened to I/O, means moving data between a program and the outside world: files on disk, the keyboard, the screen, other computers. Unix-like systems such as Linux and macOS treat all of these in one uniform way, as a **file**, meaning a plain sequence of bytes that can be read from or written to. A program first asks the operating system to open a file and receives a small number, the **file descriptor**, to use in later requests, much like the numbered ticket handed over at a cloakroom. One surprise catches almost everyone: when you ask to read 100 bytes you may be given fewer, like turning on a tap that delivers water in spurts. Correct programs ask again until they have everything.
 
-## 1. Everything is a file
+Why this matters at work: all network programming is done with these calls, and the partial-read surprise is the most common bug in a first network program. Problems such as "too many open files" and data missing from the end of a transfer make sense only at this level. The helper routines built in this lesson are the kind found in production code.
 
-A Linux **file** is a sequence of $m$ bytes: $B_0, B_1, \dots, B_{m-1}$. **All I/O devices (networks, disks, terminals) are modeled as files**, and all input and output is performed by reading and writing the appropriate files. This elegant mapping lets the kernel export a simple, low-level application interface, **Unix I/O**, that enables all input and output to be performed in a uniform and consistent way:
+## Why look closer
 
-- **Opening files.** An application announces its intention to access an I/O device by asking the kernel to *open* the corresponding file. The kernel returns a small nonnegative integer, a **descriptor**, that identifies the file in all subsequent operations. The kernel keeps track of all information about the open file; the application only keeps the descriptor. Each process created by a Linux shell begins life with three open files: **standard input** (descriptor 0), **standard output** (descriptor 1) and **standard error** (descriptor 2); `<unistd.h>` defines `STDIN_FILENO`, `STDOUT_FILENO`, `STDERR_FILENO`.
-- **Changing the current file position.** The kernel maintains a **file position** $k$, initially 0, for each open file: a byte offset from the beginning of the file. An application can set it explicitly with a `seek` operation.
-- **Reading and writing files.** A *read* operation copies $n > 0$ bytes from a file to memory, starting at the current file position $k$ and then incrementing $k$ by $n$. Given a file of size $m$ bytes, a read when $k \ge m$ triggers a condition known as **end-of-file (EOF)**, which the application can detect. *There is no explicit "EOF character" at the end of a file.* A *write* copies $n > 0$ bytes from memory to the file, starting at $k$, then updating $k$.
-- **Closing files.** When an application has finished accessing a file, it informs the kernel by asking it to *close* the file. The kernel frees the data structures it created when the file was opened and restores the descriptor to a pool of available descriptors. When a process terminates for any reason, the kernel closes all open files and frees their memory resources.
+Most programmers meet input and output through a comfortable library: `printf`, `std::cout`, Python's `open`. Underneath every one of those is the same tiny kernel interface of about half a dozen calls. It is worth learning that layer directly, for three reasons. First, the libraries leak: buffering surprises, mysterious partial reads on sockets, and "too many open files" errors only make sense once you know what is below. Second, some things cannot be done from the library at all, such as redirecting a child's output or reading a file's metadata. Third, network programming is done almost entirely at this level, and the single most common beginner bug there, assuming that a read returns everything you asked for, is a Unix I/O bug. This lesson covers the interface, then builds the small set of helper routines that make it safe to use.
 
-## 2. Files
+## 1. One abstraction for everything
 
-Each Linux file has a **type** that indicates its role in the system:
+Unix made a bold simplification: a **file is a sequence of bytes**, and every I/O device is presented as a file. Disks, terminals, pipes, network connections, even kernel data structures exposed under `/proc`: all are read and written with the same calls. The consequence is that a program such as `grep` works unchanged whether its input is a file, a keyboard, or the output of another program arriving over a pipe.
 
-- A **regular file** contains arbitrary data. Applications often distinguish **text files** (only ASCII or Unicode characters) and **binary files** (everything else), but to the kernel there is no difference. A Linux text file consists of a sequence of **text lines**, each terminated by a *newline* character `\n` (ASCII line feed, numeric value `0x0a`).
-- A **directory** is a file consisting of an array of **links**, where each link maps a **filename** to a file, which may be another directory. Each directory contains at least two entries: `.` (dot), a link to the directory itself, and `..` (dot-dot), a link to the **parent directory** in the directory hierarchy. `mkdir` creates a directory, `ls` views its contents, `rmdir` deletes it.
-- A **socket** is a file that is used to communicate with another process across a network (Module 11).
+The lifecycle of any file use has the same five moves:
 
-Other file types include **named pipes**, **symbolic links**, and **character and block devices**.
+1. **Open.** The program asks the kernel for access. The kernel replies with a **descriptor**, a small non-negative integer that names the open file in all later calls. The kernel keeps the real bookkeeping; the program keeps only the number.
+2. **Position.** For each open file the kernel remembers a **current offset** *k*, initially 0, measured in bytes from the start. A program can move it explicitly with `lseek`.
+3. **Read.** Copy up to *n* bytes from the file, starting at offset *k*, into memory, and advance *k* by the number copied. If *k* is already at or past the end, the read reports **end-of-file**. Note that there is no "EOF character" stored in the file; EOF is a condition the kernel detects.
+4. **Write.** Copy up to *n* bytes from memory to the file at offset *k* and advance *k*.
+5. **Close.** Tell the kernel you are done. It frees its bookkeeping and returns the descriptor number to the pool. When a process ends for any reason, the kernel closes everything it left open.
 
-The Linux kernel organizes all files in a single **directory hierarchy** anchored by the **root directory** named `/`. Each file is a direct or indirect descendant of the root. As part of its context, each process has a **current working directory** that identifies its current location in the hierarchy (changed with `cd`). Locations are specified by **pathnames**: an **absolute pathname** starts with a slash and denotes a path from the root (`/home/droh/hello.c`); a **relative pathname** starts with a filename and denotes a path from the current working directory (`./hello.c` or `../home/droh/hello.c`).
+Every process created by a shell starts with three descriptors already open: 0 is standard input, 1 is standard output, 2 is standard error. The header `<unistd.h>` names them `STDIN_FILENO`, `STDOUT_FILENO` and `STDERR_FILENO`.
 
 ```mermaid
-graph TD
-  R["/"] --> bin["bin/"] & dev["dev/"] & etc["etc/"] & home["home/"] & usr["usr/"]
-  bin --> bash[bash]
-  dev --> tty[tty1]
-  etc --> passwd[passwd]
-  home --> droh["droh/"] & bryant["bryant/"]
-  droh --> hello[hello.c]
-  usr --> include["include/"] & ubin["bin/"]
-  include --> stdio[stdio.h]
-  ubin --> vim[vim]
+flowchart LR
+    P[Process] -- "fd 0" --> KB[keyboard or pipe]
+    P -- "fd 1" --> TTY[terminal or file]
+    P -- "fd 2" --> ERR[terminal]
+    P -- "fd 3" --> F[disk file]
+    P -- "fd 4" --> S[network socket]
 ```
 
-## 3. Opening and closing files
+## 2. Kinds of files
+
+Each file has a **type** that says what role it plays:
+
+- A **regular file** holds arbitrary data. Applications may distinguish *text* files (only printable characters, organised in lines) from *binary* files, but the kernel does not: to it, both are bytes. A text line on Linux ends with the single newline character, value `0x0a`.
+- A **directory** is a file whose content is a list of **links**, each mapping a name to a file. Every directory has at least two: `.` refers to the directory itself and `..` to its parent.
+- A **socket** is a file used to talk to another process across a network.
+
+Other types exist, including named pipes, symbolic links, and character and block devices, but these three cover most application work.
+
+All files are arranged in one tree rooted at `/`. A **pathname** locates a file in the tree. An *absolute* path begins with a slash and is followed from the root; a *relative* path is followed from the process's **current working directory**, which is part of each process's context and is changed with `cd` in a shell.
+
+## 3. Opening and closing
 
 ```c
-#include <sys/types.h>
-#include <sys/stat.h>
 #include <fcntl.h>
-
-int open(char *filename, int flags, mode_t mode);   /* new file descriptor, or -1 on error */
-int close(int fd);                                  /* 0 if OK, -1 on error */
+#include <unistd.h>
+int open(const char *path, int flags, mode_t mode);   /* descriptor, or -1 */
+int close(int fd);                                    /* 0, or -1 */
 ```
 
-`open` converts a filename to a file descriptor and returns the descriptor number. **The descriptor returned is always the smallest descriptor that is not currently open in the process.** The `flags` argument indicates how the process intends to access the file:
+The `flags` argument says how you intend to use the file. Exactly one of these access modes is required:
 
-- `O_RDONLY` (reading only), `O_WRONLY` (writing only), `O_RDWR` (reading and writing),
+| Flag | Access |
+|---|---|
+| `O_RDONLY` | read only |
+| `O_WRONLY` | write only |
+| `O_RDWR` | both |
 
-optionally ORed with one or more bit masks giving additional instructions for writing:
+and it may be OR-ed with modifiers:
 
-- `O_CREAT`: if the file does not exist, create a *truncated* (empty) version of it.
-- `O_TRUNC`: if the file already exists, truncate it.
-- `O_APPEND`: before each write operation, set the file position to the end of the file.
+| Flag | Effect |
+|---|---|
+| `O_CREAT` | create the file if it does not exist |
+| `O_TRUNC` | if it exists, cut it to length zero |
+| `O_APPEND` | before every write, move the offset to the end |
 
-```c
-fd = Open("foo.txt", O_RDONLY, 0);                       /* open existing file for reading */
-fd = Open("foo.txt", O_WRONLY|O_APPEND, 0);              /* open to append some data */
+A log writer, for instance, would use `O_WRONLY | O_CREAT | O_APPEND`.
+
+**The descriptor you get is always the lowest-numbered one not currently open.** That rule is not a curiosity. Shell redirection depends on it, and it makes descriptor leaks easy to spot: if a freshly started program's first `open` returns 7, something inherited four extra descriptors.
+
+When a file is created, the `mode` argument proposes permission bits (constants such as `S_IRUSR` for owner-read, `S_IWGRP` for group-write, or the octal shorthand `0644`). The process's **umask** then removes bits: the file is created with `mode & ~umask`. With the common umask of `022`, a request for `0666` yields `0644`: owner may read and write, everyone else may only read.
+
+Closing an already-closed descriptor is an error. In threaded programs it is a dangerous one, because another thread may have only now been given that same number for a different file.
+
+```python-run
+import os, tempfile
+
+def demo():
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "journal.log")
+        a = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+        b = os.open(path, os.O_RDONLY)
+        print("two opens returned descriptors", a, "and", b, "(consecutive free slots)")
+        os.close(a)
+        c = os.open(path, os.O_RDONLY)
+        print("after closing", a, "the next open returned", c, "-> lowest free number is reused")
+        os.close(b); os.close(c)
+        requested, umask = 0o666, 0o022
+        print(f"mode {requested:o} with umask {umask:03o} creates a file with {requested & ~umask:o}")
+
+try:
+    demo()
+except Exception as exc:
+    print("raw descriptors unavailable in this sandbox:", type(exc).__name__)
 ```
 
-The `mode` argument specifies the access permission bits of *new* files. Symbolic names: `S_IRUSR`, `S_IWUSR`, `S_IXUSR` (user/owner can read, write, execute), `S_IRGRP`, `S_IWGRP`, `S_IXGRP` (group), `S_IROTH`, `S_IWOTH`, `S_IXOTH` (others). As part of its context, each process has a **umask** set by the `umask` function. When a process creates a new file with some `mode`, the access permission bits of the file are set to **`mode & ~umask`**.
-
-```c
-#define DEF_MODE  S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH   /* rw-rw-rw- */
-#define DEF_UMASK S_IWGRP|S_IWOTH                                    /* ----w--w- */
-
-umask(DEF_UMASK);
-fd = Open("foo.txt", O_CREAT|O_TRUNC|O_WRONLY, DEF_MODE);   /* owner rw, everyone else r */
-```
-
-Closing an already closed descriptor is an error.
-
-**Quick check.** What does this program print?
-
-```c
-int fd1 = Open("foo.txt", O_RDONLY, 0);
-Close(fd1);
-int fd2 = Open("baz.txt", O_RDONLY, 0);
-printf("fd2 = %d\n", fd2);
-```
-
-Unix processes begin with descriptors 0, 1, 2 open. The first `open` returns 3; after it is closed, descriptor 3 is free again, so the second `open` also returns 3: `fd2 = 3`.
-
-## 4. Reading and writing files
+## 4. Reading and writing
 
 ```c
 #include <unistd.h>
-ssize_t read(int fd, void *buf, size_t n);         /* bytes read, 0 on EOF, -1 on error */
-ssize_t write(int fd, const void *buf, size_t n);  /* bytes written, -1 on error */
+ssize_t read(int fd, void *buf, size_t n);          /* bytes read, 0 at EOF, -1 on error */
+ssize_t write(int fd, const void *buf, size_t n);   /* bytes written, -1 on error */
 ```
 
-`read` copies at most `n` bytes from the current file position of descriptor `fd` to memory location `buf`. A return value of −1 indicates an error, 0 indicates EOF; otherwise the return value is the number of bytes actually transferred. `write` copies at most `n` bytes from `buf` to the current file position of `fd`.
+Two details of the signatures repay attention. The request size is a `size_t`, an unsigned type, while the result is an `ssize_t`, a *signed* type of the same width, because the functions must be able to return -1. The largest possible successful result is therefore half the largest possible request.
 
-Copying standard input to standard output one byte at a time:
+The return value of `read` has three distinct meanings, and correct code distinguishes all of them:
+
+- **positive**: that many bytes were delivered, possibly fewer than requested;
+- **zero**: end-of-file;
+- **-1**: an error, with the reason in `errno`.
+
+Here is the simplest possible copy program, moving bytes from standard input to standard output one at a time. It is correct, and dreadfully slow, since every byte costs two trips into the kernel:
 
 ```c
-int main(void) {
-    char c;
-    while (Read(STDIN_FILENO, &c, 1) != 0)
-        Write(STDOUT_FILENO, &c, 1);
-    exit(0);
-}
+char c;
+while (read(STDIN_FILENO, &c, 1) > 0)
+    write(STDOUT_FILENO, &c, 1);
 ```
-
-> [!NOTE]
-> **`ssize_t` vs. `size_t`.** `read` takes a `size_t` (unsigned long) input but returns `ssize_t` (signed long), because it must be able to return −1 on error. Interestingly, the possibility of returning a single −1 halves the maximum size of a read.
 
 ### Short counts
 
-In some situations, `read` and `write` transfer **fewer bytes than the application requests**. Such **short counts** do *not* indicate an error. They occur for several reasons:
+When `read` or `write` transfers fewer bytes than you asked for, that is a **short count**. It is not an error. It happens in several ordinary situations:
 
-- **Encountering EOF on reads.** If a file contains only 20 more bytes from the current position and we read in 50-byte chunks, the next `read` returns a short count of 20, and the `read` after that signals EOF by returning 0.
-- **Reading text lines from a terminal.** If the open file is associated with a terminal (keyboard and display), each `read` transfers **one text line at a time**, returning a short count equal to the size of the line.
-- **Reading and writing network sockets.** If the open file corresponds to a network socket, internal buffering constraints and long network delays can cause `read` and `write` to return short counts. Short counts can also occur with a Linux **pipe**.
+- **Hitting end-of-file.** Ask for 4,096 bytes when only 1,200 remain and you receive 1,200; the *next* call returns 0.
+- **Reading from a terminal.** Each `read` returns one line of typed text, however large your buffer.
+- **Reading or writing a socket or pipe.** Network delays and kernel buffer limits split data unpredictably. A sender's single 8,000-byte write may arrive as several pieces.
+- **Being interrupted by a signal** after some bytes have already moved.
 
-In practice, you will never encounter short counts when you read from disk files except on EOF, and never when you write to disk files. But **if you want to build robust (reliable) network applications such as web servers, you must deal with short counts by repeatedly calling `read` and `write` until all requested bytes have been transferred.**
-
-## 5. Robust reading and writing with the Rio package
-
-The book's **Rio (Robust I/O)** package handles short counts automatically. It provides two kinds of functions:
-
-- **Unbuffered input and output functions** transfer data directly between memory and a file, with no application-level buffering. Especially useful for reading and writing binary data to and from networks.
-- **Buffered input functions** efficiently read text lines and binary data from a file whose contents are cached in an application-level buffer, similar to the one provided for standard I/O functions such as `printf`. Unlike the standard I/O buffered routines, the Rio buffered input functions are **thread-safe** and can be interleaved arbitrarily on the same descriptor.
-
-### Unbuffered: rio_readn and rio_writen
-
-```c
-ssize_t rio_readn(int fd, void *usrbuf, size_t n);    /* bytes transferred, 0 on EOF, -1 on error */
-ssize_t rio_writen(int fd, void *usrbuf, size_t n);   /* bytes transferred, -1 on error */
-```
-
-`rio_readn` transfers up to `n` bytes from the current file position of `fd` to `usrbuf`; it can return a short count **only if it encounters EOF**. `rio_writen` **never returns a short count**. The core is a loop:
-
-```c
-/* Sketch of the idea: keep calling read until n bytes have arrived or EOF is hit */
-remaining = n;
-while (remaining > 0) {
-    got = read(fd, p, remaining);
-    if (got < 0 && errno == EINTR)  continue;     /* interrupted by a signal handler: just retry */
-    if (got < 0)                    return -1;    /* a real error */
-    if (got == 0)                   break;        /* EOF */
-    remaining -= got;
-    p += got;
-}
-return n - remaining;                             /* bytes actually transferred */
-```
-
-Note that each function **manually restarts** `read` or `write` if it is interrupted by the return from an application signal handler (`EINTR`), to be as portable as possible.
+For a plain disk file you will essentially only meet the first case (and writes to disk files are normally complete). That is why programs tested only on files appear to work and then fail the first time they are pointed at a socket.
 
 ```python-run
-# A Python analogue: loop until n bytes have arrived, tolerating short reads.
-import io
-class TrickleStream:
-    """A stream that returns at most 3 bytes per read, like a slow socket."""
-    def __init__(self, data): self.buf = io.BytesIO(data); self.calls = 0
-    def read(self, n): self.calls += 1; return self.buf.read(min(n, 3))
+import os
 
-def readn(stream, n):
+def demo():
+    r, w = os.pipe()
+    os.write(w, b"alpha ")                 # the data shows up in two instalments
+    first = os.read(r, 4096)               # asked for 4096...
+    print(f"asked for 4096 bytes, got {len(first)}: {first!r}   <- a short count, not an error")
+    os.write(w, b"beta")
+    os.close(w)                            # writer is finished
+    print("next read:", os.read(r, 4096))
+    print("read after writer closed:", os.read(r, 4096), "<- zero bytes means end-of-file")
+    os.close(r)
+
+try:
+    demo()
+except Exception as exc:
+    print("pipes unavailable in this sandbox:", type(exc).__name__)
+    print("expected: a 6-byte short read, then b'beta', then b'' for EOF")
+```
+
+## 5. Robust I/O: looping until the job is done
+
+Since short counts are normal, any program that needs "exactly *n* bytes" must call in a loop. Writing that loop correctly every time is tedious and error-prone, so the usual practice is to put it in a pair of helpers. Call them `read_full` and `write_full`.
+
+```c
+ssize_t read_full(int fd, void *buf, size_t n) {
+    size_t left = n;
+    char *p = buf;
+    while (left > 0) {
+        ssize_t got = read(fd, p, left);
+        if (got < 0) {
+            if (errno == EINTR) continue;   /* a signal interrupted us: retry */
+            return -1;                      /* genuine error */
+        }
+        if (got == 0) break;                /* EOF */
+        left -= got;
+        p += got;
+    }
+    return n - left;                        /* short only if EOF came first */
+}
+```
+
+Its contract: return fewer than `n` bytes **only** at end-of-file. The writing twin has the same loop without the EOF branch and never returns a short count at all. Three things are handled that naive code forgets: partial transfers, the `EINTR` error that a signal handler's return can cause on older systems or with certain handler settings, and advancing the buffer pointer so that later pieces do not overwrite earlier ones.
+
+```mermaid
+flowchart TD
+    A[need n more bytes] --> B[call read for the remainder]
+    B --> C{result}
+    C -- "-1 and EINTR" --> B
+    C -- "-1 other" --> E[return error]
+    C -- "0" --> F[EOF: return bytes so far]
+    C -- "k > 0" --> D[advance pointer, subtract k]
+    D --> G{remainder is 0?}
+    G -- no --> B
+    G -- yes --> H[return n]
+```
+
+```python-run
+import random
+random.seed(4)
+
+class FlakySource:
+    """Hands out data in unpredictable small pieces, like a network connection."""
+    def __init__(self, data): self.data, self.calls = data, 0
+    def read(self, n):
+        self.calls += 1
+        k = min(len(self.data), n, random.randint(1, 7))
+        piece, self.data = self.data[:k], self.data[k:]
+        return piece
+
+def read_full(src, n):
     chunks, left = [], n
     while left > 0:
-        chunk = stream.read(left)
-        if not chunk:                  # EOF
+        piece = src.read(left)
+        if not piece:            # EOF
             break
-        chunks.append(chunk); left -= len(chunk)
+        chunks.append(piece)
+        left -= len(piece)
     return b"".join(chunks)
 
-s = TrickleStream(b"GET /index.html HTTP/1.1\r\n")
-print(s.read(10), "<- a single read gives a short count")
-print(readn(s, 10), "<- readn loops;", s.calls, "calls so far")
-print(readn(s, 100), "<- short only because of EOF")
+src = FlakySource(b"The quick brown fox jumps over the lazy dog")
+naive = src.read(20)
+print("naive single read of 20 :", naive, f"({len(naive)} bytes!)")
+src = FlakySource(b"The quick brown fox jumps over the lazy dog")
+print("read_full(20)           :", read_full(src, 20), f"using {src.calls} underlying reads")
+print("read_full(100) at EOF   :", len(read_full(src, 100)), "bytes (short only because the data ran out)")
 ```
 
-### Buffered: rio_readlineb and rio_readnb
+## 6. Buffered reading for lines
 
-Suppose we want to count the number of lines in a text file. Calling `read` to transfer 1 byte at a time and checking each for the newline character requires a **trap to the kernel for each byte**: inefficient. A better approach is a wrapper function, `rio_readlineb`, that copies the text line from an internal **read buffer**, automatically making a `read` call to refill the buffer whenever it becomes empty. For files containing both text lines and binary data (such as the HTTP responses of Module 11), a buffered version of `rio_readn`, called `rio_readnb`, transfers raw bytes from the same read buffer.
+Text protocols such as HTTP are organised in lines, so a server needs a "read one line" operation. Doing it by reading one byte per system call until a newline shows up is correct but costs a kernel trap per character. Reading a big block and searching it for the newline is fast, but then you have probably consumed bytes *beyond* the newline, and they must be kept for the next request.
 
-```c
-void    rio_readinitb(rio_t *rp, int fd);                         /* associate fd with a read buffer */
-ssize_t rio_readlineb(rio_t *rp, void *usrbuf, size_t maxlen);    /* read a text line (incl. newline) */
-ssize_t rio_readnb(rio_t *rp, void *usrbuf, size_t n);            /* read up to n bytes */
-```
-
-`rio_readinitb` is called once per open descriptor. `rio_readlineb` reads the next text line from `rp` (including the terminating newline), copies it to `usrbuf`, and terminates it with the NULL (zero) character; it reads at most `maxlen - 1` bytes, leaving room for the terminator. Lines longer than that are truncated and terminated with NULL.
-
-The buffer is described by a structure of type `rio_t`:
+The answer is an application-level **read buffer**: a small structure holding the descriptor, a block of a few kilobytes, a pointer to the next unconsumed byte, and a count of unconsumed bytes.
 
 ```c
-#define RIO_BUFSIZE 8192
 typedef struct {
-    int rio_fd;                  /* descriptor for this internal buf */
-    int rio_cnt;                 /* unread bytes in internal buf */
-    char *rio_bufptr;            /* next unread byte in internal buf */
-    char rio_buf[RIO_BUFSIZE];   /* internal buffer */
-} rio_t;
+    int   fd;
+    int   unread;          /* bytes still in the buffer */
+    char *next;            /* first unread byte */
+    char  buf[8192];
+} reader_t;
 ```
 
-The heart of the buffered routines is `rio_read`, a buffered version of Linux `read` with the same semantics: when it is called with a request to read `n` bytes, there are `rp->rio_cnt` unread bytes in the read buffer. If the buffer is empty, it is replenished with a call to `read` (a short count from that `read` is not an error; it simply partially fills the buffer). Once the buffer is nonempty, `rio_read` copies the minimum of `n` and `rp->rio_cnt` bytes from the read buffer to the user buffer and returns the number of bytes copied.
+At its heart is one internal routine with the same signature as `read`. If the buffer is empty it refills it with a single large `read` (retrying on `EINTR`); then it copies out `min(n, unread)` bytes and updates the two bookkeeping fields. Two public operations are built on top:
 
-> [!WARNING]
-> Calls to the buffered functions (`rio_readlineb`, `rio_readnb`) can be interleaved with each other on the same descriptor, but **should not be interleaved with calls to the unbuffered `rio_readn`**: the unbuffered call would bypass bytes sitting in the buffer.
+- **read a line**: pull bytes through the internal routine one at a time until a newline or a length limit is reached, then terminate the string. Each byte now costs a memory copy, not a system call.
+- **read *n* bytes**: the buffered version of `read_full`, for binary payloads that follow text headers.
+
+Some properties to remember:
+
+- The buffered calls for one reader may be freely mixed with each other, because they share the buffer.
+- **Never mix buffered and unbuffered reads on the same descriptor.** The unbuffered call goes straight to the kernel and skips whatever is sitting in the buffer, so data appears to go missing or arrive out of order.
+- Keep the state in a caller-supplied structure, one per descriptor, not in a hidden static variable. That makes the functions safe to use from several threads on different connections.
+- Always pass a maximum length to the line reader, and decide what happens to lines that exceed it. Unbounded line reads are how buffer overflows happen.
 
 ```python-run
-# Why buffer? Count 'system calls' needed to read lines one byte at a time vs. through an 8 KB buffer.
-data = (b"line of text\n" * 1000)
-class CountingFile:
-    def __init__(self, data): self.data, self.pos, self.syscalls = data, 0, 0
-    def read(self, n):
+class Reader:
+    def __init__(self, src, bufsize=16):
+        self.src, self.bufsize, self.buf, self.syscalls = src, bufsize, b"", 0
+    def _fill(self):
         self.syscalls += 1
-        chunk = self.data[self.pos:self.pos + n]; self.pos += len(chunk); return chunk
+        self.buf = self.src.read(self.bufsize)
+        return bool(self.buf)
+    def readline(self, maxlen=1024):
+        out = bytearray()
+        while len(out) < maxlen:
+            if not self.buf and not self._fill():
+                break                          # EOF
+            ch, self.buf = self.buf[:1], self.buf[1:]
+            out += ch
+            if ch == b"\n":
+                break
+        return bytes(out)
 
-f = CountingFile(data)                       # unbuffered: 1 byte per read
-lines = 0
-while (c := f.read(1)):
-    lines += c == b"\n"
-print("unbuffered:", lines, "lines,", f.syscalls, "read calls")
-
-f = CountingFile(data); buf = b""; lines = 0  # buffered: refill 8192 bytes at a time
-while True:
-    if not buf:
-        buf = f.read(8192)
-        if not buf: break
-    i = buf.find(b"\n")
-    if i < 0: buf = b""; continue
-    lines += 1; buf = buf[i + 1:]
-print("buffered  :", lines, "lines,", f.syscalls, "read calls")
-```
-
-(The simple buffered loop above would mishandle a line that straddles two buffer refills; `rio_readlineb` copies byte by byte from the buffer precisely to avoid that. The call counts make the point.)
-
-## 6. Reading file metadata
-
-An application can retrieve information about a file (its **metadata**) with `stat` and `fstat`:
-
-```c
-#include <unistd.h>
-#include <sys/stat.h>
-int stat(const char *filename, struct stat *buf);
-int fstat(int fd, struct stat *buf);
-```
-
-`stat` takes a filename, `fstat` a file descriptor; both fill in a `stat` structure whose members include the device, inode, protection and file type (`st_mode`), number of hard links, owner user and group IDs, total size in bytes (`st_size`), block size and count, and times of last access, modification and change.
-
-The two members used most: **`st_size`** contains the file size in bytes; **`st_mode`** encodes both the file permission bits and the file type. Macros in `<sys/stat.h>` determine the type: `S_ISREG(m)` (regular file?), `S_ISDIR(m)` (directory?), `S_ISSOCK(m)` (network socket?).
-
-```c
-Stat(argv[1], &stat);
-if (S_ISREG(stat.st_mode))       type = "regular";
-else if (S_ISDIR(stat.st_mode))  type = "directory";
-else                             type = "other";
-readok = (stat.st_mode & S_IRUSR) ? "yes" : "no";    /* check read access */
-```
-
-## 7. Reading directory contents
-
-```c
-#include <sys/types.h>
-#include <dirent.h>
-DIR *opendir(const char *name);          /* returns a directory stream, or NULL */
-struct dirent *readdir(DIR *dirp);       /* next directory entry, or NULL if no more / error */
-int closedir(DIR *dirp);
-```
-
-A **directory stream** is an abstraction for an ordered sequence of items, here a list of directory entries. Each call to `readdir` returns a pointer to the next entry, a structure containing an inode number `d_ino` and the filename `d_name`. If there are no more entries, `readdir` returns NULL; if an error occurs, it returns NULL and sets `errno`: the only way to distinguish the two is to check whether `errno` has been modified since the call.
-
-```python-run
-import os, stat, tempfile
-d = tempfile.mkdtemp()
-with open(os.path.join(d, "foo.txt"), "w") as f: f.write("foobar")
-os.mkdir(os.path.join(d, "sub"))
-for name in sorted(os.listdir(d)):                       # opendir / readdir / closedir
-    st = os.stat(os.path.join(d, name))                  # stat
-    kind = "directory" if stat.S_ISDIR(st.st_mode) else "regular" if stat.S_ISREG(st.st_mode) else "other"
-    print(f"{name:8} type={kind:9} size={st.st_size:5} owner-read={'yes' if st.st_mode & stat.S_IRUSR else 'no'}")
+import io
+text = b"GET /index.html HTTP/1.1\r\nHost: example.org\r\n\r\n"
+r = Reader(io.BytesIO(text))
+while (line := r.readline()):
+    print(repr(line))
+print(f"{len(text)} bytes delivered with {r.syscalls} refills, versus {len(text)} one-byte reads")
 ```
 
 > [!INTERVIEW]
-> **"What is a file descriptor?"** A small nonnegative integer, an index into the process's descriptor table, through which the process refers to an open file (or pipe, socket, device…). 0/1/2 are stdin/stdout/stderr; `open` returns the lowest unused number. The kernel keeps the real state (position, flags, the underlying inode) on its side.
+> **"`read(fd, buf, 4096)` returned 1,460. Is that a bug?"** No. A short count is normal on sockets, pipes and terminals, and at the end of a file. The only values with special meaning are 0 (end-of-file) and -1 (error; check `errno`, and retry if it is `EINTR`). Correct code loops until it has the amount it needs or frames its messages so it knows how much to expect. Interviewers ask this to see whether you have written real network code.
 
 > [!INTERVIEW]
-> **"Why might `read(fd, buf, n)` return fewer than `n` bytes, and how do you handle it?"** EOF, a terminal delivering one line, a socket or pipe with fewer bytes currently available, or interruption by a signal. Robust code loops until it has what it needs (or EOF), restarts on `EINTR`, and treats 0 as EOF. Forgetting this is a classic network-programming bug that only shows up under load or on slow links.
+> **"What does 'everything is a file' buy you?"** Uniformity and composition. One small set of calls works on disks, terminals, pipes and sockets, so tools can be combined without knowing what is on the other end, and features such as redirection, `select`-style multiplexing and permission checks are implemented once for every kind of object.
 
-> [!INTERVIEW]
-> **"Why is buffered I/O faster?"** Every `read`/`write` is a system call costing a user/kernel mode switch. Reading byte by byte makes one call per byte; a user-level buffer amortizes one call over thousands of bytes.
+## 7. Pitfalls
 
-## 8. Summary
+- **Ignoring the return value.** `read` tells you how many bytes are valid; treating the whole buffer as filled processes garbage.
+- **Treating the buffer as a C string.** `read` does not append a terminating zero. Add one yourself, in a buffer one byte larger than the read size, before calling string functions.
+- **Confusing 0 and -1.** A loop written as `while (read(...))` spins forever on an error, because -1 is "true".
+- **Forgetting the pointer advance** in a retry loop, so each piece overwrites the previous one.
+- **Leaking descriptors.** Each process has a limit, often 1,024 by default. A server that forgets to close one descriptor per request fails after a predictable number of requests with "too many open files".
+- **Omitting the mode with `O_CREAT`.** The permission bits are then taken from whatever happens to be on the stack.
+- **Assuming `O_APPEND` behaviour without the flag.** Two processes writing to one log without it overwrite each other.
+- **Mixing buffered and raw reads** on one descriptor.
 
-- Unix models every device as a file: a byte sequence accessed through descriptors with open, read, write, seek and close.
-- File types: regular, directory, socket (plus pipes, symlinks, devices). One directory hierarchy rooted at `/`.
-- `open` returns the lowest free descriptor; flags select access mode and creation/truncation/append behavior; new-file permissions are `mode & ~umask`.
-- `read`/`write` may return short counts (EOF, terminals, sockets, pipes); 0 from `read` means EOF.
-- Rio: `rio_readn`/`rio_writen` loop until done (restarting on `EINTR`); `rio_readlineb`/`rio_readnb` add a per-descriptor buffer for efficient, thread-safe line and byte reads.
-- `stat`/`fstat` give metadata (`st_size`, `st_mode`); `opendir`/`readdir`/`closedir` enumerate directories.
+## Summary
 
-## Check yourself
+- Unix models every I/O object as a file, a byte sequence accessed through a descriptor with `open`, `read`, `write`, `lseek` and `close`.
+- Descriptors 0, 1 and 2 are open at start-up; `open` always returns the lowest free number.
+- New files get permissions `mode & ~umask`.
+- `read` returns a positive count, 0 for end-of-file, or -1 for error. A count smaller than requested is a normal **short count**, common on terminals, pipes and sockets.
+- Robust helpers loop until all requested bytes are transferred, restart after `EINTR`, and return short only at EOF.
+- A per-descriptor application buffer makes line-oriented reading efficient; never mix it with unbuffered reads on the same descriptor.
+
+## Glossary
+
+- **I/O (input/output)**: moving data between a program and files, devices or other computers.
+- **File**: in Unix, any sequence of bytes that can be read or written, including devices and network connections.
+- **File descriptor**: the small number a program uses to refer to a file it has opened.
+- **Standard input / output / error**: the three descriptors (0, 1, 2) every program starts with.
+- **File position (offset)**: the place in a file where the next read or write will happen.
+- **EOF (end-of-file)**: the condition of having no more data to read, reported by a read that returns zero.
+- **Pathname**: the text naming a file's location, such as `/home/ana/notes.txt`.
+- **Permission bits**: settings that control who may read, write or run a file.
+- **`umask`**: a per-process setting that removes permissions from newly created files.
+- **Short count**: a read or write that transfers fewer bytes than requested, without being an error.
+- **`EINTR`**: the error code meaning a system call was interrupted and may be tried again.
+- **Buffer**: a block of memory used to hold data temporarily, here to reduce the number of system calls.
 
 ```quiz
 [
-  {"q": "A process opens foo.txt (getting fd 3), closes it, then opens baz.txt. What descriptor does the second open return?", "options": ["3", "4", "0", "5"], "answer": 0,
-   "explain": "open returns the smallest descriptor not currently open; 3 was freed by close."},
-  {"q": "What does read return at end of file?", "options": ["-1", "0", "EOF character", "The number of bytes requested"], "answer": 1,
-   "explain": "A return value of 0 signals EOF; there is no EOF character stored in the file."},
-  {"q": "Which situation does NOT normally produce a short count?", "options": ["Reading from a network socket", "Reading a line from a terminal", "Reading 50 bytes from a disk file with 1000 bytes remaining", "Reading the last 20 bytes of a file with a 50-byte request"], "answer": 2,
-   "explain": "Disk file reads return short counts only at EOF."},
-  {"q": "A file is created with mode rw-rw-rw- (0666) while umask is ----w--w- (0022). What are its permissions?", "options": ["rw-rw-rw-", "rw-r--r--", "rwxr-xr-x", "r--r--r--"], "answer": 1,
-   "explain": "Permissions are mode & ~umask: the group and other write bits are removed."},
-  {"q": "When can rio_readn return fewer bytes than requested?", "options": ["Whenever read returns a short count", "Only when it hits EOF", "Never", "When interrupted by a signal"], "answer": 1,
-   "explain": "It loops over short counts and restarts on EINTR; only EOF produces a short return."},
-  {"q": "Why is rio_readlineb much faster than reading one byte per read call?", "options": ["It uses mmap", "It fills an internal buffer with one system call and then serves many bytes from user space", "It skips newlines", "It uses threads"], "answer": 1,
-   "explain": "Buffering amortizes the cost of the kernel trap over thousands of bytes."},
-  {"q": "Which function tells you the size of a file given its open descriptor?", "options": ["read", "lseek only", "fstat (st_size)", "opendir"], "answer": 2,
-   "explain": "fstat fills a stat structure whose st_size member is the file size in bytes."},
-  {"q": "Why does read return ssize_t rather than size_t?", "options": ["To allow sizes above 4 GB", "Because it must be able to return -1 on error", "For alignment", "Historical accident with no purpose"], "answer": 1,
-   "explain": "The signed type accommodates the -1 error return."}
+  {"q": "A freshly started process (with only descriptors 0, 1 and 2 open) opens two files, closes the first, then opens a third. What descriptor does the third open return?",
+   "options": ["3", "4", "5", "It is unpredictable"],
+   "answer": 0, "explain": "The opens return 3 and 4. After closing 3, the lowest unused descriptor is 3 again, and open always returns the lowest free number."},
+  {"q": "read(fd, buf, 512) returns 0. What should the program conclude?",
+   "options": ["An error occurred", "End-of-file was reached", "It should retry immediately", "The buffer was too small"],
+   "answer": 1, "explain": "A return of 0 signals end-of-file. Errors are reported as -1, and a short but positive count means data was delivered."},
+  {"q": "Which situation will NOT normally produce a short count?",
+   "options": ["Reading a line typed at a terminal", "Reading from a network socket", "Reading the middle of a large disk file with plenty of data remaining", "Reading the last few bytes before the end of a file"],
+   "answer": 2, "explain": "Reads from regular disk files return the full amount unless end-of-file intervenes. Terminals, sockets and pipes routinely return less."},
+  {"q": "A process with umask 027 calls open with O_CREAT and mode 0666. What permissions does the new file have?",
+   "options": ["0666", "0640", "0027", "0644"],
+   "answer": 1, "explain": "The result is mode AND NOT umask: 0666 with the bits of 027 cleared leaves 0640."},
+  {"q": "Why does a robust read loop check for errno == EINTR?",
+   "options": ["EINTR means end-of-file", "A signal handler may have interrupted the call, and the right response is to retry rather than fail", "EINTR means the descriptor is invalid", "To detect short counts"],
+   "answer": 1, "explain": "An interrupted system call can return -1 with EINTR without any real I/O failure. The loop restarts the call."},
+  {"q": "What is the main purpose of an application-level read buffer when reading text lines?",
+   "options": ["To make reads atomic", "To replace many one-byte system calls with a few large ones while keeping leftover bytes for later", "To convert line endings", "To avoid needing a descriptor"],
+   "answer": 1, "explain": "One large read fills the buffer; subsequent bytes are served from memory. Bytes past the current line stay in the buffer for the next call."},
+  {"q": "What goes wrong if buffered line reads and raw read calls are mixed on the same descriptor?",
+   "options": ["Nothing", "The raw read bypasses bytes already pulled into the buffer, so data seems lost or reordered", "The descriptor is closed", "The kernel returns EINTR"],
+   "answer": 1, "explain": "The buffer may already hold bytes beyond what the application has consumed. A raw read fetches later bytes from the kernel and skips those."},
+  {"q": "Why is the return type of read ssize_t rather than size_t?",
+   "options": ["To save memory", "Because it must be able to return -1 to signal an error", "Because files cannot exceed 2 GB", "For compatibility with printf"],
+   "answer": 1, "explain": "size_t is unsigned and cannot represent -1. The signed ssize_t allows an error indication alongside byte counts."}
 ]
 ```
 
-> **Source:** CS:APP 3e, §10.1–10.7 (Unix I/O; Files; Opening and closing files; Reading and writing files; Robust reading and writing with the Rio package; Reading file metadata; Reading directory contents).
+> **Source:** CS:APP 3e, §10.1–10.5

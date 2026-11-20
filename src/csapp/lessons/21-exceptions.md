@@ -1,278 +1,353 @@
 # Exceptions and the kernel
 
-From the moment a processor is powered on until it is shut off, the program counter assumes a sequence of values $a_0, a_1, \dots, a_{n-1}$, each the address of an instruction $I_k$. Each transition from $a_k$ to $a_{k+1}$ is a **control transfer**, and the sequence is the processor's **control flow**. The simplest flow is "smooth": each instruction is adjacent in memory to the previous one. Jumps, calls and returns cause abrupt changes, but those react only to changes in *program state*.
+> **Before this lesson:** You need the idea of the operating system, the kernel and a process from [Caches, the OS, and the big themes](#/lesson/csapp/tour-os), and registers and the stack from [Procedures and the run-time stack](#/lesson/csapp/asm-procedures).
 
-Systems must also react to changes in *system state* that are not captured by program variables and not necessarily related to the running program: a hardware timer goes off, a packet arrives at the network adapter, a program requests data from disk and sleeps until it arrives, a child process terminates and its parent must be notified. Modern systems react by making abrupt changes in control flow called **exceptional control flow (ECF)**. ECF occurs at every level:
+## In plain words
 
-- **Hardware/OS level**: *exceptions*, events detected by hardware that transfer control to the kernel.
-- **OS level**: *context switches*, transferring control between processes.
-- **Application level**: *signals* (one process or the kernel interrupts another) and *nonlocal jumps* (`setjmp`/`longjmp`).
+Normally a processor runs one instruction after another, in order. An **exception** is a sudden, forced detour: something happens, the processor stops what it was doing, runs a piece of operating-system code that deals with the event, and then usually returns to where it was. Picture reading a book when the doorbell rings. You place a bookmark, answer the door, come back and continue from the bookmark. Events of this kind include a key being pressed, a timer running out, a program asking the operating system for a service, and a program attempting something illegal such as dividing by zero. The core of the operating system that handles them is called the **kernel**.
 
-Why understand ECF? It is the basic mechanism operating systems use to implement I/O, processes and virtual memory. Applications request OS services through a form of ECF called a **trap** or **system call**. Writing a shell or a web server requires creating processes, waiting for them and handling signals. ECF is how concurrency is implemented. And language-level exceptions (`try`/`catch`/`throw` in C++ and Java) are built on nonlocal jumps.
+Why this matters at work: every file read, network message and new program involves this mechanism, and so does every "segmentation fault" crash. Understanding it explains how one processor appears to run a hundred programs at once, and what a system call costs. It is the base for the following lessons on processes and signals and a frequent interview subject.
 
-## 1. Exceptions
+## Why look closer
 
-An **exception** is an abrupt change in the control flow in response to some change in the processor's state, implemented partly by hardware and partly by the operating system.
+A processor, left alone, does one thing: it fetches the instruction at the program counter, executes it, and moves on to the next. Jumps, calls and returns let a program steer that sequence, but only in response to its own internal state. Real systems need more. A key is pressed. A network packet lands. A timer says another program is due its turn. An instruction divides by zero or touches memory that is not there. A program wants to read a file, which only the operating system is allowed to do. Every one of these requires an abrupt change in what the processor is executing, triggered by something other than the program's ordinary logic. The mechanisms for that are grouped under the name **exceptional control flow**, and they exist at every layer: in hardware, in the kernel, and in applications. This lesson covers the lowest layer, exceptions, and then the two great abstractions the kernel builds from them: the process and the system call.
+
+Why should an application programmer care? Because exceptions are how your program asks the OS for anything at all, how the OS shares one CPU among hundreds of programs, how a segmentation fault is produced, and the foundation for signals, concurrency and I/O in the lessons that follow.
+
+## 1. What an exception is
+
+Number the instructions a processor executes $I_0, I_1, I_2, \dots$ and call each step from one to the next a *control transfer*. The whole sequence is the processor's **control flow**. An **exception** is an abrupt transfer of control to the operating system in response to a change in the processor's state. The change is called an **event**. It may be related to the instruction currently executing (an arithmetic overflow, a page that is not in memory, a deliberate request for a system service) or have nothing to do with it (a timer expiring, an I/O device finishing).
+
+When the processor detects an event, it makes an indirect call, through a table, to a piece of kernel code written to deal with exactly that kind of event: an **exception handler**. When the handler is done, one of three things happens, depending on the event:
+
+1. control returns to the instruction that was executing when the event happened, so it runs again;
+2. control returns to the instruction *after* it;
+3. the interrupted program is aborted.
 
 ```mermaid
 sequenceDiagram
-  participant A as Application program
-  participant H as Exception handler (kernel)
-  Note over A: executing I_curr when an event occurs
-  A->>H: exception: indirect call through the exception table
-  Note over H: exception processing
-  H-->>A: return to I_curr, or to I_next, or abort
+    participant U as Application
+    participant K as Kernel handler
+    Note over U: executing instruction I_k
+    U->>K: event detected, control transfers via exception table
+    Note over K: handler runs in kernel mode
+    K-->>U: return to I_k, return to I_k+1, or abort
 ```
 
-The change in state is called an **event**. It may be directly related to the current instruction (a page fault, arithmetic overflow, divide by zero) or unrelated (a timer going off, an I/O request completing). When the processor detects an event, it makes an indirect procedure call through a jump table called the **exception table**, to an OS subroutine, the **exception handler**, designed to process that kind of event. When the handler finishes, one of three things happens, depending on the event:
+### How the handler is found
 
-1. The handler returns control to the **current instruction** $I_{curr}$, the one executing when the event occurred.
-2. The handler returns control to the **next instruction** $I_{next}$, the one that would have executed next.
-3. The handler **aborts** the interrupted program.
+Every type of exception has a unique small non-negative integer, its **exception number**. Some numbers are fixed by the processor's designers (divide error, page fault, breakpoint, machine check); the rest are assigned by the kernel's designers (system calls, signals from particular devices).
 
-### Exception handling
+When the system boots, the kernel builds a jump table called the **exception table**, where entry *k* holds the address of the handler for exception *k*. The table's starting address is kept in a special CPU register, the exception table base register. At run time, when event *k* is detected, the processor uses *k* as an index into the table and jumps to the address it finds.
 
-Each type of exception is assigned a unique nonnegative **exception number**. Some are assigned by the processor's designers (divide by zero, page faults, memory access violations, breakpoints, arithmetic overflows), others by the OS kernel's designers (system calls, signals from external I/O devices).
+```python-run
+# The dispatch mechanism in miniature: number -> handler, looked up in a table built at "boot".
+def divide_error(ctx):   return "abort: deliver SIGFPE"
+def page_fault(ctx):     return "load the page, then RE-RUN the faulting instruction"
+def timer_tick(ctx):     return "maybe switch to another process, resume at the NEXT instruction"
+def system_call(ctx):    return f"perform service #{ctx['rax']}, resume at the NEXT instruction"
 
-At boot time, the OS allocates and initializes the exception table so that entry $k$ contains the address of the handler for exception $k$. The table's address is held in a special CPU register, the **exception table base register**. At run time, the processor detects an event, determines the exception number $k$, and triggers the exception by an indirect call through entry $k$.
+exception_table = {0: divide_error, 14: page_fault, 32: timer_tick, 128: system_call}
 
-An exception is like a procedure call, with important differences:
+for number, ctx in ((14, {}), (128, {"rax": 1}), (0, {}), (32, {})):
+    handler = exception_table[number]
+    print(f"exception {number:3} -> {handler.__name__:13} -> {handler(ctx)}")
+```
 
-- The return address pushed is either the current or the next instruction, depending on the class.
-- The processor also pushes additional state needed to restart the interrupted program, such as the `EFLAGS` register with the condition codes.
-- If control passes from a user program to the kernel, these items are pushed onto the **kernel's stack**, not the user's.
-- Handlers run in **kernel mode**, with complete access to all system resources.
+### How it differs from a function call
 
-After the handler has processed the event, it optionally returns to the interrupted program with a special "return from interrupt" instruction, which pops the state back into the processor's registers and restores **user mode** if the interrupted program was a user program.
+An exception resembles a procedure call, with some important differences:
 
-## 2. Classes of exceptions
+- The return address pushed is either the current instruction or the next one, depending on the type of exception. A call always pushes the next.
+- The processor also saves extra state that will be needed to resume the interrupted program, such as the flags register.
+- If control is moving from a user program into the kernel, everything is pushed on the **kernel's stack**, not the user's. The kernel cannot trust a user stack pointer.
+- Handlers run in **kernel mode**, with access to every instruction and all of memory.
 
-| Class | Cause | Async/sync | Return behavior |
+After the handler finishes, it executes a special "return from interrupt" instruction that pops the saved state, restores user mode if that is where control came from, and resumes the interrupted program.
+
+## 2. The four classes
+
+Exceptions divide into four classes, and the classification is worth memorising because each has a different cause and a different return behaviour.
+
+| Class | Cause | Sync or async | Returns to |
 |---|---|---|---|
-| **Interrupt** | Signal from an I/O device | Asynchronous | Always returns to the next instruction |
-| **Trap** | Intentional exception | Synchronous | Always returns to the next instruction |
-| **Fault** | Potentially recoverable error | Synchronous | Might return to the current instruction |
-| **Abort** | Nonrecoverable error | Synchronous | Never returns |
+| **Interrupt** | signal from an I/O device | asynchronous | the next instruction |
+| **Trap** | intentional, requested by an instruction | synchronous | the next instruction |
+| **Fault** | an error that may be correctable | synchronous | the current instruction, or never |
+| **Abort** | an unrecoverable error | synchronous | never |
 
-*Asynchronous* means caused by events in I/O devices external to the processor; *synchronous* means caused by executing an instruction (the "faulting instruction").
+*Asynchronous* means the event was caused by something outside the processor and unrelated to whatever instruction happened to be executing. *Synchronous* means it is the direct result of executing a particular instruction.
 
 ### Interrupts
 
-I/O devices such as network adapters, disk controllers and timer chips trigger interrupts by signaling a pin on the processor chip and placing on the system bus the exception number identifying the device. **After the current instruction finishes**, the processor notices that the interrupt pin has gone high, reads the exception number, and calls the appropriate **interrupt handler**. When the handler returns, control goes to the next instruction: the program continues as though the interrupt had never happened.
+Devices such as network adapters, disk controllers and timer chips signal the processor by raising a voltage on its interrupt pin and placing a number on the bus that identifies which device is calling. After finishing the current instruction, the processor notices the pin, reads the number, and calls the corresponding handler. When the handler returns, the next instruction of the interrupted program runs, and that program behaves as if nothing had happened. It is merely a little later than it would otherwise have been.
 
 ### Traps and system calls
 
-Traps are *intentional* exceptions that occur as a result of executing an instruction. Their most important use is to provide a procedure-like interface between user programs and the kernel: the **system call**. User programs often need services from the kernel, such as reading a file (`read`), creating a process (`fork`), loading a program (`execve`) or terminating (`exit`). Processors provide a special `syscall n` instruction for this. Executing it causes a trap to a handler that decodes the argument and calls the appropriate kernel routine.
+A trap is an exception a program asks for on purpose. Its most important use is the **system call**: the doorway between a user program and the kernel. User code is not permitted to read a disk, create a process or open a network connection by itself. It places a request number in a register and executes a special instruction (`syscall` on x86-64). That traps into the kernel, which decodes the request, runs the matching kernel routine, and returns to the instruction after the trap.
 
-From the programmer's perspective a system call looks like a function call, but the implementations differ fundamentally: regular functions run in **user mode**, which restricts the instructions they can execute, and they use the same stack as the caller; a system call runs in **kernel mode**, which allows privileged instructions, and accesses a stack defined in the kernel.
+From the programmer's seat a system call looks like a function call, and C libraries wrap each one in an ordinary function. The implementation is very different, though: an ordinary function runs in user mode with the caller's privileges and on the caller's stack, whereas a system call runs in kernel mode, on a kernel stack, with access to privileged instructions.
 
 ### Faults
 
-Faults result from error conditions that a handler might be able to correct. When a fault occurs, the processor transfers control to the fault handler. If the handler can correct the condition, it returns control to the **faulting instruction**, re-executing it. Otherwise it returns to an `abort` routine in the kernel that terminates the application.
+A fault is an error condition that a handler *might* be able to repair. If the handler fixes the problem, it returns to the faulting instruction, which is executed again. If it cannot, it returns to a kernel routine that terminates the program.
 
-The classic example is the **page fault**: an instruction references a virtual address whose page is not in memory and must be retrieved from disk. The page fault handler loads the page from disk and returns control to the instruction that caused the fault. When it executes again, the page is in memory and the instruction runs to completion (Module 9).
+The canonical example is the **page fault**. An instruction refers to a virtual address whose page is not currently in memory. The handler fetches the page from disk and returns; the instruction re-executes and now succeeds. The program never knows.
 
 ### Aborts
 
-Aborts result from unrecoverable fatal errors, typically hardware errors such as parity errors when DRAM or SRAM bits are corrupted. Abort handlers never return control to the application.
+Aborts come from fatal hardware errors, such as a memory parity error detected by the machine. The handler never returns control to the program.
 
-## 3. Exceptions in Linux/x86-64 systems
+```mermaid
+flowchart TD
+    E[Exception] --> Q1{Caused by the current instruction?}
+    Q1 -- no --> I[Interrupt: resume at next instruction]
+    Q1 -- yes --> Q2{Intentional?}
+    Q2 -- yes --> T[Trap: resume at next instruction]
+    Q2 -- no --> Q3{Possibly recoverable?}
+    Q3 -- yes --> F[Fault: re-execute current instruction or terminate]
+    Q3 -- no --> A[Abort: terminate]
+```
 
-There are up to 256 exception types. Numbers 0–31 are defined by the Intel architects (identical on any x86-64 system); 32–255 correspond to interrupts and traps defined by the OS.
+### What this looks like on Linux/x86-64
 
-| Number | Description | Class |
+The architecture defines up to 256 exception types. Numbers 0 to 31 are fixed by the hardware specification; 32 to 255 are available to the operating system for interrupts and traps. A few that every programmer eventually meets:
+
+| Number | Name | Class | What Linux does |
+|---|---|---|---|
+| 0 | divide error | fault | no recovery attempted; the shell prints "Floating exception" |
+| 13 | general protection fault | fault | usually a reference to an undefined area or a write to read-only memory; "Segmentation fault" |
+| 14 | page fault | fault | loads the page and restarts the instruction |
+| 18 | machine check | abort | fatal hardware error; no return |
+| 32–255 | OS-defined | interrupt or trap | device handlers, timers |
+
+Note the oddity: an *integer* division by zero is reported with a floating-point-sounding message, for historical reasons.
+
+## 3. System calls up close
+
+Linux offers hundreds of system calls, each identified by a number that indexes a table inside the kernel. A handful that appear throughout these lessons:
+
+| Number | Name | Purpose |
 |---|---|---|
-| 0 | Divide error | Fault |
-| 13 | General protection fault | Fault |
-| 14 | Page fault | Fault |
-| 18 | Machine check | Abort |
-| 32–255 | OS-defined exceptions | Interrupt or trap |
+| 0 | `read` | read from a file |
+| 1 | `write` | write to a file |
+| 2 | `open` | open a file |
+| 3 | `close` | close a file |
+| 9 | `mmap` | map memory |
+| 39 | `getpid` | process ID |
+| 57 | `fork` | create a process |
+| 59 | `execve` | run a program |
+| 60 | `_exit` | terminate |
+| 62 | `kill` | send a signal |
 
-- **Divide error (0)**: dividing by zero, or a quotient too big for the destination. Unix does not attempt to recover; it aborts the program. The shell reports "Floating exception" (even for integer division!).
-- **General protection fault (13)**: many causes, usually a reference to an undefined area of virtual memory or a write to a read-only text segment. Linux does not recover; the shell reports **"Segmentation fault"**.
-- **Page fault (14)**: the faulting instruction is restarted after the handler maps the page.
-- **Machine check (18)**: a fatal hardware error detected during the faulting instruction; never returns.
+The x86-64 Linux convention for the `syscall` instruction: the call number goes in `%rax`; up to six arguments go in `%rdi`, `%rsi`, `%rdx`, `%r10`, `%r8`, `%r9`; the result comes back in `%rax`. A negative result between -4095 and -1 indicates an error, with the magnitude being the error code. The instruction itself overwrites `%rcx` and `%r11`.
 
-### Linux/x86-64 system calls
+A complete program that prints a line without any C library:
 
-Linux provides hundreds of system calls. Each has a unique integer number corresponding to an offset in a jump table in the kernel (not the exception table).
+```asm
+        .section .rodata
+msg:    .ascii "exceptional\n"
+        .text
+        .globl _start
+_start:
+        movq $1, %rax          # write is system call 1
+        movq $1, %rdi          # first argument: descriptor 1 (standard output)
+        leaq msg(%rip), %rsi   # second argument: address of the bytes
+        movq $12, %rdx         # third argument: byte count
+        syscall
+        movq $60, %rax         # _exit is system call 60
+        movq $0, %rdi          # exit status 0
+        syscall
+```
 
-| Number | Name | Description | Number | Name | Description |
-|---|---|---|---|---|---|
-| 0 | `read` | Read file | 33 | `pause` | Suspend until signal arrives |
-| 1 | `write` | Write file | 37 | `alarm` | Schedule delivery of alarm signal |
-| 2 | `open` | Open file | 39 | `getpid` | Get process ID |
-| 3 | `close` | Close file | 57 | `fork` | Create process |
-| 4 | `stat` | Get info about file | 59 | `execve` | Execute a program |
-| 9 | `mmap` | Map memory page to file | 60 | `_exit` | Terminate process |
-| 12 | `brk` | Reset the top of the heap | 61 | `wait4` | Wait for a process to terminate |
-| 32 | `dup2` | Copy file descriptor | 62 | `kill` | Send signal to a process |
+Python's `os` module provides thin wrappers over the same calls, so we can exercise the mechanism directly.
 
-C programs usually invoke them through wrapper functions in the standard library ("system-level functions"). On x86-64, a system call is made with the `syscall` instruction. All arguments are passed in registers, not on the stack: **`%rax` holds the syscall number**, and up to six arguments go in **`%rdi`, `%rsi`, `%rdx`, `%r10`, `%r8`, `%r9`** (note `%r10` where the function ABI uses `%rcx`). On return, `%rcx` and `%r11` are destroyed and `%rax` contains the return value. A negative return value between −4,095 and −1 indicates an error corresponding to negative `errno`.
+```python-run
+import os, errno
 
-Hello world written directly with system calls:
+n = os.write(1, b"exceptional\n")            # the write system call on descriptor 1
+print("write returned", n, "| my process ID is", os.getpid())
+
+# How the kernel reports failure: the raw result is a small negative number; the library
+# stores its magnitude in errno and returns -1 (Python turns that into an exception).
+try:
+    os.close(987)                             # a descriptor that is not open
+except OSError as e:
+    print(f"close(987) failed: errno {e.errno} = {errno.errorcode[e.errno]} ({os.strerror(e.errno)})")
+```
+
+### Checking for errors
+
+When a Unix system-level function fails, it typically returns -1 and stores a code in the global variable `errno` describing why. Ignoring those return values is the single most common source of baffling behaviour in systems code: the failure happens here, and the symptom appears somewhere else much later. The discipline is tedious but simple: check **every** call.
 
 ```c
-int main() {
-    write(1, "hello, world\n", 13);
-    _exit(0);
+pid_t pid = fork();
+if (pid < 0) {
+    fprintf(stderr, "fork failed: %s\n", strerror(errno));
+    exit(1);
 }
 ```
 
-```
-main:
-    movq $1, %rax          # write is system call 1
-    movq $1, %rdi          # arg1: stdout has descriptor 1
-    movq $string, %rsi     # arg2: hello world string
-    movq $len, %rdx        # arg3: string length
-    syscall                # make the system call
-    movq $60, %rax         # _exit is system call 60
-    movq $0, %rdi          # arg1: exit status is 0
-    syscall
-```
+Because that pattern bloats code, many projects define a thin wrapper per call that performs the check and terminates with a message on failure, so the main logic stays readable. For teaching code that is ideal; for production code you usually want to handle specific errors rather than exit.
 
-```python-run
-# Python's os module wraps the same system calls.
-import os, sys
-n = os.write(1, b"hello, world\n")      # write(1, buf, 13)
-print("write returned", n, "| pid", os.getpid())
-```
+## 4. Processes: the kernel's first great illusion
 
-> [!NOTE]
-> Terminology varies. The book uses *exception* as the general term and *interrupt*, *trap*, *fault*, *abort* for the classes; "asynchronous exception" = interrupt. Many texts and Intel's manuals use "interrupt" and "exception" somewhat differently. Do not confuse these hardware/kernel exceptions with the software exceptions of C++/Java/Python.
+Exceptions are the building blocks for the most successful abstraction in computing. A **process** is an instance of a program in execution. Every program runs in the **context** of some process: its code and data in memory, its stack, the contents of the registers, its program counter, its environment variables and its set of open file descriptors.
 
-## 4. Processes
+A process hands the program two illusions:
 
-Exceptions are the basic building blocks that allow the OS kernel to provide the notion of a **process**: *an instance of a program in execution*. Each program runs in the **context** of some process: the state it needs to run correctly, including the program's code and data in memory, its stack, the contents of its general-purpose registers, its program counter, environment variables, and the set of open file descriptors.
-
-A process provides two key abstractions:
-
-- An independent **logical control flow**: the illusion that our program has exclusive use of the processor.
-- A **private address space**: the illusion that our program has exclusive use of the memory system.
+- **An independent logical control flow**: the program appears to have the processor entirely to itself.
+- **A private address space**: the program appears to have all of memory entirely to itself.
 
 ### Logical control flow
 
-If we single-stepped a program in a debugger, we would see a series of PC values belonging exclusively to our program's executable or shared objects. This sequence is a **logical control flow** (logical flow). On a single core running three processes, the one physical control flow is partitioned into three logical flows; each process runs for a while and is then **preempted** (temporarily suspended) while others take their turns. To the program it looks like exclusive use of the CPU, except that instructions occasionally appear to stall.
+If you single-stepped a machine running several programs, you would see a series of program counter values. The subsequence belonging to one process is its **logical flow**. The processor's single physical flow is carved into slices, with each process running for a while and then being **preempted** (temporarily suspended) while others take their turn. Because the kernel saves and restores everything faithfully, each program behaves as though it ran without interruption; the only observable difference is elapsed time.
 
-### Concurrent flows
-
-A logical flow whose execution **overlaps in time** with another flow is a **concurrent flow**, and the two are said to run concurrently. Precisely: flows X and Y are concurrent iff X begins after Y begins and before Y finishes, or Y begins after X begins and before X finishes. The general phenomenon is **concurrency**. Each period during which a process executes a portion of its flow is a **time slice**; taking turns is **time slicing** or **multitasking**.
-
-Concurrency is independent of the number of cores. If two flows overlap in time they are concurrent, even on a single processor. Flows running concurrently *on different cores or computers* are **parallel flows**: a proper subset of concurrent flows.
-
-**Example.** Suppose flow A starts at time 0 and finishes at time 5 (being preempted from 2 to 4), flow B runs from 2 to 4, and flow C from 6 to 8. Then A and B are concurrent (B starts and ends within A's lifetime); A and C are not; B and C are not.
+Two flows are **concurrent** if their lifetimes overlap, that is, if one begins after the other begins and before the other finishes. This has nothing to do with how many cores exist: two flows that take turns on one core are concurrent. If they actually execute at the same instant on different cores, they are additionally **parallel**. The practice of processes taking turns is **multitasking**, and each turn is a **time slice**.
 
 ```python-run
-def concurrent(x, y):                 # x, y = (start, end) of logical flows
-    return x[0] < y[1] and y[0] < x[1]
-flows = {"A": (0, 5), "B": (2, 4), "C": (6, 8)}
-for p, q in (("A", "B"), ("A", "C"), ("B", "C")):
-    print(p, q, "concurrent?", concurrent(flows[p], flows[q]))
+# Lifetimes of four flows as (start, finish). Concurrent means the intervals overlap.
+flows = {"A": (0, 7), "B": (2, 4), "C": (5, 9), "D": (10, 12)}
+names = sorted(flows)
+for i, x in enumerate(names):
+    for y in names[i + 1:]:
+        (s1, f1), (s2, f2) = flows[x], flows[y]
+        print(f"{x} and {y}:", "concurrent" if s1 < f2 and s2 < f1 else "not concurrent")
 ```
 
 ### Private address space
 
-On a machine with $n$-bit addresses, each process gets its own space of $2^n$ addresses: bytes of memory associated with a particular address in one process cannot in general be read or written by any other process. Each private address space has the same general organization (code segment starting at `0x400000`, data, heap, shared libraries, stack at the top of the user region, kernel above).
+Each process gets its own address space, organised the same way for every program: code and data at the bottom, then the heap, shared libraries in the middle, the user stack near the top, and above all of that a region reserved for the kernel. A byte of memory in one process's space cannot, in general, be read or written by another process.
 
-### User and kernel modes
+### User mode and kernel mode
 
-To provide an airtight process abstraction, the processor must restrict the instructions an application can execute and the portions of the address space it can access. Processors provide this with a **mode bit** in some control register.
+For the kernel to maintain those illusions, the processor must be able to restrict what application code can do. It does so with a **mode bit** in a control register.
 
-- When the mode bit is set, the process runs in **kernel mode** (supervisor mode): it can execute any instruction and access any memory location.
-- Otherwise it runs in **user mode**: it may not execute **privileged instructions** (halt the processor, change the mode bit, initiate an I/O operation) nor directly reference code or data in the kernel area of the address space. Any attempt results in a fatal protection fault. User programs must access kernel code and data *indirectly* through the system call interface.
+- With the bit set, the processor is in **kernel mode** (supervisor mode). Code may execute any instruction and access any memory location.
+- With the bit clear, it is in **user mode**. Code may not execute **privileged instructions**: halting the CPU, changing the mode bit, starting an I/O operation. It may not touch the kernel's region of the address space. Trying either produces a protection fault.
 
-A process running application code starts in user mode. **The only way to change from user mode to kernel mode is via an exception**: an interrupt, a fault, or a trapping system call. The handler runs in kernel mode; when it returns to application code, the processor switches back to user mode.
+Application code always starts in user mode, and **the only way to get from user mode to kernel mode is through an exception**: an interrupt, a fault, or a trapping system call. The handler runs in kernel mode, and the mode is switched back when it returns. That single controlled gateway is what makes protection possible.
 
-Linux provides the **`/proc` filesystem**, which lets user-mode processes access the contents of kernel data structures as a hierarchy of text files: `/proc/cpuinfo`, or `/proc/<pid>/maps` for the memory segments of a process.
+Linux lets user programs peek at kernel data safely through the `/proc` filesystem, which presents kernel structures as readable text files, for example `/proc/cpuinfo` or `/proc/<pid>/maps`.
 
 ### Context switches
 
-The kernel implements multitasking with a higher-level form of ECF, the **context switch**, built on top of the exception mechanism. The kernel maintains a **context** for each process: the state needed to restart a preempted process. It consists of the values of the general-purpose registers, floating-point registers, program counter, user's stack, status registers, kernel's stack, and various kernel data structures such as the **page table** (address space), the **process table** (information about the current process) and the **file table** (open files).
+Multitasking is implemented with a higher-level form of exceptional control flow, the **context switch**, built from the lower-level exception mechanism. The kernel maintains a context for each process: the general-purpose and floating-point registers, program counter, user stack pointer, status registers, kernel stack, and kernel structures such as the page table, a process table, and a file table.
 
-At certain points the kernel can decide to preempt the current process and restart a previously preempted one. This decision is **scheduling**, handled by kernel code called the **scheduler**. A context switch (1) saves the context of the current process, (2) restores the saved context of some previously preempted process, and (3) passes control to this newly restored process.
+At certain moments the kernel decides to preempt the running process and resume another. That decision is **scheduling**, and the code that makes it is the **scheduler**. A context switch then:
 
-Context switches happen:
+1. saves the context of the current process,
+2. restores the saved context of the chosen process,
+3. passes control to it.
 
-- while the kernel is executing a **system call** on behalf of the user: if the call blocks (e.g., `read` waiting for disk, or `sleep`), the kernel puts the process to sleep and switches to another;
-- as a result of an **interrupt**: all systems have a periodic **timer interrupt**, typically every 1 ms or 10 ms; each time it fires the kernel can decide that the current process has run long enough.
+When do context switches happen?
+
+- **During a system call that blocks.** A `read` from disk will take milliseconds. Rather than wait, the kernel runs someone else, and switches back after the disk interrupts to say the data is ready. `sleep` is an explicit request to be switched out.
+- **On a timer interrupt.** Every system has a periodic timer, typically firing every 1 to 10 milliseconds. The handler lets the kernel decide that the current process has had long enough.
 
 ```mermaid
 sequenceDiagram
-  participant A as Process A
-  participant K as Kernel
-  participant B as Process B
-  Note over A: user mode
-  A->>K: read system call (trap), kernel mode
-  Note over K: disk read started, context switch A to B
-  K->>B: B runs in user mode
-  Note over K: disk interrupt: data ready
-  B->>K: interrupt, kernel mode
-  Note over K: context switch B to A
-  K->>A: read returns, A in user mode
+    participant A as Process A
+    participant K as Kernel
+    participant B as Process B
+    A->>K: read system call, traps to kernel
+    Note over K: disk request started, A cannot proceed
+    K->>B: context switch to B
+    Note over B: B runs in user mode
+    B->>K: disk interrupt arrives
+    Note over K: data ready, scheduler picks A
+    K->>A: context switch back, read returns
+```
+
+Switches are not free. Beyond the direct cost of saving and restoring registers, the new process finds the caches and the TLB filled with someone else's data, so it runs slowly until they warm up.
+
+```python-run
+# A round-robin scheduler with a 3 ms time slice: the timer interrupt preempts whoever is running.
+from collections import deque
+ready = deque([["editor", 5], ["compiler", 9], ["backup", 4]])     # name, CPU ms still needed
+clock, switches, timeline = 0, 0, []
+while ready:
+    name, need = ready.popleft()
+    run = min(3, need)
+    timeline.append(f"{name}:{clock}-{clock + run}")
+    clock += run
+    if need > run:
+        ready.append([name, need - run])          # timer interrupt: preempted, back of the queue
+    if ready:
+        switches += 1
+print("  ".join(timeline))
+print("context switches:", switches, "| total CPU time:", clock, "ms")
 ```
 
 > [!INTERVIEW]
-> **"What happens during a system call?"** The user wrapper puts the syscall number in `%rax` and arguments in registers, then executes `syscall`: a trap. The CPU switches to kernel mode, saves the user PC/flags, switches to the kernel stack and jumps to the kernel's entry point, which dispatches through the syscall table. On return the CPU restores user state and mode. Cost: on the order of 100 ns to 1 µs (mode switch, cache/TLB pollution), far more than a function call, which is why buffered I/O batches many logical writes into few syscalls.
+> **"What happens during a system call?"** The wrapper puts the call number and arguments in registers and executes a trap instruction. The CPU switches to kernel mode, saves the return address and flags, switches to the process's kernel stack, and jumps to the kernel's entry point. The kernel validates the arguments, performs the service, puts the result in the return register, and executes a return instruction that restores user mode. If the call must wait, the kernel context-switches to another process in the meantime.
 
 > [!INTERVIEW]
-> **"Interrupt vs. trap vs. fault?"** Interrupt: asynchronous, from a device, resumes at the next instruction. Trap: synchronous and intentional (syscall, breakpoint), resumes at the next instruction. Fault: synchronous, possibly recoverable error (page fault), re-executes the faulting instruction if fixed. Abort: unrecoverable.
+> **"Interrupt, trap, fault, abort: what is the difference?"** Interrupts are asynchronous, from devices, and resume at the next instruction. Traps are deliberate (system calls, breakpoints) and resume at the next instruction. Faults are possibly recoverable errors and re-execute the same instruction if fixed (page fault) or kill the process if not (protection violation). Aborts are unrecoverable hardware errors. A crisp four-line answer signals real understanding.
 
-> [!INTERVIEW]
-> **"What does a context switch cost, and why?"** Direct cost: saving/restoring registers and kernel bookkeeping, a few microseconds. Indirect cost, usually larger: the new process finds cold caches and (when the address space changes) a flushed or mismatched TLB. Thread switches within one process keep the address space, so they are cheaper.
+## 5. Pitfalls
 
-## 5. System call error handling
+- **Mixing up mode switch and context switch.** Entering the kernel for a system call or interrupt changes the *mode* but stays within the same process. A context switch changes *which process* is running. Many system calls never cause a context switch.
+- **Assuming a fault means a bug.** Page faults are routine and invisible; only unrecoverable faults become signals.
+- **Believing "concurrent" requires multiple cores.** Overlapping lifetimes suffice.
+- **Ignoring return values of system calls.** The error will resurface far away.
+- **Reading `errno` when no error occurred,** or after another library call has overwritten it. Check the return value first, then read `errno` immediately.
+- **Treating the kernel as a separate process.** It is not. Kernel code runs within the context of whatever process was current, on that process's kernel stack.
+- **Confusing hardware exceptions with language exceptions.** A C++ or Python `try`/`catch` is an application-level control mechanism and involves the kernel not at all.
 
-When Unix system-level functions encounter an error, they typically return −1 and set the global integer variable `errno` to indicate what went wrong. Programmers should **always check for errors**, but many skip it because it bloats the code:
+## Summary
 
-```c
-if ((pid = fork()) < 0) {
-    fprintf(stderr, "fork error: %s\n", strerror(errno));
-    exit(0);
-}
-```
+- Exceptional control flow is any change in execution order not produced by ordinary jumps, calls and returns. At the hardware level the mechanism is the exception: an event causes an indirect jump through the exception table to a kernel handler.
+- Interrupts are asynchronous and come from devices; traps are intentional and implement system calls; faults may be corrected, in which case the instruction is re-executed; aborts are fatal.
+- A system call places a number in `%rax` and arguments in registers, executes `syscall`, and receives the result in `%rax`. Always check the result.
+- A process is a running program with its own logical control flow and private address space.
+- The mode bit separates unrestricted kernel mode from restricted user mode; exceptions are the only route from user to kernel.
+- The kernel multitasks by context switching: saving one process's context and restoring another's, triggered by blocking system calls and timer interrupts.
 
-The book adopts **error-handling wrappers** (pioneered by W. Richard Stevens): for each base function `foo`, a wrapper `Foo` with identical arguments calls the base function, checks for errors, and terminates on any problem:
+## Glossary
 
-```c
-pid_t Fork(void) {
-    pid_t pid;
-    if ((pid = fork()) < 0)
-        unix_error("Fork error");
-    return pid;
-}
-```
-
-So a call shrinks to `pid = Fork();`. Remember when you read the rest of this module: capitalized names are these wrappers.
-
-## 6. Summary
-
-- ECF lets systems react to events outside the normal flow: exceptions (hardware/kernel), context switches (kernel), signals and nonlocal jumps (application).
-- Exceptions dispatch through the exception table to kernel handlers running in kernel mode. Four classes: interrupts (async), traps, faults, aborts (sync).
-- System calls are traps: number in `%rax`, arguments in `%rdi, %rsi, %rdx, %r10, %r8, %r9`.
-- A process = logical control flow + private address space. Flows overlapping in time are concurrent; on different cores, parallel.
-- User mode is restricted; only exceptions switch to kernel mode. Context switches save and restore process contexts, triggered by blocking system calls and timer interrupts.
-
-## Check yourself
+- **Control flow**: the sequence of instructions the processor executes.
+- **Exception**: an abrupt transfer of control to the operating system in response to an event.
+- **Exception handler**: the kernel code that runs to deal with one kind of exception.
+- **Exception table**: a list, set up at start-up, giving the handler's address for each exception number.
+- **Interrupt**: an exception caused by a device, unrelated to the instruction being run.
+- **Trap**: an exception a program causes on purpose, most often to make a system call.
+- **Fault**: an exception caused by an error that the handler may be able to repair, such as a page fault.
+- **Abort**: an exception caused by an unrecoverable error.
+- **System call**: a request from a program for a service that only the kernel may perform.
+- **`errno`**: a variable in which C library functions report the reason for a failure.
+- **Kernel mode / user mode**: the unrestricted state in which the kernel runs / the restricted state in which programs run.
+- **Process**: a running program together with its own memory and state.
+- **Context switch**: saving one process's state and restoring another's so the processor changes task.
+- **Scheduler**: the kernel code that decides which process runs next.
 
 ```quiz
 [
-  {"q": "Which class of exception is asynchronous?", "options": ["Trap", "Fault", "Interrupt", "Abort"], "answer": 2,
-   "explain": "Interrupts come from I/O devices, unrelated to the instruction being executed."},
-  {"q": "After a page fault is handled successfully, where does control return?", "options": ["To the next instruction", "To the faulting instruction, which is re-executed", "To the kernel's abort routine", "To main"], "answer": 1,
-   "explain": "Faults return to the current (faulting) instruction so it can run again now that the page is present."},
-  {"q": "In which register is the system call number passed on Linux/x86-64?", "options": ["%rdi", "%rax", "%rcx", "%r10"], "answer": 1,
-   "explain": "%rax holds the number; arguments go in %rdi, %rsi, %rdx, %r10, %r8, %r9."},
-  {"q": "What exception does a write to a read-only code page typically raise, and what does the shell print?", "options": ["Machine check; Abort", "General protection fault; Segmentation fault", "Divide error; Floating exception", "Page fault; Bus error"], "answer": 1,
-   "explain": "Exception 13 is reported by Linux shells as a segmentation fault."},
-  {"q": "Flow A runs during [0,5], flow B during [2,4], on a single core. Are they concurrent? Parallel?", "options": ["Concurrent and parallel", "Concurrent but not parallel", "Neither", "Parallel but not concurrent"], "answer": 1,
-   "explain": "They overlap in time (concurrent) but a single core cannot run them simultaneously (not parallel)."},
-  {"q": "How can a process switch from user mode to kernel mode?", "options": ["By setting the mode bit directly", "Only via an exception: interrupt, fault or trap", "By calling any library function", "By jumping to kernel addresses"], "answer": 1,
-   "explain": "Changing the mode bit is privileged; exceptions are the controlled entry points into the kernel."},
-  {"q": "Which of these is NOT part of a process's context saved on a context switch?", "options": ["General-purpose registers", "Program counter", "The contents of the L1 cache", "Kernel stack and page table"], "answer": 2,
-   "explain": "Caches are not saved; in fact the switched-in process typically finds them cold, an indirect cost of context switching."},
-  {"q": "Why does an interrupt handler return to the *next* instruction?", "options": ["The current instruction completes before the interrupt is taken", "The current instruction is skipped", "Interrupts are faults", "It restarts the program"], "answer": 0,
-   "explain": "The processor checks the interrupt pin after finishing the current instruction, so execution resumes with the following one."}
+  {"q": "Which class of exception is asynchronous?",
+   "options": ["Trap", "Fault", "Interrupt", "Abort"],
+   "answer": 2, "explain": "Interrupts are caused by external devices and are unrelated to the instruction being executed. The other three result from executing a specific instruction."},
+  {"q": "After the kernel successfully handles a page fault, where does execution resume?",
+   "options": ["At the instruction after the one that faulted", "At the same instruction that faulted, which is executed again", "At the start of main", "In the signal handler for SIGSEGV"],
+   "answer": 1, "explain": "A corrected fault returns to the faulting instruction so that it can run again, this time with the page present."},
+  {"q": "How does a user program transfer from user mode to kernel mode?",
+   "options": ["By calling any library function", "By setting the mode bit directly", "Only via an exception: an interrupt, fault or trap", "By jumping to a kernel address"],
+   "answer": 2, "explain": "Changing the mode bit is privileged and kernel memory is inaccessible from user mode. Exceptions provide the sole controlled entry point."},
+  {"q": "On x86-64 Linux, which register holds the system call number when the syscall instruction executes?",
+   "options": ["%rdi", "%rax", "%rsp", "%rcx"],
+   "answer": 1, "explain": "The number goes in %rax, arguments in %rdi, %rsi, %rdx, %r10, %r8 and %r9, and the result returns in %rax."},
+  {"q": "Flow X runs from time 1 to 6 and flow Y from time 4 to 9 on a single-core machine. Which statement is true?",
+   "options": ["They are concurrent and parallel", "They are concurrent but not parallel", "They are neither", "They are parallel but not concurrent"],
+   "answer": 1, "explain": "Their lifetimes overlap, so they are concurrent. With only one core they cannot execute at the same instant, so they are not parallel."},
+  {"q": "Which event does NOT by itself force a context switch?",
+   "options": ["A process calling sleep", "A read system call that must wait for the disk", "A getpid system call", "A timer interrupt at the end of a time slice"],
+   "answer": 2, "explain": "getpid enters the kernel, copies a number and returns to the same process. It changes mode briefly but there is no need to run another process."},
+  {"q": "What does the exception table contain?",
+   "options": ["The saved registers of each process", "For each exception number, the address of its handler", "The list of open files", "Return addresses of user functions"],
+   "answer": 1, "explain": "It is a jump table built at boot. The processor indexes it with the exception number to locate the handler."},
+  {"q": "When an exception occurs while user code is running, where is the processor state saved?",
+   "options": ["On the user stack", "On the kernel stack", "In the exception table", "On disk"],
+   "answer": 1, "explain": "The kernel cannot rely on the user stack pointer being valid or safe, so state is pushed on the per-process kernel stack."}
 ]
 ```
 
-> **Source:** CS:APP 3e, §8.1–8.3 (Exceptions: handling, classes, Linux/x86-64 exceptions and system calls; Processes: logical control flow, concurrent flows, private address space, user and kernel modes, context switches; System call error handling).
+> **Source:** CS:APP 3e, §8.1–8.3

@@ -1,316 +1,371 @@
 # File sharing, redirection and standard I/O
 
-The previous lesson treated a descriptor as an opaque handle. To understand what really happens when two descriptors refer to the same file, when a process forks, or when a shell runs `ls > foo.txt`, we need to open the hood and look at the three kernel data structures that represent open files. This short piece of kernel anatomy explains a surprising amount of everyday Unix behavior, and it is a favorite source of exam and interview puzzles. We then cover I/O redirection with `dup2`, the C standard I/O library, and the practical question of which I/O functions to use when.
+> **Before this lesson:** This lesson continues from [Unix I/O and robust reading](#/lesson/csapp/unix-io): file descriptors, `open`, `read` and `write` are assumed. It also uses `fork` and `execve` from [Processes: fork, exec, wait](#/lesson/csapp/processes).
 
-## 1. How the kernel represents open files
+## In plain words
 
-The kernel uses three related data structures:
+When a program opens a file, the operating system keeps notes about that opening, the most important being a bookmark that marks how far the program has read. Two questions follow. What happens when two programs, or two parts of one program, use the same file: do they share a bookmark or does each have its own? And how can output that normally appears on the screen be sent into a file without the program knowing? Imagine a library book with a bookmark in it. If two readers share one physical copy, one reader moving the bookmark affects the other. If each has a separate copy, they read independently. This lesson explains which arrangement applies when, and how the command shell uses that knowledge for **redirection**, meaning sending a program's output or input somewhere other than the screen or keyboard.
 
-- **Descriptor table.** Each process has its **own separate** descriptor table, whose entries are indexed by the process's open file descriptors. Each open descriptor entry points to an entry in the file table.
-- **File table** (open file table). The set of open files is represented by a file table that is **shared by all processes**. Each file table entry consists of (for our purposes) the current **file position**, a **reference count** of the number of descriptor entries that currently point to it, and a pointer to an entry in the v-node table. Closing a descriptor decrements the reference count in the associated file table entry. The kernel will not delete the file table entry until its reference count is zero.
-- **v-node table.** Like the file table, the v-node table is **shared by all processes**. Each entry contains most of the information in the `stat` structure, including the `st_mode` and `st_size` members.
+Why this matters at work: redirection and pipes are used in every script and automated build. The buffering behaviour covered at the end explains two confusing sights: messages that vanish when a program crashes, and messages that appear twice. Questions on what two processes read from a shared file are common in systems interviews.
 
-```mermaid
-graph LR
-  subgraph DT["Descriptor table (one per process)"]
-    fd0[fd 0] 
-    fd1[fd 1]
-    fd3[fd 3]
-    fd4[fd 4]
-  end
-  subgraph FT["Open file table (shared by all processes)"]
-    A["File A: pos, refcnt = 1"]
-    B["File B: pos, refcnt = 1"]
-  end
-  subgraph VT["v-node table (shared by all processes)"]
-    VA["v-node: file access, size, type ..."]
-    VB["v-node: file access, size, type ..."]
-  end
-  fd3 --> A --> VA
-  fd4 --> B --> VB
+## Why look closer
+
+Three small puzzles to start. A program opens the same file twice and reads one byte from each descriptor: does the second read see the first byte or the second? A parent opens a file, forks, and both processes read one byte: same question. And when you type `ls > listing.txt`, how does `ls`, which was compiled long before you thought of that file name, end up writing into it? All three have crisp answers once you know the three data structures the kernel keeps for open files. This lesson covers those structures, the `dup2` call that powers shell redirection, how to ask the kernel about a file without opening it, how to walk a directory, and finally how the C standard I/O library sits on top of everything and when you should or should not use it.
+
+## 1. Asking about a file: metadata
+
+Every file has a record of facts *about* it, separate from its contents: its size, its type, who may access it, when it was last changed. The `stat` family of calls copies that record into a structure you supply:
+
+```c
+#include <sys/stat.h>
+int stat(const char *path, struct stat *buf);     /* by name */
+int fstat(int fd, struct stat *buf);              /* by open descriptor */
 ```
 
-The typical situation is shown above: descriptors 3 and 4 reference two different files through distinct open file table entries. No sharing. But three other configurations arise, and each behaves differently.
+The structure has more than a dozen fields. The ones application code most often needs:
+
+| Field | Meaning |
+|---|---|
+| `st_size` | length in bytes |
+| `st_mode` | file type and the nine permission bits |
+| `st_nlink` | number of directory entries (hard links) naming this file |
+| `st_uid`, `st_gid` | owner and group |
+| `st_mtime` | time of last modification |
+| `st_ino` | the inode number, unique within one filesystem |
+
+The type lives in the upper bits of `st_mode`, and macros test it: `S_ISREG` for an ordinary file, `S_ISDIR` for a directory, `S_ISSOCK` for a socket, and so on. The low bits are the familiar read, write and execute permissions for user, group and others. A web server, for example, calls `stat` before serving a path to check that it is a regular file and that it is readable, and uses `st_size` for the `Content-Length` header.
+
+```python-run
+import os, stat, tempfile, time
+
+with tempfile.TemporaryDirectory() as d:
+    path = os.path.join(d, "notes.txt")
+    with open(path, "w") as f:
+        f.write("twelve bytes")
+    for p in (path, d):
+        info = os.stat(p)
+        kind = "directory" if stat.S_ISDIR(info.st_mode) else "regular file" if stat.S_ISREG(info.st_mode) else "other"
+        print(f"{os.path.basename(p) or p:12} type={kind:12} size={info.st_size:5} "
+              f"perms={stat.filemode(info.st_mode)} readable={os.access(p, os.R_OK)}")
+    print("modified", round(time.time() - os.stat(path).st_mtime, 2), "seconds ago")
+```
+
+## 2. Reading a directory
+
+A directory is itself a file, but its contents are a list of *(name, inode number)* entries that only the kernel may edit. Programs read it through a small stream interface:
+
+```c
+#include <dirent.h>
+DIR *opendir(const char *path);
+struct dirent *readdir(DIR *dirp);      /* NULL at the end, or on error */
+int closedir(DIR *dirp);
+```
+
+Each call to `readdir` returns the next entry. The portable fields are `d_name` (the file name) and `d_ino`. Because `NULL` signals both "no more entries" and "something went wrong", careful code clears `errno` before the call and inspects it afterwards. Every directory contains the entries `.` and `..`, which recursive walkers must skip or they will loop forever.
+
+```python-run
+import os, tempfile
+with tempfile.TemporaryDirectory() as d:
+    for name in ("b.txt", "a.txt"):
+        open(os.path.join(d, name), "w").close()
+    os.mkdir(os.path.join(d, "sub"))
+    with os.scandir(d) as entries:                 # opendir / readdir / closedir underneath
+        for e in sorted(entries, key=lambda e: e.name):
+            print(f"{e.name:6} inode={'yes' if e.inode() else 'n/a'} directory={e.is_dir()}")
+```
+
+## 3. Three tables behind every descriptor
+
+Here is the model that answers the opening puzzles. The kernel represents open files with three linked structures.
+
+1. **Descriptor table.** One per process. It is an array indexed by descriptor number; each slot that is in use points to an entry in the next table.
+2. **Open file table.** One for the whole system, shared by all processes. Each entry represents one *opening* of a file. It holds the **current position** (the byte offset where the next read or write will happen), the access mode, a **reference count** of how many descriptor slots point at it, and a pointer into the third table. The kernel discards an entry only when its reference count falls to zero.
+3. **v-node table.** Also system-wide. One entry per file, holding essentially the `stat` information.
+
+```mermaid
+flowchart LR
+    subgraph DT[Descriptor table - per process]
+      d3[fd 3]
+      d4[fd 4]
+    end
+    subgraph OFT[Open file table - system wide]
+      A[entry A: pos 0, refcnt 1]
+      B[entry B: pos 0, refcnt 1]
+    end
+    subgraph VN[v-node table - system wide]
+      V1[report.txt: size, type, perms]
+      V2[log.txt: size, type, perms]
+    end
+    d3 --> A --> V1
+    d4 --> B --> V2
+```
+
+That picture is the ordinary case: two descriptors, two openings, two different files. Three more arrangements are possible, and each one corresponds to a puzzle.
 
 ### Case 1: the same file opened twice
 
-Multiple descriptors can reference the same file through **different file table entries**. This happens if you call `open` twice with the same filename. The key idea is that **each descriptor has its own distinct file position**, so different reads on different descriptors can fetch data from different locations in the file.
+Calling `open` twice on one path creates **two** open-file entries that point at the **same** v-node. Each entry has its own position. So the descriptors advance independently: reading through one does not move the other.
+
+*Puzzle one:* both reads return the first byte of the file.
+
+### Case 2: after `fork`
+
+`fork` gives the child a copy of the parent's descriptor table. The copies point at the **same** open-file entries, whose reference counts go up by one. Parent and child therefore **share one position**. A read by either advances the offset seen by both.
+
+*Puzzle two:* whichever process reads first gets byte one; the other gets byte two. This sharing is exactly what lets a parent and child append to the same log without overwriting each other, and it is why both must `close` before the kernel releases the entry.
 
 ```mermaid
-graph LR
-  fd3[fd 3] --> A["File table entry A: pos = 1, refcnt = 1"] --> V["v-node for foobar.txt"]
-  fd4[fd 4] --> B["File table entry B: pos = 0, refcnt = 1"] --> V
+flowchart LR
+    subgraph Parent
+      p3[fd 3]
+    end
+    subgraph Child
+      c3[fd 3]
+    end
+    E[open file entry: pos shared, refcnt 2] --> V[v-node]
+    p3 --> E
+    c3 --> E
 ```
 
-**Puzzle.** The disk file `foobar.txt` consists of the six ASCII characters `foobar`. What does this print?
+### Case 3: after `dup2`
 
-```c
-int fd1 = Open("foobar.txt", O_RDONLY, 0);
-int fd2 = Open("foobar.txt", O_RDONLY, 0);
-char c;
-Read(fd1, &c, 1);
-Read(fd2, &c, 1);
-printf("c = %c\n", c);
+The third arrangement puts two descriptors *in the same process* onto one open-file entry. That is the job of `dup2`, covered next.
+
+The demo below builds the model directly, so you can check all three puzzles and then try your own variations.
+
+```python-run
+class OpenFile:                       # one entry of the system-wide open file table
+    def __init__(self, vnode):
+        self.vnode, self.pos, self.refcnt = vnode, 0, 1
+
+class Process:
+    def __init__(self, table=None):
+        self.fds = dict(table or {})  # descriptor table: number -> OpenFile
+    def open(self, vnode):
+        fd = next(n for n in range(3, 99) if n not in self.fds)   # lowest free slot
+        self.fds[fd] = OpenFile(vnode)
+        return fd
+    def read1(self, fd):
+        of = self.fds[fd]
+        ch = of.vnode["data"][of.pos]
+        of.pos += 1
+        return ch
+    def fork(self):
+        for of in self.fds.values():
+            of.refcnt += 1
+        return Process(self.fds)      # copied table, same OpenFile objects
+    def dup2(self, old, new):
+        if new in self.fds:
+            self.fds[new].refcnt -= 1 # implicit close of whatever new referred to
+        self.fds[new] = self.fds[old]
+        self.fds[old].refcnt += 1
+
+vnode = {"data": "QUARTZ"}
+
+p = Process(); a = p.open(vnode); b = p.open(vnode)
+print("opened twice :", p.read1(a), p.read1(b), " (independent positions)")
+
+p = Process(); fd = p.open(vnode); child = p.fork()
+print("after fork   :", child.read1(fd), p.read1(fd), " (one shared position, refcnt", p.fds[fd].refcnt, ")")
+
+p = Process(); a = p.open(vnode); b = p.open(vnode); p.read1(b); p.dup2(b, a)
+print("after dup2   :", p.read1(a), " (fd", a, "now follows fd", b, "'s position)")
 ```
 
-Answer: `c = f`. The descriptors `fd1` and `fd2` each have their own open file table entry, so each has its own file position. The read from `fd2` reads the first byte of the file.
-
-### Case 2: parent and child after fork
-
-Suppose a parent process has the typical configuration (descriptors 3 and 4 open on files A and B) and then calls `fork`. **The child gets its own duplicate copy of the parent's descriptor table. Parent and child share the same set of open file table entries and thus share the same file position.** The reference counts of the entries become 2. An important consequence is that the parent and child must *both* close their descriptors before the kernel will delete the corresponding file table entry.
-
-```mermaid
-graph LR
-  subgraph Parent["Parent's descriptor table"]
-    p3[fd 3]
-  end
-  subgraph Child["Child's descriptor table"]
-    c3[fd 3]
-  end
-  p3 --> A["File table entry: pos shared, refcnt = 2"]
-  c3 --> A
-  A --> V[v-node]
-```
-
-**Puzzle.** With `foobar.txt` as before:
-
-```c
-int fd = Open("foobar.txt", O_RDONLY, 0);
-char c;
-if (Fork() == 0) {
-    Read(fd, &c, 1);
-    exit(0);
-}
-Wait(NULL);
-Read(fd, &c, 1);
-printf("c = %c\n", c);
-```
-
-Answer: `c = o`. The child inherits the parent's descriptor table, and all processes share the same open file table entry. The child's read advances the shared position by one byte; when the parent reads after waiting for the child, it gets the *second* byte.
-
-This sharing is what makes shell constructs like `(cmd1; cmd2) > out.txt` work: both commands inherit the same open file entry, so the second continues writing where the first stopped instead of overwriting it.
-
-### Case 3: dup2
-
-The third way to share is to have two descriptors **in the same process** point to the same file table entry, created with `dup` or `dup2`. That is the basis of I/O redirection.
-
-## 2. I/O redirection
-
-Linux shells provide **I/O redirection** operators that let users associate standard input and output with disk files. Typing
-
-```
-linux> ls > foo.txt
-```
-
-causes the shell to load and execute the `ls` program with standard output redirected to disk file `foo.txt`. A web server performs a similar kind of redirection when it runs a CGI program on behalf of the client (Module 11).
-
-How does it work? One way is the `dup2` function:
+## 4. Redirection with dup2
 
 ```c
 #include <unistd.h>
-int dup2(int oldfd, int newfd);    /* returns nonnegative descriptor if OK, -1 on error */
+int dup2(int oldfd, int newfd);
 ```
 
-`dup2` **copies descriptor table entry `oldfd` to descriptor table entry `newfd`, overwriting the previous contents** of descriptor table entry `newfd`. If `newfd` was already open, `dup2` closes `newfd` before it copies `oldfd`.
+`dup2` copies descriptor-table slot `oldfd` over slot `newfd`. If `newfd` was already open, it is closed first. Afterwards both numbers refer to the same open-file entry and thus share a position. Read the argument order as "make `newfd` mean what `oldfd` means"; getting it backwards is the most common mistake.
 
-Suppose that before calling `dup2(4, 1)` we have the typical situation: descriptor 1 (stdout) corresponds to file A (say, a terminal) and descriptor 4 corresponds to file B (say, a disk file); the reference counts for A and B are both 1. After `dup2(4, 1)`:
+Now the third opening puzzle unravels. Programs do not write to "the terminal". They write to descriptor 1, whatever that happens to be. When you type `ls > listing.txt`, the shell:
+
+1. forks a child,
+2. in the child, opens `listing.txt` for writing and gets some descriptor, say 3,
+3. calls `dup2(3, 1)`, so descriptor 1 now refers to the file, then closes 3,
+4. calls `execve` to run `ls`.
+
+Descriptor tables survive `execve`, so `ls` starts life with its standard output already pointing at the file and never knows the difference. Input redirection with `<` is the same trick on descriptor 0, and a pipeline `a | b` connects descriptor 1 of one child and descriptor 0 of the next to the two ends of a pipe. The same move let the web server in the sockets lesson run a CGI program whose `printf` output went straight to a network connection.
 
 ```mermaid
-graph LR
-  fd1["fd 1 (stdout)"] --> B["File B: refcnt = 2"]
-  fd4[fd 4] --> B
-  A["File A: refcnt = 0, closed, entry deleted"]
-  B --> VB["v-node B"]
+flowchart LR
+    subgraph Before
+      b1[fd 1] --> T1[terminal entry]
+      b3[fd 3] --> F1[listing.txt entry]
+    end
+    subgraph After dup2 3 onto 1
+      a1[fd 1] --> F2[listing.txt entry, refcnt 2]
+      a3[fd 3] --> F2
+    end
 ```
-
-Both descriptors now point to file B; file A has been closed and its file table and v-node table entries deleted; the reference count for file B has been incremented. **From this point on, any data written to standard output are redirected to file B.**
-
-So a shell implements `ls > foo.txt` like this: after `fork`, in the child, `open("foo.txt", O_WRONLY|O_CREAT|O_TRUNC, mode)` (returning, say, 3), then `dup2(3, 1)`, `close(3)`, and finally `execve("/bin/ls", ...)`. The `ls` program simply writes to descriptor 1, unaware that it is no longer the terminal. This is the payoff of separating `fork` from `execve`.
-
-> [!NOTE]
-> **Left and right hoinkies.** To avoid confusion with other bracket-type operators such as `]` and `[`, the book's authors have always referred to the shell's `>` operator as a "right hoinky" and the `<` operator as a "left hoinky".
-
-**Puzzle.** With `foobar.txt` containing `foobar`:
-
-```c
-int fd1 = Open("foobar.txt", O_RDONLY, 0);
-int fd2 = Open("foobar.txt", O_RDONLY, 0);
-char c;
-Read(fd2, &c, 1);
-Dup2(fd2, fd1);
-Read(fd1, &c, 1);
-printf("c = %c\n", c);
-```
-
-Answer: `c = o`. Because we redirect `fd1` to `fd2`, the read through `fd1` uses `fd2`'s file table entry, whose position is already 1.
-
-**Puzzle: how would you use `dup2` to redirect standard input to descriptor 5?** `dup2(5, 0);` (or `dup2(5, STDIN_FILENO)`): copy entry 5 over entry 0.
 
 ```python-run
-# A model of the three tables that reproduces all three puzzles.
-class Kernel:
-    def __init__(self, files): self.files = files
-    def open(self, proc, name):
-        fd = next(i for i in range(3, 100) if i not in proc)
-        proc[fd] = {"name": name, "pos": 0, "refcnt": 1}        # new open-file-table entry
-        return fd
-    def read(self, proc, fd, n=1):
-        e = proc[fd]; data = self.files[e["name"]][e["pos"]:e["pos"] + n]; e["pos"] += len(data); return data
-    def dup2(self, proc, old, new):
-        if new in proc: proc[new]["refcnt"] -= 1
-        proc[new] = proc[old]; proc[old]["refcnt"] += 1          # share the SAME entry
-    def fork(self, proc):
-        for e in proc.values(): e["refcnt"] += 1
-        return dict(proc)                                        # copy of the descriptor table only
+import os, sys, tempfile
 
-k = Kernel({"foobar.txt": "foobar"})
-p = {}; a = k.open(p, "foobar.txt"); b = k.open(p, "foobar.txt")
-k.read(p, a); print("two opens      : c =", k.read(p, b))
+def redirect_demo():
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "listing.txt")
+        sys.stdout.flush()
+        keep = os.dup(1)                                  # remember the real stdout
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+        os.dup2(fd, 1)                                    # fd 1 now means the file
+        os.close(fd)
+        os.write(1, b"this line was written to descriptor 1\n")
+        os.dup2(keep, 1)                                  # put stdout back
+        os.close(keep)
+        with open(path) as f:
+            return f.read().strip()
 
-p = {}; fd = k.open(p, "foobar.txt"); child = k.fork(p)
-k.read(child, fd); print("fork then read : c =", k.read(p, fd))
-
-p = {}; a = k.open(p, "foobar.txt"); b = k.open(p, "foobar.txt")
-k.read(p, b); k.dup2(p, b, a); print("dup2(fd2, fd1) : c =", k.read(p, a))
+try:
+    print("the file captured:", repr(redirect_demo()))
+except Exception as exc:                                  # some sandboxes cannot dup descriptors
+    print("descriptor duplication unavailable here:", type(exc).__name__)
+    print("on a normal system the file captures the line written to descriptor 1")
 ```
 
-The coding problem `csapp-fd-sharing` asks you to build this model yourself.
+> [!INTERVIEW]
+> **"Parent opens a file and forks; the child reads 5 bytes. Where does the parent's next read start?"** At byte 5. `fork` duplicates the descriptor table but not the open-file entry, so the offset is shared. Contrast with two independent `open` calls on the same path, which get separate offsets. If the interviewer follows up with "how does the shell implement `>`", answer with fork, open, `dup2(fd, 1)`, exec.
 
-## 3. Standard I/O
+## 5. Standard I/O: the buffered layer
 
-The C language defines a set of higher-level input and output functions, the **standard I/O library**, that provides programmers with a higher-level alternative to Unix I/O. The library (`libc`) provides functions for opening and closing files (`fopen` and `fclose`), reading and writing bytes (`fread` and `fwrite`), reading and writing strings (`fgets` and `fputs`), and sophisticated formatted I/O (`scanf` and `printf`).
+Raw `read` and `write` are system calls, and a system call costs hundreds of nanoseconds or more for the trip into the kernel and back. A program that calls `read` once per character is painfully slow. The C library's **standard I/O** package (`fopen`, `fgets`, `fscanf`, `printf`, `fread`, `fwrite`, `fflush`, `fclose`) fixes that.
 
-The standard I/O library models an open file as a **stream**. To the programmer, a stream is a pointer to a structure of type `FILE`. Every ANSI C program begins with three open streams, `stdin`, `stdout` and `stderr`, which correspond to standard input, standard output and standard error:
+It models an open file as a **stream**: a `FILE` structure that wraps a descriptor together with a block of memory called the **stream buffer**. Three streams are open when `main` begins: `stdin`, `stdout` and `stderr`, wrapping descriptors 0, 1 and 2.
 
-```c
-#include <stdio.h>
-extern FILE *stdin;    /* standard input  (descriptor 0) */
-extern FILE *stdout;   /* standard output (descriptor 1) */
-extern FILE *stderr;   /* standard error  (descriptor 2) */
-```
+The buffer's whole purpose is to cut down the number of system calls:
 
-A stream of type `FILE` is an abstraction for a **file descriptor and a stream buffer**. The purpose of the stream buffer is the same as the Rio read buffer: to **minimize the number of expensive Linux I/O system calls**. For example, suppose a program makes repeated calls to `getc`, each returning the next character from a file. When `getc` is called the first time, the library fills the stream buffer with a single call to `read` and then returns the first byte in the buffer to the application. As long as there are unread bytes in the buffer, subsequent calls to `getc` can be served directly from the stream buffer.
+- On input, the first `getc` triggers one `read` that fills the buffer with a few kilobytes. The next several thousand `getc` calls are satisfied from memory.
+- On output, `printf` appends to the buffer. The bytes reach the kernel through a single `write` only when the buffer fills, when the program calls `fflush`, when the stream is closed, or when the program exits normally.
 
-Output is buffered too: `printf` appends to the buffer, and the buffer is **flushed** to the descriptor with `write` when it fills, when `fflush` is called, when the stream is closed or the program exits normally, or (for a stream attached to a terminal, which is *line buffered*) when a newline is written.
+Streams connected to a terminal are usually **line buffered** (flushed at each newline), other output streams are **fully buffered**, and `stderr` is unbuffered so that error messages appear immediately.
 
 ```python-run
-import io
-class CountingRaw(io.RawIOBase):
-    def __init__(self): self.writes = 0; self.data = b""
-    def writable(self): return True
-    def write(self, b): self.writes += 1; self.data += bytes(b); return len(b)
+# Count the kernel crossings needed to consume a 100,000-byte file one character at a time.
+size, bufsize = 100_000, 8192
 
-raw = CountingRaw()
-for _ in range(1000): raw.write(b"x")                         # unbuffered: one 'system call' per byte
-print("unbuffered writes:", raw.writes)
-
-raw = CountingRaw(); buffered = io.BufferedWriter(raw, buffer_size=4096)
-for _ in range(1000): buffered.write(b"x")
-print("before flush     :", raw.writes, "writes,", len(raw.data), "bytes delivered")
-buffered.flush()
-print("after flush      :", raw.writes, "write,", len(raw.data), "bytes delivered")
+unbuffered_calls = size + 1                    # one read per byte, plus the one that returns 0
+buffered_calls = -(-size // bufsize) + 1       # one read per buffer refill, plus the final 0
+print("read() calls, byte at a time :", unbuffered_calls)
+print("read() calls, 8 KB buffer    :", buffered_calls)
+print("reduction factor             :", round(unbuffered_calls / buffered_calls))
 ```
 
-> [!WARNING]
-> **Buffers and `fork`.** The stream buffer lives in user memory, so `fork` duplicates it. `printf("hello"); fork();` prints `hello` twice when stdout is not line buffered (or there is no newline), because both processes eventually flush their copy. Similarly, output can be *lost* if a process is killed or calls `_exit` before flushing. Use `fflush(stdout)` before `fork`.
+### Buffering surprises
 
-## 4. Putting it together: which I/O functions should I use?
+The buffer lives in user memory, and that has consequences worth memorising.
+
+- **Lost output on a crash.** If a program prints a progress message without a newline to a pipe or file and is then killed by a signal, the message was still in the buffer and vanishes. Debugging prints should go to `stderr` or be followed by `fflush`.
+- **Duplicated output across `fork`.** The child receives a copy of the parent's memory, *including unflushed buffer contents*. If both later flush, the text appears twice. Flush before forking.
+- **Ordering confusion.** Mixing `printf` and direct `write` on descriptor 1 can make output appear out of order, because one path is delayed and the other is not.
+
+```python-run
+# A model of the fork-duplicates-the-buffer effect.
+import copy
+class Stream:
+    def __init__(self): self.buffer, self.kernel = [], None
+    def printf(self, text): self.buffer.append(text)
+    def flush(self, sink): sink.extend(self.buffer); self.buffer.clear()
+
+terminal = []
+parent = Stream()
+parent.printf("starting... ")            # no newline, sits in the buffer
+child = copy.deepcopy(parent)            # fork copies user memory, buffer included
+parent.printf("parent done\n"); parent.flush(terminal)
+child.printf("child done\n");   child.flush(terminal)
+print("".join(terminal))
+print("'starting...' appears", "".join(terminal).count("starting"), "times; flush before fork to avoid it")
+```
+
+## 6. Choosing an I/O interface
+
+There are three layers you might call: raw Unix I/O; a thin robust wrapper around it that handles short counts and offers safe buffered line reading (the previous lesson built one); and standard I/O. All of the higher layers are implemented with `read` and `write` in the end.
 
 ```mermaid
-graph TB
-  APP[C application program] --> STD["Standard I/O functions: fopen fdopen fread fwrite fscanf fprintf sscanf sprintf fgets fputs fflush fseek fclose"]
-  APP --> RIO["Rio functions: rio_readn rio_writen rio_readinitb rio_readlineb rio_readnb"]
-  APP --> UNIX
-  STD --> UNIX["Unix I/O functions (accessed via system calls): open read write lseek stat close"]
-  RIO --> UNIX
+flowchart TD
+    App[Application] --> Std[Standard I/O: fopen printf fgets fflush]
+    App --> Rob[Robust wrappers: full reads and writes, buffered lines]
+    App --> Raw[Unix I/O: open read write lseek stat close]
+    Std --> Raw
+    Rob --> Raw
+    Raw --> K[Kernel]
 ```
 
-Unix I/O is implemented in the operating system kernel. The higher-level Rio and standard I/O functions are implemented "on top of" (using) the Unix I/O functions. The book's basic guidelines:
+A workable rule set:
 
-- **G1: Use the standard I/O functions whenever possible.** They are the method of choice for I/O on disk and terminal devices. Most C programmers use standard I/O exclusively throughout their careers, never bothering with the lower-level Unix I/O functions (except possibly `stat`, which has no counterpart in the standard I/O library).
-- **G2: Don't use `scanf` or `rio_readlineb` to read binary files.** Functions like these are designed specifically for reading text files. Binary files might be littered with many `0xa` bytes that have nothing to do with terminating text lines.
-- **G3: Use the Rio functions for I/O on network sockets.** Standard I/O poses nasty problems when used for input and output on networks.
-
-Why the trouble with sockets? Standard I/O streams are **full duplex** in the sense that programs can perform input and output on the same stream. However, there are poorly documented restrictions on streams that interact badly with restrictions on sockets:
-
-- **Restriction 1: input functions following output functions.** An input function cannot follow an output function without an intervening call to `fflush`, `fseek`, `fsetpos` or `rewind`. The `fflush` function empties the buffer associated with a stream; the latter three use the Unix I/O `lseek` function to reset the current file position.
-- **Restriction 2: output functions following input functions.** An output function cannot follow an input function without an intervening call to `fseek`, `fsetpos` or `rewind`, unless the input function encounters an end-of-file.
-
-These restrictions pose a problem for network applications because it is **illegal to use `lseek` on a socket**. The first restriction can be worked around by flushing the buffer before every input operation. The only way to work around the second is to open two streams on the same open socket descriptor, one for reading and one for writing:
-
-```c
-FILE *fpin, *fpout;
-fpin  = fdopen(sockfd, "r");
-fpout = fdopen(sockfd, "w");
-```
-
-But this approach has problems as well, because it requires the application to call `fclose` on both streams in order to free the memory resources associated with each stream and avoid a memory leak. Each of these operations attempts to close the same underlying socket descriptor, so the second `close` operation will fail. In a sequential program that is harmless, but closing an already closed descriptor in a **threaded** program is a recipe for disaster (the descriptor number may already have been reused by another thread). Hence the recommendation: do not use the standard I/O functions for input and output on network sockets; use the robust Rio functions instead. If you need formatted output, use `sprintf` to format a string in memory and then send it to the socket using `rio_writen`. If you need formatted input, use `rio_readlineb` to read an entire text line and then use `sscanf` to extract the different fields from it.
-
-## 5. Worked example: tracing a shell pipeline
-
-How does `ls | wc -l` use these mechanisms? A **pipe** is a kernel buffer with two descriptors: bytes written to the write end can be read from the read end.
-
-1. The shell calls `pipe(fds)`, obtaining `fds[0]` (read end) and `fds[1]` (write end).
-2. It forks child 1. In child 1: `dup2(fds[1], 1)` (stdout → pipe), close both `fds`, `execve("ls")`.
-3. It forks child 2. In child 2: `dup2(fds[0], 0)` (stdin ← pipe), close both `fds`, `execve("wc")`.
-4. The parent closes both `fds` and waits for both children.
-
-Every step relies on facts from this lesson: descriptor tables are copied by `fork`; open file table entries are shared and reference counted; `dup2` rewires a descriptor; `execve` preserves open descriptors. Step 4 matters more than it looks: `wc` only sees EOF on its standard input when **every** descriptor referring to the pipe's write end has been closed. If the parent (or `wc` itself) forgets to close `fds[1]`, the reference count never reaches zero and `wc` hangs forever, a classic bug in student shells.
-
-```mermaid
-sequenceDiagram
-  participant S as Shell
-  participant L as Child 1 (ls)
-  participant W as Child 2 (wc -l)
-  S->>S: pipe(fds)
-  S->>L: fork
-  L->>L: dup2(fds[1], 1), close fds, execve ls
-  S->>W: fork
-  W->>W: dup2(fds[0], 0), close fds, execve wc
-  S->>S: close fds[0] and fds[1]
-  L-->>W: bytes flow through the kernel pipe buffer
-  Note over W: read returns 0 (EOF) once all write ends are closed
-  S->>S: waitpid for both children
-```
+1. **Use standard I/O whenever you can.** For disk files and terminals it is convenient, portable and fast.
+2. **Avoid the formatted input functions on binary data.** `scanf` and `fgets` are designed for text lines. Bytes that happen to equal a newline or a zero will confuse them, and they give no protection against overlong input unless you are careful with field widths.
+3. **Avoid standard I/O on network sockets.** A stream that is used for both input and output has awkward rules: you may not follow an output call with an input call without an intervening `fflush` or reposition, and you may not follow input with output without a reposition such as `fseek`, unless the input hit end-of-file. Sockets cannot be repositioned at all. You can work around it by opening two streams on one socket, but then closing both closes the underlying descriptor twice, which is a latent bug in threaded programs because the number may already have been reused. For sockets, use robust unbuffered writes and a dedicated buffered reader.
+4. **Use raw Unix I/O in signal handlers and when you need exact control.** `write` is async-signal-safe; `printf` is not. Raw calls are also the only way to reach metadata and descriptor-level operations.
 
 > [!INTERVIEW]
-> **"How does a shell implement `cmd > file` and `a | b`?"** `fork`; in the child `open` the file and `dup2(fd, 1)` (for pipes, `dup2` the pipe ends onto 0 or 1), close the extra descriptors, then `execve`. The program being run is unaware. Follow-up: `2>&1` is `dup2(1, 2)`, and order matters: `cmd > f 2>&1` sends both to `f`, while `cmd 2>&1 > f` points stderr at the *old* stdout first.
+> **"Why might `printf` output be missing when my program crashes?"** Because `printf` writes into a user-space buffer, not to the file. If the process dies abnormally before the buffer is flushed, the kernel never saw the bytes. `stderr` is unbuffered, a newline flushes a terminal stream, and `fflush(stdout)` forces the issue. A good follow-up remark is that the same buffer gets copied by `fork`.
 
-> [!INTERVIEW]
-> **"After `fork`, do parent and child share the file offset?"** Yes: `fork` copies the descriptor table, but the entries point to the same open-file-table entries, which hold the offset. Two independent `open` calls on the same path do not share an offset. And `dup`/`dup2` share it within one process. This three-level structure (descriptor → open file description → inode) is the single most useful fact about Unix files.
+## 7. Pitfalls
 
-> [!INTERVIEW]
-> **"Why does my output disappear / appear twice?"** User-space buffering. Data in a stdio buffer is not yet in the kernel: it is lost on a crash or `_exit`, and duplicated by `fork`. `stderr` is unbuffered, which is why error messages appear immediately and out of order relative to `stdout` when output is redirected to a file.
+- **Swapping the `dup2` arguments.** `dup2(1, fd)` redirects your file descriptor to the terminal, the opposite of what you wanted.
+- **Forgetting to close the original after `dup2`.** The spare descriptor keeps the file open and leaks into the exec'd program.
+- **Assuming independent offsets after `fork`.** They are shared; coordinate or reopen.
+- **Assuming shared offsets after two `open`s.** They are independent; two writers will overwrite each other unless both use append mode.
+- **Recursing into `.` and `..`** when walking directories.
+- **Using `stat` results as a security check.** The file can change between the check and the later `open`. Open first, then `fstat` the descriptor.
+- **Leaving streams unflushed before `fork` or before a risky operation.**
+- **Leaking descriptors.** Every `open`, `dup`, `accept` and `pipe` needs a matching `close`, or a long-running server eventually hits its limit.
 
-## 6. Summary
+## Summary
 
-- Three tables: per-process **descriptor table** → shared **open file table** (file position, reference count) → shared **v-node table** (metadata).
-- Two `open`s of one file: separate entries, independent positions. `fork`: the child's descriptors point to the *same* entries, so positions are shared. `dup2(old, new)`: `new` becomes an alias of `old`'s entry.
-- Redirection = `open` + `dup2` between `fork` and `execve`. Pipes combine the same pieces.
-- Standard I/O wraps a descriptor with a user-level buffer (a stream) to cut system calls; beware buffers across `fork` and at abnormal exit.
-- Guidelines: standard I/O for disks and terminals; Rio (or careful raw I/O) for sockets; never line-oriented functions on binary data.
+- `stat` and `fstat` return a file's metadata: size, type, permissions, timestamps. Directories are read with `opendir`/`readdir`/`closedir`.
+- The kernel tracks open files with a per-process descriptor table, a shared open file table (position and reference count), and a shared v-node table (metadata).
+- Two `open` calls give independent positions; `fork` and `dup2` create additional references to one entry and therefore share a position.
+- `dup2(oldfd, newfd)` makes `newfd` refer to what `oldfd` refers to. Shells implement `<`, `>` and pipes with it between `fork` and `exec`.
+- Standard I/O wraps descriptors in buffered streams to reduce system calls. The buffer explains lost output on crashes and doubled output after `fork`.
+- Prefer standard I/O for files and terminals, robust descriptor-level I/O for sockets, and raw calls inside signal handlers.
 
-## Check yourself
+## Glossary
+
+- **Metadata**: information about a file, such as its size, type and permissions, as opposed to its contents.
+- **`stat`**: the system call that returns a file's metadata.
+- **Directory**: a file whose contents are a list of names and the files they refer to.
+- **Descriptor table**: each process's own list linking descriptor numbers to open files.
+- **Open file table**: the system-wide list with one entry per opening of a file, holding its position.
+- **v-node table**: the system-wide list with one entry per file, holding its metadata.
+- **Reference count**: a tally of how many descriptors point to an open file entry; the entry is removed at zero.
+- **`dup2`**: the system call that makes one descriptor refer to the same open file as another.
+- **Redirection**: making a program's input or output go to a file or another program.
+- **Pipe**: a channel that carries one program's output to another program's input.
+- **Stream**: the C library's wrapper around a descriptor that adds a buffer.
+- **Buffering**: collecting data in memory so that it reaches the kernel in fewer, larger operations.
+- **Flush**: to push buffered output through to the kernel at once.
 
 ```quiz
 [
-  {"q": "Where is the current file position stored?", "options": ["In the descriptor table entry", "In the open file table entry", "In the v-node", "In the FILE stream only"], "answer": 1,
-   "explain": "Each open file table entry holds the position and a reference count; descriptors merely point to it."},
-  {"q": "foobar.txt contains 'foobar'. A process opens it twice (fd1, fd2), reads 1 byte from fd1, then 1 byte from fd2. What did the second read return?", "options": ["f", "o", "b", "EOF"], "answer": 0,
-   "explain": "Separate opens create separate file table entries with independent positions."},
-  {"q": "A parent opens foobar.txt, forks; the child reads 1 byte and exits; the parent waits and then reads 1 byte. What does the parent read?", "options": ["f", "o", "Nothing", "It depends on scheduling"], "answer": 1,
-   "explain": "Parent and child share the open file table entry, so the child's read advanced the shared position."},
-  {"q": "What does dup2(4, 1) do?", "options": ["Copies descriptor 1 onto 4", "Makes descriptor 1 refer to the same open file as descriptor 4, closing whatever 1 referred to", "Swaps the two descriptors", "Duplicates the file on disk"], "answer": 1,
-   "explain": "dup2(oldfd, newfd) overwrites entry newfd with a copy of entry oldfd."},
-  {"q": "When does the kernel delete an open file table entry?", "options": ["On the first close", "When its reference count drops to zero", "When the process forks", "Never"], "answer": 1,
-   "explain": "Each descriptor pointing at the entry (across processes too) holds a reference; all must be closed."},
-  {"q": "Why should standard I/O not be used directly on a socket?", "options": ["It is too slow", "Its rules about alternating input and output require lseek-style repositioning, which sockets do not support", "Sockets are not files", "printf cannot write bytes"], "answer": 1,
-   "explain": "Stream restrictions interact badly with sockets; the workarounds are fragile, so the book recommends Rio."},
-  {"q": "A program calls printf(\"hi\") with stdout redirected to a file and then fork(). How many times does 'hi' appear in the file after both processes exit normally?", "options": ["0", "1", "2", "Undefined"], "answer": 2,
-   "explain": "The unflushed stdio buffer is duplicated by fork and flushed by both processes."},
-  {"q": "In 'ls | wc -l', why must the shell (parent) close the pipe's write end?", "options": ["To save memory", "Otherwise wc never sees EOF, because a write end is still open", "ls cannot run otherwise", "It need not"], "answer": 1,
-   "explain": "read on a pipe returns 0 only after all descriptors for the write end are closed."}
+  {"q": "A program opens data.txt twice, obtaining fd1 and fd2, then reads one byte from each. The file begins with the letters XYZ. What does the read on fd2 return?",
+   "options": ["X", "Y", "Z", "End of file"],
+   "answer": 0, "explain": "Each open creates its own open-file entry with its own position starting at 0, so both descriptors read the first byte."},
+  {"q": "A parent opens a file beginning XYZ, then forks. The child reads one byte and exits; the parent waits and then reads one byte. What does the parent get?",
+   "options": ["X", "Y", "Z", "An error"],
+   "answer": 1, "explain": "The child's descriptor refers to the same open-file entry as the parent's, so they share one position. The child consumed X; the parent reads Y."},
+  {"q": "Which call makes standard output refer to the file open on descriptor 5?",
+   "options": ["dup2(1, 5)", "dup2(5, 1)", "dup(5)", "fstat(5, 1)"],
+   "answer": 1, "explain": "dup2(oldfd, newfd) copies the old slot onto the new one. To redirect descriptor 1 to the file, the file's descriptor is the first argument."},
+  {"q": "Where is the current file position stored?",
+   "options": ["In the per-process descriptor table", "In the open file table entry", "In the v-node", "In the FILE stream only"],
+   "answer": 1, "explain": "The position belongs to the open file table entry, which is why descriptors that share an entry share an offset."},
+  {"q": "When does the kernel delete an open file table entry?",
+   "options": ["When any process closes a descriptor referring to it", "When its reference count drops to zero", "When the process that opened it exits, regardless of others", "Never; entries persist until reboot"],
+   "answer": 1, "explain": "Each descriptor pointing at the entry holds a reference. The entry is released only after the last one is closed."},
+  {"q": "A program prints a message without a newline using printf to a pipe, then forks, and both processes exit normally. How many times does the message appear?",
+   "options": ["Zero", "Once", "Twice", "It is undefined"],
+   "answer": 2, "explain": "The unflushed text sits in the user-space stream buffer, which fork copies. Each process flushes its own copy at exit."},
+  {"q": "Why is standard I/O a poor fit for network sockets?",
+   "options": ["Sockets do not have descriptors", "Its rules for mixing input and output on one stream require flushing or repositioning, and sockets cannot be repositioned", "It is too slow", "It cannot handle text"],
+   "answer": 1, "explain": "Switching from input to output on a stream requires a positioning call, which is impossible on a socket; the usual workarounds risk double closes."},
+  {"q": "Which function reports whether a path names a regular file or a directory without opening it?",
+   "options": ["readdir", "lseek", "stat", "dup2"],
+   "answer": 2, "explain": "stat fills a structure whose st_mode field encodes the file type, tested with macros such as S_ISREG and S_ISDIR."}
 ]
 ```
 
-> **Source:** CS:APP 3e, §10.8–10.12 (Sharing files; I/O redirection; Standard I/O; Putting it together: which I/O functions should I use?).
+> **Source:** CS:APP 3e, §10.6–10.12

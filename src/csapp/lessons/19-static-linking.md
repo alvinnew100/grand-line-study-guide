@@ -1,340 +1,390 @@
 # Static linking: symbols and relocation
 
-**Linking** is the process of collecting and combining pieces of code and data into a single file that can be loaded into memory and executed. It can happen at **compile time** (source is translated to machine code), at **load time** (the program is loaded into memory by the loader), or even at **run time** (by application programs). On modern systems it is performed automatically by programs called **linkers**.
+> **Before this lesson:** You should know the stages that turn source code into a program from [From source text to a running program](#/lesson/csapp/tour-hello), and be able to read a `call` instruction and an address in hexadecimal from [x86-64 basics: registers, operands, mov](#/lesson/csapp/asm-basics).
 
-Linkers make **separate compilation** possible: instead of one monolithic source file, an application is decomposed into modules that can be modified and compiled independently. Change one module, recompile just that one, and relink.
+## In plain words
 
-Why should a programmer understand linking?
+Large programs are written as many separate files. Each file is translated on its own into a piece called an **object file**, and a tool called the **linker** joins the pieces into one runnable program. Imagine several authors writing chapters of one book separately. One chapter says "see the chapter on sailing" without knowing which page that will be. An editor then gathers the chapters, decides the final page numbers, and goes back through every "see..." note to fill in the real page. The linker is that editor. The named things being referred to (functions and shared variables) are called **symbols**, matching each reference to its definition is **symbol resolution**, and filling in the final addresses is **relocation**.
 
-- It helps you **build large programs**, where you will meet missing modules, missing libraries and incompatible library versions.
-- It helps you **avoid dangerous programming errors**: the decisions linkers make when resolving symbols can silently affect correctness (e.g., duplicate global variables).
-- It helps you understand **how language scoping rules are implemented** (what `static` really means).
-- It helps you understand other systems concepts: **loading**, virtual memory, paging, memory mapping.
-- It lets you exploit **shared libraries** and powerful techniques such as library interpositioning.
+Why this matters at work: "undefined reference" and "multiple definition" errors come from the linker and stop builds every day. Once you understand what it does, those messages become quick to fix. The lesson also explains a silent bug in which two files disagree about a shared variable and overwrite each other's data.
 
-## 1. Compiler drivers
+## Why look closer
 
-Consider a program of two files:
+Sooner or later every C or C++ programmer meets one of these messages: `undefined reference to 'parse_config'`, or `multiple definition of 'buffer'`. Neither comes from the compiler. Both come from the **linker**, a tool most people use daily and understand vaguely. That vagueness is expensive. It makes build errors look like magic, it hides a class of silent bugs in which two source files disagree about a global variable and corrupt each other's memory without any warning, and it makes the order of libraries on a command line seem like superstition. This lesson explains what a linker does, concretely enough that you can predict its behaviour: how it decides which definition a name refers to, how it lays out the final program, and how it patches machine code with addresses that the compiler could not know.
 
-```c
-/* main.c */
-int sum(int *a, int n);
+## 1. Why programs are built in pieces
 
-int array[2] = {1, 2};
+**Linking** is the process of collecting and combining pieces of code and data into a single file that can be loaded into memory and run. It can happen at compile time, at load time, or even while the program is running. This lesson covers the first, **static linking**; the next covers the others.
 
-int main() {
-    int val = sum(array, 2);
-    return val;
-}
-```
+The point of having a linker at all is **separate compilation**. A large program is not one enormous source file. It is many modules, each compiled independently. Change one, and only that one has to be recompiled before relinking. Libraries of commonly used functions can be compiled once and reused by everybody.
 
-```c
-/* sum.c */
-int sum(int *a, int n) {
-    int i, s = 0;
-    for (i = 0; i < n; i++)
-        s += a[i];
-    return s;
-}
-```
-
-`gcc -Og -o prog main.c sum.c` invokes the **compiler driver**, which runs, for each source file, the preprocessor (`cpp`: `main.c` → `main.i`), the compiler (`cc1`: → `main.s`) and the assembler (`as`: → `main.o`, a **relocatable object file**), then the linker (`ld`) to combine `main.o`, `sum.o` and the necessary system object files into the **executable object file** `prog`. To run it, the shell calls the **loader**, which copies the code and data of `prog` into memory and transfers control to its beginning.
+When you run a compiler driver such as `gcc`, it quietly runs a pipeline for each source file and then links the results:
 
 ```mermaid
-graph LR
-  A[main.c] --> T1["Translators (cpp, cc1, as)"] --> O1[main.o]
-  B[sum.c] --> T2["Translators (cpp, cc1, as)"] --> O2[sum.o]
-  O1 --> LD["Linker (ld)"]
-  O2 --> LD
-  LD --> P["prog: fully linked executable"]
+flowchart LR
+    S1[app.c] --> P1[preprocessor] --> C1[compiler] --> A1[assembler] --> O1[app.o]
+    S2[stats.c] --> P2[preprocessor] --> C2[compiler] --> A2[assembler] --> O2[stats.o]
+    O1 --> LD[linker ld]
+    O2 --> LD
+    LIB[libc.a] --> LD
+    LD --> EXE[executable]
 ```
 
-## 2. What a static linker does
+To build the executable, the linker has two jobs:
 
-A static linker such as `ld` takes relocatable object files as input and generates a fully linked executable. Input files consist of **sections**: contiguous sequences of bytes holding instructions, initialized global data, uninitialized variables, and so on. The linker performs two main tasks:
+1. **Symbol resolution.** Object files define and refer to *symbols*: functions, global variables, static variables. The linker must associate each reference with exactly one definition.
+2. **Relocation.** Compilers and assemblers produce code and data that start at address 0. The linker assigns each definition a real memory location and then modifies every reference so that it points there.
 
-1. **Symbol resolution.** Object files *define* and *reference* **symbols**: functions, global variables, static variables. The linker associates each symbol reference with exactly one symbol definition.
-2. **Relocation.** Compilers and assemblers generate code and data sections that start at address 0. The linker **relocates** these sections by associating a memory location with each symbol definition and then modifying all references to those symbols so that they point to that location, blindly following instructions generated by the assembler called **relocation entries**.
+Keep one fact in mind: the linker knows almost nothing about your program's meaning. Object files are blocks of bytes, some containing code, some data, and some containing instructions *for the linker itself*. The compiler and assembler have already done most of the thinking.
 
-A basic fact to keep in mind: object files are merely collections of blocks of bytes. The linker concatenates blocks, decides on run-time locations for them, and modifies various locations within the blocks. It has **minimal understanding** of the target machine; the compiler and assembler have already done most of the work.
+## 2. Object files
 
-## 3. Object files
+Object files come in three kinds:
 
-Three forms:
+| Kind | Produced by | Purpose |
+|---|---|---|
+| **Relocatable** (`.o`) | compiler and assembler | to be combined with other relocatable files at link time |
+| **Executable** | linker | can be copied into memory and run directly |
+| **Shared** (`.so`) | compiler and linker | a special relocatable file that can be loaded and linked at load time or run time |
 
-- **Relocatable object file** (`.o`): binary code and data in a form that can be combined with other relocatable files at compile time.
-- **Executable object file**: can be copied directly into memory and executed.
-- **Shared object file** (`.so`): a special relocatable file that can be loaded into memory and linked **dynamically**, at load time or run time.
-
-Formats vary by system: Windows uses **PE** (Portable Executable), macOS uses **Mach-O**, and modern x86-64 Linux and Unix systems use **ELF** (Executable and Linkable Format).
-
-### ELF relocatable object files
+On Linux all three use the **ELF** format. A relocatable ELF file begins with a header describing the file (word size, byte order, machine type, where the section header table is) and is then divided into sections:
 
 | Section | Contents |
 |---|---|
-| ELF header | Word size, byte ordering, file type (relocatable/executable/shared), machine type, offset of the section header table |
-| `.text` | Machine code of the compiled program |
-| `.rodata` | Read-only data: format strings for `printf`, jump tables for `switch` |
-| `.data` | **Initialized** global and static C variables |
-| `.bss` | **Uninitialized** global and static variables, and those initialized to zero. Occupies **no actual space** in the file: just a placeholder. ("Better Save Space!") |
-| `.symtab` | **Symbol table**: functions and global variables defined and referenced. No entries for local (stack) variables |
-| `.rel.text` | Locations in `.text` that must be modified when the linker combines this file with others (calls to external functions, references to globals) |
-| `.rel.data` | Relocation information for global variables whose initial value is the address of a global or externally defined function |
-| `.debug` | Debugging symbol table (present with `-g`) |
-| `.line` | Mapping between line numbers in source and instructions in `.text` (with `-g`) |
-| `.strtab` | String table for names in `.symtab`, `.debug` and section headers |
-| Section header table | Describes the location and size of every section |
+| `.text` | machine code of the compiled program |
+| `.rodata` | read-only data: string literals, `switch` jump tables |
+| `.data` | global and static variables with a non-zero initial value |
+| `.bss` | global and static variables that are uninitialised or initialised to zero; takes no space in the file |
+| `.symtab` | a table of the functions and global variables defined and referenced |
+| `.rel.text` | locations in `.text` that must be patched when the linker combines this file with others |
+| `.rel.data` | the same for `.data`, for example a global pointer initialised with the address of another global |
+| `.debug`, `.line` | debugging information, present only when compiled with `-g` |
+| `.strtab` | the text of symbol and section names |
 
-Local nonstatic variables are **not** in any of these sections: they live on the stack (or in registers) at run time.
+The `.bss` section deserves a second look. A declaration such as `static double samples[1000000];` needs eight megabytes at run time, but every byte is zero. Storing eight megabytes of zeros on disk would be wasteful, so the file records only "this much zeroed space is required". One mnemonic for the name is "Better Save Space".
 
-## 4. Symbols and symbol tables
+Local variables that are not `static` appear in none of these sections. They live on the stack or in registers at run time and are of no interest to the linker.
 
-Each relocatable module $m$ has a symbol table with three kinds of symbols:
+## 3. Symbols and symbol tables
 
-- **Global symbols** *defined* by $m$ and usable by other modules: nonstatic C functions and global variables.
-- **Externals**: global symbols *referenced* by $m$ but defined by some other module.
-- **Local symbols** defined and referenced exclusively by $m$: **`static`** C functions and `static` global variables. Visible anywhere within $m$, invisible outside it.
+From the point of view of one module, call it *m*, there are three kinds of linker symbol:
 
-Do not confuse local linker symbols with local program variables: the symbol table has **no entries for nonstatic local variables**, which the stack manages at run time. But a local variable declared `static` inside a function is *not* on the stack: the compiler allocates space for it in `.data` or `.bss` and creates a local linker symbol with a unique name. If two functions each define `static int x`, the assembler might emit `x.1` and `x.2`.
+- **Global symbols defined by *m***: its non-static functions and non-static global variables, which other modules can refer to.
+- **Global symbols referenced by *m* but defined elsewhere**, called **externals**.
+- **Local symbols**: functions and global variables declared `static`. They are visible everywhere inside *m* and invisible outside it.
+
+Do not confuse local *linker symbols* with local *program variables*. A non-static local variable is managed on the stack and has no symbol table entry at all. A `static` local variable, by contrast, is not on the stack: the compiler gives it space in `.data` or `.bss` and creates a local linker symbol with a unique name, so two functions in one file may each have a `static int calls;` without interfering.
 
 > [!TIP]
-> **Hide names with `static`.** C's `static` attribute plays the role of `private` in Java and C++: any global variable or function declared `static` is private to its module. It is good practice to protect variables and functions with `static` wherever possible.
+> In C, `static` at file scope is the tool for information hiding, playing the role of `private` in other languages. Declare every function and global `static` unless another file truly needs it. You get a cleaner namespace and fewer linker surprises.
 
-An ELF symbol table entry contains the name (offset in the string table), the value (offset within its section for relocatable files; an absolute run-time address for executables), the size, the type (data/function), the binding (local/global), and the **section** the symbol is assigned to. Three **pseudosections** have no entries in the section header table:
+Each `.symtab` entry records the symbol's name, its **value** (for a relocatable file, its offset from the start of the section where it is defined), its size, its type (function or data), its binding (local or global), and the **section** it belongs to. Three special pseudo-sections exist for symbols that are not in any ordinary one:
 
-- **ABS**: symbols that should not be relocated.
-- **UNDEF**: undefined symbols, referenced here but defined elsewhere.
-- **COMMON**: uninitialized data objects not yet allocated.
+- `ABS`: the symbol should not be relocated;
+- `UNDEF`: the symbol is referenced here but defined somewhere else;
+- `COMMON`: uninitialised data objects that have not yet been allocated.
 
-The distinction between COMMON and `.bss` is subtle: GCC assigns **uninitialized global variables** to COMMON, and **uninitialized static variables, plus global or static variables initialized to zero**, to `.bss`. The reason lies in how symbol resolution works, coming next.
-
-`readelf -s main.o` shows, for our example: `main` (GLOBAL FUNC, section 1 = `.text`, size 24), `array` (GLOBAL OBJECT, section 3 = `.data`, size 8), and `sum` (GLOBAL NOTYPE, UND).
-
-## 5. Symbol resolution
-
-For local symbols, resolution is simple: one definition per module, guaranteed by the compiler. For global symbols it is trickier. When the compiler meets a symbol not defined in the current module, it **assumes it is defined elsewhere**, generates a symbol table entry, and leaves it to the linker. If the linker cannot find a definition in any input, it prints an error and terminates:
-
-```
-/tmp/ccSz5uti.o: In function `main':
-/tmp/ccSz5uti.o(.text+0x7): undefined reference to `foo'
-```
-
-> [!NOTE]
-> C++ and Java allow overloaded functions with the same name but different parameter lists. The compiler encodes each unique name-and-parameter combination into a unique linker name, a process called **mangling**. For example `Foo::bar(int, long)` becomes `bar__3Fooil`-style names; the linker sees only the mangled strings.
-
-### Duplicate symbol names: strong and weak
-
-What if several modules define the same global name? At compile time, the compiler exports each global symbol as either **strong** or **weak**:
-
-- **Strong**: functions and **initialized** global variables.
-- **Weak**: **uninitialized** global variables.
-
-Linux linkers then apply three rules:
-
-1. **Multiple strong symbols with the same name are not allowed.**
-2. Given a strong symbol and multiple weak symbols with the same name, **choose the strong symbol**.
-3. Given multiple weak symbols with the same name, **choose any** of the weak symbols.
-
-Consequences:
+Take this pair of files:
 
 ```c
-/* foo1.c */                 /* bar1.c */
-int main() { return 0; }     int main() { return 0; }   // Rule 1: link error, main multiply defined
+/* stats.c */
+int samples[3] = {4, 8, 15};
+static int calls;
 
-/* foo2.c */                 /* bar2.c */
-int x = 15213;               int x = 15213;             // Rule 1: link error
-
-/* foo3.c */                 /* bar3.c */
-void f(void);                int x;                      // weak
-int x = 15213;               void f() { x = 15212; }    // Rule 2: both refer to foo3's x
-int main() { f(); printf("x = %d\n", x); }              // prints x = 15212. Surprise!
-```
-
-Rules 2 and 3 produce insidious bugs, especially when the duplicate definitions have **different types**:
-
-```c
-/* foo5.c */
-int y = 15212;
-int x = 15213;
-int main() {
-    f();
-    printf("x = 0x%x y = 0x%x\n", x, y);
+int total(void) {
+    static int cache = -1;
+    calls++;
+    if (cache < 0) cache = samples[0] + samples[1] + samples[2];
+    return cache;
 }
 
-/* bar5.c */
-double x;                 // weak; the linker picks foo5's 4-byte int x
-void f() { x = -0.0; }    // writes 8 bytes: clobbers x AND the adjacent y
+/* app.c */
+extern int samples[];
+int total(void);
+int main(void) { return total() + samples[0]; }
 ```
-
-On x86-64 this prints `x = 0x0 y = 0x80000000`: assigning an 8-byte `double` to the location of the 4-byte `x` overwrote `y` as well. The linker only emits a warning about alignment. Such bugs manifest far from their cause and after the program has been running for a while.
-
-This explains COMMON: when the compiler sees a weak global like `int x;`, it does not know whether another module also defines `x` or which will be chosen, so it defers the decision to the linker by assigning the symbol to COMMON. A zero-initialized `x` is strong, hence `.bss`; a static one is local, hence `.bss`.
-
-> [!WARNING]
-> **Rules for globals:** avoid them if you can. Otherwise use `static` if you can; initialize every global you define; use `extern` to declare references to globals defined elsewhere. Compile with `-fno-common` (the default in modern GCC ≥ 10) so that multiply-defined globals produce an error, or `-Werror`.
-
-## 6. Linking with static libraries
-
-Related object modules can be packaged into a single file called a **static library**, an **archive** (`.a` file on Linux), which is a concatenation of relocatable object files with a header describing each member. When linking, **the linker copies only the object modules that are referenced by the program**, reducing executable size on disk and in memory, while the programmer names only a few library files.
-
-Compare the alternatives the book lists: having the compiler recognize standard functions (Pascal's approach; complicates the compiler), putting all of libc in one relocatable module (every executable would carry all ~5 MB), or one file per function (programmer must link each explicitly). Archives get the best of each. `libc.a` contains about 1,500 object modules (`printf.o`, `scanf.o`, ...); `libm.a` holds the math functions.
-
-Creating and using a library:
-
-```
-linux> gcc -c addvec.c multvec.c
-linux> ar rcs libvector.a addvec.o multvec.o
-linux> gcc -c main2.c
-linux> gcc -static -o prog2c main2.o ./libvector.a      # or: -L. -lvector
-```
-
-If `main2.o` references only `addvec`, the linker copies `addvec.o` into the executable but not `multvec.o`. It also pulls `printf.o` and its dependencies from `libc.a`.
-
-### How linkers use static libraries to resolve references
-
-The linker scans the relocatable files and archives **left to right in the order they appear on the command line**, maintaining three sets:
-
-- $E$: relocatable object files that will be merged to form the executable,
-- $U$: unresolved symbols (referenced but not yet defined),
-- $D$: symbols defined by previous input files.
-
-For each input file $f$:
-
-- If $f$ is an **object file**, add it to $E$ and update $U$ and $D$ with its definitions and references.
-- If $f$ is an **archive**, try to match the unresolved symbols in $U$ against the symbols defined by the archive's members. If member $m$ defines a symbol in $U$, add $m$ to $E$ and update $U$ and $D$. Repeat over the members until a fixed point where $U$ and $D$ no longer change. Members not in $E$ are **discarded**.
-- At the end, if $U$ is nonempty, the linker prints an error. Otherwise it merges and relocates the files in $E$.
-
-The catch: **the ordering of libraries and object files on the command line is significant.** If the library defining a symbol appears *before* the object file that references it, the reference will not be resolved:
-
-```
-linux> gcc -static ./libvector.a main2.c
-/tmp/cc9XH6Rp.o: In function `main':
-/tmp/cc9XH6Rp.o(.text+0x18): undefined reference to `addvec'
-```
-
-When `libvector.a` is processed, $U$ is empty, so no member is added. The rule of thumb: **put libraries at the end of the command line.** If libraries depend on each other, order them so that each symbol reference precedes its definition: if `foo.c` calls functions in `libx.a` and `libz.a`, both of which call `liby.a`, use `gcc foo.c libx.a libz.a liby.a`. Mutually dependent libraries may need to be repeated: `gcc foo.c libx.a liby.a libx.a`.
 
 ```python-run
-def link(inputs):
-    """inputs: list of ('obj', defs, refs) or ('lib', [(defs, refs), ...])"""
+# What the symbol tables of the two object files contain (as a tool like readelf would report).
+stats_o = [
+    ("samples", "OBJECT", "GLOBAL", ".data"),
+    ("calls",   "OBJECT", "LOCAL",  ".bss"),
+    ("cache.0", "OBJECT", "LOCAL",  ".data"),     # static local: renamed, stored in .data (non-zero initialiser)
+    ("total",   "FUNC",   "GLOBAL", ".text"),
+]
+app_o = [
+    ("main",    "FUNC",   "GLOBAL", ".text"),
+    ("total",   "NOTYPE", "GLOBAL", "UNDEF"),
+    ("samples", "NOTYPE", "GLOBAL", "UNDEF"),
+]
+for name, table in (("stats.o", stats_o), ("app.o", app_o)):
+    print(name)
+    for sym, kind, bind, sect in table:
+        print(f"   {sym:9} {kind:7} {bind:7} {sect}")
+undefined = {s for s, _, _, sect in app_o if sect == "UNDEF"}
+defined = {s for s, _, bind, sect in stats_o if bind == "GLOBAL" and sect != "UNDEF"}
+print("app.o's undefined symbols all satisfied by stats.o:", undefined <= defined)
+```
+
+## 4. Symbol resolution
+
+For references to local symbols, resolution is trivial: the compiler permits only one definition per module. Global symbols are the hard case. When the compiler sees a name that is not defined in the current file, it assumes that it is defined in some other module, makes a symbol table entry, and leaves it to the linker. If the linker cannot find a definition in any input, it prints the familiar error and stops.
+
+C++ and Java allow overloading, so several functions can share a source-level name. Their compilers encode the parameter types into each linker symbol, a process called **name mangling**, which is why C++ link errors mention names such as `_ZN5Stack4pushEi`.
+
+### Duplicate names: strong and weak
+
+What if the same global name is defined in more than one module? At compile time, each global symbol is exported to the assembler as either **strong** or **weak**:
+
+- **Strong**: functions and *initialised* global variables.
+- **Weak**: *uninitialised* global variables.
+
+The linker then applies three rules:
+
+1. Multiple strong symbols with the same name are an error.
+2. Given one strong symbol and several weak ones with the same name, choose the strong one.
+3. Given several weak symbols with the same name, choose any one of them.
+
+Rule 1 gives a clear error. Rules 2 and 3 give *no diagnostic by default*, and that is where the danger lies. Consider:
+
+```c
+/* a.c */                          /* b.c */
+int level = 7;                     double level;            /* weak, and a different type! */
+int limit = 9;                     void reset(void) { level = 0.0; }
+```
+
+The linker picks the strong `int level` from `a.c`, which is four bytes. But `b.c` was compiled believing `level` is an eight-byte `double`. When `reset` runs, it writes eight bytes at the address of `level`, wiping out whatever lies in the next four, quite possibly `limit`. No error, no warning, and a failure that shows up far from its cause.
+
+```python-run
+import struct
+# .data of a.o: level (4 bytes) followed immediately by limit (4 bytes)
+memory = bytearray(struct.pack("<ii", 7, 9))
+print("before reset():  level =", struct.unpack_from("<i", memory, 0)[0],
+      " limit =", struct.unpack_from("<i", memory, 4)[0])
+
+struct.pack_into("<d", memory, 0, 0.0)        # b.c stores a double at &level: 8 bytes
+print("after  reset():  level =", struct.unpack_from("<i", memory, 0)[0],
+      " limit =", struct.unpack_from("<i", memory, 4)[0], "  <- limit was silently destroyed")
+
+struct.pack_into("<ii", memory, 0, 7, 9)
+struct.pack_into("<d", memory, 0, -1.5)       # a non-zero store shows the damage more vividly
+print("storing -1.5:    level =", struct.unpack_from("<i", memory, 0)[0],
+      " limit =", struct.unpack_from("<i", memory, 4)[0])
+```
+
+Defences:
+
+- avoid global variables where you can;
+- make them `static` if they are used in only one file;
+- initialise any true global, so that a duplicate becomes a rule 1 error;
+- declare shared globals in exactly one header with `extern`, and define them in exactly one source file;
+- compile with `-fno-common`, which makes a multiply-defined global an error. Recent GCC versions do this by default.
+
+This also explains the `COMMON` pseudo-section. When the compiler meets an uninitialised global, it cannot tell whether another module will define the same name, so it defers the decision to the linker by marking the symbol `COMMON`. Uninitialised *static* variables cannot clash with anything, so they go straight into `.bss`.
+
+> [!INTERVIEW]
+> **"Two files both declare `int x;` at file scope with no initialiser, and the program links without complaint. What happened?"** Under the traditional rules both are weak symbols, so the linker silently merges them into one variable shared by both files. If the declarations have different types, the files disagree about the variable's size, and writes from one can corrupt neighbouring data. The fix is `static` for file-private variables, or one definition plus `extern` declarations in a header, and building with `-fno-common`.
+
+## 5. Static libraries
+
+Related object modules can be packaged into a single file called a **static library**, or archive, with the suffix `.a`. An archive is a collection of concatenated relocatable object files with a header describing each member. It is created with the `ar` tool.
+
+Why not put all of the standard functions into one big object file? Because every program would then carry every function. Why not one object file per function? Because programmers would have to name dozens of files on every link. The archive gives the best of both: you name one library, and **the linker copies only the members that your program actually references**. The standard C library `libc.a` contains well over a thousand modules; a program calling `printf` receives only `printf.o` and whatever that module in turn requires.
+
+### How libraries are scanned, and why order matters
+
+The linker processes the files on its command line **strictly from left to right**, maintaining three sets:
+
+- **E**: the relocatable object files that will be merged into the executable;
+- **U**: unresolved symbols, referred to but not yet defined;
+- **D**: symbols defined by the files already seen.
+
+All three start empty. For each input file *f*:
+
+- If *f* is an **object file**, add it to E, and update U and D with its definitions and references.
+- If *f* is an **archive**, try to match the symbols currently in U against the symbols defined by the archive's members. If member *m* defines one, add *m* to E and update U and D. Repeat over the members until U and D stop changing. Any member not in E by then is **discarded**, and the linker moves on.
+
+At the end, if U is not empty, the linker reports the unresolved symbols and stops. Otherwise it merges and relocates the files in E.
+
+The consequence is one of the most common link errors there is. Suppose `main.o` calls a function in `libshape.a`:
+
+```
+gcc main.o ./libshape.a      # works
+gcc ./libshape.a main.o      # undefined reference
+```
+
+In the second command, when the archive is scanned, U is still empty, so no member is pulled in. Then `main.o` adds its reference to U, and there is nothing left to satisfy it.
+
+The rules of thumb that follow:
+
+- Put libraries at the **end** of the command line.
+- If library X uses symbols from library Y, X must come **before** Y.
+- If two libraries depend on each other, a library may be repeated: `gcc app.o libx.a liby.a libx.a`.
+
+```python-run
+def link(files):
     E, U, D = [], set(), set()
-    def add(name, defs, refs):
-        E.append(name); D.update(defs); U.difference_update(defs); U.update(set(refs) - D)
-    for kind, name, payload in inputs:
-        if kind == "obj":
-            add(name, *payload)
-        else:
+    for name, content in files:
+        if isinstance(content, dict) and "members" in content:        # an archive
             changed = True
             while changed:
                 changed = False
-                for mname, defs, refs in payload:
-                    if mname not in E and U & set(defs):
-                        add(mname, defs, refs); changed = True
+                for mname, m in content["members"].items():
+                    if mname not in E and U & m["defines"]:
+                        E.append(mname)
+                        D |= m["defines"]; U |= m["refs"]; U -= D
+                        changed = True
+        else:                                                          # an object file
+            E.append(name)
+            D |= content["defines"]; U |= content["refs"]; U -= D
     return E, sorted(U)
-libvector = ("lib", "libvector.a", [("addvec.o", ["addvec"], []), ("multvec.o", ["multvec"], [])])
-main2 = ("obj", "main2.o", (["main"], ["addvec"]))
-print("main2.o libvector.a ->", link([main2, libvector]))
-print("libvector.a main2.o ->", link([libvector, main2]))
+
+main_o = {"defines": {"main"}, "refs": {"area"}}
+libshape = {"members": {
+    "area.o":   {"defines": {"area"},   "refs": {"square"}},
+    "square.o": {"defines": {"square"}, "refs": set()},
+    "unused.o": {"defines": {"volume"}, "refs": set()},
+}}
+for order in ([("main.o", main_o), ("libshape.a", libshape)],
+              [("libshape.a", libshape), ("main.o", main_o)]):
+    E, U = link(order)
+    print(" ".join(n for n, _ in order).ljust(22), "-> linked:", E, "| unresolved:", U or "none")
 ```
 
-## 7. Relocation
+Notice in the successful case that `unused.o` is not included, and that `square.o` was pulled in on a second pass over the archive because `area.o` needed it.
 
-Once every reference is bound to exactly one definition, the linker knows the exact sizes of the code and data sections, and relocates in two steps:
+## 6. Relocation
 
-1. **Relocating sections and symbol definitions.** Merge all sections of the same type into a new aggregate section (all `.data` sections become the executable's `.data`), assign run-time addresses to the aggregate sections, to each input section, and to each symbol. Now every instruction and global variable has a unique run-time address.
-2. **Relocating symbol references within sections.** Modify every symbol reference in the code and data so that it points to the correct run-time address, guided by **relocation entries**.
+Once every reference has been matched to one definition, the linker knows the exact sizes of all the code and data sections in its input, and can assign addresses. Relocation has two steps.
 
-### Relocation entries
+**Step 1: relocate sections and symbol definitions.** The linker merges all sections of the same type into one: all the `.text` sections of the inputs become the executable's single `.text`, and likewise for `.data`. It then assigns run-time addresses to the merged sections, to each input section inside them, and to every symbol. After this step, every function and global variable has a unique address.
 
-When the assembler meets a reference to an object whose ultimate location is unknown, it generates a relocation entry telling the linker how to patch the reference. Code entries go in `.rel.text`, data entries in `.rel.data`. Each has:
+**Step 2: relocate references.** The linker modifies each symbol reference in the code and data so that it points to the correct address. For this it relies on **relocation entries**.
 
-```c
-typedef struct {
-    long offset;      /* offset of the reference to relocate, within its section */
-    long type:32,     /* relocation type */
-         symbol:32;   /* symbol table index */
-    long addend;      /* constant part of the relocation expression */
-} Elf64_Rela;
-```
+When the assembler meets a reference to something whose final location it does not know, it emits a placeholder and a relocation entry telling the linker how to fix it up later. Entries for code go in `.rel.text` and for data in `.rel.data`. Each entry holds:
 
-ELF defines 32 relocation types; the two most basic are:
+- `offset`: where in the section the reference to be patched lies;
+- `symbol`: which symbol it should point to;
+- `type`: how to compute the new bytes;
+- `addend`: a signed constant used by some types to bias the result.
 
-- **`R_X86_64_PC32`**: relocate a reference that uses a 32-bit **PC-relative** address (e.g., a `call` target).
-- **`R_X86_64_32`**: relocate a reference that uses a 32-bit **absolute** address.
+ELF defines dozens of types. Two basic ones are enough to understand the idea:
 
-These two support the x86-64 **small code model**, which assumes the total size of code and data in the executable is under 2 GB so that 32-bit PC-relative addresses suffice (the GCC default).
+| Type | Meaning | Value stored |
+|---|---|---|
+| `R_X86_64_PC32` | 32-bit **PC-relative** address | `ADDR(symbol) + addend - address of the reference` |
+| `R_X86_64_32` | 32-bit **absolute** address | `ADDR(symbol) + addend` |
 
-### Worked example
+### Worked example: a PC-relative call
 
-Disassembling `main.o`:
+Suppose `main` contains a call to `total`. In `app.o`, disassembled, the call looks like this:
 
 ```
-0000000000000000 <main>:
-   0: 48 83 ec 08          sub    $0x8,%rsp
-   4: be 02 00 00 00       mov    $0x2,%esi
-   9: bf 00 00 00 00       mov    $0x0,%edi        # %edi = &array
-                    a: R_X86_64_32 array           # relocation entry
-   e: e8 00 00 00 00       callq  13 <main+0x13>   # sum()
-                    f: R_X86_64_PC32 sum-0x4       # relocation entry
-  13: 48 83 c4 08          add    $0x8,%rsp
-  17: c3                   retq
+  1a:   e8 00 00 00 00      call  1f <main+0x1f>
+                    1b: R_X86_64_PC32   total-0x4
 ```
 
-**PC-relative reference** (`call sum`). The entry is `r.offset = 0xf`, `r.symbol = sum`, `r.type = R_X86_64_PC32`, `r.addend = -4`. Suppose the linker has decided `ADDR(.text) = 0x4004d0` for `main` and `ADDR(sum) = 0x4004e8`. Then:
+The opcode `e8` is at offset `0x1a` within the section. The four bytes after it, at offset `0x1b`, are a placeholder. The entry says: patch four bytes at offset `0x1b` with the PC-relative address of `total`, using an addend of -4.
 
-$$\text{refaddr} = \text{ADDR(s)} + \text{r.offset} = \text{0x4004d0} + \text{0xf} = \text{0x4004df}$$
-$$*\text{refptr} = \text{ADDR(r.symbol)} + \text{r.addend} - \text{refaddr} = \text{0x4004e8} + (-4) - \text{0x4004df} = \text{0x5}$$
+Now suppose the linker has decided that this `.text` section starts at address `0x401000` and that `total` lives at `0x401060`. Then:
 
-So the call becomes `4004de: e8 05 00 00 00 callq 4004e8 <sum>`. At run time the CPU pushes the return address `0x4004e3` and computes PC ← PC + 0x5 = `0x4004e3 + 0x5 = 0x4004e8`. The addend −4 compensates for the fact that the PC already points 4 bytes past the start of the 32-bit field when the displacement is applied.
+- address of the reference = `0x401000 + 0x1b` = `0x40101b`;
+- patched value = `0x401060 + (-4) - 0x40101b` = `0x41`.
 
-**Absolute reference** (`mov $array, %edi`). The entry: `r.offset = 0xa`, `r.symbol = array`, `r.type = R_X86_64_32`, `r.addend = 0`. With `ADDR(array) = 0x601018`, the linker writes `*refptr = ADDR(r.symbol) + r.addend = 0x601018`, giving `bf 18 10 60 00 mov $0x601018,%edi`.
+The instruction becomes `e8 41 00 00 00`. Check it from the CPU's side. When the call executes, the program counter already holds the address of the *next* instruction, `0x40101f`. The processor adds the displacement: `0x40101f + 0x41` = `0x401060`. That is exactly `total`.
+
+Why -4? A PC-relative displacement is measured from the end of the instruction, but the relocation is computed from the address of the four-byte field itself, which starts four bytes earlier. The addend makes up the difference.
+
+### Worked example: an absolute reference
+
+Suppose an instruction loads the address of `samples`, and the entry says `R_X86_64_32 samples` with addend 0 at offset `0x0a`. If the linker placed `samples` at `0x404028`, it writes the bytes `28 40 40 00` (little-endian) into the instruction.
 
 ```python-run
-def reloc_pc32(addr_section, r_offset, addr_symbol, addend):
-    refaddr = addr_section + r_offset
-    return (addr_symbol + addend - refaddr) & 0xFFFFFFFF
-def reloc_abs32(addr_symbol, addend):
-    return (addr_symbol + addend) & 0xFFFFFFFF
-print(hex(reloc_pc32(0x4004d0, 0xf, 0x4004e8, -4)))    # 0x5
-print(hex(reloc_abs32(0x601018, 0)))                    # 0x601018
+def relocate_pc32(section_addr, offset, symbol_addr, addend):
+    ref_addr = section_addr + offset
+    return (symbol_addr + addend - ref_addr) & 0xFFFFFFFF
+
+def relocate_abs32(symbol_addr, addend):
+    return (symbol_addr + addend) & 0xFFFFFFFF
+
+text = 0x401000
+disp = relocate_pc32(text, 0x1b, 0x401060, -4)
+next_pc = text + 0x1b + 4
+print(f"patched displacement: {disp:#x}  -> bytes e8 {disp.to_bytes(4, 'little').hex(' ')}")
+print(f"CPU computes target : {next_pc:#x} + {disp:#x} = {(next_pc + disp) & 0xFFFFFFFF:#x}")
+
+value = relocate_abs32(0x404028, 0)
+print(f"absolute reference  : bytes {value.to_bytes(4, 'little').hex(' ')}")
+
+back = relocate_pc32(text, 0x51, 0x401010, -4)      # a call to a function at a LOWER address
+print(f"backward call       : displacement {back:#x} = {back - (1 << 32)} as a signed number")
 ```
 
 > [!INTERVIEW]
-> **"What is the difference between a declaration and a definition, and what causes 'undefined reference' vs. 'multiple definition' errors?"** A declaration tells the compiler a name's type; a definition allocates storage or provides code. *Undefined reference* = the linker found references but no definition (forgot to link a file/library, wrong library order, C++ name mangling without `extern "C"`). *Multiple definition* = two strong symbols with one name (e.g., defining a variable in a header included by two `.c` files; the fix is `extern` in the header and one definition in a `.c`).
+> **"What does a linker do?"** Two things. It resolves symbols, pairing every reference with one definition, using the strong/weak rules for duplicates and scanning archives left to right for members that satisfy outstanding references. Then it relocates: merges like sections, assigns final addresses, and patches each reference as directed by the relocation entries, computing either a PC-relative displacement or an absolute address. Mentioning why library order matters and what `undefined reference` means in terms of the unresolved set shows practical experience.
 
-> [!INTERVIEW]
-> **"Where do these variables live?"** `int g = 1;` → `.data`. `int g;` → COMMON/`.bss`. `static int s;` → `.bss`. `const char *msg = "hi";` → the string in `.rodata`, the pointer in `.data`. A local `int x;` → stack or register, no symbol. A local `static int c = 0;` → `.bss` with a local symbol.
+## 7. Pitfalls
 
-## 8. Summary
+- **Libraries before the objects that use them.** The archive is scanned once, at its position in the command line.
+- **Uninitialised globals with the same name in two files.** Merged silently unless `-fno-common` is in effect.
+- **Mismatched declarations across files.** The linker does not check types. A function declared with the wrong signature in the caller links cleanly and misbehaves at run time. Shared headers are the cure.
+- **Thinking `static` locals are on the stack.** They live in `.data` or `.bss` and keep their value between calls.
+- **Thinking `.bss` variables enlarge the file.**
+- **Calling C from C++ without `extern "C"`.** The C++ compiler mangles the name, and the linker cannot find the plain C symbol.
+- **Defining variables in headers.** Every file that includes the header gets a strong definition, and the link fails with duplicates.
 
-- Linkers combine relocatable object files by **symbol resolution** and **relocation**.
-- ELF relocatable files carry `.text`, `.rodata`, `.data`, `.bss`, `.symtab`, relocation sections and more.
-- Symbols are global, external or local (`static`). Stack locals have no symbols.
-- Strong vs. weak: no two strong; strong beats weak; any of several weak. Type-mismatched duplicates corrupt memory silently.
-- Static libraries are archives; the linker pulls only referenced members, scanning left to right, so **libraries go last**.
-- Relocation patches references using entries (offset, symbol, type, addend): PC-relative `S + A - P`, absolute `S + A`.
+## Summary
 
-## Check yourself
+- Linking combines separately compiled object files into an executable. Static linkers perform symbol resolution and then relocation.
+- Relocatable ELF files hold `.text`, `.rodata`, `.data`, `.bss`, a symbol table, and relocation entries.
+- Symbols are global, external, or local (`static`). Non-static local variables are not linker symbols.
+- Duplicate globals are resolved by strength: two strong definitions are an error, a strong beats a weak, and among weak ones any may be chosen, which can silently corrupt data when types differ.
+- Static libraries are archives from which the linker extracts only the members needed, in a single left-to-right scan; order on the command line matters.
+- Relocation merges sections, assigns addresses, and patches references using entries such as `R_X86_64_PC32` and `R_X86_64_32`.
+
+## Glossary
+
+- **Linker**: the tool that combines object files and libraries into an executable program.
+- **Object file**: the output of compiling one source file: machine code and data plus information for the linker.
+- **ELF**: Executable and Linkable Format, the file layout Linux uses for object files and programs.
+- **Section**: a named part of an object file, such as `.text` for code or `.data` for initialised variables.
+- **`.bss`**: the section for variables that start as zero; it takes no space in the file.
+- **Symbol**: a name for a function or variable that the linker tracks.
+- **Symbol table**: the list of symbols an object file defines and refers to.
+- **Symbol resolution**: matching every reference to a symbol with exactly one definition.
+- **Strong / weak symbol**: a function or initialised global / an uninitialised global, used to decide between duplicate names.
+- **Static library (archive)**: a file bundling many object files, from which the linker copies only those needed.
+- **Relocation**: assigning final addresses and patching references to use them.
+- **Relocation entry**: a note left by the assembler telling the linker which bytes to patch and how.
+- **PC-relative address**: an address stored as a distance from the current instruction instead of an absolute number.
 
 ```quiz
 [
-  {"q": "Which ELF section holds an uninitialized static variable?", "options": [".data", ".bss", ".rodata", "COMMON"], "answer": 1,
-   "explain": "Uninitialized statics (and zero-initialized globals/statics) go to .bss; uninitialized non-static globals go to COMMON."},
-  {"q": "Module A has 'int x = 5;' and module B has 'int x;'. What happens at link time?", "options": ["Link error: duplicate symbol", "Both refer to A's x (strong beats weak)", "Each module gets its own x", "The linker picks B's"], "answer": 1,
-   "explain": "Rule 2: a strong symbol overrides weak symbols of the same name."},
-  {"q": "Two modules each define 'int x = 1;'. Result?", "options": ["The first on the command line wins", "Link error: multiple strong symbols", "They are merged", "Undefined behavior at run time"], "answer": 1,
-   "explain": "Rule 1 forbids multiple strong definitions."},
-  {"q": "Does a non-static local variable of a function appear in .symtab?", "options": ["Yes, as a local symbol", "Yes, as a global symbol", "No, it is managed on the stack at run time", "Only with -O2"], "answer": 2,
-   "explain": "The linker symbol table has no entries for automatic local variables."},
-  {"q": "gcc -static libfoo.a main.o fails with an undefined reference to a function in libfoo.a. Why?", "options": ["Static libraries cannot be linked", "The archive was scanned when the unresolved set was empty, so no member was extracted", "main.o is corrupt", "The function is weak"], "answer": 1,
-   "explain": "Archives are searched only for symbols currently unresolved; libraries must come after the objects that use them."},
-  {"q": "For an R_X86_64_PC32 relocation with ADDR(symbol)=0x4004e8, addend=-4 and refaddr=0x4004df, what value is stored?", "options": ["0x4004e8", "0x5", "0x9", "0xd"], "answer": 1,
-   "explain": "0x4004e8 - 4 - 0x4004df = 0x5."},
-  {"q": "What does the static keyword do to a global function in C?", "options": ["Stores it in .bss", "Makes its symbol local to the module so other files cannot reference it", "Makes it faster", "Puts it in a shared library"], "answer": 1,
-   "explain": "static gives internal linkage: a local linker symbol, invisible to other modules."},
-  {"q": "Why does .bss occupy no space in the object file?", "options": ["It is compressed", "Its contents are all zero, so only its size needs recording; memory is allocated at run time", "It is stored in .data", "It is discarded by the linker"], "answer": 1,
-   "explain": "Uninitialized data needs no bytes on disk; the loader provides zero-filled memory."}
+  {"q": "In which section of a relocatable object file is the variable 'static int hits;' (declared at file scope, no initialiser) placed?",
+   "options": [".data", ".bss", ".rodata", "COMMON"],
+   "answer": 1, "explain": "Uninitialised static variables cannot be merged with definitions in other modules, so they go directly to .bss. Only uninitialised non-static globals are marked COMMON."},
+  {"q": "Which of these does NOT have an entry in the object file's symbol table?",
+   "options": ["A non-static function", "A static global variable", "A non-static local variable inside a function", "A static local variable inside a function"],
+   "answer": 2, "explain": "Ordinary local variables live on the stack or in registers and are invisible to the linker. Static locals get a uniquely named local symbol."},
+  {"q": "File one contains 'int n = 5;' and file two contains 'int n = 6;' at file scope. What does the linker do?",
+   "options": ["Picks the first one", "Picks the last one", "Reports a multiple-definition error", "Merges them into an array"],
+   "answer": 2, "explain": "Both are initialised globals and therefore strong. Two strong symbols with the same name violate the first rule."},
+  {"q": "File one has 'int v = 1; int w = 2;' and file two has 'double v;' and assigns to it. The program links. What is the risk?",
+   "options": ["None", "The assignment writes 8 bytes at the address of a 4-byte variable and may overwrite w", "The linker converts the double to an int", "The program will not start"],
+   "answer": 1, "explain": "The strong 4-byte definition is chosen, but file two's code was compiled for an 8-byte object, so its store spills into the adjacent variable."},
+  {"q": "Why does 'gcc libm_util.a main.o' fail with an undefined reference when 'gcc main.o libm_util.a' succeeds?",
+   "options": ["Archives must be listed alphabetically", "When the archive is scanned first there are no unresolved symbols yet, so no members are extracted", "The archive is corrupted", "main.o must be compiled with -static"],
+   "answer": 1, "explain": "The linker scans left to right and takes from an archive only members that define currently unresolved symbols. Later references are too late."},
+  {"q": "A call instruction's 4-byte displacement field is at address 0x40101b, the target function is at 0x401060 and the addend is -4. What value does the linker store?",
+   "options": ["0x45", "0x41", "0x401060", "0x3d"],
+   "answer": 1, "explain": "The PC-relative formula is symbol + addend - reference address: 0x401060 - 4 - 0x40101b = 0x41."},
+  {"q": "What is the purpose of a relocation entry?",
+   "options": ["To record a symbol's type for the debugger", "To tell the linker where a reference must be patched and how to compute the value", "To reserve space in .bss", "To list the libraries the program needs"],
+   "answer": 1, "explain": "The assembler cannot know final addresses, so it leaves a placeholder and an entry giving the offset, the symbol, the relocation type and an addend."},
+  {"q": "When a program is linked against a static library containing 1,500 object modules and uses functions from 3 of them, how many modules are copied into the executable?",
+   "options": ["All 1,500", "Only those 3, plus any that they in turn reference", "None; they are loaded at run time", "Exactly 3, never more"],
+   "answer": 1, "explain": "The linker extracts only archive members that resolve outstanding references, including references introduced by members it has newly added."}
 ]
 ```
 
-> **Source:** CS:APP 3e, §7.1–7.7 (Compiler drivers; Static linking; Object files; Relocatable object files; Symbols and symbol tables; Symbol resolution, static libraries; Relocation).
+> **Source:** CS:APP 3e, §7.1–7.7

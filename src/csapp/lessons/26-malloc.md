@@ -1,338 +1,391 @@
 # Dynamic memory allocation and garbage collection
 
-`mmap` and `munmap` can create and delete areas of virtual memory, but C programmers usually find it more convenient and portable to use a **dynamic memory allocator** when they need additional virtual memory at run time. The most important reason programs use dynamic allocation is that they often do not know the sizes of certain data structures until the program actually runs. This lesson explains how allocators like `malloc` work inside: block headers, free lists, placement, splitting, coalescing with boundary tags, and segregated lists. Then it covers garbage collection and the catalogue of memory bugs that every C programmer must be able to recognize.
+> **Before this lesson:** You should be able to read C code that uses pointers, and know the layout of a process's memory (code, data, heap, stack) from [Caches, the OS, and the big themes](#/lesson/csapp/tour-os). Virtual memory from [Linux VM and memory mapping](#/lesson/csapp/vm-mapping) explains where the heap comes from.
 
-## 1. The heap and the allocator interface
+## In plain words
 
-A dynamic memory allocator maintains an area of a process's virtual memory known as the **heap**: an area of demand-zero memory that begins immediately after the uninitialized data area and grows upward (toward higher addresses). For each process, the kernel maintains a variable **`brk`** ("break") that points to the top of the heap.
+Programs often cannot know in advance how much memory they will need: it depends on the file opened or the number of users connected. Such memory is requested while the program runs, from a region called the **heap**, and handed back when it is no longer needed. The code that manages the heap is the **allocator**; in C it is reached through the functions `malloc` (give me some memory) and `free` (I am finished with it). Picture a car park with no painted bays, where vehicles of every length arrive and leave in any order. After a while the empty space is scattered in small gaps, and a long bus cannot park although the total free space would be enough. Keeping the gaps usable, and finding one quickly, is the allocator's whole job.
 
-An allocator maintains the heap as a collection of various-size **blocks**. Each block is a contiguous chunk of virtual memory that is either **allocated** or **free**. An allocated block has been explicitly reserved for use by the application and remains allocated until it is freed, either explicitly by the application or implicitly by the allocator itself.
+Why this matters at work: mistakes with heap memory cause some of the most damaging faults in software, including crashes, slow leaks that bring down long-running services, and security holes. Understanding the allocator explains those failures and the performance of memory-heavy programs. "How would you implement `malloc`?" is a classic interview question.
 
-- **Explicit allocators** require the application to explicitly free any allocated blocks: C's `malloc`/`free`, C++'s `new`/`delete`.
-- **Implicit allocators** require the allocator to detect when an allocated block is no longer being used and then free it: **garbage collectors** (Lisp, ML, Java, Python).
+## Why look closer
+
+A program rarely knows in advance how much memory it will need. A text editor cannot guess the size of the file you will open; a web server cannot guess how many requests will be in flight. Sizes that are only known at run time are served from the **heap**, through an **allocator**. In C that means `malloc` and `free`, and most people use them for years as black boxes. Opening the box is worthwhile. It explains why a single stray write can make a program crash an hour later in unrelated code, why a long-running service's memory footprint creeps upward even though it "frees everything", and what design decisions separate a fast allocator from a slow one. It is also a compact case study in the classic engineering tension between speed and space. The lesson ends with garbage collection and a field guide to the memory bugs that C makes possible.
+
+## 1. The heap and its interface
+
+The heap is an area of demand-zero virtual memory that starts immediately above the program's uninitialised data and grows toward higher addresses. The kernel tracks its upper boundary in a per-process variable called the **program break** (`brk`).
+
+An allocator carves the heap into **blocks**, each a contiguous chunk of virtual memory that is either *allocated* (handed out to the program) or *free* (available). Allocators come in two families that differ in who is responsible for giving memory back:
+
+- **Explicit allocators** make the program release blocks. C's `malloc`/`free` and C++'s `new`/`delete` are of this kind.
+- **Implicit allocators**, better known as **garbage collectors**, detect blocks the program can no longer use and reclaim them automatically. Java, Go, Python and JavaScript work this way.
+
+The C interface is small:
 
 ```c
 #include <stdlib.h>
-void *malloc(size_t size);                 /* pointer to a block of at least size bytes, or NULL */
-void *calloc(size_t nmemb, size_t size);   /* allocate and zero-initialize */
-void *realloc(void *ptr, size_t size);     /* change the size of a previously allocated block */
-void  free(void *ptr);                     /* ptr must come from malloc/calloc/realloc */
+void *malloc(size_t size);               /* uninitialised block of at least size bytes, or NULL */
+void *calloc(size_t n, size_t size);     /* n*size bytes, zero-filled */
+void *realloc(void *p, size_t size);     /* resize, possibly moving the contents */
+void  free(void *p);                     /* p must come from the calls above, exactly once */
 
 #include <unistd.h>
-void *sbrk(intptr_t incr);                 /* grow/shrink the heap by adding incr to brk; returns old brk */
+void *sbrk(intptr_t incr);               /* move the program break; returns the old break */
 ```
 
-`malloc` returns a pointer to a block of memory of at least `size` bytes that is suitably aligned for any kind of data object that might be contained in the block. In 32-bit mode the address is always a multiple of 8; **in 64-bit mode, a multiple of 16**. `malloc` does **not** initialize the memory it returns. If it encounters a problem (the request exceeds available virtual memory), it returns NULL and sets `errno`. Allocators obtain memory from the kernel with `sbrk` or with `mmap`.
+`malloc` returns memory aligned for any data type: on 64-bit Linux that means a multiple of 16 bytes. It does not clear the block. `free` returns nothing and has no way of reporting a bad argument, so passing it a pointer it did not hand out, or the same pointer twice, is undefined behaviour. Allocators obtain raw heap space from the kernel with `sbrk` or with `mmap`.
 
-`free(ptr)` must be given a pointer to the beginning of an allocated block obtained from the allocator; otherwise its behavior is **undefined**, and since it returns nothing, it gives no indication that something is wrong.
+Why not declare big arrays? Because a fixed bound is either wasteful or, eventually, too small. Code that hard-wires a maximum input size becomes a maintenance burden and, worse, an invitation to buffer overflows.
 
-## 2. Allocator requirements and goals
+## 2. What makes allocation hard
 
-Explicit allocators must operate within stringent constraints:
+An explicit allocator works under strict rules:
 
-- **Handling arbitrary request sequences.** The allocator cannot make assumptions about the ordering of allocate and free requests.
-- **Making immediate responses to requests.** It may not reorder or buffer requests to improve performance.
-- **Using only the heap.** Any nonscalar data structures the allocator uses must themselves be stored in the heap.
-- **Aligning blocks** so that they can hold any type of data object.
-- **Not modifying allocated blocks.** Allocators can only manipulate free blocks; in particular they are **not allowed to move allocated blocks** (compaction is impossible, because the application holds raw pointers).
+1. **Any sequence of requests may arrive.** It cannot assume that frees mirror allocations in some convenient order.
+2. **It must answer immediately.** No buffering requests to reorder them.
+3. **It may use only the heap** for its own bookkeeping.
+4. **Blocks must be aligned.**
+5. **Allocated blocks may never be touched.** Once handed out, a block cannot be moved or altered, so techniques like compaction are off the table: the allocator has no idea where the program keeps its pointers.
 
-Within these, the author of an allocator pursues two often conflicting goals:
+Inside those rules it tries to maximise two things that pull against each other:
 
-**Goal 1: maximize throughput**, the number of requests completed per unit time. Minimizing the average time of allocate and free requests. A reasonable target: worst-case allocate time linear in the number of free blocks, constant-time free.
+- **Throughput**: requests completed per second.
+- **Memory utilisation**: how much of the heap holds actual payload. The usual measure is *peak utilisation*: the largest total payload the program ever had outstanding, divided by the heap size at the end.
 
-**Goal 2: maximize memory utilization.** Virtual memory is a finite resource (bounded by swap space). The most useful metric is **peak utilization**. Given a sequence of $n$ requests $R_0, \dots, R_{n-1}$: the **aggregate payload** $P_k$ is the sum of the payloads of the currently allocated blocks after request $R_k$; $H_k$ is the current (monotonically nondecreasing) size of the heap. The peak utilization over the first $k+1$ requests is
+A trivially fast allocator never reuses anything and wastes enormous space; a perfectly compact one would search exhaustively on every call. Real designs sit in between.
 
-$$U_k = \frac{\max_{i \le k} P_i}{H_k}$$
+### Fragmentation
 
-It is easy to write a fast allocator that wastes memory, or a thrifty one that is slow; the art is the balance.
+Poor utilisation is mostly caused by **fragmentation**, of which there are two kinds.
 
-## 3. Fragmentation
+- **Internal fragmentation** is waste *inside* allocated blocks: the difference between the block's size and the payload the caller asked for. It comes from alignment padding, per-block bookkeeping, and minimum block sizes. It is easy to quantify because it depends only on past requests.
+- **External fragmentation** is waste *between* blocks: the free space adds up to enough for a request, but no single free block is big enough. It is hard to quantify because it depends on *future* requests. Thirty free bytes in three scattered pieces are fine if the next request wants 8 and useless if it wants 24.
 
-The primary cause of poor heap utilization is **fragmentation**: otherwise unused memory is not available to satisfy allocate requests.
+Because the future is unknown, allocators use a heuristic: try to keep free memory in a few large pieces rather than many small ones.
 
-- **Internal fragmentation** occurs when an allocated block is larger than the payload: because of a minimum block size, alignment padding, or header overhead. It is simple to quantify: the sum of (block size − payload) over allocated blocks. It depends only on the pattern of *previous* requests and the allocator implementation.
-- **External fragmentation** occurs when there *is* enough aggregate free memory to satisfy an allocate request, but **no single free block is large enough**. It is much harder to quantify because it also depends on the pattern of *future* requests. So allocators use heuristics that try to maintain small numbers of larger free blocks rather than large numbers of smaller ones.
-
-## 4. Implementation issues
-
-A practical allocator must decide:
-
-- **Free block organization**: how do we keep track of free blocks?
-- **Placement**: how do we choose an appropriate free block for a newly allocated block?
-- **Splitting**: after placing a block in some free block, what do we do with the remainder?
-- **Coalescing**: what do we do with a block that has just been freed?
-
-## 5. Implicit free lists
-
-Any practical allocator needs a data structure that lets it distinguish block boundaries and tell allocated from free blocks. Most embed this information **in the blocks themselves**.
-
-A simple format: a one-word **header**, the **payload**, and possibly some **padding**. The header encodes the block size (including header and padding) and whether the block is allocated or free. With a double-word (8-byte) alignment constraint, the block size is always a multiple of 8, so its 3 low-order bits are always zero. We store only the 29 high-order bits of the size and use the low bits for other information: the **least significant bit is the allocated bit**.
-
-```
- 31                                3 2 1 0
-+-----------------------------------+-----+
-|            block size             |0 0 a|   header: a = 1 allocated, a = 0 free
-+-----------------------------------+-----+
-|                                         |
-|   payload (allocated blocks only)       |   <- malloc returns a pointer to here
-|                                         |
-+-----------------------------------------+
-|   padding (optional)                    |
-+-----------------------------------------+
+```python-run
+# External fragmentation in ten lines: plenty of free bytes, no usable block.
+heap = [("A", 16), ("free", 16), ("B", 16), ("free", 16), ("C", 16), ("free", 16)]
+free_total = sum(size for tag, size in heap if tag == "free")
+largest = max(size for tag, size in heap if tag == "free")
+print("layout:", " | ".join(f"{t}:{s}" for t, s in heap))
+print(f"free bytes in total: {free_total}, largest single free block: {largest}")
+for request in (16, 32, 48):
+    print(f"request for {request:2} bytes ->", "fits" if request <= largest else "FAILS despite enough total space")
 ```
 
-A header of `0x00000019` describes an allocated block of 24 (`0x18`) bytes; `0x00000028` a free block of 40 bytes.
+Every practical allocator has to settle five questions: how to keep track of free blocks, which free block to choose, what to do with the leftover part of a chosen block, when to merge neighbouring free blocks, and how to get more memory when nothing fits. The rest of the design discussion walks through them.
 
-The heap is then a sequence of contiguous allocated and free blocks. This organization is an **implicit free list** because the free blocks are linked implicitly by the size fields in the headers: the allocator traverses the entire set of free blocks by traversing **all** of the blocks in the heap. A special **end block** (a terminating header with the allocated bit set and size zero) marks the end.
+## 3. Implicit free lists
 
-The alignment requirement plus the block format impose a **minimum block size**: with double-word alignment, even a 1-byte request becomes a two-word block (one for the header, one to maintain alignment).
+The simplest organisation stores a one-word **header** at the front of every block, allocated or free. The header holds the block's total size. Since alignment forces every size to be a multiple of 8 or 16, the low-order bits of the size are always zero, and the allocator borrows the lowest one as an **allocated flag**.
 
-### Placing allocated blocks
+```
+ header word            payload                 padding
++--------------------+---------------------+----------+
+| size (upper bits)|a|  what the caller    | optional |
++--------------------+---------------------+----------+
+                      ^ pointer returned by malloc
+```
 
-When an application requests a block of $k$ bytes, the allocator searches the free list for a free block large enough. The **placement policy** determines the search:
+With a size in every header, the blocks form a chain that can be walked from the start of the heap by repeatedly adding each block's size to its address. Free blocks are found by skipping over the allocated ones. Nothing links the free blocks to each other directly, hence the name *implicit* list. A special zero-size allocated header marks the end.
 
-- **First fit** searches the free list from the beginning and chooses the first free block that fits. Advantage: tends to retain large free blocks at the end of the list. Disadvantage: tends to leave "splinters" of small free blocks toward the beginning, increasing the search time for larger blocks.
-- **Next fit** (proposed by Donald Knuth) starts each search where the previous search left off. It can run significantly faster than first fit, especially if the front of the list becomes littered with small splinters; but some studies suggest it suffers from worse memory utilization.
-- **Best fit** examines every free block and chooses the free block with the smallest size that fits. It generally enjoys better memory utilization than either first fit or next fit, but with simple free list organizations it requires an exhaustive search of the heap.
+```python-run
+def pack(size, allocated):            # size is a multiple of 8, so bit 0 is spare
+    return size | allocated
+def unpack(word):
+    return word & ~0x7, word & 0x1
 
-### Splitting free blocks
+for size, alloc in ((16, 1), (40, 0), (24, 1)):
+    w = pack(size, alloc)
+    print(f"size {size:2} alloc {alloc} -> header {w:#06x} -> decoded {unpack(w)}")
 
-Once the allocator has located a free block that fits, it must decide how much of it to allocate. Using the entire free block is simple and fast but introduces internal fragmentation. If the fit is not good, the allocator usually **splits** the free block into two parts: the first becomes the allocated block and the remainder becomes a new free block.
+# Rounding a request up: add the header, respect an 8-byte alignment and a 16-byte minimum.
+def block_size(payload, header=4, align=8, minimum=16):
+    return max(minimum, (payload + header + align - 1) // align * align)
+for n in (1, 5, 12, 13, 21):
+    b = block_size(n)
+    print(f"malloc({n:2}) -> block of {b:2} bytes, internal fragmentation {b - n} bytes")
+```
 
-### Getting additional heap memory
+### Placement: choosing a free block
 
-If the allocator is unable to find a fit, it tries to create larger free blocks by coalescing; if that does not yield a sufficiently large block, or the free blocks are already maximally coalesced, it asks the kernel for additional heap memory by calling `sbrk`, transforms the additional memory into one large free block, inserts it into the free list, and places the requested block there.
+When a request for *k* bytes arrives, the allocator searches for a free block of at least *k*. The **placement policy** decides which:
 
-### Coalescing free blocks
+| Policy | Rule | Character |
+|---|---|---|
+| **First fit** | scan from the beginning, take the first that fits | fast when it succeeds early; tends to litter the front of the heap with small leftovers |
+| **Next fit** | resume scanning where the last search stopped | usually faster than first fit; studies show worse utilisation |
+| **Best fit** | examine every free block, take the smallest that fits | best utilisation; needs a full scan with a simple list |
 
-When the allocator frees an allocated block, there might be other free blocks adjacent to it. Such adjacent free blocks cause **false fragmentation**: lots of available free memory chopped up into small, unusable free blocks. Freeing two adjacent 16-byte blocks without merging them leaves a request for 24 bytes unsatisfiable even though 32 contiguous bytes are free.
+### Splitting
 
-Any practical allocator must merge adjacent free blocks: **coalescing**. With **immediate coalescing**, adjacent blocks are merged each time a block is freed. With **deferred coalescing**, the allocator waits until some later time, e.g. until some allocation request fails, and then scans the entire heap. Immediate coalescing is straightforward and can be performed in constant time, but with some request patterns it can cause a form of thrashing where a block is repeatedly coalesced and then split soon thereafter. Fast allocators often opt for some form of deferred coalescing.
+If the chosen block is larger than needed, the allocator may **split** it: the front part becomes the allocated block and the remainder becomes a new, smaller free block. Without splitting, a good fit wastes little, but a poor fit turns into internal fragmentation. Splitting is skipped when the remainder would be smaller than the minimum block size.
 
-### Coalescing with boundary tags
+### Getting more memory
 
-Coalescing with the **next** block is easy: the header of the current block points to the header of the next block, which can be checked to see whether the next block is free. But how do we coalesce with the **previous** block? With an implicit list of headers only, we would have to search the entire list up to the current block: `free` would be linear in the heap size.
+If no block fits even after merging free neighbours, the allocator asks the kernel to extend the heap with `sbrk`, turns the new space into one large free block, and tries again.
 
-Knuth's elegant solution is **boundary tags**: add a **footer** at the end of each block, a replica of the header. The allocator can then determine the starting location and status of the previous block by inspecting its footer, which is always one word away from the start of the current block.
+### Coalescing
 
-There are four cases when freeing the current block:
+When a block is freed, there may be free blocks on either side of it. Left alone, they produce **false fragmentation**: lots of free memory chopped into pieces too small to use, even though the pieces are adjacent. The fix is **coalescing**, merging adjacent free blocks. An allocator may coalesce **immediately** on every `free`, or **defer** it until, say, a request fails. Immediate coalescing is simple and constant-time, though a pattern of alternating allocate and free of the same size can make it merge and split repeatedly.
 
-| Case | Previous | Next | Action |
+Merging with the *next* block is easy: its header is right after the end of the current block. Merging with the *previous* block is the problem. With headers alone, the only way to find where the previous block starts is to walk the heap from the beginning.
+
+### Boundary tags
+
+The classic solution, due to Knuth, is to put a copy of the header at the *end* of each block as well: a **footer**, or boundary tag. The previous block's footer sits in the word immediately before the current block's header, so its size and status can be read in constant time.
+
+With both neighbours inspectable, freeing a block falls into exactly four cases:
+
+| Previous | Next | Action | Resulting free block size |
 |---|---|---|---|
-| 1 | Allocated | Allocated | No coalescing; just mark the current block free |
-| 2 | Allocated | Free | Merge with next: header of current and footer of next updated with the combined size |
-| 3 | Free | Allocated | Merge with previous: header of previous and footer of current updated |
-| 4 | Free | Free | Merge all three: header of previous and footer of next updated |
+| allocated | allocated | mark the block free | size |
+| allocated | free | merge with next | size + next |
+| free | allocated | merge with previous | prev + size |
+| free | free | merge all three | prev + size + next |
 
-In each case the coalescing is performed in **constant time**.
-
-One drawback: requiring every block to contain both a header and a footer can introduce significant memory overhead when an application manipulates many small blocks. A clever optimization: the footer of the previous block is needed only if the previous block is **free**. If we store the allocated/free bit of the *previous* block in one of the excess low-order bits of the *current* block's header, then **allocated blocks do not need footers**, and that space can be used for payload. Free blocks still need them.
-
-### Putting it together: a simple allocator
-
-The book implements a complete allocator (`mm_init`, `mm_malloc`, `mm_free`) based on an implicit free list with immediate boundary-tag coalescing. Its design: 4-byte words and 8-byte double words (`WSIZE`, `DSIZE`); headers and footers of one word; **minimum block size 16 bytes**; the heap starts with a padding word, an 8-byte allocated **prologue block** (header + footer only) and ends with a zero-size allocated **epilogue header**: tricks that eliminate edge conditions during coalescing. The heap is extended in chunks of `CHUNKSIZE` = 4,096 bytes.
-
-The size adjustment for a request of `size` bytes is the important line:
-
-```c
-if (size <= DSIZE)
-    asize = 2 * DSIZE;                                         /* minimum 16 bytes */
-else
-    asize = DSIZE * ((size + (DSIZE) + (DSIZE - 1)) / DSIZE);  /* add overhead, round up to a multiple of 8 */
+```mermaid
+flowchart LR
+    subgraph Case 4 before
+      a1[prev free 24] --- a2[freed 16] --- a3[next free 32]
+    end
+    subgraph Case 4 after
+      b1[one free block of 72]
+    end
 ```
 
-That is: add 8 bytes of overhead (header + footer) and round up to the nearest multiple of 8. Then `find_fit(asize)`; if found, `place` it (splitting if the remainder would be at least the minimum block size of 16 bytes); otherwise extend the heap and place there.
+Footers cost a word per block, which hurts when blocks are small. A standard optimisation notes that the footer is only ever consulted when the block is *free*. If each header also stores a "previous block is allocated" bit in another spare low bit, allocated blocks can drop their footers and use the space for payload.
+
+A practical trick in implementations is to bracket the heap with a small permanently allocated **prologue** block at the start and a zero-size allocated **epilogue** header at the end. Those sentinels mean the coalescing code never has to test for the edges of the heap.
+
+The simulator below implements an implicit list with first fit, splitting and four-case coalescing. Sizes are in words to keep it readable.
 
 ```python-run
 class Heap:
-    """Implicit-list allocator model: blocks are [start, size, allocated]; first fit, split, immediate coalescing."""
-    def __init__(self, size): self.blocks = [[0, size, False]]
-    @staticmethod
-    def adjust(size): return 16 if size <= 8 else 8 * ((size + 8 + 7) // 8)
-    def malloc(self, size):
-        if size <= 0: return None
-        asize = self.adjust(size)
-        for i, (start, bsize, alloc) in enumerate(self.blocks):       # first fit
-            if not alloc and bsize >= asize:
-                if bsize - asize >= 16:                               # split
-                    self.blocks[i] = [start, asize, True]
-                    self.blocks.insert(i + 1, [start + asize, bsize - asize, False])
+    def __init__(self, words):
+        self.blocks = [[words, False]]            # [size, allocated], in address order
+    def malloc(self, need):
+        for i, (size, used) in enumerate(self.blocks):
+            if not used and size >= need:         # first fit
+                if size - need >= 2:              # split if the remainder is a viable block
+                    self.blocks[i:i + 1] = [[need, True], [size - need, False]]
                 else:
-                    self.blocks[i][2] = True
-                return start
+                    self.blocks[i][1] = True
+                return i
         return None
-    def free(self, start):
-        i = next(k for k, b in enumerate(self.blocks) if b[0] == start)
-        self.blocks[i][2] = False
-        if i + 1 < len(self.blocks) and not self.blocks[i + 1][2]:    # coalesce with next
-            self.blocks[i][1] += self.blocks.pop(i + 1)[1]
-        if i > 0 and not self.blocks[i - 1][2]:                       # coalesce with previous
-            self.blocks[i - 1][1] += self.blocks.pop(i)[1]
-    def show(self): return " ".join(f"[{s}:{n}{'a' if a else 'f'}]" for s, n, a in self.blocks)
+    def free(self, i):
+        self.blocks[i][1] = False
+        if i + 1 < len(self.blocks) and not self.blocks[i + 1][1]:   # merge with next
+            self.blocks[i][0] += self.blocks.pop(i + 1)[0]
+        if i > 0 and not self.blocks[i - 1][1]:                      # merge with previous
+            self.blocks[i - 1][0] += self.blocks.pop(i)[0]
+    def show(self, note):
+        print(f"{note:26}", " ".join(f"[{s}{'a' if u else 'f'}]" for s, u in self.blocks))
 
-h = Heap(96)
-p1, p2, p3 = h.malloc(8), h.malloc(20), h.malloc(8)
-print(h.show())
-h.free(p1); h.free(p3); print(h.show(), "<- p3 coalesced with the tail; p1 isolated")
-free_bytes = sum(n for s, n, a in h.blocks if not a)
-print("malloc(56) needs a 64-byte block ->", h.malloc(56), "although", free_bytes, "bytes are free: external fragmentation")
-h.free(p2); print(h.show(), "<- everything coalesced")
+h = Heap(32)
+h.malloc(4); h.malloc(6); h.malloc(4); h.malloc(8)
+h.show("after four mallocs")
+h.free(1);  h.show("free the 6-word block")
+h.free(2);  h.show("free the 4 next to it")       # index shifted: cases merge with previous
+print("malloc(9) lands at index", h.malloc(9)); h.show("reuse the merged space")
 ```
 
-## 6. Explicit free lists
+The weakness of an implicit list is speed: every allocation scans blocks that are already in use, so its cost grows with the *total* number of blocks.
 
-The implicit free list is simple but block allocation time is linear in the *total* number of heap blocks, which is not suitable for a general-purpose allocator. A better approach organizes the free blocks into an explicit data structure. Since by definition the body of a free block is not needed by the program, **the pointers that implement the data structure can be stored within the bodies of the free blocks**. For example, a doubly linked free list with a `pred` (predecessor) and `succ` (successor) pointer in each free block.
+## 4. Explicit free lists
 
-This reduces first-fit allocation time from linear in the total number of blocks to **linear in the number of free blocks**. The time to free a block depends on the ordering policy:
+Free blocks are, by definition, not holding program data. So their payload area can hold the allocator's own pointers. An **explicit free list** stores a predecessor and a successor pointer in the body of each free block, linking the free blocks into a doubly linked list. Allocation now scans only free blocks, so its cost grows with the number of *free* blocks.
 
-- **LIFO order**: insert newly freed blocks at the beginning of the list. With LIFO ordering and first fit, the allocator inspects the most recently used blocks first. Freeing takes **constant time**; with boundary tags, coalescing is also constant time.
-- **Address order**: each block's address is less than its successor's. Freeing requires a linear-time search for the appropriate predecessor; the trade-off is that address-ordered first fit enjoys better memory utilization than LIFO-ordered first fit, approaching that of best fit.
+Two ordering disciplines are common:
 
-A disadvantage of explicit lists: free blocks must be large enough to contain all of the necessary pointers as well as the header and possibly a footer. This results in a **larger minimum block size** and increases the potential for internal fragmentation.
+- **Last-in, first-out**: push a freed block on the front of the list. Freeing is constant time (with boundary tags, coalescing is too), and recently freed, cache-warm memory is reused first.
+- **Address order**: keep the list sorted by address. Freeing needs a search to find the insertion point, but first fit on an address-ordered list achieves utilisation close to best fit.
 
-## 7. Segregated free lists
+The cost is a larger minimum block: it must hold a header, two pointers and possibly a footer, which raises internal fragmentation for tiny requests.
 
-An allocator with a single linked list of free blocks requires time linear in the number of free blocks to allocate a block. A popular approach for reducing allocation time, **segregated storage**, maintains **multiple free lists**, where each list holds blocks that are roughly the same size. The set of all possible block sizes is partitioned into equivalence classes called **size classes**: for example by powers of two, $\{1\}, \{2\}, \{3,4\}, \{5\text{–}8\}, \dots, \{1025\text{–}2048\}, \{2049\text{–}4096\}, \{4097\text{–}\infty\}$, or with each small size in its own class and large blocks partitioned by powers of two. The allocator maintains an array of free lists, one per size class, ordered by increasing size.
+## 5. Segregated free lists
 
-**Simple segregated storage.** The free list for each size class contains same-size blocks, each the size of the largest element of the class. To allocate, check the appropriate free list; if non-empty, allocate the first block in its entirety (free blocks are never split). If the list is empty, request a fixed-size chunk from the OS, divide it into equal-size blocks and link them. To free, insert the block at the front of the appropriate list. Allocating and freeing are constant-time, and blocks need no headers or footers (same size per chunk, no splitting, no coalescing), but the scheme is susceptible to internal and external fragmentation.
+A single list still means a linear search. The standard remedy is to keep **many lists**, each holding blocks of similar size. The set of all block sizes is partitioned into **size classes**; a popular choice is powers of two, with separate classes for each of the smallest sizes: 1, 2, 3–4, 5–8, and so on up to 1025–2048, 2049–4096 and beyond. A request goes to the list for its class and moves up to larger classes if that one is empty.
 
-**Segregated fits.** Each free list is associated with a size class and organized as some type of explicit or implicit list; each list contains potentially different-size blocks whose sizes are members of the size class. To allocate: determine the size class of the request and do a first-fit search of the appropriate free list. If a fit is found, (optionally) split it and insert the fragment in the appropriate list. If not, search the free list for the next larger size class; repeat until a fit is found; if none, request additional heap memory from the OS. To free: coalesce and place the result on the appropriate free list. This approach is a popular choice with production-quality allocators such as the **GNU `malloc`** package, because it is both fast and memory efficient: searches are limited to particular parts of the heap, and a simple first-fit search of a segregated free list **approximates a best-fit search of the entire heap**.
+Three notable variants:
 
-**Buddy systems.** A special case of segregated fits where each size class is a power of 2. Given a heap of $2^m$ words, to allocate a block of size $2^k$, find the first available block of size $2^j$ with $k \le j \le m$; if $j = k$, done; otherwise recursively split the block in half until $j = k$, placing each remaining half (the **buddy**) on the appropriate free list. To free, coalesce with the free buddy repeatedly. A key fact: **given the address and size of a block, it is easy to compute the address of its buddy** (they differ in exactly one bit position). The major advantage is fast searching and coalescing; the major disadvantage is that the power-of-2 requirement on the block size can cause significant internal fragmentation. Buddy systems suit workloads where block sizes are known in advance to be powers of 2 (the Linux kernel's page allocator is one).
+**Simple segregated storage.** Each class holds blocks of exactly one size, never split and never coalesced. Allocation pops the head of the list and freeing pushes onto it, both constant time. Because every block in a chunk has the same size, the size of a block can be inferred from its address and no per-block header is needed. The price is fragmentation of both kinds.
 
-## 8. Garbage collection
+**Segregated fits.** Each class holds blocks of varying sizes within its range. To allocate, search the appropriate list first-fit; if a block is found, optionally split it and file the remainder in the right class; if not, try the next larger class; if all fail, grow the heap. Freeing coalesces and files the result. This is the approach used by production allocators such as the GNU C library's. It is fast because each search covers only a slice of the heap, and space-efficient because first fit within a size class approximates best fit over the entire heap.
 
-With an explicit allocator, it is the application's responsibility to free any allocated blocks it no longer needs. Failing to do so is a common error:
-
-```c
-void garbage() {
-    int *p = (int *) Malloc(15213);
-    return;                 /* array p is garbage at this point */
-}
-```
-
-A **garbage collector** is a dynamic storage allocator that automatically frees allocated blocks no longer needed by the program (**garbage**). The process of automatically reclaiming heap storage is **garbage collection**. Garbage collection dates back to Lisp systems developed by John McCarthy at MIT in the early 1960s.
-
-### Basics
-
-A garbage collector views memory as a directed **reachability graph**. The nodes are partitioned into a set of **root nodes** and a set of **heap nodes**. Each heap node corresponds to an allocated block in the heap. A directed edge $p \to q$ means that some location in block $p$ points to some location in block $q$. Root nodes correspond to locations **not in the heap** that contain pointers into the heap: registers, variables on the stack, or global variables in the read/write data area.
-
-A node $p$ is **reachable** if there exists a directed path from any root node to $p$. At any point in time, the **unreachable nodes correspond to garbage** that can never be used again by the application. The role of a garbage collector is to maintain some representation of the reachability graph and periodically reclaim the unreachable nodes by freeing them and returning them to the free list.
-
-```mermaid
-graph TB
-  R1((root)) --> A[block A]
-  R2((root)) --> B[block B]
-  A --> C[block C]
-  B --> C
-  D[block D] --> E[block E]
-  E --> D
-```
-
-Here A, B and C are reachable. D and E point to each other but no root reaches them: **garbage** (this cycle is exactly what defeats naive reference counting).
-
-Collectors for languages like ML and Java, which exert tight control over how applications create and use pointers, can maintain an exact representation of the reachability graph and thus reclaim all garbage. Collectors for C and C++ cannot in general maintain exact representations; they are known as **conservative garbage collectors**: each reachable block is correctly identified as reachable, while some unreachable nodes might be incorrectly identified as reachable.
-
-### Mark&Sweep
-
-A Mark&Sweep garbage collector consists of a **mark phase**, which marks all reachable and allocated descendants of the root nodes, followed by a **sweep phase**, which frees each unmarked allocated block. Typically one of the spare low-order bits in the block header indicates whether a block is marked.
-
-```
-void mark(ptr p) {
-    if ((b = isPtr(p)) == NULL) return;     /* not a pointer into an allocated block */
-    if (blockMarked(b)) return;
-    markBlock(b);
-    len = length(b);
-    for (i = 0; i < len; i++)               /* treat every word of the block as a potential pointer */
-        mark(b[i]);
-}
-
-void sweep(ptr b, ptr end) {
-    while (b < end) {
-        if (blockMarked(b)) unmarkBlock(b);
-        else if (blockAllocated(b)) free(b);
-        b = nextBlock(b);
-    }
-}
-```
-
-The mark phase calls `mark` once for each root node; the sweep phase is a single pass over the heap.
-
-### Conservative Mark&Sweep for C programs
-
-C poses interesting challenges for `isPtr`. First, C does not tag memory locations with type information, so there is no obvious way to determine whether an input parameter `p` is a pointer or not. Second, even if we knew `p` was a pointer, there is no obvious way to determine whether it points to some location in the payload of an allocated block. One solution to the latter is to maintain the set of allocated blocks as a **balanced binary tree** ordered by address, with left and right pointers in each block's header. The collector must be **conservative** because scalars like `int`s can masquerade as pointers: if an `int` on the stack happens to hold a value that corresponds to an address in the payload of some allocated block, the collector must (incorrectly) mark that block reachable. Correct, but possibly leaky.
+**Buddy systems.** Every block size is a power of two. To satisfy a request, round it up to a power of two, find a block of that size or split a larger one in half repeatedly; the two halves are *buddies*. On free, merge with the buddy if it is free too, and repeat upward. The neat part is that a block's buddy address is computed by flipping a single bit of its own address, so searching and coalescing are fast. The drawback is internal fragmentation of up to nearly 50%, which makes buddies best suited to workloads whose sizes are already powers of two.
 
 ```python-run
-def mark_sweep(heap_edges, roots):
-    marked = set()
-    def mark(b):
-        if b in marked or b not in heap_edges: return
-        marked.add(b)
-        for q in heap_edges[b]: mark(q)
-    for r in roots: mark(r)
-    return sorted(marked), sorted(set(heap_edges) - marked)
-edges = {"A": ["C"], "B": ["C"], "C": [], "D": ["E"], "E": ["D"]}
-print("reachable, garbage =", mark_sweep(edges, roots=["A", "B"]))
+def size_class(n):
+    """Index of the power-of-two class holding n: 1, 2, 3-4, 5-8, 9-16, ..."""
+    return (n - 1).bit_length()
+
+for n in (1, 2, 3, 4, 5, 8, 9, 100, 1024, 1025):
+    c = size_class(n)
+    lo, hi = (1 << (c - 1)) + 1 if c else 1, 1 << c
+    print(f"request {n:5} -> class {c:2} covering {lo}..{hi}")
+
+# Buddy arithmetic: flip the bit corresponding to the block size.
+def buddy(offset, size):
+    return offset ^ size
+print("buddy of the 32-byte block at offset 96 :", buddy(96, 32))
+print("buddy of the 64-byte block at offset 64 :", buddy(64, 64))
+print("a 33-byte request in a buddy system wastes", 64 - 33, "of 64 bytes")
 ```
 
-## 9. Common memory-related bugs in C programs
+> [!INTERVIEW]
+> **"How would you implement `malloc`?"** Structure the answer around the design questions. *Free-block organisation*: segregated lists by size class. *Placement*: first fit within the class, which approximates best fit. *Splitting*: split when the remainder exceeds the minimum block. *Coalescing*: immediately, in constant time, using boundary tags, with the footer omitted in allocated blocks. *Growth*: `sbrk` for small blocks, `mmap` for very large ones. Then name the trade-off, throughput against utilisation, and mention that real allocators add per-thread caches to avoid lock contention.
 
-Managing and using virtual memory is difficult and error-prone. Memory-related bugs are among the most frightening because they often manifest themselves at a distance, in both time and space, from the source of the bug. The book's catalogue:
+## 6. Garbage collection
 
-| Bug | Example | Why it is wrong |
-|---|---|---|
-| **Dereferencing bad pointers** | `scanf("%d", val);` | Passes the *value* of `val` as an address; should be `&val`. Best case a fault; worst case it overwrites valid memory |
-| **Reading uninitialized memory** | `y = Malloc(n * sizeof(int)); y[i] += ...` | Heap memory is not zeroed (`.bss` is, `malloc` is not). Use `calloc` or initialize |
-| **Allowing stack buffer overflows** | `char buf[64]; gets(buf);` | No bound on input length; use `fgets` |
-| **Assuming pointers and the objects they point to are the same size** | `int **A = Malloc(n * sizeof(int));` | Should be `sizeof(int *)`; works on 32-bit, corrupts the heap on 64-bit |
-| **Making off-by-one errors** | `for (i = 0; i <= n; i++) A[i] = ...` | Writes one element past the end |
-| **Referencing a pointer instead of the object it points to** | `*size--;` | Precedence: decrements the pointer, not the value; write `(*size)--` |
-| **Misunderstanding pointer arithmetic** | `p += sizeof(int);` for `int *p` | Arithmetic is already in units of the pointed-to type; this skips 4 ints. Use `p++` |
-| **Referencing nonexistent variables** | `int val; return &val;` | The local's stack frame is gone after return |
-| **Referencing data in free heap blocks** | `free(x); ... y[i] = x[i]++;` | Use after free: the block may have been reallocated |
-| **Introducing memory leaks** | `int *x = Malloc(n); return;` | Garbage accumulates; fatal for daemons and servers that never terminate |
+A garbage collector frees the programmer from calling `free`. It periodically finds blocks the program can no longer reach and returns them to the free list.
 
-Tools such as **Valgrind** and AddressSanitizer catch most of these at run time.
+The collector models memory as a **directed graph**. **Heap nodes** are allocated blocks. **Root nodes** are locations outside the heap that hold pointers into it: registers, stack slots, global variables. An edge from *p* to *q* means block *p* contains a pointer to somewhere in block *q*. A heap node is **reachable** if some path leads to it from a root. Anything unreachable is **garbage**: the program has no way of ever using it again.
+
+```mermaid
+flowchart LR
+    R1((root: stack var)) --> A[block A]
+    R2((root: global)) --> B[block B]
+    A --> C[block C]
+    B --> C
+    D[block D] --> E[block E]
+    E --> D
+    D --> C
+```
+
+In that picture A, B and C are live. D and E point at each other but nothing reachable points at them, so both are garbage. That cycle is exactly the case a naive reference-counting scheme cannot reclaim.
+
+### Mark and sweep
+
+The classic algorithm, introduced by McCarthy for Lisp around 1960, has two phases.
+
+- **Mark.** Starting from every root, follow pointers depth-first and set a mark bit in the header of every block reached. A block that is already marked is not visited again, which handles cycles.
+- **Sweep.** Walk the whole heap linearly. An allocated block that is unmarked is garbage and is freed. A marked block has its mark cleared, ready for the next collection.
+
+```python-run
+blocks = {                          # block -> blocks it holds pointers to
+    "A": ["C"], "B": ["C"], "C": [],
+    "D": ["E", "C"], "E": ["D"], "F": [],
+}
+roots = ["A", "B"]
+
+def mark(start, marked):
+    stack = [start]
+    while stack:
+        b = stack.pop()
+        if b not in marked:
+            marked.add(b)
+            stack.extend(blocks[b])
+
+marked = set()
+for r in roots:
+    mark(r, marked)
+garbage = sorted(set(blocks) - marked)
+print("marked (reachable):", sorted(marked))
+print("swept  (garbage)  :", garbage, "<- note the D/E cycle is collected")
+```
+
+### Collecting C conservatively
+
+Languages such as Java keep precise type information, so the collector knows exactly which words are pointers. C does not. An `int` holding 4,198,400 and a pointer holding the address `0x401000` are bit-for-bit the same. A collector for C therefore has to be **conservative**: any word whose value happens to fall inside an allocated block is *treated as* a pointer to that block. To make that test efficient, the collector maintains a search structure over the allocated blocks (for instance a balanced tree keyed by address) so it can tell whether an arbitrary value lands inside one and find that block's header.
+
+The consequence is that some garbage may be wrongly retained because an integer resembles an address. That is safe (nothing live is ever freed) but imprecise. It also means a conservative collector cannot move blocks, since it cannot be sure which words to update.
+
+## 7. A field guide to memory bugs
+
+Memory errors in C are notorious because the symptom usually appears far from the cause, in both time and code. Knowing the standard varieties makes them much easier to recognise.
+
+- **Dereferencing a bad pointer.** The textbook case is `scanf("%d", n)` with the `&` forgotten: the *value* of `n` is used as an address. If you are lucky it faults immediately; if not, it overwrites something valid.
+- **Reading uninitialised memory.** `malloc` does not zero its blocks. Code that assumes a fresh array starts at zero works until the allocator recycles a dirty block. Use `calloc` or initialise explicitly.
+- **Stack buffer overflow.** Copying input into a fixed-size local array without a length limit. Use bounded functions such as `fgets`.
+- **Assuming pointers and the objects they point to are the same size.** `malloc(n * sizeof(int))` for an array that is meant to hold `n` pointers allocates half the needed space on a 64-bit machine. The damage shows up when the allocator later reads a corrupted header or footer.
+- **Off-by-one errors.** Allocating `n` elements and then writing index `n`.
+- **Referencing a pointer instead of what it points to.** `*count--` decrements the pointer, not the count, because of operator precedence; write `(*count)--`.
+- **Misunderstanding pointer arithmetic.** `p + 1` advances by the size of the pointed-to type, not by one byte. Adding `sizeof(int)` to an `int *` skips four elements.
+- **Returning the address of a local variable.** The stack frame is reused by the next call, and the pointer now aliases someone else's data.
+- **Using freed memory.** The block may already have been handed to another part of the program.
+- **Freeing twice,** which corrupts the free list.
+- **Leaking.** Losing the last pointer to a block without freeing it. In a short program this is harmless; in a daemon that runs for months it slowly consumes the address space.
+
+```python-run
+ptr, integer = 8, 4            # sizes on x86-64 Linux
+n = 10
+print(f"on x86-64: sizeof(int) = {integer}, sizeof(void *) = {ptr}")
+print(f"array of {n} pointers needs {n * ptr} bytes; malloc(n * sizeof(int)) gives {n * integer}")
+print(f"-> writes run {n * ptr - n * integer} bytes past the block, into the next block's header")
+
+# Pointer arithmetic scales by element size.
+base = 0x1000
+print(f"int *p = {base:#x};  p + 3 = {base + 3 * integer:#x};  p + sizeof(int) = {base + integer * integer:#x}")
+```
 
 > [!INTERVIEW]
-> **"How does `malloc` work?"** It manages a heap obtained from the kernel (`brk`/`sbrk` for small requests, `mmap` for large ones). Each block has a header recording size and allocated bit; free blocks are tracked in segregated free lists by size class. `malloc` rounds the request up for alignment and overhead, finds a fit (first-fit within a size class approximates best fit), splits off any large remainder, and returns the payload pointer. `free` reads the header just before the pointer (which is why `free` needs no size argument), marks the block free and coalesces with free neighbours using boundary tags. Real allocators add per-thread caches (tcmalloc, jemalloc) to avoid lock contention.
+> **"What is the difference between a memory leak and a dangling pointer?"** A leak is memory that is still allocated but no longer reachable, so it can never be freed; the program's footprint grows. A dangling pointer is the reverse: a pointer that is still held to memory that has already been freed or has gone out of scope; using it reads or corrupts whatever now occupies that space. Tools such as AddressSanitizer and Valgrind detect both, and ownership disciplines such as RAII in C++ or the borrow checker in Rust prevent them by construction.
 
-> [!INTERVIEW]
-> **"Internal vs. external fragmentation?"** Internal: wasted space *inside* allocated blocks (headers, padding, rounding to size classes). External: enough free memory in total but scattered in pieces too small for the request. Coalescing and good placement policies fight external fragmentation; compaction is impossible in C because allocated blocks cannot move.
+## 8. Pitfalls in allocator thinking
 
-> [!INTERVIEW]
-> **"Mark-and-sweep vs. reference counting?"** Mark-and-sweep traces from the roots, reclaims cycles, but has pause times proportional to the live heap (mark) and total heap (sweep). Reference counting frees objects immediately when the count hits zero and has predictable latency, but costs an update on every pointer write and cannot reclaim cycles without an auxiliary cycle collector (CPython has both). Generational and copying collectors exploit the fact that most objects die young.
+- **Expecting `free` to shrink the process.** Freed blocks usually return to the allocator's lists, not to the operating system.
+- **Assuming equal total free space means success.** External fragmentation can defeat a request even when plenty of bytes are free.
+- **Forgetting overhead.** A million 1-byte allocations may consume 16 to 32 MB once headers, alignment and minimum sizes are counted.
+- **Using the old pointer after `realloc`.** The block may have moved.
+- **Believing garbage collection ends leaks.** A collector frees only *unreachable* objects. A forgotten reference in a long-lived cache or listener list keeps its whole subgraph alive.
 
-## 10. Summary
+## Summary
 
-- The heap is a demand-zero area grown with `brk`/`sbrk`; explicit allocators (`malloc`/`free`) vs. implicit ones (garbage collectors).
-- Goals: high throughput and high peak utilization $U_k = \max_{i\le k} P_i / H_k$; the enemy is fragmentation (internal and external).
-- Implicit free lists: headers with size + allocated bit; first/next/best fit; splitting; coalescing in O(1) with boundary-tag footers (four cases).
-- Explicit free lists store `pred`/`succ` pointers inside free blocks; segregated lists (size classes) give near-best-fit behavior quickly; buddy systems use powers of two.
-- Garbage collectors reclaim blocks unreachable from the roots; Mark&Sweep; conservative collection for C.
-- Know the classic C memory bugs: bad pointers, uninitialized reads, overflows, wrong `sizeof`, off-by-one, use-after-free, leaks.
+- The heap is managed as a set of allocated and free blocks. Explicit allocators rely on the program to free; garbage collectors find unreachable blocks themselves.
+- Allocators balance throughput against utilisation and fight internal fragmentation (waste within blocks) and external fragmentation (free space split too finely).
+- An implicit list stores size and an allocated bit in each block's header and scans all blocks. Placement may be first, next or best fit; chosen blocks are split; freed blocks are coalesced, in constant time when boundary tags are used.
+- Explicit lists thread pointers through free blocks so that only free blocks are searched. Segregated lists keep one list per size class, giving fast allocation with near best-fit utilisation; buddy systems are a power-of-two special case.
+- Mark-and-sweep collection marks everything reachable from the roots and frees the rest. Collectors for C must be conservative because integers and pointers are indistinguishable.
+- Most C memory bugs are one of a dozen recurring patterns: bad or uninitialised pointers, overruns, wrong sizes, dangling references, double frees and leaks.
 
-## Check yourself
+## Glossary
+
+- **Heap**: the region of a process's memory from which storage is requested while the program runs.
+- **Allocator**: the code that hands out and takes back pieces of the heap.
+- **Block**: one continuous piece of the heap, either in use or free.
+- **Payload**: the part of a block the program actually asked for.
+- **Throughput**: the number of allocation requests completed per second.
+- **Utilisation**: how much of the heap holds useful data as opposed to overhead and gaps.
+- **Internal fragmentation**: space wasted inside allocated blocks, for example by padding.
+- **External fragmentation**: free space split into pieces too small to satisfy a request.
+- **Header / footer**: small records at the start / end of a block holding its size and whether it is in use.
+- **Free list**: the allocator's record of which blocks are available.
+- **First fit / best fit**: choosing the first free block that is big enough / the smallest one that is big enough.
+- **Splitting / coalescing**: dividing a free block that is larger than needed / merging neighbouring free blocks.
+- **Garbage collector**: a system that finds and frees memory the program can no longer reach.
+- **Memory leak**: memory that is never freed although the program no longer uses it.
+- **Dangling pointer**: a pointer that still refers to memory that has already been freed.
 
 ```quiz
 [
-  {"q": "In the implicit-list block format, why can the low 3 bits of the header's size field be used for flags?", "options": ["Sizes are stored in words", "Block sizes are multiples of 8, so those bits are always zero", "Headers are 64 bits", "They are unused by the CPU"], "answer": 1,
-   "explain": "Double-word alignment makes every block size a multiple of 8; the low bit stores the allocated flag."},
-  {"q": "Using the book's allocator (8 bytes overhead, 8-byte alignment, minimum block 16), what block size does malloc(13) need?", "options": ["16", "21", "24", "32"], "answer": 2,
-   "explain": "13 + 8 = 21, rounded up to a multiple of 8 gives 24."},
-  {"q": "There are 32 free bytes in total but malloc(24) fails because they are in two non-adjacent 16-byte blocks. This is:", "options": ["Internal fragmentation", "External fragmentation", "A memory leak", "Thrashing"], "answer": 1,
-   "explain": "Enough aggregate free memory exists, but no single free block is large enough."},
-  {"q": "What problem do boundary tags (footers) solve?", "options": ["Finding the next block", "Coalescing with the previous block in constant time", "Aligning payloads", "Detecting leaks"], "answer": 1,
-   "explain": "The footer of the previous block sits just before the current header, giving its size and status immediately."},
-  {"q": "With an explicit free list in LIFO order, how long does free take (with boundary tags)?", "options": ["O(1)", "O(number of free blocks)", "O(heap size)", "O(log n)"], "answer": 0,
-   "explain": "The block is coalesced in constant time and inserted at the head of the list."},
-  {"q": "Why does a segregated-fits allocator approximate best fit?", "options": ["It sorts all blocks", "A first-fit search within the right size class only sees blocks close to the requested size", "It never splits", "It uses a tree"], "answer": 1,
-   "explain": "Size classes restrict the search to blocks of roughly the right size."},
-  {"q": "In the reachability graph, which nodes does a garbage collector reclaim?", "options": ["Nodes with no outgoing edges", "Heap nodes not reachable from any root", "Root nodes", "Nodes with a reference count of one"], "answer": 1,
-   "explain": "Garbage = heap blocks with no path from a root (registers, stack, globals)."},
-  {"q": "What is wrong with 'int **A = malloc(n * sizeof(int));' on a 64-bit machine?", "options": ["Nothing", "It allocates n*4 bytes but A needs n pointers of 8 bytes each: writes overflow the block", "malloc cannot allocate pointers", "It leaks memory"], "answer": 1,
-   "explain": "sizeof(int) is 4 but sizeof(int *) is 8; half the needed space is allocated."}
+  {"q": "A heap has free blocks of 8, 8 and 8 bytes separated by allocated blocks. A request for 16 bytes fails. What is this called?",
+   "options": ["Internal fragmentation", "External fragmentation", "A memory leak", "Thrashing"],
+   "answer": 1, "explain": "The total free space is sufficient, but it is broken into pieces none of which is large enough. That is external fragmentation."},
+  {"q": "Why can an allocator store an allocated flag in the low bit of the size field of a block header?",
+   "options": ["Sizes are always odd", "Alignment makes every block size a multiple of 8 or 16, so the low bits are always zero", "The size is stored in the footer instead", "Headers are 128 bits wide"],
+   "answer": 1, "explain": "Because of alignment the low-order bits of any valid size carry no information, so they can hold status flags and be masked off when reading the size."},
+  {"q": "What problem do boundary tags (footers) solve?",
+   "options": ["Finding the next block", "Finding the size and status of the previous block in constant time so it can be coalesced", "Detecting double frees", "Aligning payloads"],
+   "answer": 1, "explain": "The footer of the previous block lies immediately before the current header. Without it, locating the previous block would require scanning from the start of the heap."},
+  {"q": "A block is freed while both its neighbours are free. With immediate coalescing, how many free blocks result from these three?",
+   "options": ["Three", "Two", "One", "Zero"],
+   "answer": 2, "explain": "This is the fourth coalescing case: the previous, current and next blocks merge into a single free block whose size is the sum of the three."},
+  {"q": "Compared with an implicit free list, what does an explicit free list improve?",
+   "options": ["Allocation time depends on the number of free blocks instead of all blocks", "It eliminates internal fragmentation", "It removes the need for headers", "It makes blocks movable"],
+   "answer": 0, "explain": "Linking only the free blocks means a search never visits allocated ones. The cost is a larger minimum block to hold the two pointers."},
+  {"q": "Why does a segregated-fits allocator achieve utilisation close to best fit?",
+   "options": ["It compacts the heap", "A first-fit search limited to the right size class finds a block close in size to the request", "It never splits blocks", "It uses a garbage collector"],
+   "answer": 1, "explain": "Each list contains only blocks in a narrow size range, so the first block found there is already a near-best fit across the heap."},
+  {"q": "In mark and sweep, which blocks are freed during the sweep phase?",
+   "options": ["Marked blocks", "Allocated blocks that are not marked", "All blocks older than the last collection", "Blocks referenced only by registers"],
+   "answer": 1, "explain": "Marking sets a bit on everything reachable from the roots. The sweep frees allocated blocks without the bit and clears the bit on the rest."},
+  {"q": "Why must a garbage collector for C be conservative?",
+   "options": ["C programs do not use the heap", "It cannot distinguish an integer from a pointer, so any value that looks like a heap address must be treated as a reference", "C forbids recursion in collectors", "The heap is too small"],
+   "answer": 1, "explain": "Without type information, a word that happens to point into a block might be a pointer. Treating it as one is safe but may retain some garbage."}
 ]
 ```
 
-> **Source:** CS:APP 3e, §9.9–9.11 (Dynamic memory allocation: malloc and free, requirements and goals, fragmentation, implicit free lists, boundary tags, explicit and segregated free lists; Garbage collection; Common memory-related bugs in C programs).
+> **Source:** CS:APP 3e, §9.9–9.11

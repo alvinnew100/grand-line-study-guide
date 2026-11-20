@@ -1,365 +1,378 @@
 # Three ways to build concurrent servers
 
-Logical control flows are **concurrent** if they overlap in time. This general phenomenon, concurrency, shows up at many levels of a computer system: hardware exception handlers, processes and Linux signal handlers are all familiar examples. So far we have treated concurrency mainly as a mechanism the operating system kernel uses to run multiple application programs. But concurrency is not limited to the kernel: it plays an important role in **application programs** too. Application-level concurrency is useful for:
+> **Before this lesson:** You need sockets, `accept` and the echo server from [Sockets, clients, servers and HTTP](#/lesson/csapp/sockets-http); `fork`, `waitpid` and zombies from [Processes: fork, exec, wait](#/lesson/csapp/processes); and signal handlers from [Signals and nonlocal jumps](#/lesson/csapp/signals).
 
-- **Accessing slow I/O devices.** When an application is waiting for data to arrive from a slow device such as a disk, the kernel keeps the CPU busy by running other processes. Individual applications can exploit concurrency in a similar way, by alternating useful work with I/O requests.
-- **Interacting with humans.** People expect to perform multiple tasks at the same time (resize a window while a document prints). Each time the user requests some action, a separate concurrent logical flow is created to perform it.
-- **Reducing latency by deferring work.** A dynamic storage allocator might defer coalescing to a concurrent "coalescing" flow that runs at a lower priority, soaking up spare CPU cycles.
-- **Servicing multiple network clients.** The iterative servers of the previous module are unrealistic, because they can only service one client at a time: a single slow client can deny service to every other client. A real server creates a separate logical flow for each client.
-- **Computing in parallel on multi-core machines.** Applications partitioned into concurrent flows often run faster on multi-core machines than on uniprocessor machines, because the flows execute in parallel rather than being interleaved.
+## In plain words
 
-Applications that use application-level concurrency are known as **concurrent programs**. Modern operating systems provide three basic approaches for building them:
+A **server** is a program that waits for requests from other programs, called **clients**, and answers them. A server that deals with one client at a time makes everyone else wait, like a shop with a single till. **Concurrency** means having several tasks in progress during the same period. There are three classic ways to arrange it, and a restaurant illustrates all three. You can open a separate small restaurant for each group of guests: completely isolated and expensive (**processes**). You can have one very quick waiter who goes round all the tables and never stands waiting at any one of them (**I/O multiplexing**, also called an event loop). Or you can employ several waiters who share one kitchen and must take care not to collide (**threads**).
 
-| Approach | Flows are... | Scheduled by | Address space |
-|---|---|---|---|
-| **Processes** | Processes | The kernel | Separate per flow; flows communicate via explicit **interprocess communication (IPC)** |
-| **I/O multiplexing** | State machines inside one process | The application itself, explicitly | One, shared by all flows |
-| **Threads** | Threads inside one process | The kernel | One, shared by all flows |
+Why this matters at work: every server you will build or operate uses one of these models or a mixture, and the choice determines how it fails, how it scales, and what kinds of bugs it suffers. Well-known systems are built in different ways for good reasons. "Process or thread?" and "how does a single-threaded server handle thousands of clients?" are standard interview questions.
 
-Threads can be thought of as a hybrid of the other two: scheduled by the kernel like process flows and sharing the same virtual address space like I/O multiplexing flows. We use a concurrent echo server as the running example.
+## Why look closer
 
-## 1. Concurrent programming with processes
+A server that handles one client from start to finish before looking at the next is easy to write and useless in production. Picture a chat backend where one user on a train with patchy signal takes forty seconds to send a message: with a one-at-a-time design, every other user stares at a spinner for forty seconds. The cure is **concurrency**: several logical flows of control whose lifetimes overlap. The operating system gives an application programmer three quite different tools for building such flows, and each has a distinct personality. This lesson builds the same tiny service three times (once per tool) so that the trade-offs are concrete rather than abstract.
 
-The simplest way to build a concurrent program is with processes, using familiar functions such as `fork`, `exec` and `waitpid`. A natural approach for a concurrent server is to **accept client connection requests in the parent and then create a new child process to service each new client**.
+## 1. Why one flow is not enough
 
-Suppose we have two clients and a server that is listening for connection requests on a listening descriptor (say, 3). The server accepts a connection request from client 1 and returns a connected descriptor (say, 4). After accepting the connection request, the server forks a child, which gets a complete copy of the server's descriptor table. **The child closes its copy of listening descriptor 3, and the parent closes its copy of connected descriptor 4**, since they are no longer needed. Since the connected descriptors in the parent and child each point to the same file table entry, it is crucial for the parent to close its copy of the connected descriptor: otherwise the file table entry for connected descriptor 4 will never be released, and the resulting **memory leak** will eventually consume the available memory and crash the system.
+Call a server **iterative** if it loops: accept a connection, serve it completely, close it, repeat. Its weakness is that a single slow or silent client blocks the whole queue. Application-level concurrency fixes that, and it is useful well beyond servers:
 
-```mermaid
-graph LR
-  C1[Client 1 clientfd] <-->|data transfers| CH1["Child 1: connfd(4)"]
-  C2[Client 2 clientfd] <-->|data transfers| CH2["Child 2: connfd(5)"]
-  C3[New client] -.->|connection request| P["Server parent: listenfd(3)"]
+- **Waiting on slow devices.** While one flow waits for a disk or a network peer, another can use the CPU.
+- **Staying responsive to people.** A user interface must react to a click even while a long computation runs.
+- **Deferring work.** A memory allocator or a logger can batch up chores and run them in a background flow.
+- **Serving many clients.** The subject of this lesson.
+- **Using several cores.** Flows that truly run at the same instant on different cores are **parallel**, a special case of concurrent.
+
+```python-run
+# One slow client in front of three fast ones: completion times, iterative vs concurrent.
+service = {"slow": 40.0, "a": 0.2, "b": 0.3, "c": 0.1}    # seconds of attention each needs
+
+clock, done = 0.0, {}
+for name, need in service.items():            # iterative: strictly one after another
+    clock += need
+    done[name] = clock
+print("iterative :", {k: round(v, 1) for k, v in done.items()})
+
+# concurrent (idealised): every client progresses independently
+print("concurrent:", service)
+print("client 'a' waits", round(done["a"] / service["a"]), "times longer than necessary")
 ```
 
-The server's main loop:
+The three building blocks, in the order we will meet them:
+
+| Approach | Who schedules the flows | Address space | Typical cost |
+|---|---|---|---|
+| **Processes** | kernel | separate per flow | highest |
+| **I/O multiplexing** | your own code | one, shared | lowest |
+| **Threads** | kernel | one, shared | in between |
+
+## 2. Version one: a process per client
+
+The oldest recipe uses nothing but `fork`. The parent process sits in a loop calling `accept`. Each time a connection arrives, it forks a child, and the child does all the talking with that client.
 
 ```c
-/* SIGCHLD handler: reap every zombie that is available, without blocking */
-while (waitpid(-1, 0, WNOHANG) > 0)
-    ;
-
-/* main server loop */
-while (1) {
-    connfd = Accept(listenfd, (SA *) &clientaddr, &clientlen);
-    if (Fork() == 0) {          /* child */
-        Close(listenfd);        /*   does not need the listening socket */
-        echo(connfd);           /*   services this client until EOF */
-        Close(connfd);
+int lfd = make_listener(port);
+signal(SIGCHLD, reap_children);          /* see below */
+for (;;) {
+    int cfd = accept(lfd, NULL, NULL);
+    if (fork() == 0) {                   /* child */
+        close(lfd);                      /* child never accepts */
+        serve(cfd);
+        close(cfd);
         exit(0);
     }
-    Close(connfd);              /* parent: MUST close its copy of the connected socket */
+    close(cfd);                          /* parent: MUST drop its copy */
 }
 ```
 
-Points worth noting:
+Three housekeeping rules turn that sketch into a correct server.
 
-- Servers typically run for a long time, so we must include a **`SIGCHLD` handler that reaps zombie children**. Since `SIGCHLD` signals are blocked while the handler is executing, and since Linux signals are not queued, the handler must be prepared to reap **multiple** zombie children (the `while` loop).
-- The parent and the child must close their respective copies of `connfd`. This is especially important for the parent.
-- Because of the reference count in the socket's file table entry, the connection to the client will not be terminated until **both** the parent's and child's copies of `connfd` are closed.
+**Reap the children.** Each finished child lingers as a zombie until the parent waits for it. The usual solution is a `SIGCHLD` handler. Because signals of the same type do not queue, one delivery may stand for several dead children, so the handler must loop:
 
-### Pros and cons of processes
+```c
+void reap_children(int sig) {
+    while (waitpid(-1, NULL, WNOHANG) > 0)
+        ;
+}
+```
 
-Processes have a clean model for sharing state information between parents and children: **file tables are shared and user address spaces are not**. Having separate address spaces for processes is both an advantage and a disadvantage. It is impossible for one process to accidentally overwrite the virtual memory of another process, which eliminates a lot of confusing failures: an obvious advantage.
+**Close the descriptor on both sides.** After `fork`, parent and child each hold a descriptor referring to the same open connection, and the kernel's entry for that connection has a reference count of two. The connection is only torn down when the count reaches zero. If the parent forgets `close(cfd)`, the client never sees end-of-file even after the child exits, and the parent leaks one descriptor per client until `accept` starts failing. Symmetrically, the child should close the listening descriptor it inherited.
 
-On the other hand, separate address spaces make it more difficult for processes to **share state information**. To share information, they must use explicit IPC mechanisms (pipes, FIFOs, System V shared memory and semaphores, sockets). Another disadvantage of process-based designs is that they tend to be **slower**, because the overhead for process control and IPC is high.
+**Remember what is and is not shared.** The child gets a *copy* of the parent's memory. File tables are shared; variables are not.
 
-## 2. Concurrent programming with I/O multiplexing
+```mermaid
+flowchart LR
+    C1[Client 1] --- K1[child process 1]
+    C2[Client 2] --- K2[child process 2]
+    New[New client] -. connect .-> P[parent process<br/>blocked in accept]
+    P -- fork --> K1
+    P -- fork --> K2
+```
 
-Suppose you are asked to write an echo server that can also respond to interactive commands that the user types to standard input. The server must respond to two independent I/O events: (1) a network client making a connection request, and (2) a user typing a command line at the keyboard. Which event do we wait for first? Neither option is ideal. If we are waiting for a connection request in `accept`, then we cannot respond to input commands; if we are waiting for an input command in `read`, then we cannot respond to any connection requests.
+### Verdict on processes
 
-One solution to this dilemma is a technique called **I/O multiplexing**. The basic idea is to use the **`select`** function to ask the kernel to suspend the process, returning control to the application only after one or more I/O events have occurred.
+- **Strength: isolation.** A wild pointer in one child cannot corrupt another child's data. A crash kills one client's session and nothing else. For security-sensitive services this is a real feature, which is why some browsers and databases still use a process per tab or per connection.
+- **Weakness: sharing is awkward.** If the flows need a common cache or a hit counter, they must use explicit inter-process communication: pipes, shared memory segments, message queues, sockets. All of it is clumsier than a plain variable.
+- **Weakness: cost.** Creating a process and switching between processes involves the heaviest bookkeeping of the three models.
+
+## 3. Version two: I/O multiplexing
+
+Suppose we want the server to also react to an operator typing commands on standard input. Now there are two sources of events, a new connection and a typed line, and a blocking call on one of them makes us deaf to the other. **I/O multiplexing** solves this inside a single process: ask the kernel to put us to sleep until *any* of a set of descriptors is ready, then deal with whichever woke us.
+
+The classic system call is `select`:
 
 ```c
 #include <sys/select.h>
-int select(int n, fd_set *fdset, NULL, NULL, NULL);   /* returns nonzero count of ready descriptors, -1 on error */
+int select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, struct timeval *timeout);
 
-FD_ZERO(fd_set *fdset);            /* clear all bits in fdset */
-FD_CLR(int fd, fd_set *fdset);     /* clear bit fd in fdset */
-FD_SET(int fd, fd_set *fdset);     /* turn on bit fd in fdset */
-FD_ISSET(int fd, fd_set *fdset);   /* is bit fd in fdset on? */
+FD_ZERO(&set);         /* empty the set          */
+FD_SET(fd, &set);      /* add fd                 */
+FD_CLR(fd, &set);      /* remove fd              */
+FD_ISSET(fd, &set);    /* is fd a member?        */
 ```
 
-`select` manipulates sets of type `fd_set`, known as **descriptor sets**. Logically, we think of a descriptor set as a bit vector of size $n$: $b_{n-1}, \dots, b_1, b_0$. Each bit $b_k$ corresponds to descriptor $k$. Descriptor $k$ is a member of the descriptor set if and only if $b_k = 1$.
+An `fd_set` is a bit vector with one bit per descriptor number. You hand `select` the set you are interested in (the *read set*, if you care about input) and the number of descriptors to examine. It blocks until at least one of them can be read without blocking, and then **overwrites your set** with the subset that is ready. Two consequences:
 
-For our purposes, `select` takes two inputs: a descriptor set (`fdset`) called the **read set**, and the cardinality (`n`) of the read set (actually the maximum cardinality of any descriptor set). The `select` function **blocks until at least one descriptor in the read set is ready for reading**. A descriptor $k$ is ready for reading if and only if a request to read 1 byte from that descriptor would not block. As a side effect, `select` **modifies** the `fd_set` pointed to by argument `fdset` to indicate a subset of the read set called the **ready set**, consisting of the descriptors in the read set that are ready for reading. The value returned by the function indicates the cardinality of the ready set. Note that because of the side effect, we must update the read set every time `select` is called.
+- The return value tells you how many are ready; `FD_ISSET` tells you which.
+- Because the argument is destroyed, you must rebuild it or copy a master set before every call. Forgetting this is the classic `select` bug.
 
-A server that waits for both a connection request and a keyboard command:
+A descriptor counts as readable when a `read` of one byte would return immediately. That includes end-of-file, and for a listening socket it means a connection is waiting for `accept`.
 
-```c
-FD_ZERO(&read_set);                    /* clear read set */
-FD_SET(STDIN_FILENO, &read_set);       /* add stdin to read set */
-FD_SET(listenfd, &read_set);           /* add listenfd to read set */
+### From multiplexing to an event-driven server
 
-while (1) {
-    ready_set = read_set;
-    Select(listenfd + 1, &ready_set, NULL, NULL, NULL);
-    if (FD_ISSET(STDIN_FILENO, &ready_set))
-        command();                     /* read command line from stdin */
-    if (FD_ISSET(listenfd, &ready_set)) {
-        connfd = Accept(listenfd, (SA *) &clientaddr, &clientlen);
-        echo(connfd);                  /* echo client input until EOF */
-        Close(connfd);
-    }
-}
-```
-
-Instead of waiting for a connection request by calling the `accept` function, we call the `select` function, which blocks until either the listening descriptor or standard input is ready for reading. This is a good first step, but there is still a problem: once the server connects to a client, it continues echoing input lines until the client closes its end of the connection. If you type a command to standard input, you will not get a response until the server is finished with the client. A better approach would be to multiplex at a **finer granularity**, echoing (at most) one text line each time through the server loop.
-
-### A concurrent event-driven server based on I/O multiplexing
-
-I/O multiplexing can be used as the basis for concurrent **event-driven** programs, where flows make progress as a result of certain events. The general idea is to model logical flows as **state machines**. Informally, a state machine is a collection of *states*, *input events* and *transitions* that map states and input events to states. Each transition maps an (input state, input event) pair to an output state. A *self-loop* is a transition between the same input and output state.
-
-For each new client $k$, a concurrent server based on I/O multiplexing creates a new state machine $s_k$ and associates it with connected descriptor $d_k$. Each state machine $s_k$ has one state ("waiting for descriptor $d_k$ to be ready for reading"), one input event ("descriptor $d_k$ is ready for reading"), and one transition ("read a text line from descriptor $d_k$").
+With `select` as the engine, a whole server can be written as an **event loop** driving a collection of **state machines**. Each connected client is one state machine. It has a state ("waiting for the next chunk from descriptor 7"), reacts to an input event ("descriptor 7 became readable"), and makes a transition (read what is available, echo it, go back to waiting).
 
 ```mermaid
 stateDiagram-v2
-  [*] --> Waiting: client k connects
-  Waiting --> Waiting: descriptor ready, read one text line and echo it
-  Waiting --> [*]: EOF, close descriptor and remove from pool
+    [*] --> Waiting: accept returns a new descriptor
+    Waiting --> Waiting: descriptor readable, data echoed
+    Waiting --> [*]: read returns 0, descriptor closed
 ```
 
-The server uses I/O multiplexing, courtesy of the `select` function, to detect the occurrence of input events. As each connected descriptor becomes ready for reading, the server executes the transition for the corresponding state machine: in this case, reading and echoing a text line from the descriptor.
+The server keeps a pool of active descriptors plus whatever per-client context each state machine needs (a partial line buffer, a byte count, an authenticated user name). The loop is always the same shape:
 
-The book's implementation maintains the set of active clients in a **`pool`** structure: the read set and ready set, the maximum descriptor, an array of connected descriptors and their Rio read buffers. The main loop calls `select`; if the listening descriptor is ready, it accepts the connection and calls `add_client` (which finds an empty slot, adds the descriptor to the pool and to the read set); then `check_clients` echoes **one text line** from each ready connected descriptor, and on EOF closes the descriptor and removes it from the pool.
+1. Copy the master set and call `select`.
+2. If the listening descriptor is ready, `accept` and add the new client to the pool.
+3. For every client descriptor that is ready, perform **one bounded step** of work and return to the loop.
+
+The demo below is a complete event-driven echo service in miniature. It uses connected socket pairs instead of a real network so that it can run anywhere, and falls back to a note if the sandbox has no socket support.
 
 ```python-run
-# An event-driven echo "server" with the selectors module: one thread, many clients, explicit state per client.
 import selectors, socket
-try:
+
+def demo():
     sel = selectors.DefaultSelector()
-    listenfd = socket.socket(); listenfd.bind(("127.0.0.1", 0)); listenfd.listen(); listenfd.setblocking(False)
-    sel.register(listenfd, selectors.EVENT_READ, data=None)
-    port = listenfd.getsockname()[1]
+    clients = {}                                   # server-side socket -> per-client state
+    peers = []                                     # the "remote" ends
+    for name in ("ann", "bo", "cy"):
+        near, far = socket.socketpair()
+        near.setblocking(False)
+        sel.register(near, selectors.EVENT_READ)
+        clients[near] = {"name": name, "bytes": 0}
+        peers.append(far)
 
-    clients = [socket.create_connection(("127.0.0.1", port)) for _ in range(3)]
-    for i, c in enumerate(clients): c.sendall(f"hello from client {i}\n".encode())
-    clients[1].close()                                   # client 1 hangs up after its line
+    peers[2].sendall(b"third speaks first\n")       # arrival order is NOT connection order
+    peers[0].sendall(b"hello\n")
+    peers[1].close()                                # bo hangs up without a word
 
-    served = lines = 0
-    while lines < 3 or served < 3:
-        for key, _ in sel.select(timeout=1):
-            if key.data is None:                         # event: listening descriptor ready -> accept
-                connfd, addr = key.fileobj.accept(); connfd.setblocking(False)
-                sel.register(connfd, selectors.EVENT_READ, data={"addr": addr, "bytes": 0}); served += 1
-            else:                                        # event: connected descriptor ready -> one transition
-                data = key.fileobj.recv(1024)
-                if data:
-                    key.data["bytes"] += len(data); lines += 1
-                    key.fileobj.sendall(data.upper())
-                else:                                    # EOF
-                    sel.unregister(key.fileobj); key.fileobj.close()
-    print("served", served, "clients in one thread;", "client 0 got:", clients[0].recv(100))
-    for c in (clients[0], clients[2]): c.close()
-    listenfd.close()
-except Exception as e:
-    print("sockets are not available in this sandbox:", e)
+    for _ in range(2):                              # two turns of the event loop
+        for key, _mask in sel.select(timeout=0.2):
+            sock, st = key.fileobj, clients[key.fileobj]
+            data = sock.recv(4096)                  # will not block: select said it is ready
+            if data:
+                st["bytes"] += len(data)
+                sock.sendall(data.upper())
+                print(f"{st['name']}: echoed {len(data)} bytes (running total {st['bytes']})")
+            else:
+                print(f"{st['name']}: EOF, removing from the pool")
+                sel.unregister(sock); sock.close()
+    print("replies:", peers[0].recv(100), peers[2].recv(100))
+
+try:
+    demo()
+except Exception as exc:
+    print("sockets are not available in this sandbox:", type(exc).__name__)
+    print("expected behaviour: cy and ann are echoed in arrival order, bo is dropped on EOF")
 ```
 
-### Pros and cons of I/O multiplexing
+### Verdict on event-driven designs
 
-**Advantages.** Event-driven designs give programmers **more control over the behavior** of their programs than process-based designs; for example, we can imagine writing an event-driven concurrent server that gives preferred service to some clients. An event-driven server runs in the context of a **single process**, so every logical flow has access to the entire address space of the process: sharing data between flows is easy. Because the program is a single process, you can debug it as you would any sequential program, with a familiar tool such as GDB. And event-driven designs are often **significantly more efficient** than process-based designs because they do not require a process context switch to schedule a new flow.
-
-**Disadvantages.** **Coding complexity**: our event-driven concurrent echo server requires about three times more code than the process-based server, and the complexity increases as the granularity of the concurrency decreases (granularity = the number of instructions each logical flow executes per time slice). Our server is also **vulnerable to a malicious client that sends only a partial text line and then halts**: because the server reads a whole line per event, it would block. Modifying an event-driven server to handle partial text lines is a nontrivial task. Finally, event-driven designs **cannot fully utilize multi-core processors**.
+- **Strength: control.** Your code decides which client gets attention next, so policies such as "premium users first" are a few lines.
+- **Strength: sharing is trivial.** Everything lives in one address space and only one flow runs at a time, so there are no data races between handlers. You can also debug it with a normal single-threaded debugger.
+- **Strength: efficiency.** No process or thread switch is needed to move between clients, which is why high-performance systems such as nginx, Node.js and Redis are built this way.
+- **Weakness: code complexity.** You must chop every task into non-blocking steps and store the in-between state by hand. The finer the granularity, the worse it gets.
+- **Weakness: one stall stops everything.** If a handler waits for a full line from a client who sends half a line and then pauses, every other client is frozen. Reading a partial request without blocking requires real care, and a malicious client can exploit any mistake.
+- **Weakness: one core.** A single event loop cannot use a second processor. Real systems run one loop per core.
 
 > [!NOTE]
-> Modern high-performance servers (nginx, Node.js, Redis) and frameworks (Python's asyncio) are event-driven, using scalable successors of `select` such as `epoll` (Linux) or `kqueue` (BSD/macOS). Their advantage in the face of the per-flow overhead of processes and threads is why this design matters.
+> `select` scans a fixed-size bit vector on every call, which scales poorly beyond roughly a thousand descriptors. Production systems use `epoll` on Linux or `kqueue` on BSD and macOS, which report only the ready descriptors. The programming model (event loop plus state machines) is unchanged.
 
-## 3. Concurrent programming with threads
+## 4. Version three: threads
 
-A **thread** is a logical flow that runs in the context of a process. Threads are scheduled automatically by the kernel. Each thread has its own **thread context**, including a unique integer **thread ID (TID)**, **stack**, **stack pointer**, **program counter**, **general-purpose registers** and **condition codes**. All threads running in a process **share the entire virtual address space** of that process: its code, data, heap, shared libraries and open files.
+A **thread** is a logical flow that runs *inside* a process. The kernel schedules threads automatically, as it does processes, yet all threads of a process live in one virtual address space, as the state machines of an event loop do. It is a hybrid of the two previous models.
 
-### Thread execution model
+What each thread owns privately is small:
 
-Each process begins life as a single thread called the **main thread**. At some point, the main thread creates a **peer thread**, and from this point in time the two threads run concurrently. Eventually, control passes to the peer thread via a context switch, either because the main thread executes a slow system call such as `read` or `sleep` or because it is interrupted by the system's interval timer.
+- a thread ID,
+- a stack and stack pointer,
+- a program counter,
+- the general-purpose registers and condition codes.
 
-Thread execution differs from processes in some important ways. Because a thread context is **much smaller** than a process context, a thread context switch is **faster** than a process context switch. Another difference is that threads, unlike processes, are **not organized in a rigid parent-child hierarchy**. The threads associated with a process form a **pool of peers**, independent of which threads were created by which other threads. The main thread is distinguished from other threads only in the sense that it is always the first thread to run in the process. The main impact of this notion of a pool of peers is that a thread can kill any of its peers or wait for any of its peers to terminate. Further, each peer can read and write the same shared data.
+Everything else, including code, heap, global variables, shared libraries and open files, belongs to the process and is visible to every thread in it. Because a thread context is so much smaller than a process context, switching between threads is cheaper.
 
-### Posix threads
+Threads also differ from processes socially. Processes form a strict parent-child tree; threads form a **pool of peers**. The thread that begins executing `main` is called the main thread, but it has no special authority: any thread can wait for, or terminate, any other.
 
-**Posix threads (Pthreads)** is a standard interface for manipulating threads from C programs, adopted in 1995 and available on all Linux systems. It defines about 60 functions.
+### The essential Pthreads calls
 
 ```c
-#include "csapp.h"
-void *thread(void *vargp);
+#include <pthread.h>
+int   pthread_create(pthread_t *tid, const pthread_attr_t *attr, void *(*fn)(void *), void *arg);
+pthread_t pthread_self(void);
+void  pthread_exit(void *retval);
+int   pthread_join(pthread_t tid, void **retval);
+int   pthread_detach(pthread_t tid);
+int   pthread_cancel(pthread_t tid);
+int   pthread_once(pthread_once_t *once, void (*init)(void));
+```
 
-int main() {
+- **Creating.** `pthread_create` starts a new thread running `fn(arg)`. The routine takes one `void *` and returns one `void *`; to pass more, bundle the values in a struct.
+- **Ending.** A thread ends when its routine returns, when it calls `pthread_exit`, when a peer cancels it, or when *any* thread calls `exit`, which ends the entire process. If the main thread calls `pthread_exit` instead, the process lives on until the remaining threads finish.
+- **Reaping.** `pthread_join` blocks until the named thread ends and collects its return value. Unlike `wait`, it cannot wait for "whichever finishes first".
+- **Detaching.** A thread is either **joinable** or **detached**. A joinable thread holds on to its stack and bookkeeping until somebody joins it; a detached thread releases them by itself the moment it ends. A server that never joins its workers must detach them, typically with `pthread_detach(pthread_self())` as the worker's first line, or it leaks memory per connection.
+- **One-time setup.** `pthread_once` guarantees an initialisation routine runs exactly once however many threads race to call it.
+
+### A thread-per-connection server, and its famous bug
+
+```c
+for (;;) {
+    int *slot = malloc(sizeof *slot);          /* a private home for this descriptor */
+    *slot = accept(lfd, NULL, NULL);
     pthread_t tid;
-    Pthread_create(&tid, NULL, thread, NULL);
-    Pthread_join(tid, NULL);
-    exit(0);
+    pthread_create(&tid, NULL, worker, slot);
 }
 
-void *thread(void *vargp) {    /* thread routine */
-    printf("Hello, world!\n");
+void *worker(void *arg) {
+    int cfd = *(int *)arg;
+    free(arg);
+    pthread_detach(pthread_self());
+    serve(cfd);
+    close(cfd);                                /* shared table: closing here is enough */
     return NULL;
 }
 ```
 
-The code and local data for a thread are encapsulated in a **thread routine**: each takes as input a single generic pointer and returns a generic pointer. To pass multiple arguments, put them into a structure and pass a pointer to the structure.
+Why the `malloc`? The tempting shortcut is a single local `int cfd` in the main loop with `&cfd` passed to every worker. That is a **race**: the new thread may not run its first line until after the main thread has looped around and stored the *next* client's descriptor in the same variable. Two workers then serve the same client and one client is ignored. Giving each connection its own heap cell removes the shared variable. (Squeezing the integer into the pointer value itself also works and is common, at the price of a cast.)
 
-| Function | Purpose |
-|---|---|
-| `pthread_create(&tid, attr, f, arg)` | Create a new thread running `f(arg)`; when it returns, `tid` contains the ID of the new thread |
-| `pthread_self()` | Return the caller's thread ID |
-| `pthread_exit(retval)` | Terminate the calling thread. If the *main* thread calls it, it waits for all other peer threads to terminate and then terminates the process |
-| `pthread_cancel(tid)` | Terminate another thread |
-| `pthread_join(tid, &retval)` | Block until thread `tid` terminates, then **reap** any memory resources held by it. Unlike `wait`, it can only wait for a *specific* thread |
-| `pthread_detach(tid)` | Detach thread `tid` |
-| `pthread_once(&once, init)` | Run an initialization routine exactly once |
-
-A thread terminates in one of four ways: **implicitly** when its top-level thread routine returns; **explicitly** by calling `pthread_exit`; when some peer thread calls the Linux **`exit`** function, which terminates the process and **all threads** associated with the process; or when another peer thread **cancels** it with `pthread_cancel`.
-
-### Joinable vs. detached threads
-
-At any point in time, a thread is **joinable** or **detached**. A joinable thread can be reaped and killed by other threads; its memory resources (such as the stack) are **not freed until it is reaped** by another thread. In contrast, a detached thread cannot be reaped or killed by other threads; its memory resources are **freed automatically by the system when it terminates**.
-
-By default, threads are created joinable. In order to avoid memory leaks, **each joinable thread should be either explicitly reaped by another thread or detached** by a call to `pthread_detach` (a thread can detach itself with `pthread_detach(pthread_self())`). Although some of our examples use joinable threads, there are good reasons to use detached threads in real programs: a high-performance web server might create a new peer thread each time it receives a connection request from a web browser. Since each connection is handled independently by a separate thread, it is unnecessary, and indeed undesirable, for the server to explicitly wait for each peer thread to terminate.
-
-### A concurrent server based on threads
-
-```c
-/* main thread */
-while (1) {
-    connfdp = Malloc(sizeof(int));                   /* a private slot for this connection's descriptor */
-    *connfdp = Accept(listenfd, (SA *) &clientaddr, &clientlen);
-    Pthread_create(&tid, NULL, thread, connfdp);
-}
-
-/* peer thread routine */
-void *thread(void *vargp) {
-    int connfd = *((int *)vargp);
-    Pthread_detach(pthread_self());                  /* nobody will join us: reclaim resources automatically */
-    Free(vargp);                                     /* the slot allocated by the main thread */
-    echo(connfd);
-    Close(connfd);
-    return NULL;
-}
-```
-
-The overall structure is similar to the process-based design: the main thread repeatedly waits for a connection request and then creates a peer thread to handle the request. While the code looks simple, there are a couple of general and somewhat subtle issues.
-
-**How to pass the connected descriptor to the peer thread.** The obvious approach is to pass a pointer to the descriptor:
-
-```c
-connfd = Accept(listenfd, (SA *) &clientaddr, &clientlen);
-Pthread_create(&tid, NULL, thread, &connfd);      /* WRONG: race */
-```
-
-and have the peer thread dereference the pointer: `int connfd = *((int *)vargp);`. This would be wrong, because it introduces a **race** between the assignment statement in the peer thread and the `accept` statement in the main thread. If the assignment completes before the next `accept`, the local `connfd` in the peer thread gets the correct descriptor value. However, if the assignment completes **after** the `accept`, then the local `connfd` variable in the peer thread gets the descriptor number of the *next* connection: two threads are now performing input and output on the same descriptor. To avoid the potentially deadly race, we must assign each connected descriptor returned by `accept` to its **own dynamically allocated memory block**.
-
-**Avoiding memory leaks in the thread routine.** Since we are not explicitly reaping threads, we must **detach each thread** so that its memory resources will be reclaimed when it terminates. Further, we must be careful to **free the memory block** that was allocated by the main thread.
+Note also what is absent compared with the process version: the main thread does **not** close the connected descriptor. All threads share one descriptor table, so there is only one reference, and the worker's `close` ends the connection.
 
 ```python-run
-# Thread-per-connection in Python: the argument is passed by value, so there is no race on it.
-import socket, threading
+import threading
+
+def serve(n, results):
+    results[n] = f"client {n} served by {threading.current_thread().name}"
+
+def demo():
+    results, workers = {}, []
+    for n in range(4):
+        t = threading.Thread(target=serve, args=(n, results), name=f"worker-{n}")
+        t.start()                          # each thread received its own copy of n
+        workers.append(t)
+    for t in workers:
+        t.join()
+    for n in sorted(results):
+        print(results[n])
+
 try:
-    listenfd = socket.socket(); listenfd.bind(("127.0.0.1", 0)); listenfd.listen()
-    port = listenfd.getsockname()[1]
-    log = []
-    def serve(connfd, n):
-        with connfd:
-            for line in connfd.makefile("rb"):
-                connfd.sendall(line)
-        log.append(n)
-    def acceptor(count):
-        for n in range(count):
-            connfd, _ = listenfd.accept()
-            threading.Thread(target=serve, args=(connfd, n), daemon=True).start()    # 'detached' peer thread
-    a = threading.Thread(target=acceptor, args=(3,)); a.start()
-    clients = [socket.create_connection(("127.0.0.1", port)) for _ in range(3)]     # three clients at once
-    for i, c in enumerate(reversed(clients)):                                         # served in any order
-        c.sendall(f"line {i}\n".encode()); print(c.recv(100))
-    for c in clients: c.close()
-    a.join(); listenfd.close()
-except Exception as e:
-    print("sockets/threads are not available in this sandbox:", e)
+    demo()
+except RuntimeError as exc:                # browser sandboxes may not allow thread creation
+    print("threads unavailable here:", exc)
+    print("on a normal interpreter you would see four lines, one per worker thread")
+
+# The buggy pattern, modelled without threads: workers read a shared slot only AFTER the loop moved on.
+slot = None
+late_readers = []
+for fd in (4, 5, 6):
+    slot = fd                              # main thread overwrites the single shared variable
+    late_readers.append(lambda: slot)      # worker has the address, not the value
+print("descriptors the three late workers see:", [read() for read in late_readers])
 ```
 
-## 4. Shared variables in threaded programs
+### Verdict on threads
 
-From a programmer's perspective, one of the attractive aspects of threads is the ease with which multiple threads can share the same program variables. However, this sharing can be tricky. To write correctly threaded programs we must have a clear understanding of what we mean by sharing. A variable is **shared** if and only if **multiple threads reference some instance of the variable**.
+- **Strength: sharing is effortless.** A global cache is a global.
+- **Strength: cheaper than processes** and able to use many cores.
+- **Weakness: sharing is effortless.** The same property that helps also lets one thread scribble on another's data. Bugs depend on timing, appear once in a million runs, and vanish under a debugger. The next two lessons are devoted to taming this with synchronisation.
+- **Weakness: no fault isolation.** A segmentation fault in one thread takes down the process and every client it was serving.
 
-**Threads memory model.** A pool of concurrent threads runs in the context of a process. Each thread has its own separate thread context (thread ID, stack, stack pointer, program counter, condition codes, general-purpose register values). Each thread shares the rest of the process context with the other threads: the entire user virtual address space, consisting of read-only text (code), read/write data, the heap, and any shared library code and data areas. The threads also share the same set of open files.
+## 5. Choosing between them
 
-In an operational sense, it is impossible for one thread to read or write the register values of another thread. On the other hand, any thread can access any location in the shared virtual memory. If some thread modifies a memory location, then every other thread will eventually see the change if it reads that location. Thus registers are never shared, whereas virtual memory is always shared. The memory model for the separate thread stacks is not as clean: these stacks are contained in the stack area of the virtual address space and are *usually* accessed independently by their respective threads. We say *usually* rather than *always*, because different thread stacks are **not protected from other threads**. So if a thread somehow manages to acquire a pointer to another thread's stack, then it can read and write any part of that stack.
-
-**Mapping variables to memory.**
-
-- **Global variables** (declared outside of a function): at run time, the read/write area of virtual memory contains **exactly one instance** of each global variable that can be referenced by any thread.
-- **Local automatic variables** (declared inside a function without the `static` attribute): at run time, **each thread's stack contains its own instances** of any local automatic variables. This is true even if multiple threads execute the same thread routine.
-- **Local static variables** (declared inside a function with the `static` attribute): as with global variables, the read/write area of virtual memory contains **exactly one instance** of each local static variable declared in a program.
-
-The book's example:
-
-```c
-char **ptr;                                  /* global */
-
-int main() {
-    char *msgs[2] = { "Hello from foo", "Hello from bar" };   /* automatic, on main's stack */
-    ptr = msgs;                              /* ...but now reachable through a global */
-    for (long i = 0; i < 2; i++)
-        Pthread_create(&tid, NULL, thread, (void *)i);         /* i passed by value */
-    Pthread_exit(NULL);
-}
-
-void *thread(void *vargp) {
-    long myid = (long)vargp;                 /* automatic: one instance per thread */
-    static int cnt = 0;                      /* static: one instance in total */
-    printf("[%ld]: %s (cnt=%d)
-", myid, ptr[myid], ++cnt);
-    return NULL;
-}
+```mermaid
+flowchart TD
+    Q1{Must a crash in one flow<br/>leave the others intact?} -- yes --> P[Processes]
+    Q1 -- no --> Q2{Do you need more<br/>than one core?}
+    Q2 -- no --> E[Event loop]
+    Q2 -- yes --> Q3{Is there much<br/>shared mutable state?}
+    Q3 -- little --> H[Event loop per core<br/>or worker processes]
+    Q3 -- lots --> T[Threads plus careful locking]
 ```
 
-| Variable instance | Referenced by main thread? | By peer thread 0? | By peer thread 1? | Shared? |
-|---|---|---|---|---|
-| `ptr` | yes | yes | yes | **yes** |
-| `cnt` | no | yes | yes | **yes** |
-| `i.m` (main's `i`) | yes | no | no | no |
-| `msgs.m` | yes | yes | yes | **yes** |
-| `myid.p0` | no | yes | no | no |
-| `myid.p1` | no | no | yes | no |
+| Question | Processes | Event-driven | Threads |
+|---|---|---|---|
+| Is data shared by default? | No | Yes | Yes |
+| Can flows corrupt each other? | No | No preemption, so rarely | Yes |
+| Uses multiple cores? | Yes | No, one loop per process | Yes |
+| Overhead per client | High | Very low | Moderate |
+| Hardest part | IPC and reaping | Splitting work into non-blocking steps | Synchronisation |
 
-Notes: `cnt` is a local static variable with only one run-time instance, referenced by both peer threads, hence shared. `msgs` is a local automatic variable on the main thread's stack, yet it is **shared**, because the peer threads reference it indirectly through the global `ptr`: local automatic variables *can* be shared. And `i` is passed **by value** (cast into the pointer argument), so the peers never reference main's `i` — a deliberate trick to avoid the race described above.
-
-> [!INTERVIEW]
-> **"Process vs. thread?"** A process has its own address space, file descriptor table and other resources; a thread is a flow of control *within* a process with its own stack and registers, sharing the address space and open files with its peers. Threads are cheaper to create and switch (no address-space change, so no TLB flush) and share data trivially, but a bug in one thread can corrupt all of them and sharing requires synchronization. Processes give isolation and fault containment at the price of IPC.
+Real systems mix the models. A common production layout is a few worker processes for isolation and multi-core use, each running an event loop for cheap connection handling, with a small thread pool on the side for operations that have no non-blocking form.
 
 > [!INTERVIEW]
-> **"How would you design a server for 10,000 concurrent connections?"** Thread-per-connection wastes memory on stacks and time on context switches; process-per-connection is worse. The standard answer is an event-driven design: non-blocking sockets with `epoll`/`kqueue`, one event loop per core, connection state kept in small per-connection state machines; optionally a thread pool for CPU-heavy or blocking work. Trade-off: more complex code, and one slow handler stalls every connection on that loop.
+> **"Process versus thread?"** Give the precise split: a thread has its own stack, registers, program counter and ID; it shares the address space, heap, globals and open files with its siblings. A process has all of those to itself. Then give the consequences: threads are cheaper to create and switch and share data trivially, but have no memory isolation, so a bug or crash in one affects all. Processes are isolated and need IPC to cooperate.
 
 > [!INTERVIEW]
-> **"What do threads share and not share?"** Shared: code, globals and static data, heap, open files, signal handlers. Private: thread ID, registers including PC and SP, stack (though not *protected* from other threads), `errno` (thread-local).
+> **"How does a single-threaded server such as Node.js or Redis handle ten thousand clients?"** With I/O multiplexing: it registers every socket with `epoll` or `kqueue`, sleeps until some are ready, and runs a short non-blocking handler for each. No handler may block or compute for long, because that would stall every other client. CPU-heavy work is pushed to a pool or to other processes.
 
-## 5. Summary
+## 6. Pitfalls
 
-- Concurrency lets a program serve slow devices, humans and many clients, and exploit multiple cores.
-- **Processes**: `fork` per client; isolation and simplicity; reap children with a `SIGCHLD` handler; parent must close `connfd`; sharing needs IPC; highest overhead.
-- **I/O multiplexing**: one process, `select` (or `epoll`) plus explicit state machines; easy sharing, efficient, debuggable; complex code, single core, coarse handlers can stall everyone.
-- **Threads**: kernel-scheduled flows sharing one address space; Pthreads API; detach or join every thread; pass per-thread arguments carefully to avoid races.
-- A variable is shared iff more than one thread references an instance of it: globals and local statics have one instance; automatic locals have one per thread stack but can still be shared via pointers.
+- **Leaking the connected descriptor in a forking server.** The parent's copy keeps the connection open and eventually exhausts the descriptor table.
+- **A `SIGCHLD` handler that reaps once.** Pending signals of one kind collapse into a single delivery; loop with `WNOHANG`.
+- **Reusing the `fd_set` after `select`.** It now contains only the ready descriptors. Keep a master copy.
+- **Blocking inside an event handler.** A buffered "read a whole line" call on a client that has sent half a line freezes the server.
+- **Passing a pointer to a loop variable to a new thread.** Give each thread its own storage.
+- **Never joining and never detaching.** Each finished joinable thread leaks its stack.
+- **Calling `exit` from a worker thread.** It terminates the whole process, not the one thread. Use `return` or `pthread_exit`.
+- **Assuming thread start order.** The scheduler may run a new thread immediately, much later, or on another core at once.
 
-## Check yourself
+## Summary
+
+- Iterative servers let one slow client block everybody; concurrent servers interleave many logical flows.
+- **Processes**: `fork` per connection. Separate address spaces give safety and make sharing hard. Reap children and close duplicated descriptors.
+- **I/O multiplexing**: one process waits on many descriptors with `select` or a modern equivalent and advances per-client state machines. Cheap and race-free, but the code is intricate, a blocking step stalls all clients, and it uses one core.
+- **Threads**: kernel-scheduled flows within one address space, each with a private stack and registers. Cheap sharing and multi-core use, in exchange for race hazards and no isolation.
+- Detach worker threads, give each its own argument storage, and never assume an ordering between threads.
+
+## Glossary
+
+- **Concurrency**: several tasks being in progress over the same period.
+- **Iterative server**: a server that fully serves one client before accepting the next.
+- **Process**: a running program with its own private memory.
+- **IPC (inter-process communication)**: the methods separate processes use to exchange data, such as pipes and sockets.
+- **I/O multiplexing**: one flow of control waiting on many input sources at once and serving whichever is ready.
+- **`select` / `epoll`**: system calls that report which of many descriptors are ready for reading or writing.
+- **Event loop**: a loop that repeatedly waits for events and runs a short handler for each.
+- **State machine**: a description of a task as a set of states and the events that move it between them.
+- **Thread**: a flow of control inside a process that shares the process's memory with other threads.
+- **Pthreads**: the standard programming interface for threads on Unix-like systems.
+- **Joinable / detached**: a thread whose resources are freed when another thread collects it / freed automatically when it ends.
+- **Race**: a bug whose appearance depends on the timing of two flows.
+- **Fault isolation**: the property that a failure in one part cannot damage another.
 
 ```quiz
 [
-  {"q": "In the process-based concurrent server, why must the parent close connfd after forking?", "options": ["To send EOF to the client immediately", "Otherwise the file table entry's reference count never reaches zero: a descriptor leak that eventually exhausts resources", "Because the child cannot use it otherwise", "To reap the child"], "answer": 1,
-   "explain": "Parent and child both reference the connection; the parent's copy must be closed or it is never released."},
-  {"q": "What does select do with the descriptor set passed to it?", "options": ["Leaves it unchanged", "Modifies it to contain only the descriptors that are ready", "Closes the ready descriptors", "Sorts it"], "answer": 1,
-   "explain": "select overwrites the set with the ready set, so the read set must be re-copied before each call."},
-  {"q": "Which is a disadvantage of an event-driven (I/O multiplexing) server?", "options": ["It cannot share data between flows", "It requires IPC", "It cannot fully use multi-core processors and its code is more complex", "Context switches are expensive"], "answer": 2,
-   "explain": "A single process on one core runs all flows, and the state-machine style takes more code."},
-  {"q": "Which of these is NOT part of a thread's private context?", "options": ["Stack pointer", "Program counter", "The heap", "General-purpose registers"], "answer": 2,
-   "explain": "The heap is part of the process's shared virtual address space."},
-  {"q": "What happens to the memory of a joinable thread that terminates and is never joined?", "options": ["It is freed automatically", "It leaks until another thread reaps it with pthread_join", "The process crashes", "It becomes a zombie process"], "answer": 1,
-   "explain": "Joinable threads must be reaped; detached threads are cleaned up automatically."},
-  {"q": "Why does the threaded echo server malloc a block for each connected descriptor instead of passing &connfd?", "options": ["Threads cannot read the main thread's stack", "To avoid a race: the main thread may overwrite connfd with the next accept before the peer reads it", "malloc is faster", "Descriptors must live on the heap"], "answer": 1,
-   "explain": "Passing the address of a variable that the main thread keeps reusing creates a race."},
-  {"q": "A function declares 'static int cnt = 0;' and is run by two threads. How many instances of cnt exist?", "options": ["One, shared by both threads", "Two, one per thread", "None until first use", "One per call"], "answer": 0,
-   "explain": "Local static variables live in the data area with exactly one instance."},
-  {"q": "Can a local automatic variable on one thread's stack be shared?", "options": ["Never", "Yes, if another thread obtains a pointer to it", "Only if declared volatile", "Only in the main thread"], "answer": 1,
-   "explain": "Thread stacks are not protected from one another; msgs in the example is shared through the global ptr."}
+  {"q": "In a fork-per-connection server, what goes wrong if the parent never closes its copy of the connected descriptor?",
+   "options": ["Nothing; the child's close is sufficient", "The connection stays open after the child exits and the parent eventually runs out of descriptors", "The child receives SIGPIPE immediately", "The listening socket stops working after the first client"],
+   "answer": 1, "explain": "Parent and child both reference the open connection. It is only torn down when every reference is closed, so the parent's stale copy keeps it alive and leaks a descriptor per client."},
+  {"q": "After select returns, what does the read set you passed in contain?",
+   "options": ["Exactly what you passed in", "Only the descriptors that are ready for reading", "All descriptors that are open in the process", "It is undefined"],
+   "answer": 1, "explain": "select overwrites its set arguments with the ready subset, so the caller must keep a master copy and rebuild the argument before each call."},
+  {"q": "Which item is private to each thread rather than shared by the process?",
+   "options": ["The heap", "Global variables", "The stack pointer and registers", "The open file table"],
+   "answer": 2, "explain": "Each thread has its own stack, stack pointer, program counter, registers and thread ID. Code, heap, globals and open files are shared."},
+  {"q": "A server creates one thread per connection and never calls pthread_join. What must each worker do to avoid leaking resources?",
+   "options": ["Call exit when finished", "Detach itself, for example with pthread_detach(pthread_self())", "Call fork", "Close the listening descriptor"],
+   "answer": 1, "explain": "A joinable thread keeps its stack and bookkeeping until joined. A detached thread frees them automatically when it ends."},
+  {"q": "The main loop passes the address of a single local variable holding the connected descriptor to every new thread. Why is this a bug?",
+   "options": ["Stack variables cannot be accessed from other threads", "The next accept may overwrite the variable before the new thread reads it", "pthread_create copies the pointed-to value, wasting memory", "The descriptor is closed when the variable goes out of scope"],
+   "answer": 1, "explain": "The new thread and the main thread race on the shared variable. If the main thread loops first, two workers read the same later descriptor."},
+  {"q": "What is the main weakness of a single-process event-driven server?",
+   "options": ["It cannot share data between clients", "A handler that blocks or runs long stalls every client, and it cannot use multiple cores", "It needs one kernel stack per client", "It must reap zombie children"],
+   "answer": 1, "explain": "Only one flow runs at a time, so any blocking step freezes the loop, and one loop runs on one core."},
+  {"q": "In a threaded server, why does the main thread NOT close the connected descriptor after creating the worker?",
+   "options": ["Threads share one descriptor table, so closing it would close it for the worker too", "pthread_create closes it automatically", "Descriptors cannot be closed by the main thread", "The kernel reference count is two, as with fork"],
+   "answer": 0, "explain": "Unlike fork, creating a thread does not duplicate the descriptor table. There is a single reference, and the worker closes it when done."},
+  {"q": "Which model gives the strongest protection against one client's bug corrupting another client's state?",
+   "options": ["Threads", "Event-driven I/O multiplexing", "Processes", "All are equal"],
+   "answer": 2, "explain": "Each process has a private address space, so a stray write or crash is contained. Threads and event handlers share memory."}
 ]
 ```
 
-> **Source:** CS:APP 3e, §12.1–12.4 (Concurrent programming with processes; with I/O multiplexing; with threads; Shared variables in threaded programs).
+> **Source:** CS:APP 3e, §12.1–12.3
