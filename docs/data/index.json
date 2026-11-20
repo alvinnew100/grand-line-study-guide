@@ -204,6 +204,21 @@
   "problems": 18
  },
  {
+  "id": "redis",
+  "title": "Redis in Action",
+  "icon": "🟥",
+  "blurb": "Redis from zero to production: data structures, caching, persistence and replication, queues, locks, search, a social feed, memory tuning, scaling, Lua scripting, streams, Cluster, vector search and the caching and rate-limiting patterns interviews ask about - every idea with a runnable simulation.",
+  "color": "#d82c20",
+  "sources": [
+   "Josiah L. Carlson, Redis in Action (Manning, 2013), ch. 1-11",
+   "Redis documentation (redis.io/docs): data types, persistence, replication, Sentinel, Cluster specification, streams, ACLs, client-side caching, eviction, programmability, vector search"
+  ],
+  "words": 115849,
+  "modules": 13,
+  "lessons": 30,
+  "problems": 6
+ },
+ {
   "id": "mongodb",
   "title": "MongoDB",
   "icon": "🍃",
@@ -245,7 +260,7 @@
    "The Go Programming Language Specification, go.dev/ref/spec",
    "Go documentation: Effective Go, the Go Memory Model, the Go blog and package docs, go.dev/doc and pkg.go.dev"
   ],
-  "words": 108138,
+  "words": 115417,
   "modules": 18,
   "lessons": 42,
   "problems": 30
@@ -309,7 +324,7 @@
   "words": 0,
   "modules": 15,
   "lessons": 0,
-  "problems": 7
+  "problems": 17
  },
  {
   "id": "graphql",
@@ -534,7 +549,7 @@
    "MDN Web Docs (developer.mozilla.org)",
    "WCAG 2.2"
   ],
-  "words": 95876,
+  "words": 96880,
   "modules": 9,
   "lessons": 28,
   "problems": 33
