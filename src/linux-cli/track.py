@@ -1,0 +1,143 @@
+TRACK = dict(
+    id="linux-cli",
+    title="The Linux Command Line",
+    icon="🐧",
+    color="#2a9d8f",
+    group="Tools",
+    blurb="From your first prompt to shell scripts, text pipelines and on-call debugging: the command line explained from the ground up, with Python problems that rebuild the classic tools.",
+    sources=["Shotts, The Linux Command Line (5th internet edition)", "Original material on ssh, tmux, curl, jq, git, cron, systemd, GPUs and Docker"],
+    modules=[
+        dict(
+            id="getting-around",
+            title="Learning the Shell I — Getting Around",
+            summary="What a shell is, how the file-system tree is laid out, and how to look at, create, copy, move and delete things in it.",
+            lessons=[
+                dict(id="shell-and-navigation", title="The shell, the prompt and navigation", file="01-shell-and-navigation.md"),
+                dict(id="exploring-the-system", title="Exploring the system: ls, file, less and the directory tour", file="02-exploring-the-system.md"),
+                dict(id="manipulating-files", title="Manipulating files and directories", file="03-manipulating-files.md"),
+            ],
+            problems=["cli-normalize-path", "cli-parse-ls-line"],
+        ),
+        dict(
+            id="commands-streams-expansion",
+            title="Learning the Shell II — Commands, Streams and Expansion",
+            summary="Where commands come from, how output is redirected and piped, and what the shell rewrites before a command runs.",
+            lessons=[
+                dict(id="commands-and-help", title="Working with commands and getting help", file="04-commands-and-help.md"),
+                dict(id="redirection-pipelines", title="Redirection and pipelines", file="05-redirection-pipelines.md"),
+                dict(id="expansion-quoting", title="Expansion and quoting: seeing the line as the shell sees it", file="06-expansion-quoting.md"),
+                dict(id="keyboard-history", title="Keyboard tricks, completion and history", file="07-keyboard-history.md"),
+            ],
+            problems=["cli-mini-wc", "cli-head-tail", "cli-top-k-lines", "cli-glob-match", "cli-brace-expansion", "cli-tokenize-command"],
+        ),
+        dict(
+            id="permissions-processes",
+            title="Learning the Shell III — Permissions and Processes",
+            summary="Who may do what to a file, and how running programs are listed, signalled and controlled.",
+            lessons=[
+                dict(id="permissions", title="Permissions, ownership and identity", file="08-permissions.md"),
+                dict(id="processes", title="Processes, jobs and signals", file="09-processes.md"),
+            ],
+            problems=["cli-octal-to-symbolic", "cli-symbolic-to-octal", "cli-chmod-apply", "cli-umask-result", "cli-top-cpu-processes"],
+        ),
+        dict(
+            id="configuration",
+            title="Configuration and the Environment",
+            summary="Environment variables, startup files, a survival course in vi and a prompt that tells you what you need to know.",
+            lessons=[
+                dict(id="environment-startup", title="The environment and startup files", file="10-environment-startup.md"),
+                dict(id="vi-and-prompt", title="A gentle introduction to vi, and customising the prompt", file="11-vi-and-prompt.md"),
+            ],
+            problems=[],
+        ),
+        dict(
+            id="system-tasks",
+            title="Common Tasks I — Packages, Storage and Networking",
+            summary="Installing software, mounting and inspecting disks, and the everyday network toolbox.",
+            lessons=[
+                dict(id="package-management", title="Package management", file="12-package-management.md"),
+                dict(id="storage-media", title="Storage media: mounting, partitions and file systems", file="13-storage-media.md"),
+                dict(id="networking", title="Networking tools", file="14-networking.md"),
+            ],
+            problems=["cli-du-rollup"],
+        ),
+        dict(
+            id="finding-archiving",
+            title="Common Tasks II — Finding Files and Making Backups",
+            summary="locate, find and xargs for searching; tar, gzip, zip and rsync for packing and synchronising.",
+            lessons=[
+                dict(id="finding-files", title="Searching for files: locate, find and xargs", file="15-finding-files.md"),
+                dict(id="archiving-backup", title="Archiving and backup: gzip, tar, zip and rsync", file="16-archiving-backup.md"),
+            ],
+            problems=["cli-find-filter", "cli-xargs-batches"],
+        ),
+        dict(
+            id="text-tools",
+            title="Common Tasks III — Regular Expressions and Text Tools",
+            summary="grep and regular expressions, the classic text filters, sed, and formatting, printing and compiling.",
+            lessons=[
+                dict(id="regular-expressions", title="Regular expressions with grep", file="17-regular-expressions.md"),
+                dict(id="text-processing-1", title="Text processing I: cat, sort, uniq, cut, paste and join", file="18-text-processing-1.md"),
+                dict(id="text-processing-2", title="Text processing II: comm, diff, patch, tr, sed and aspell", file="19-text-processing-2.md"),
+                dict(id="formatting-printing-compiling", title="Formatting output, printing and compiling programs", file="20-formatting-printing-compiling.md"),
+            ],
+            problems=["cli-mini-grep", "cli-cut-fields", "cli-join-on-key", "cli-comm-columns", "cli-tr-translate", "cli-sed-substitute"],
+        ),
+        dict(
+            id="script-foundations",
+            title="Shell Scripts I — Foundations",
+            summary="Your first script, variables and here documents, functions, decisions with if and test, and reading input.",
+            lessons=[
+                dict(id="first-script-project", title="Writing your first script and starting a project", file="21-first-script-project.md"),
+                dict(id="functions-top-down", title="Top-down design and shell functions", file="22-functions-top-down.md"),
+                dict(id="if-test", title="Flow control: if, exit status and test", file="23-if-test.md"),
+                dict(id="reading-input", title="Reading keyboard input and validating it", file="24-reading-input.md"),
+            ],
+            problems=["cli-test-expression"],
+        ),
+        dict(
+            id="script-control",
+            title="Shell Scripts II — Loops, Branches and Parameters",
+            summary="while, until and for loops, case, positional parameters, and how to debug a script that misbehaves.",
+            lessons=[
+                dict(id="loops", title="Loops: while, until and for", file="25-loops.md"),
+                dict(id="case-positional", title="case and positional parameters", file="26-case-positional.md"),
+                dict(id="troubleshooting", title="Troubleshooting and defensive scripting", file="27-troubleshooting.md"),
+            ],
+            problems=["cli-parameter-expansion"],
+        ),
+        dict(
+            id="script-data",
+            title="Shell Scripts III — Strings, Numbers, Arrays and Exotica",
+            summary="Parameter expansion, arithmetic, arrays, group commands, subshells, traps and named pipes.",
+            lessons=[
+                dict(id="strings-numbers", title="Strings and numbers", file="28-strings-numbers.md"),
+                dict(id="arrays-exotica", title="Arrays and exotica: groups, subshells, traps and named pipes", file="29-arrays-exotica.md"),
+            ],
+            problems=[],
+        ),
+        dict(
+            id="ml-backend",
+            title="Command Line for ML and Backend Engineers",
+            summary="The tools the book does not cover but your job does: ssh, tmux, curl, jq, git, virtualenvs, cron, systemd, logs, GPUs and Docker.",
+            lessons=[
+                dict(id="ssh-tmux", title="ssh, keys and tmux: working on remote machines", file="30-ssh-tmux.md"),
+                dict(id="curl-jq-git", title="curl, jq and git on the command line", file="31-curl-jq-git.md"),
+                dict(id="env-cron-systemd-logs", title="Environments, cron, systemd and log inspection", file="32-env-cron-systemd-logs.md"),
+                dict(id="gpu-monitoring-docker", title="nvidia-smi, resource monitoring and the Docker CLI", file="33-gpu-monitoring-docker.md"),
+            ],
+            problems=["cli-cron-match"],
+        ),
+        dict(
+            id="interview-oncall",
+            title="Interview and On-Call Essentials",
+            summary="The commands interviewers ask about, a method for a slow or full machine, and one-liners taken apart piece by piece.",
+            lessons=[
+                dict(id="interview-commands", title="The commands you are asked about", file="34-interview-commands.md"),
+                dict(id="debugging-slow-full-machine", title="Debugging a slow or full machine", file="35-debugging-slow-full-machine.md"),
+                dict(id="one-liners", title="One-liners explained piece by piece", file="36-one-liners.md"),
+            ],
+            problems=[],
+        ),
+    ],
+)

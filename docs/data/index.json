@@ -22,11 +22,12 @@
   "blurb": "From your first prompt to shell scripts, text pipelines and on-call debugging: the command line explained from the ground up, with Python problems that rebuild the classic tools.",
   "color": "#2a9d8f",
   "sources": [
-   "Shotts, The Linux Command Line (5th internet edition)"
+   "Shotts, The Linux Command Line (5th internet edition)",
+   "Original material on ssh, tmux, curl, jq, git, cron, systemd, GPUs and Docker"
   ],
-  "words": 0,
-  "modules": 1,
-  "lessons": 0,
+  "words": 136671,
+  "modules": 12,
+  "lessons": 36,
   "problems": 25
  },
  {
@@ -84,10 +85,10 @@
    "NeetCode roadmap (NeetCode 150 / 250)",
    "CPython documentation and source notes on dict/set"
   ],
-  "words": 14498,
+  "words": 17923,
   "modules": 2,
   "lessons": 6,
-  "problems": 27
+  "problems": 50
  },
  {
   "id": "neet-window-stack",
@@ -100,10 +101,10 @@
    "NeetCode 150 roadmap",
    "Python docs: bisect, collections.deque"
   ],
-  "words": 20005,
+  "words": 24119,
   "modules": 3,
   "lessons": 8,
-  "problems": 51
+  "problems": 60
  },
  {
   "id": "neet-linked-trees",
@@ -118,7 +119,7 @@
   "words": 20666,
   "modules": 3,
   "lessons": 9,
-  "problems": 36
+  "problems": 61
  },
  {
   "id": "neet-heap-graphs",
@@ -171,17 +172,17 @@
   "id": "sql",
   "title": "SQL from Zero to Interview",
   "icon": "🗃️",
-  "blurb": "Relational thinking and standard SQL from first SELECT to window functions, recursive CTEs and interview patterns - run every query live on bank, shop and MLOps datasets.",
+  "blurb": "Relational thinking and standard SQL from first SELECT to window functions, recursive CTEs and interview patterns - run every query live on six seeded datasets, then practise on 93 problems.",
   "color": "#2b7bb9",
   "sources": [
    "Alan Beaulieu, Learning SQL (O'Reilly), ch. 1-15 and appendices",
    "SQLite documentation (window functions, WITH clause, EXPLAIN QUERY PLAN)",
    "PostgreSQL and MySQL reference manuals (dialect notes)"
   ],
-  "words": 96031,
-  "modules": 19,
-  "lessons": 38,
-  "problems": 40
+  "words": 105855,
+  "modules": 20,
+  "lessons": 39,
+  "problems": 93
  },
  {
   "id": "databases",
@@ -264,6 +265,21 @@
   "modules": 17,
   "lessons": 37,
   "problems": 35
+ },
+ {
+  "id": "typescript",
+  "title": "TypeScript",
+  "icon": "🔷",
+  "blurb": "From your first type annotation to conditional types: the type system, generics, configuration, real React and Node projects, and the questions interviewers ask. Explained from zero, with runnable examples.",
+  "color": "#3178c6",
+  "sources": [
+   "Josh Goldberg, Learning TypeScript (O'Reilly)",
+   "The TypeScript Handbook (typescriptlang.org/docs)"
+  ],
+  "words": 70344,
+  "modules": 6,
+  "lessons": 18,
+  "problems": 27
  },
  {
   "id": "graphql",
