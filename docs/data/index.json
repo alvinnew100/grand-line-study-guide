@@ -116,7 +116,7 @@
    "Goodrich, Tamassia & Goldwasser, Data Structures and Algorithms in Python, ch. 7 (linked lists), ch. 8 (trees), ch. 11 (search trees), ch. 13.5 (tries)",
    "NeetCode 150 (Linked List, Trees, Tries)"
   ],
-  "words": 20666,
+  "words": 25886,
   "modules": 3,
   "lessons": 9,
   "problems": 61
@@ -276,7 +276,7 @@
    "Josh Goldberg, Learning TypeScript (O'Reilly)",
    "The TypeScript Handbook (typescriptlang.org/docs)"
   ],
-  "words": 70344,
+  "words": 70561,
   "modules": 6,
   "lessons": 18,
   "problems": 27

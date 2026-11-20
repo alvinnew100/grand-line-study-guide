@@ -1,0 +1,90 @@
+TRACK = dict(
+    id="typescript",
+    title="TypeScript",
+    icon="🔷",
+    color="#3178c6",
+    group="Web",
+    blurb="From your first type annotation to conditional types: the type system, generics, configuration, "
+          "real React and Node projects, and the questions interviewers ask. Explained from zero, with runnable examples.",
+    sources=[
+        "Josh Goldberg, Learning TypeScript (O'Reilly)",
+        "The TypeScript Handbook (typescriptlang.org/docs)",
+    ],
+    modules=[
+        dict(
+            id="concepts",
+            title="Part I: Concepts",
+            summary="What TypeScript is, how the type system thinks, unions and narrowing, and structural object types.",
+            lessons=[
+                dict(id="js-to-ts", title="From JavaScript to TypeScript", file="01-from-javascript-to-typescript.md"),
+                dict(id="type-system", title="The type system: types, inference and assignability", file="02-the-type-system.md"),
+                dict(id="unions-narrowing", title="Unions, literals and narrowing", file="03-unions-literals-narrowing.md"),
+                dict(id="objects", title="Objects and structural typing", file="04-objects-structural-typing.md"),
+            ],
+            problems=["ts-partition-by-type", "ts-is-user", "ts-narrow-union", "ts-nullish-defaults",
+                      "ts-is-assignable", "ts-cart-reducer", "ts-exhaustive-check"],
+        ),
+        dict(
+            id="features",
+            title="Part II: Features",
+            summary="Functions, arrays and tuples, interfaces and classes, type modifiers and generics.",
+            lessons=[
+                dict(id="functions-arrays-tuples", title="Functions, arrays and tuples", file="05-functions-arrays-tuples.md"),
+                dict(id="interfaces-classes", title="Interfaces and classes", file="06-interfaces-and-classes.md"),
+                dict(id="type-modifiers", title="Type modifiers: unknown, predicates, keyof, typeof, assertions, const",
+                     file="07-type-modifiers.md"),
+                dict(id="generics", title="Generics: type parameters, constraints, defaults and promises", file="08-generics.md"),
+            ],
+            problems=["ts-overload-dispatch", "ts-tuple-zip", "ts-head-tail", "ts-get-path",
+                      "ts-result-chain", "ts-event-bus"],
+        ),
+        dict(
+            id="usage",
+            title="Part III: Usage",
+            summary="Declaration files, tsconfig and strictness flags, editor features, module systems and project references.",
+            lessons=[
+                dict(id="declaration-files", title="Declaration files", file="09-declaration-files.md"),
+                dict(id="tsconfig", title="Configuration: tsconfig.json and the strictness flags", file="10-tsconfig-and-strictness.md"),
+                dict(id="ide-modules-projects", title="Editor features, module systems and project references",
+                     file="11-ide-modules-project-references.md"),
+            ],
+            problems=["ts-strict-flags", "ts-tsconfig-extends"],
+        ),
+        dict(
+            id="extra-credit",
+            title="Part IV: Extra credit",
+            summary="Syntax that emits code (enums, namespaces, decorators, parameter properties) and computing types from types.",
+            lessons=[
+                dict(id="syntax-extensions", title="Syntax extensions: enums, namespaces, decorators, parameter properties",
+                     file="12-syntax-extensions.md"),
+                dict(id="type-operations", title="Type operations: mapped, conditional, infer, never, template literals",
+                     file="13-type-operations.md"),
+            ],
+            problems=["ts-enum-reverse", "ts-pick-omit", "ts-required-keys", "ts-deep-freeze",
+                      "ts-route-params", "ts-combine-object-types", "ts-print-type"],
+        ),
+        dict(
+            id="real-projects",
+            title="TypeScript in real projects",
+            summary="Typing React and Express, validating data at runtime, typing API responses, migrating from JavaScript, linting.",
+            lessons=[
+                dict(id="react-express", title="Typing React components and Express handlers", file="14-typing-react-and-express.md"),
+                dict(id="validation-api", title="Runtime validation and API response typing",
+                     file="15-runtime-validation-and-api-types.md"),
+                dict(id="migration-linting", title="Migrating from JavaScript, and linting", file="16-migration-and-linting.md"),
+            ],
+            problems=["ts-safe-json-parse", "ts-schema-validate", "ts-state-machine"],
+        ),
+        dict(
+            id="interview",
+            title="TypeScript interview essentials",
+            summary="The conceptual questions (type vs interface, any/unknown/never, structural surprises, variance) and the hands-on ones.",
+            lessons=[
+                dict(id="interview-fundamentals", title="Interview essentials I: concepts and variance", file="17-interview-fundamentals.md"),
+                dict(id="interview-exercises", title="Interview essentials II: generics, unions and utility types by hand",
+                     file="18-interview-exercises.md"),
+            ],
+            problems=["ts-function-variance", "ts-deep-partial-merge"],
+        ),
+    ],
+)
