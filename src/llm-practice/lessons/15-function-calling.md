@@ -223,6 +223,96 @@ attacker-controlled text (a web page, an email, a document). Treat it accordingl
 
 Module 10 develops these defences.
 
+## 7. The whole loop, runnable, with a scripted model
+
+The API code in section 2 needs a key. Here is the same control flow with a scripted stand-in for the
+model, so you can run it and trace three behaviours at once: **parallel calls**, an **error that the
+model recovers from**, and the **step cap**.
+
+```python-run
+import json
+
+TOOLS = {
+    "get_order": {"required": ["order_id"],
+                  "fn": lambda order_id: {"id": order_id, "status": "shipped", "carrier": "DHL"} if order_id.startswith("ORD-")
+                        else (_ for _ in ()).throw(ValueError("order_id must look like 'ORD-12345'"))},
+    "get_weather": {"required": ["city"], "fn": lambda city: {"city": city, "temp_c": 3}},
+}
+
+SCRIPT = iter([   # what a real model would emit turn by turn
+    {"text": "I'll look up both.", "calls": [{"id": "c1", "name": "get_order", "input": {"order_id": "12345"}},
+                                             {"id": "c2", "name": "get_weather", "input": {"city": "Oslo"}}]},
+    {"text": "The id needs a prefix; retrying.", "calls": [{"id": "c3", "name": "get_order", "input": {"order_id": "ORD-12345"}}]},
+    {"text": "Your order shipped with DHL, and it is 3 C in Oslo.", "calls": []},
+])
+def model(messages):
+    return next(SCRIPT)
+
+def execute(call):
+    tool = TOOLS.get(call["name"])
+    if tool is None:
+        return {"tool_use_id": call["id"], "is_error": True, "content": f"Unknown tool {call['name']}. Available: {sorted(TOOLS)}"}
+    missing = [a for a in tool["required"] if a not in call["input"]]
+    if missing:
+        return {"tool_use_id": call["id"], "is_error": True, "content": f"Missing arguments: {missing}"}
+    try:
+        return {"tool_use_id": call["id"], "is_error": False, "content": json.dumps(tool["fn"](**call["input"]))}
+    except Exception as e:                                   # report, do not crash the loop
+        return {"tool_use_id": call["id"], "is_error": True, "content": f"{type(e).__name__}: {e}"}
+
+def run(user_text, max_steps=5):
+    messages = [{"role": "user", "content": user_text}]
+    for step in range(1, max_steps + 1):
+        turn = model(messages)
+        messages.append({"role": "assistant", "content": turn})          # keep the calls in history
+        print(f"step {step}: assistant says {turn['text']!r} and makes {len(turn['calls'])} call(s)")
+        if not turn["calls"]:
+            return turn["text"]
+        results = [execute(c) for c in turn["calls"]]                    # all results go back together
+        for r in results:
+            print("   ", "ERROR " if r["is_error"] else "ok    ", r["tool_use_id"], r["content"])
+        messages.append({"role": "user", "content": results})
+    return "Stopped: step limit reached."
+
+print("FINAL:", run("Where is order 12345, and what's the weather in Oslo?"))
+```
+
+Trace it: in step 1 the model makes two calls in one turn; `c1` fails validation inside the tool and
+comes back as an error result while `c2` succeeds, and **both** results are returned together. In step 2
+the model reads the error message, fixes the argument and retries. In step 3 it has what it needs and
+answers. Notice how much the quality of the error text matters: "order_id must look like 'ORD-12345'"
+tells the model exactly how to recover, where "invalid input" would have produced a guess.
+
+## 8. tool_choice and other controls
+
+| setting | behaviour | typical use |
+|---|---|---|
+| `auto` (default) | the model decides whether to call a tool | general assistants |
+| `any` / `required` | the model must call some tool | routers, pipelines where a call is always needed |
+| a specific tool | the model must call that tool | structured extraction: the tool's schema is the output format |
+| `none` | tools are visible but may not be called | a final "answer now from what you have" turn |
+| parallel calls disabled | at most one call per turn | tools with ordering dependencies or side effects |
+
+Two details worth knowing. Forcing a tool usually suppresses any explanatory text before the call, so do
+not expect the model to "think aloud" first in that mode. And changing the tool list or `tool_choice`
+between turns changes the prompt prefix, which invalidates prompt caches (module 9): prefer keeping the
+tool set stable for a whole conversation.
+
+## 9. Diagnosing tool-use failures
+
+| symptom | likely cause | fix |
+|---|---|---|
+| model answers from memory instead of calling the tool | description does not say when to use it; question looks answerable | state the trigger conditions in the description and system prompt |
+| wrong tool chosen | overlapping tools, vague names | merge or rename; add "use X for A, Y for B" guidance |
+| hallucinated ids or enum values | free-text parameters; opaque ids | enums, examples, a search tool that returns valid ids |
+| same failing call repeated | error message not actionable | say what was wrong and show a valid example |
+| API rejects the conversation | assistant tool-call turn missing, or result ids do not match | append the assistant message verbatim; return one result per call id |
+| context fills with tool output | tools return everything | pagination, filtering, concise formats, truncation notices |
+| loop never ends | no step cap; the model is waiting for information it cannot get | cap steps, detect repeated calls, let the model ask the user |
+
+When you debug, read the **transcript** (every prompt, call and result) rather than only the final
+answer; almost every tool-use bug is visible there within a minute.
+
 > [!INTERVIEW]
 > **"Walk me through the function-calling loop and its failure modes."** Send messages plus tool
 > schemas; the model returns tool-use blocks with ids and JSON arguments; validate and execute them

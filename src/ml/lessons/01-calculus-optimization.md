@@ -202,6 +202,103 @@ stable = m + np.log(np.sum(np.exp(z - m)))   # log-sum-exp trick
 print("naive:", naive, " stable:", stable)
 ```
 
+## 9. Worked derivation: logistic regression from loss to update rule
+
+The derivation below is asked for in interviews more often than any other. Work through it once with a
+pencil.
+
+**Set-up.** One example $(x, y)$ with $y\in\{0,1\}$. The model computes $z = w^\top x + b$ and
+$p = \sigma(z)$. The loss is $\ell = -[\,y\log p + (1-y)\log(1-p)\,]$.
+
+**Step 1: loss with respect to the probability.**
+
+$$\frac{\partial \ell}{\partial p} = -\frac{y}{p} + \frac{1-y}{1-p} = \frac{p - y}{p(1-p)}.$$
+
+**Step 2: probability with respect to the logit.** From the table in section 1, $\frac{\partial p}{\partial z} = p(1-p)$.
+
+**Step 3: chain them.** The awkward factor $p(1-p)$ cancels:
+
+$$\frac{\partial \ell}{\partial z} = \frac{p - y}{p(1-p)}\cdot p(1-p) = p - y.$$
+
+**Step 4: logit with respect to the parameters.** $\frac{\partial z}{\partial w} = x$ and
+$\frac{\partial z}{\partial b} = 1$, so
+
+$$\nabla_w \ell = (p - y)\,x,\qquad \frac{\partial \ell}{\partial b} = p - y.$$
+
+**Step 5: average over the dataset** to get $\nabla_w J = \frac1n X^\top(p - y)$, and update
+$w \leftarrow w - \eta\,\nabla_w J$.
+
+The result reads naturally. The error $p - y$ is positive when the model is too confident in class 1 and
+negative when it is not confident enough. Each weight moves in proportion to that error times its
+feature's value. A feature that was zero for this example does not move at all.
+
+**A numeric check.** Take $x = (2, 1)$, $y = 1$, $w = (0.5, -1)$, $b = 0$. Then $z = 0$, $p = 0.5$,
+$\ell = \log 2 = 0.693$. The gradient is $(p-y)x = (-1, -0.5)$ and $\partial\ell/\partial b = -0.5$. With
+$\eta = 1$ the new parameters are $w = (1.5, -0.5)$, $b = 0.5$, giving $z = 3$, $p = 0.953$ and
+$\ell = 0.049$. One step took the loss from 0.693 to 0.049.
+
+```python-run
+import numpy as np
+sigmoid = lambda z: 1 / (1 + np.exp(-z))
+loss = lambda w, b, x, y: -(y * np.log(sigmoid(w @ x + b)) + (1 - y) * np.log(1 - sigmoid(w @ x + b)))
+
+x, y = np.array([2.0, 1.0]), 1.0
+w, b = np.array([0.5, -1.0]), 0.0
+p = sigmoid(w @ x + b)
+grad_w, grad_b = (p - y) * x, p - y
+print("p =", p, " loss =", round(float(loss(w, b, x, y)), 3))
+print("analytic gradient:", grad_w, grad_b)
+
+eps = 1e-6                                              # verify with finite differences
+num = [(loss(w + eps * np.eye(2)[j], b, x, y) - loss(w - eps * np.eye(2)[j], b, x, y)) / (2 * eps) for j in range(2)]
+print("numerical gradient:", np.round(num, 6))
+
+w, b = w - 1.0 * grad_w, b - 1.0 * grad_b               # one step with learning rate 1
+print("after one step: w =", w, " b =", b, " loss =", round(float(loss(w, b, x, y)), 3))
+```
+
+## 10. Why the loss surface's shape decides everything
+
+Section 3 said that gradient descent on a quadratic is stable only when $\eta < 2/\lambda_{\max}$. Here
+is where that comes from, in one dimension. Let $L(w) = \frac{a}{2}w^2$, whose curvature is $a$. The
+gradient is $aw$, so one step gives
+
+$$w_{t+1} = w_t - \eta\,a\,w_t = (1 - \eta a)\,w_t.$$
+
+Each step multiplies $w$ by the factor $(1-\eta a)$:
+
+- if $0 < \eta a < 1$, the factor is between 0 and 1 and $w$ shrinks steadily towards the minimum;
+- if $1 < \eta a < 2$, the factor is negative but smaller than 1 in size: $w$ jumps across the minimum
+  each step and still converges, oscillating;
+- if $\eta a > 2$, the factor is larger than 1 in size and $w$ grows without bound. This is divergence.
+
+In several dimensions, each direction has its own curvature, given by an eigenvalue of the Hessian. The
+learning rate must satisfy the *steepest* direction ($\eta < 2/\lambda_{\max}$). With that learning rate,
+the *flattest* direction shrinks by only $(1 - \eta\lambda_{\min})$ per step. The ratio
+$\kappa = \lambda_{\max}/\lambda_{\min}$ is the **condition number**. A large one means slow convergence,
+and it is exactly what badly scaled features produce.
+
+```python-run
+import numpy as np
+a = 4.0                                         # curvature of L(w) = a/2 * w^2; the limit is 2/a = 0.5
+for lr in [0.1, 0.25, 0.4, 0.49, 0.51]:
+    w, path = 1.0, []
+    for _ in range(6):
+        w = (1 - lr * a) * w
+        path.append(round(w, 3))
+    print(f"lr={lr:<5} factor={1 - lr * a:+.2f}  w: {path}")
+
+rng = np.random.RandomState(0)
+X = rng.randn(200, 2) * [1.0, 30.0]             # the second feature has a 30 times larger scale
+for name, data in [("raw features", X), ("standardised", (X - X.mean(0)) / X.std(0))]:
+    eig = np.linalg.eigvalsh(2 / len(data) * data.T @ data)
+    print(f"{name:13s} condition number of the MSE Hessian = {eig.max() / eig.min():8.1f}")
+```
+
+A learning rate of 0.25 is ideal for this curvature: the factor is 0, and the minimum is reached in one
+step. That is what Newton's method does in general, by dividing the gradient by the curvature. Adam's
+per-parameter scaling (module 8) is a cheap approximation of the same idea.
+
 ## Summary
 
 - The gradient points uphill. Gradient descent steps against it with learning rate $\eta$.

@@ -249,6 +249,148 @@ is the mapping you'll need:
 > faster, introduced strict mode, `model_*` method names, `field_validator`/`model_validator`, `ConfigDict`,
 > `TypeAdapter`, and split settings into `pydantic-settings`.
 
+## Nested models and reading error locations
+
+Real payloads are trees. Pydantic validates the whole tree in one pass and reports each problem with a
+**path** (`loc`) into it — the same path FastAPI returns to clients with `"body"` prepended:
+
+```python-run
+from pydantic import BaseModel, Field, ValidationError
+
+class Address(BaseModel):
+    street: str
+    city: str
+    postcode: str = Field(pattern=r"^\d{5}$")
+
+class LineItem(BaseModel):
+    sku: str = Field(min_length=3)
+    quantity: int = Field(ge=1)
+    unit_price: float = Field(gt=0)
+
+class Order(BaseModel):
+    customer_email: str
+    shipping: Address
+    items: list[LineItem] = Field(min_length=1)
+    notes: dict[str, str] = {}
+
+payload = {
+    "customer_email": "ann@example.com",
+    "shipping": {"street": "1 Main St", "city": "Austin", "postcode": "ABCDE"},
+    "items": [
+        {"sku": "HAM-1", "quantity": 2, "unit_price": 9.5},
+        {"sku": "x", "quantity": 0, "unit_price": "free"},
+    ],
+    "notes": {"gift": 1},
+}
+try:
+    Order.model_validate(payload)
+except ValidationError as e:
+    for err in e.errors():
+        print(".".join(str(p) for p in err["loc"]).ljust(22), err["type"])
+```
+
+Read `items.1.quantity` as "in `items`, element index 1, field `quantity`". Five independent problems —
+in a nested object, in a list element, in a dict value — are found and located in a single validation,
+which is what lets a frontend highlight every bad form field at once.
+
+A valid payload round-trips through nested objects with real types, and conversion back is one call:
+
+```python-run
+from pydantic import BaseModel
+
+class Address(BaseModel):
+    city: str
+
+class User(BaseModel):
+    name: str
+    addresses: list[Address]
+
+u = User.model_validate({"name": "Ann", "addresses": [{"city": "Austin"}, {"city": "Boston"}]})
+print(type(u.addresses[0]).__name__, u.addresses[1].city)        # real Address objects, not dicts
+print(u.model_dump())                                            # recursively back to plain dicts
+copy = u.model_copy(deep=True)
+copy.addresses[0].city = "Denver"
+print(u.addresses[0].city, "|", copy.addresses[0].city)          # deep copy is independent
+```
+
+## Unions: how Pydantic chooses
+
+For `int | str`, v1 tried types left to right, so the *order* silently changed results. v2 uses **smart
+mode**: it prefers a member the input already matches exactly, and only then falls back to coercion.
+
+```python-run
+from pydantic import BaseModel
+
+class M(BaseModel):
+    a: int | str
+    b: str | int
+    c: float | int
+    d: list[int] | str
+
+print(M(a="5", b=5, c=3, d="12"))
+# a stays '5' (already a str), b stays 5 (already an int), c stays int 3, d stays '12'
+print(M(a=5, b="x", c=3.5, d=["1", 2]))
+```
+
+When members are models, prefer a **discriminated union** (next lesson) so the choice is explicit rather
+than inferred.
+
+## Validating things that aren't model fields
+
+Three tools cover data that doesn't arrive as a model instance:
+
+- `Model.model_validate(obj)` — from a dict or (with `from_attributes=True`) an object.
+- `Model.model_validate_json(text)` — parse and validate JSON in one step in Rust; faster than
+  `json.loads` followed by `model_validate`, and stricter about JSON-specific rules.
+- `TypeAdapter(T)` — the same engine for any type: `TypeAdapter(list[Order])`, `TypeAdapter(dict[str,
+  float])`, a union.
+- `@validate_call` — validates a plain function's arguments (and optionally its return value) against its
+  hints: runtime checking for internal functions that receive untrusted data.
+
+```python-run
+from pydantic import ValidationError, validate_call, Field
+from typing import Annotated
+
+@validate_call
+def resize(width: Annotated[int, Field(gt=0, le=4096)], height: Annotated[int, Field(gt=0, le=4096)],
+           keep_ratio: bool = True) -> str:
+    return f"{width}x{height} keep_ratio={keep_ratio}"
+
+print(resize("640", 480, keep_ratio="no"))        # coerced like model fields
+try:
+    resize(0, 99999)
+except ValidationError as e:
+    print([(err["loc"], err["type"]) for err in e.errors()])
+```
+
+## Cost model: where validation time goes
+
+Validation is fast (compiled Rust), but not free, and the model is built once per class, not per request:
+
+- **Class creation** compiles a validator and serializer — a one-off cost at import.
+- **Per call** cost grows with the size of the data. Ten thousand nested objects per request are ten
+  thousand validations; for bulk numeric payloads (feature matrices, embeddings) prefer flat
+  `list[list[float]]` with length limits, or binary formats, over a list of tiny models.
+- `model_construct()` builds an instance **without validation** — only for data you have already
+  validated (for example rows you wrote yourself); using it on client input removes the safety net.
+- In FastAPI a response model is validated *again* on the way out. For very large responses that you
+  trust, returning a `Response` directly skips that cost — at the price of losing filtering.
+
+## Dataclasses, TypedDict or BaseModel?
+
+| | `dataclass` | `TypedDict` | Pydantic `BaseModel` |
+|---|---|---|---|
+| Runtime validation | no | no | **yes** |
+| Coercion from JSON-ish input | no | no | yes |
+| JSON serialisation | manual | manual | built in |
+| JSON Schema | no | no | built in |
+| Overhead | lowest | none (a dict) | small |
+| Use for | internal value objects | typing existing dicts | **data crossing a trust boundary** |
+
+That last cell is the rule of thumb the book arrives at: use Pydantic wherever data enters or leaves the
+system (requests, responses, config, messages from queues, rows from files), and feel free to use lighter
+structures deep inside.
+
 ## Pitfalls
 
 - Assuming hints are checked at runtime in plain functions — only Pydantic (or similar) checks them.

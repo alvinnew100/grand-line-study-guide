@@ -254,6 +254,124 @@ print(prefix, range_sum(2, 4), range_sum(0, 6) == sum(nums))
 > [!INTERVIEW]
 > Mentioning the right tool earns points: `groupby` for run-length encoding (remember it only groups consecutive items), `accumulate` for prefix sums, `product` for grid directions or brute force, `combinations` for "choose k", `chain.from_iterable` to flatten one level, `islice` to take from a generator, `zip(a, a[1:])` / `pairwise` for adjacent pairs.
 
+## How the tools work: pure-Python equivalents
+
+The documentation specifies each itertools function by an equivalent generator. Writing a few yourself is the best way to internalise their behaviour — and interviewers sometimes ask for exactly this.
+
+```python-run
+def my_chain(*iterables):
+    for it in iterables:
+        yield from it
+
+def my_islice(iterable, stop):
+    it = iter(iterable)
+    for _ in range(stop):
+        try:
+            yield next(it)
+        except StopIteration:
+            return
+
+def my_accumulate(iterable, func=lambda a, b: a + b):
+    it = iter(iterable)
+    try:
+        total = next(it)
+    except StopIteration:
+        return
+    yield total
+    for x in it:
+        total = func(total, x)
+        yield total
+
+def my_product(*pools):
+    result = [[]]
+    for pool in pools:                               # grow partial tuples one pool at a time
+        result = [prefix + [x] for prefix in result for x in pool]
+    for combo in result:
+        yield tuple(combo)
+
+def my_combinations(items, r):
+    items = tuple(items)
+    def build(start, chosen):
+        if len(chosen) == r:
+            yield tuple(chosen)
+            return
+        for i in range(start, len(items)):           # only move forward: no repeats, no reorderings
+            yield from build(i + 1, chosen + [items[i]])
+    yield from build(0, [])
+
+import itertools
+print(list(my_chain("ab", [1])), list(my_islice(itertools.count(), 3)), list(my_accumulate([1, 2, 3, 4])))
+print(list(my_product("ab", [0, 1])) == list(itertools.product("ab", [0, 1])))
+print(list(my_combinations("abcd", 2)) == list(itertools.combinations("abcd", 2)))
+```
+
+`my_combinations` is the backtracking template behind "generate all subsets of size k"; changing `i + 1` to `i` gives combinations with replacement, and iterating over all unused positions instead of `range(start, ...)` gives permutations.
+
+Two facts follow from these definitions. First, the combinatoric tools work on **positions**, not values: if the input contains duplicates, so does the output (`combinations("aab", 2)` yields `('a','a')`, `('a','b')`, `('a','b')`). De-duplicate with a `set` or sort and skip equal neighbours. Second, `product` needs to replay its inputs, so it materialises each one — never pass it an infinite iterator.
+
+## The cost of `tee`
+
+`tee` buffers every item that one branch has seen and another has not. If you exhaust one branch before touching the other, the buffer holds the *entire* stream — at which point a plain `list` would be simpler and faster:
+
+```python-run
+from itertools import tee
+
+def source():
+    for i in range(5):
+        print(f"  produce {i}")
+        yield i
+
+a, b = tee(source())
+print("a:", next(a), next(a))        # two items produced and buffered for b
+print("b:", next(b))                 # served from the buffer: nothing new is produced
+print("a:", next(a))
+```
+
+Use `tee` only when the branches advance roughly in step (as in the classic `pairwise` recipe: `a, b = tee(it); next(b, None); zip(a, b)`).
+
+## Lazy pipeline versus building lists: a comparison
+
+```python-run
+import itertools, tracemalloc
+
+def squares_of_evens_eager(n, k):
+    nums = list(range(n))
+    evens = [x for x in nums if x % 2 == 0]
+    squares = [x * x for x in evens]
+    return squares[:k]
+
+def squares_of_evens_lazy(n, k):
+    evens = (x for x in range(n) if x % 2 == 0)
+    squares = (x * x for x in evens)
+    return list(itertools.islice(squares, k))
+
+for fn in (squares_of_evens_eager, squares_of_evens_lazy):
+    tracemalloc.start()
+    result = fn(200_000, 3)
+    _, peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+    print(f"{fn.__name__:<26} {result}  peak ~{peak / 1024:,.0f} KiB")
+```
+
+The lazy version touches six numbers and stops; the eager one builds three large lists to return three items. Laziness wins whenever you might stop early, or the data doesn't fit in memory. Eager lists win when you need the data more than once, need its length, or need to sort it — at which point laziness must end anyway (`sorted` consumes everything).
+
+## Choosing the right tool
+
+| You want | Use |
+|---|---|
+| all pairs `(i, j)` with `i < j` | `combinations(xs, 2)` |
+| every ordering | `permutations(xs)` |
+| nested loops over several ranges | `product(a, b, c)` |
+| all subsets (power set) | `chain.from_iterable(combinations(xs, r) for r in range(len(xs) + 1))` |
+| running totals / running max | `accumulate(xs)` / `accumulate(xs, max)` |
+| runs of equal neighbours | `groupby(xs)` |
+| group *all* equal keys | `defaultdict(list)` (no sort needed), or sort then `groupby` |
+| first n / skip n | `islice(it, n)` / `islice(it, n, None)` |
+| round-robin labels | `zip(items, cycle(labels))` |
+| pad the shorter input | `zip_longest(a, b, fillvalue=...)` |
+
+Note the grouping row: sorting just to feed `groupby` costs O(n log n), while a `defaultdict(list)` groups in O(n) and keeps first-seen order. Reach for `groupby` when the data is already sorted or when *consecutive* runs are what you actually mean.
+
 ## Pitfalls recap
 
 - `groupby` without sorting first only groups adjacent equal keys.

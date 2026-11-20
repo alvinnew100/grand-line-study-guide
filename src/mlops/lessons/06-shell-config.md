@@ -256,6 +256,142 @@ print(json.dumps(cfg, indent=2))
 > injected as env var/K8s Secret. Canary percentage: deployment/rollout config or a feature-flag system,
 > changeable without rebuilding the image.
 
+## A debugging session, start to finish
+
+A realistic incident shows how the commands combine. *Symptom: the nightly scoring job on a VM stopped
+writing predictions.*
+
+```bash
+# 1. Is it running? Did it run?
+systemctl status churn-score.timer churn-score.service      # or: crontab -l ; grep CRON /var/log/syslog
+journalctl -u churn-score.service --since "yesterday" | tail -50
+
+# 2. The log ends mid-run with "Killed". Out of memory?
+dmesg -T | grep -i -E "oom|killed process" | tail -5
+free -h
+
+# 3. Or out of disk?
+df -h /data
+du -xh /data --max-depth=2 | sort -h | tail -10              # find what grew
+find /data/tmp -type f -mtime +7 -name "*.parquet" -print    # stale intermediates (inspect before deleting!)
+
+# 4. Is the input there and fresh?
+ls -lh --time-style=long-iso /data/features/dt=$(date -d yesterday +%F)/ | head
+
+# 5. Can the box reach its dependencies?
+curl -sS -m 5 -o /dev/null -w "%{http_code} %{time_total}s\n" http://mlflow.internal:5000/health
+nc -zv db.internal 5432
+
+# 6. Reproduce by hand with the same environment the job uses
+sudo -u svc-churn bash -lc 'cd /opt/churn && set -a && source .env && set +a && churn score --date 2025-01-15'
+echo "exit code: $?"
+```
+
+The pattern generalises: **is it running → what do the logs say → resources (memory, disk, GPU) →
+inputs → network → reproduce**. Two frequent root causes on ML boxes are the OOM killer (a batch grew
+past RAM) and a full disk (checkpoints, logs or temp files never cleaned).
+
+### Scheduling on a single machine
+
+Before you have an orchestrator, `cron` or systemd timers run recurring jobs:
+
+```bash
+# m h dom mon dow  command        (cron uses the machine's local time zone - prefer UTC machines)
+0 2 * * *  cd /opt/churn && /opt/churn/.venv/bin/churn score --date $(date -d yesterday +\%F) >> /var/log/churn/score.log 2>&1
+```
+
+Cron's weaknesses are exactly what orchestrators fix: no retries, no dependency management, no backfill,
+no alert on failure, overlapping runs if a job is slow (`flock -n /tmp/churn.lock <cmd>` prevents
+overlap). Treat cron as a stopgap.
+
+### Log rotation and disk hygiene
+
+Unbounded logs fill disks. Either log to stdout and let the platform handle it (containers,
+systemd-journald), or configure `logrotate`:
+
+```text
+/var/log/churn/*.log {
+    daily
+    rotate 14
+    compress
+    missingok
+    notifempty
+    copytruncate
+}
+```
+
+## Layered configuration for multiple environments
+
+A recurring design problem: the same service runs in dev, staging and production with mostly identical
+settings. Copying whole files leads to drift; the robust pattern is **base + small overrides**, with
+secrets injected separately.
+
+```yaml
+# configs/serve/base.yaml
+model_uri: models:/churn@champion
+threshold: 0.5
+max_batch: 256
+log_level: INFO
+feature_store: {timeout_ms: 50, retries: 2}
+```
+
+```yaml
+# configs/serve/production.yaml  - only what differs
+log_level: WARNING
+feature_store: {timeout_ms: 30}
+```
+
+```yaml
+# configs/serve/dev.yaml
+model_uri: models:/churn@challenger
+log_level: DEBUG
+```
+
+At startup the service loads `base.yaml`, deep-merges `${APP_ENV}.yaml`, applies environment-variable
+overrides (highest precedence), validates the result against a typed schema, **logs the final config
+with secrets redacted**, and exposes a hash of it. On Kubernetes the same layering is done with
+Kustomize overlays or Helm values files producing a ConfigMap.
+
+```python-run
+import hashlib, json
+
+SECRET_KEYS = {"password", "token", "api_key", "secret"}
+def redact(cfg):
+    if isinstance(cfg, dict):
+        return {k: ("***" if any(s in k.lower() for s in SECRET_KEYS) else redact(v)) for k, v in cfg.items()}
+    return cfg
+
+def validate(cfg):
+    errors = []
+    if not 0 <= cfg["threshold"] <= 1: errors.append("threshold must be in [0, 1]")
+    if not isinstance(cfg["max_batch"], int) or cfg["max_batch"] < 1: errors.append("max_batch must be a positive int")
+    if cfg["feature_store"]["timeout_ms"] > 100: errors.append("feature_store.timeout_ms exceeds latency budget")
+    if cfg["log_level"] not in {"DEBUG", "INFO", "WARNING", "ERROR"}: errors.append("bad log_level")
+    return errors
+
+cfg = {"model_uri": "models:/churn@champion", "threshold": 0.5, "max_batch": 256, "log_level": "WARNING",
+       "feature_store": {"timeout_ms": 30, "retries": 2}, "mlflow_tracking_password": "hunter2"}
+errs = validate(cfg)
+print("validation:", "OK" if not errs else errs)
+print("effective config:", json.dumps(redact(cfg)))
+print("config hash:", hashlib.sha256(json.dumps(cfg, sort_keys=True).encode()).hexdigest()[:10])
+bad = dict(cfg, threshold="0.5", max_batch=0)
+try:
+    print("validation of bad config:", validate(bad))
+except TypeError as e:
+    print("validation of bad config: type error caught at startup ->", e)
+```
+
+The string `"0.5"` where a float is expected is the classic untyped-YAML bug; a typed schema turns it
+into a startup failure instead of a wrong decision threshold in production.
+
+### Feature flags vs configuration
+
+Configuration is set at deploy time and changes with a rollout. **Feature flags** change at run time,
+per request or per user, without redeploying: kill switches ("disable the new ranker now"), gradual
+exposure, and experiment assignment. Keep the two separate: flags that live forever become configuration
+debt, so give each flag an owner and an expiry date.
+
 ## Summary
 
 - Know your way around files, logs, processes, GPUs, ports and permissions; pipes and `jq` make you fast.

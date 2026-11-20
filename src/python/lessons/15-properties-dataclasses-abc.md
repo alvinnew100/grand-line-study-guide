@@ -291,6 +291,106 @@ except ValueError as e:
 > [!INTERVIEW]
 > Expect: "When would you use a property?" (validation/computed/read-only attributes without changing the public API), "What does @dataclass generate?" (`__init__`, `__repr__`, `__eq__`, optionally ordering, hashing, slots), "Why `field(default_factory=list)`?" (avoid a shared mutable default), "ABC vs Protocol?" (nominal + runtime enforcement vs structural + static checking), "Composition vs inheritance?" (has-a vs is-a; prefer composition).
 
+## Under the hood: descriptors, the machinery behind properties
+
+A **descriptor** is any object stored on a class that defines `__get__`, `__set__` or `__delete__`. When attribute access finds one on the class, Python calls those methods instead of reading or writing the instance dict. `property`, methods, `classmethod`, `staticmethod`, `functools.cached_property` and ORM/Pydantic fields are all descriptors. Writing one yourself turns a validation rule into a reusable component — where a property would have to be repeated for every attribute:
+
+```python-run
+class Positive:
+    """Reusable validated attribute (a data descriptor)."""
+    def __set_name__(self, owner, name):       # called once, when the class is created
+        self.name = name
+        self.storage = "_" + name
+    def __get__(self, instance, owner=None):
+        if instance is None:
+            return self                         # accessed on the class itself
+        return getattr(instance, self.storage)
+    def __set__(self, instance, value):
+        if value <= 0:
+            raise ValueError(f"{self.name} must be positive, got {value}")
+        setattr(instance, self.storage, value)
+
+class Product:
+    price = Positive()
+    qty = Positive()
+    def __init__(self, price, qty):
+        self.price, self.qty = price, qty       # both assignments run Positive.__set__
+
+p = Product(9.5, 3)
+p.qty = 10
+print(p.price * p.qty, vars(p))
+for bad in (lambda: Product(-1, 1), lambda: setattr(p, "qty", 0)):
+    try:
+        bad()
+    except ValueError as e:
+        print("ValueError:", e)
+print(type(Product.price).__name__)
+```
+
+`property` is simply a ready-made descriptor whose `__get__`/`__set__` call the functions you decorated. Because it defines `__set__`, it is a **data descriptor** and takes priority over the instance dict — which is why a property cannot be bypassed by assigning to the same name.
+
+## What `@dataclass` actually generates
+
+There is no runtime magic: the decorator reads `__annotations__`, writes the source code of the methods, `exec`s it, and attaches the results to your class. You can inspect the outcome:
+
+```python-run
+from dataclasses import dataclass, fields, field, asdict, astuple
+import inspect
+
+@dataclass
+class Item:
+    name: str
+    price: float = 0.0
+    tags: list = field(default_factory=list, repr=False)
+
+print(inspect.signature(Item.__init__))
+print([(f.name, f.type.__name__, f.default is not f.default_factory) for f in fields(Item)])
+print(sorted(n for n in vars(Item) if n.startswith("__") and n in
+             ("__init__", "__repr__", "__eq__", "__hash__", "__match_args__")))
+i = Item("cola", 1.5)
+print(i, asdict(i), astuple(i), Item.__hash__)
+```
+
+Note the last value: a plain (`eq=True`, mutable) dataclass sets `__hash__` to `None` — the "defining `__eq__` makes you unhashable" rule from the data-model lesson. `frozen=True` restores hashing; `unsafe_hash=True` forces it at your own risk.
+
+Two more behaviours that surprise people:
+
+- **Fields without defaults cannot follow fields with defaults** (the generated `__init__` would be invalid). This also bites in inheritance, when a subclass adds a required field after a parent's optional one; `kw_only=True` solves it.
+- **Only annotated names are fields.** `count = 0` without an annotation is an ordinary class attribute, silently absent from `__init__`, `__repr__` and `__eq__`.
+
+```python-run
+from dataclasses import dataclass
+
+@dataclass
+class Settings:
+    host: str = "localhost"
+    port = 8000                      # no annotation: NOT a field
+
+s = Settings()
+print(s, Settings("h") == Settings("h"), s.port)
+try:
+    Settings("h", 9000)
+except TypeError as e:
+    print("TypeError:", e)
+
+@dataclass(kw_only=True)
+class Base:
+    debug: bool = False
+@dataclass(kw_only=True)
+class Service(Base):
+    name: str                        # required field after an optional one: fine with kw_only
+print(Service(name="api"))
+```
+
+## Debugging checklist
+
+- `RecursionError` on attribute access: the property reads or writes its own public name instead of the underscore-prefixed storage.
+- `AttributeError: can't set attribute` / `property ... has no setter`: you assigned to a read-only property, perhaps in `__init__`.
+- `ValueError: mutable default <class 'list'> for field x is not allowed`: use `field(default_factory=list)`.
+- `FrozenInstanceError` in `__post_init__`: use `object.__setattr__(self, name, value)`.
+- `TypeError: Can't instantiate abstract class X without an implementation for abstract method 'y'`: implement `y` — or you misspelled it. `X.__abstractmethods__` lists what is still missing.
+- Sorting dataclasses raises `TypeError: '<' not supported`: you forgot `order=True`, or a compared field holds mixed/uncomparable values.
+
 ## Pitfalls recap
 
 - A property getter that reads `self.balance` instead of `self._balance` → infinite recursion.

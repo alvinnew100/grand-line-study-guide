@@ -286,6 +286,82 @@ Defining `__len__` makes `len(s)` work *and* makes empty stacks falsy — a smal
 > [!INTERVIEW]
 > Common questions: "What is `self`?" (the instance, passed explicitly as the first parameter; `obj.m(x)` is `Cls.m(obj, x)`). "Class vs instance attribute?" (shared vs per-object; lookup goes instance then class). "classmethod vs staticmethod?" (cls vs nothing; classmethods for alternative constructors that respect subclasses). "How do you make a field private?" (convention `_x`; `__x` mangles; properties for controlled access).
 
+## Under the hood: how a method gets its `self`
+
+There is no magic keyword behind `self`. Functions are **descriptors**: objects with a `__get__` method. When attribute lookup finds a function *on the class* while you are accessing it *through an instance*, Python calls `function.__get__(instance, cls)`, which returns a **bound method** — a small object pairing the function with the instance.
+
+```python-run
+class Greeter:
+    def __init__(self, name):
+        self.name = name
+    def hello(self, punct="!"):
+        return f"hello from {self.name}{punct}"
+
+g = Greeter("Brook")
+func = Greeter.__dict__["hello"]                 # the plain function stored in the class
+bound = func.__get__(g, Greeter)                 # what g.hello does for you
+print(bound("?"), bound.__self__ is g, bound.__func__ is func)
+
+say = g.hello                                    # bound methods are first-class values
+print(say(), [m("...") for m in (g.hello, Greeter("Robin").hello)])
+
+g.hello = lambda: "instance attribute shadows the method"   # stored in g.__dict__
+print(g.hello())
+del g.hello
+print(g.hello())
+```
+
+The same mechanism explains three things at once: why you can pass `obj.method` around as a callback (it remembers its instance); why a function stored directly on an *instance* is **not** bound (descriptors are only consulted on the class); and how `classmethod`, `staticmethod` and `property` work — they are descriptors with different `__get__` behaviour.
+
+### The full lookup order for `obj.attr`
+
+1. Search `type(obj)` and its base classes for `attr`. If found and it is a **data descriptor** (defines `__set__`, e.g. a `property`), use it.
+2. Otherwise look in the instance's own `obj.__dict__`.
+3. Otherwise use what was found on the class in step 1 (a method or plain class attribute), binding it if it is a function.
+4. Otherwise call `type(obj).__getattr__(obj, "attr")` if defined; else raise `AttributeError`.
+
+*Assignment* (`obj.attr = v`) is simpler: unless a data descriptor intercepts it, it always writes to the **instance** dict — which is why `a.fleet_size = 99` created a shadowing instance attribute earlier instead of changing the class.
+
+```python-run
+class Config:
+    retries = 3                      # class attribute: the shared default
+
+a, b = Config(), Config()
+a.retries += 1                       # read 3 from the class, WRITE 4 to the instance
+print(a.retries, b.retries, Config.retries, vars(a), vars(b))
+Config.retries = 10                  # changing the default affects instances without their own value
+print(a.retries, b.retries)
+```
+
+That "class attribute as default, instance attribute as override" pattern is legitimate and common — for **immutable** defaults. It is exactly the mutable ones (lists, dicts) that bite, because `a.items.append(x)` reads the shared object and mutates it without ever assigning.
+
+## Debugging class problems
+
+| Symptom | Cause |
+|---|---|
+| `TypeError: m() takes 0 positional arguments but 1 was given` | `self` missing from the method definition |
+| `TypeError: m() missing 1 required positional argument: 'self'` | called on the class (`Cls.m()`) instead of an instance; or forgot the parentheses when creating: `obj = Cls` |
+| `AttributeError: 'X' object has no attribute 'y'` | attribute never set in `__init__` (typo, or only set on some code path); or `__init__` of the parent never called |
+| `NameError: name 'y' is not defined` inside a method | wrote `y` instead of `self.y` |
+| changing one object changes another | shared mutable class attribute, or both hold the same list/dict passed to their constructors |
+| `print(obj)` shows `<__main__.X object at 0x...>` | no `__repr__` defined |
+
+Useful inspection tools: `vars(obj)` (instance attributes), `vars(type(obj))` (class attributes and methods), `type(obj).__mro__`, `dir(obj)` (everything reachable), and `isinstance`/`hasattr`.
+
+## Class or something lighter?
+
+Not everything needs a class. A rough guide:
+
+| Situation | Reach for |
+|---|---|
+| a one-off bundle of related values | tuple, dict, or `namedtuple` |
+| named fields, maybe defaults, mostly data | `@dataclass` |
+| one operation with a little remembered state | closure or `functools.partial` |
+| a group of stateless helper functions | a module (not a class full of static methods) |
+| state **plus** several operations and invariants to protect | a class |
+
+A class earns its keep when it maintains an *invariant* — a promise about its state, like "balance never exceeds the limit" in `CreditCard` — that would be easy to break if the data were a bare dict manipulated from all over the program.
+
 ## Pitfalls recap
 
 - Forgetting `self` as the first parameter → `TypeError: takes 0 positional arguments but 1 was given`.

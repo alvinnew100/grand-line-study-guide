@@ -226,6 +226,137 @@ gr.ChatInterface(respond, type="messages").launch()
 Ollama and llama.cpp (GGUF, CPU/Apple Silicon friendly), LM Studio, and MLX on Macs. Great for
 development and privacy-sensitive prototypes; not for high-throughput serving.
 
+## 5. What the Trainer does for you, demonstrated
+
+### Gradient accumulation is exactly a bigger batch
+
+When a batch of 32 does not fit in memory, run 4 micro-batches of 8, **sum their gradients**, and step
+once. For a loss that is a mean over examples this is mathematically identical to the large batch, as
+the demo verifies on a linear model:
+
+```python-run
+import numpy as np
+rng = np.random.default_rng(0)
+X, y = rng.standard_normal((32, 5)), rng.standard_normal(32)
+w = np.zeros(5)
+
+def grad(Xb, yb, w):                       # gradient of mean squared error on a batch
+    return 2 * Xb.T @ (Xb @ w - yb) / len(yb)
+
+full = grad(X, y, w)
+accum = np.zeros(5)
+for i in range(0, 32, 8):                  # 4 micro-batches of 8
+    accum += grad(X[i:i + 8], y[i:i + 8], w) / 4     # divide by the number of accumulation steps
+print("max difference:", float(np.abs(full - accum).max()))
+```
+
+The division by the number of accumulation steps is what `Trainer` and `accelerator.accumulate` do
+internally. Two caveats: layers that use batch statistics (BatchNorm) are not equivalent, and
+accumulation gives you the memory of a small batch but none of the speed of a large one.
+
+### Dynamic padding and length bucketing
+
+Padding every example to the longest in the *dataset* wastes most of the compute on pad tokens. Padding
+to the longest in each *batch* helps, and grouping similar lengths together (`group_by_length=True`, or a
+length-sorted sampler) helps more:
+
+```python-run
+import numpy as np
+rng = np.random.default_rng(1)
+lengths = np.clip(rng.lognormal(4.0, 0.7, 4096).astype(int), 5, 512)      # realistic skew: many short, few long
+B = 32
+def padded_tokens(order):
+    return sum(lengths[order[i:i + B]].max() * len(order[i:i + B]) for i in range(0, len(order), B))
+
+real = lengths.sum()
+shuffled = rng.permutation(len(lengths))
+print(f"real tokens                  : {real:>9,}")
+print(f"pad to global max (512)      : {512 * len(lengths):>9,}  ({512 * len(lengths) / real:.1f}x)")
+print(f"dynamic padding, random order: {padded_tokens(shuffled):>9,}  ({padded_tokens(shuffled) / real:.2f}x)")
+print(f"dynamic + length bucketing   : {padded_tokens(np.argsort(lengths)):>9,}  ({padded_tokens(np.argsort(lengths)) / real:.2f}x)")
+```
+
+(Real bucketing shuffles *among* buckets so batches are still random; fully sorted order is shown only
+to make the upper bound visible.)
+
+### A debugging table for training runs
+
+| symptom | likely cause | what to check |
+|---|---|---|
+| loss is `nan` after a few steps | learning rate too high, fp16 overflow, bad labels | lower LR, use bf16, add `max_grad_norm`, inspect a batch |
+| loss does not move | LR too low or frozen parameters; labels all `-100` | `print_trainable_parameters()`, decode one batch's labels |
+| eval loss rises while train loss falls | overfitting | fewer epochs, more data, lower rank, early stopping |
+| out of memory at the first step | batch or sequence too large | smaller batch plus accumulation, gradient checkpointing, shorter `max_length`, 4-bit base |
+| out of memory at evaluation only | logits accumulated for every eval example | `eval_accumulation_steps`, `prediction_loss_only=True` |
+| training is slow, GPU utilisation low | data loading or tokenisation in the loop | pre-tokenise with `map`, raise `dataloader_num_workers` |
+| metrics worse after resuming | scheduler or optimizer state not restored | `resume_from_checkpoint=True` rather than reloading weights |
+
+The single most useful habit: **overfit one small batch first**. If the model cannot drive the loss to
+near zero on 16 examples, there is a bug in the data pipeline, labels or template, and no amount of
+compute will fix it.
+
+## 6. Why continuous batching wins: a simulation
+
+Static batching waits to fill a batch, then every request in it waits for the **longest** one to finish.
+Continuous batching admits a waiting request into a free slot at every decode step. The simulation below
+serves the same arrival trace both ways (one unit of time is one decode step; a request needs as many
+steps as it has output tokens).
+
+```python-run
+import numpy as np
+rng = np.random.default_rng(0)
+N, SLOTS = 200, 8
+arrive = np.cumsum(rng.exponential(1.2, N)).astype(int)          # arrival step of each request
+need = np.clip(rng.lognormal(3.0, 0.8, N).astype(int), 2, 300)   # output tokens each request needs
+
+def static_batching():
+    t, done, i = 0, np.zeros(N), 0
+    while i < N:
+        t = max(t, arrive[i])
+        batch = [j for j in range(i, min(i + SLOTS, N)) if arrive[j] <= t] or [i]
+        t += need[batch].max()                                    # everyone waits for the longest
+        done[batch] = t
+        i += len(batch)
+    return done
+
+def continuous_batching():
+    t, done, queue, active, nxt = 0, np.zeros(N), [], {}, 0
+    while nxt < N or queue or active:
+        while nxt < N and arrive[nxt] <= t:
+            queue.append(nxt); nxt += 1
+        while queue and len(active) < SLOTS:                      # fill free slots every step
+            j = queue.pop(0); active[j] = need[j]
+        for j in list(active):
+            active[j] -= 1
+            if active[j] == 0:
+                done[j] = t + 1; del active[j]
+        t += 1
+    return done
+
+for name, fn in [("static", static_batching), ("continuous", continuous_batching)]:
+    lat = fn() - arrive
+    print(f"{name:10} mean latency {lat.mean():7.1f} steps   p95 {np.percentile(lat, 95):7.1f}   finished at step {int(fn().max())}")
+```
+
+Short requests no longer queue behind long ones, so both mean and tail latency drop sharply and the GPU
+stays busy. Real engines add one more constraint that this toy ignores: admitting a request requires
+**KV-cache memory**, which is what PagedAttention manages.
+
+## 7. Choosing a deployment option
+
+| option | you manage | best for | watch out for |
+|---|---|---|---|
+| Inference Providers / serverless APIs | nothing | prototypes, spiky or low volume, many models | per-token price, rate limits, model availability |
+| Inference Endpoints (dedicated) | scaling policy | steady traffic, private models, compliance | cold starts with scale-to-zero, GPU hourly cost |
+| self-hosted vLLM / SGLang / TGI | everything | high steady volume, custom models, data residency | ops burden, capacity planning, upgrades |
+| llama.cpp / Ollama / MLX | a laptop | local development, offline, privacy | throughput, feature gaps versus servers |
+| Spaces | an app repo | demos and internal tools | not a production API tier |
+
+The throughput-versus-latency trade-off is the knob behind all of them: larger batches raise tokens per
+second per GPU (lower cost per token) but increase each user's time to first token. Decide which you are
+optimising, set a latency objective (for example p95 TTFT under one second), and load-test with a
+realistic distribution of prompt and output lengths rather than a single fixed prompt.
+
 > [!INTERVIEW]
 > **"Why is vLLM faster than calling model.generate() in a loop?"** Continuous batching keeps the GPU
 > full by adding and retiring sequences at every step; PagedAttention stores the KV cache in

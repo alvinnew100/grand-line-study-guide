@@ -211,6 +211,167 @@ def update_settings(
 Each source is explicit in the signature, each is validated, and each appears in the docs with its
 location (`in: path`, `in: query`, `in: header`, `in: cookie`, `requestBody`).
 
+## Anatomy of an OpenAPI document
+
+It's worth reading a real `/openapi.json` once, because every tool downstream consumes exactly this
+structure. For a single endpoint the document has four parts: metadata (`info`), the `paths` object keyed
+by URL template and method, reusable `components.schemas` (your Pydantic models as JSON Schema), and
+security schemes.
+
+```json
+{
+  "openapi": "3.1.0",
+  "info": {"title": "House Price API", "version": "1.4.0"},
+  "paths": {
+    "/v1/predict": {
+      "post": {
+        "tags": ["predict"],
+        "summary": "Predict a price",
+        "operationId": "predict_v1",
+        "parameters": [
+          {"name": "x-request-id", "in": "header", "required": false, "schema": {"type": "string"}}
+        ],
+        "requestBody": {"required": true, "content": {"application/json": {
+            "schema": {"$ref": "#/components/schemas/PredictRequest"}}}},
+        "responses": {
+          "200": {"description": "The predicted price in USD", "content": {"application/json": {
+              "schema": {"$ref": "#/components/schemas/PredictResponse"}}}},
+          "422": {"description": "Validation Error", "content": {"application/json": {
+              "schema": {"$ref": "#/components/schemas/HTTPValidationError"}}}}
+        },
+        "security": [{"OAuth2PasswordBearer": []}]
+      }
+    }
+  },
+  "components": {"schemas": {"PredictRequest": {"...": "..."}},
+                 "securitySchemes": {"OAuth2PasswordBearer": {"type": "oauth2", "flows": {"...": "..."}}}}
+}
+```
+
+Where each piece came from in your code:
+
+| OpenAPI element | Source in FastAPI |
+|---|---|
+| `info` | `FastAPI(title=..., version=..., description=...)` |
+| path + method | the decorator `@app.post("/v1/predict")` |
+| `summary` / `description` | decorator arguments, or the function name and docstring |
+| `parameters` (`in: path/query/header/cookie`) | function parameters and those of all dependencies |
+| `requestBody` | Pydantic-model, `Body`, `Form` or `File` parameters |
+| `responses.200` | return annotation / `response_model` and `status_code` |
+| `responses.422` | added automatically whenever the operation has validated inputs |
+| `security` | security dependencies such as `OAuth2PasswordBearer` or `APIKeyHeader` |
+| `components.schemas` | every Pydantic model reachable from requests and responses |
+
+The following cell builds a miniature version of this assembly: from a function signature and Pydantic
+models to an OpenAPI-like operation object.
+
+```python-run
+import inspect, json
+from typing import Annotated, get_args, get_origin, get_type_hints
+from pydantic import BaseModel, Field, TypeAdapter
+
+class Header:           # stand-ins for fastapi.Header / fastapi.Query markers
+    where = "header"
+class Query:
+    where = "query"
+
+class PredictRequest(BaseModel):
+    sqft: float = Field(gt=0, description="Living area")
+    bedrooms: int = Field(ge=0, le=20)
+
+class PredictResponse(BaseModel):
+    price: float
+    model_version: str
+    model_config = {"protected_namespaces": ()}
+
+def predict(req: PredictRequest,
+            dry_run: bool = False,
+            x_request_id: Annotated[str | None, Header()] = None) -> PredictResponse:
+    """Predict the sale price of a house."""
+
+def describe(func, path_template=""):
+    hints = get_type_hints(func, include_extras=True)
+    op = {"summary": func.__name__.replace("_", " ").title(), "description": inspect.getdoc(func),
+          "parameters": [], "responses": {}}
+    schemas = {}
+    for name, param in inspect.signature(func).parameters.items():
+        ann, where = hints[name], "query"
+        if get_origin(ann) is Annotated:
+            ann, *meta = get_args(ann)
+            where = next((m.where for m in meta if hasattr(m, "where")), "query")
+        if isinstance(ann, type) and issubclass(ann, BaseModel):           # model -> request body
+            schemas[ann.__name__] = ann.model_json_schema()
+            op["requestBody"] = {"$ref": f"#/components/schemas/{ann.__name__}"}
+            continue
+        if "{" + name + "}" in path_template:
+            where = "path"
+        op["parameters"].append({
+            "name": name.replace("_", "-") if where == "header" else name,
+            "in": where,
+            "required": param.default is inspect.Parameter.empty,
+            "schema": TypeAdapter(ann).json_schema(),
+        })
+    ret = hints.get("return")
+    if ret:
+        schemas[ret.__name__] = ret.model_json_schema()
+        op["responses"]["200"] = {"$ref": f"#/components/schemas/{ret.__name__}"}
+    if op["parameters"] or "requestBody" in op:
+        op["responses"]["422"] = {"description": "Validation Error"}
+    return op, schemas
+
+op, schemas = describe(predict)
+print(json.dumps(op, indent=1))
+print("components:", list(schemas), "->", json.dumps(schemas["PredictRequest"]["properties"]))
+```
+
+Real FastAPI does the same walk over every route (including the parameters contributed by dependencies),
+then caches the result in `app.openapi_schema` — so the document is computed once, on the first request
+for it.
+
+## Input and output schemas can differ
+
+Pydantic v2 generates JSON Schema in two modes, and FastAPI uses both: **validation** mode for what
+clients send, **serialization** mode for what they receive. A field with a default is *optional on input*
+but *always present on output*; a `@computed_field` exists only in output. For such models the docs show
+two entries, e.g. `Item-Input` and `Item-Output`. This is correct, and helps generated clients have
+accurate types; if you prefer a single schema per model, create the app with
+`FastAPI(separate_input_output_schemas=False)`.
+
+## Documenting errors properly
+
+By default only `200` and `422` are documented. Clients deserve to know the rest, with a schema:
+
+```python
+class ErrorResponse(BaseModel):
+    detail: str
+
+@router.get(
+    "/items/{item_id}",
+    response_model=ItemPublic,
+    responses={
+        404: {"model": ErrorResponse, "description": "Item does not exist"},
+        401: {"model": ErrorResponse, "description": "Missing or invalid token"},
+        429: {"description": "Rate limit exceeded", "headers": {
+            "Retry-After": {"schema": {"type": "integer"}, "description": "Seconds to wait"}}},
+    },
+)
+def read_item(item_id: int): ...
+```
+
+Declare shared ones once at the router level (`APIRouter(responses={401: ...})`) so every route inherits
+them.
+
+## Customising and extending the schema
+
+For changes FastAPI doesn't expose as arguments, override the generator: build the default with
+`fastapi.openapi.utils.get_openapi(...)`, modify the dict (add a logo, vendor extensions such as
+`x-internal`, servers, extra security schemes), store it in `app.openapi_schema`, and assign your function
+to `app.openapi`. Other useful switches: `servers=[{"url": "https://api.example.com"}]` so "Try it out"
+and generated clients target the right host behind a proxy; `root_path="/api/v1"` when a gateway strips a
+prefix before forwarding (otherwise `/docs` requests `/openapi.json` at the wrong location and shows
+"Failed to load API definition"); and `swagger_ui_parameters={"persistAuthorization": True}` to keep the
+login across reloads.
+
 ## Pitfalls
 
 - Expecting `X_Token` with underscores to arrive — FastAPI looks for `x-token`; proxies like nginx drop

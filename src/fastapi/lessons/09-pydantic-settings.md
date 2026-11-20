@@ -264,6 +264,152 @@ or the first test's settings will be reused.
 > manager. Settings are provided through a cached dependency (`@lru_cache` + `Depends(get_settings)`), so
 > tests can override them via `app.dependency_overrides`.
 
+## Worked example: source precedence, step by step
+
+Suppose the class declares `debug: bool = False` and `log_level: str = "INFO"`, the `.env` file contains
+`APP_DEBUG=true` and `APP_LOG_LEVEL=DEBUG`, the process environment has `APP_LOG_LEVEL=WARNING`, and a
+test calls `Settings(debug=False)`. Which values win?
+
+```python-run
+import os
+from pydantic import BaseModel
+
+class Settings(BaseModel):
+    debug: bool = False
+    log_level: str = "INFO"
+    workers: int = 1
+
+def load(init_kwargs, environ, dotenv_text, prefix="APP_"):
+    """Resolve each field from the highest-priority source that has it; report where it came from."""
+    dotenv = dict(line.split("=", 1) for line in dotenv_text.strip().splitlines()
+                  if line.strip() and not line.startswith("#"))
+    values, origin = {}, {}
+    for name in Settings.model_fields:
+        key = (prefix + name).upper()
+        for label, source, k in (("init argument", init_kwargs, name),
+                                 ("environment", environ, key),
+                                 (".env file", dotenv, key)):
+            if k in source:
+                values[name], origin[name] = source[k], label
+                break
+        else:
+            origin[name] = "class default"
+    return Settings.model_validate(values), origin
+
+dotenv_text = """
+# local development overrides
+APP_DEBUG=true
+APP_LOG_LEVEL=DEBUG
+"""
+settings, origin = load({}, {"APP_LOG_LEVEL": "WARNING", "PATH": "/usr/bin"}, dotenv_text)
+for field, value in settings.model_dump().items():
+    print(f"{field:10} = {value!r:10} from {origin[field]}")
+
+print("--- a test passes an explicit argument ---")
+settings, origin = load({"debug": False}, {"APP_LOG_LEVEL": "WARNING"}, dotenv_text)
+print("debug =", settings.debug, "from", origin["debug"])
+```
+
+The real environment beats the `.env` file. That ordering is deliberate: a `.env` file left lying in an
+image or working directory can never override what the platform injects. If a value "won't change" no
+matter how you edit `.env`, an exported shell variable is usually shadowing it — `printenv | grep APP_`
+settles it in seconds.
+
+## Parsing rules worth knowing
+
+Environment variables are always strings; pydantic-settings converts them using the field types:
+
+| Field type | Environment value | Result |
+|---|---|---|
+| `bool` | `true`, `1`, `yes`, `on` (any case) | `True` |
+| `int` / `float` | `"8"`, `"0.25"` | `8`, `0.25` |
+| `list[str]` | `'["a","b"]'` (JSON) | `["a", "b"]` |
+| `dict[str, int]` | `'{"a": 1}'` (JSON) | `{"a": 1}` |
+| nested model | `APP_REDIS__PORT=6380` with `env_nested_delimiter="__"`, or one JSON value | `settings.redis.port == 6380` |
+| `SecretStr` | any string | masked wrapper |
+| `Literal["dev","prod"]` / `Enum` | `prod` | validated choice |
+
+A comma-separated list (`APP_CORS_ORIGINS=https://a.com,https://b.com`) is not JSON and fails with a
+parsing error. Either write JSON, or declare the field with `Annotated[list[str], NoDecode]` and add a
+`field_validator(mode="before")` that splits on commas.
+
+Variable names can be customised per field with `Field(validation_alias="DATABASE_URL")` — useful when
+the platform dictates a name without your prefix. Matching is case-insensitive unless you set
+`case_sensitive=True`.
+
+## Cross-field rules for configuration
+
+Configuration has invariants too, and a `model_validator` enforces them at boot instead of at 3 a.m.:
+
+```python-run
+from typing import Literal
+from pydantic import BaseModel, SecretStr, ValidationError, model_validator
+
+class Settings(BaseModel):
+    environment: Literal["dev", "staging", "prod"] = "dev"
+    debug: bool = False
+    secret_key: SecretStr
+    cors_origins: list[str] = []
+    docs_enabled: bool = True
+
+    @model_validator(mode="after")
+    def production_safety(self):
+        if self.environment == "prod":
+            problems = []
+            if self.debug:
+                problems.append("debug must be off")
+            if len(self.secret_key.get_secret_value()) < 32:
+                problems.append("secret_key must be at least 32 characters")
+            if "*" in self.cors_origins:
+                problems.append("wildcard CORS origin is not allowed")
+            if problems:
+                raise ValueError("unsafe production config: " + "; ".join(problems))
+        return self
+
+print(Settings(secret_key="dev").environment, "- lenient in dev")
+try:
+    Settings(environment="prod", debug=True, secret_key="short", cors_origins=["*"])
+except ValidationError as e:
+    print(e.errors()[0]["msg"])
+print(Settings(environment="prod", secret_key="k" * 40, cors_origins=["https://app.example.com"]).environment,
+      "- accepted")
+```
+
+A deployment with a development secret or wide-open CORS now refuses to start, which is far better than
+discovering it in a penetration-test report.
+
+## Feature flags and what does *not* belong in settings
+
+Settings are read once at startup. That makes them right for things that change **per deployment**
+(URLs, credentials, pool sizes, model version) and wrong for things that must change **while running**
+(a kill switch, a gradual rollout percentage, per-tenant limits). Those need a dynamic source — a
+database row, Redis, or a feature-flag service — read through a dependency with a short cache. Static
+boolean flags in settings are still valuable for decoupling deploy from release ("ship the code dark,
+enable with a restart").
+
+## Printing configuration safely
+
+A startup log line showing the effective configuration is extremely useful when debugging "which
+environment is this pod actually using?" — as long as secrets stay masked:
+
+```python-run
+from pydantic import BaseModel, SecretStr
+
+class Settings(BaseModel):
+    environment: str = "staging"
+    database_url: SecretStr = SecretStr("postgresql://app:hunter2@db.internal/app")
+    api_key: SecretStr = SecretStr("sk-live-123")
+    pool_size: int = 10
+
+s = Settings()
+print("startup config:", s.model_dump_json())      # SecretStr fields stay masked automatically
+print("NEVER do this :", {k: (v.get_secret_value() if isinstance(v, SecretStr) else v)
+                           for k, v in s if k == "pool_size"})   # only reveal what you need
+```
+
+Mark anything containing a credential — including whole connection URLs with passwords — as `SecretStr`,
+and the safe behaviour is the default one.
+
 ## Pitfalls
 
 - Reading `os.environ` all over the codebase — no validation, no single source of truth.

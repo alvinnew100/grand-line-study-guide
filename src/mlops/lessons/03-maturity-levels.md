@@ -174,6 +174,99 @@ and gateway, add caching, add agent patterns — with monitoring and evaluation 
 level 0 team edits prompts in production by hand; a level 2 team versions prompts, runs an evaluation
 suite in CI on every prompt change, and canaries prompt changes with online metrics (module 12).
 
+## What each level looks like in the repository
+
+Maturity is visible in the artifacts a team keeps. Here is the same churn project at each level.
+
+**Level 0**
+
+```text
+churn/
+├── churn_analysis_v3_final.ipynb
+├── model.pkl                       # emailed to the backend team
+└── README.md                       # "ask Priya how to rerun this"
+```
+
+**Level 1**
+
+```text
+churn/
+├── src/churn/{data,features,train,evaluate}.py     # notebook logic extracted into modules
+├── pipelines/training_dag.py                       # orchestrated: validate -> train -> evaluate -> register
+├── expectations/customers.json                     # data validation suite
+├── configs/train.yaml
+├── Dockerfile
+└── notebooks/                                      # exploration only
+```
+
+plus, outside the repo: a scheduler running the DAG weekly, an experiment tracker and model registry, a
+serving deployment that reads the registry, and a dashboard with basic drift checks.
+
+**Level 2** adds:
+
+```text
+├── tests/{unit,data,model,integration}/            # run on every pull request
+├── .github/workflows/{ci,deploy-pipeline,deploy-model}.yml
+├── k8s/ or helm/                                    # serving and pipeline infra as code
+├── ops/{alerts.yml,dashboards/}                     # monitoring as code
+└── docs/{model-card.md,runbook.md}
+```
+
+and the property that **nobody deploys by hand**: merging to `main` is the only way anything reaches
+production.
+
+## Measuring where you are
+
+Self-assessment by opinion is unreliable; use numbers. The four DORA metrics from software delivery
+translate directly, and ML adds a few of its own:
+
+| Metric | Question | Typical level 0 | Typical level 2 |
+|---|---|---|---|
+| Deployment frequency | how often does a new model or pipeline version reach production? | quarterly | weekly or daily |
+| Lead time for changes | from "idea merged" to "serving traffic" | weeks–months | hours–days |
+| Change failure rate | share of releases needing rollback or hotfix | unknown | measured, < 15% |
+| Time to restore | from detection to mitigation | days | minutes (alias rollback) |
+| Time to detect model degradation | from quality drop to alert | weeks, by customer complaint | hours–days, by monitor |
+| Retraining effort | human hours per retrain | 8–40 | ~0 for routine retrains |
+| Reproducibility | can last year's model be rebuilt? | no | yes, from registry lineage |
+
+```python-run
+# Score a team on a simple maturity rubric (0 = absent, 1 = manual, 2 = automated).
+team = {
+    "code in Git with review": 2, "data versioned": 1, "experiments tracked": 2,
+    "training is a pipeline": 1, "data validation gate": 0, "model validation gate": 1,
+    "model registry": 2, "CI for pipeline code": 0, "automated deployment": 1,
+    "progressive rollout / rollback": 0, "serving monitoring": 2, "drift / performance monitoring": 0,
+    "retraining trigger": 0,
+}
+level1_needs = ["training is a pipeline", "data validation gate", "model validation gate", "model registry",
+                "drift / performance monitoring", "retraining trigger"]
+level2_needs = level1_needs + ["CI for pipeline code", "automated deployment", "progressive rollout / rollback"]
+def reached(needs): return all(team[k] == 2 for k in needs)
+level = 2 if reached(level2_needs) else 1 if reached(level1_needs) else 0
+print(f"score: {sum(team.values())}/{2 * len(team)}  -> effective level {level}")
+gaps = sorted((v, k) for k, v in team.items() if k in level1_needs and v < 2)
+print("next steps toward level 1:")
+for v, k in gaps:
+    print(f"  - {k}: {'build it' if v == 0 else 'automate what is manual'}")
+```
+
+A team can score well on tools (tracker, registry, Git) and still be at level 0, because the *loop* is
+not automated. Levels are defined by the weakest link in the chain, not by how many products you bought.
+
+## Common mistakes when climbing
+
+- **Tooling before process.** Installing Kubeflow does not create a pipeline; first make the training
+  code runnable end to end from a clean checkout with one command.
+- **Automating retraining without gates.** Continuous training without data and model validation is an
+  efficient way to ship bad models automatically.
+- **One giant leap.** Going from notebooks to a full platform in one project usually stalls. Move one
+  model through each step and turn what you learn into templates.
+- **Ignoring the organisation.** Level 2 requires that data scientists own tests and pipelines, and that
+  platform engineers provide paved roads. No tool fixes a handoff culture.
+- **Uniform maturity targets.** A quarterly-refreshed pricing model and a fraud model that drifts weekly
+  deserve different investments.
+
 ## Summary
 
 - Maturity is about automation of **continuous training** and of **CI/CD for the pipeline**.

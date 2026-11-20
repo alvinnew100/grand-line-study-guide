@@ -212,6 +212,62 @@ print("invest next in:", weakest)
 - **Runbooks**: what to do when the drift alert fires at 3 a.m.
 - **Postmortems**: blameless write-ups after incidents, with action items.
 
+## A worked scenario: how debt accumulates in one year
+
+Abstract categories are easier to remember with a story. Follow a recommendation team through twelve
+months.
+
+**Month 1.** A data scientist ships a ranking model. Features are computed in a notebook-derived SQL
+script; the backend team reimplements three of them in Go for the online path. *Debt created:* two
+implementations of the same features (future skew), no tests on either.
+
+**Month 3.** A second team notices the ranking scores in a log table and starts using them to pick
+items for a marketing email. Nobody tells the ranking team. *Debt created:* an undeclared consumer.
+
+**Month 5.** To handle a new product category quickly, someone trains a small "adjustment" model on
+top of the ranker's output. *Debt created:* a correction cascade — improving the ranker now changes the
+input distribution of the adjustment model.
+
+**Month 7.** Twelve features are added in one experiment that improves offline NDCG by 0.3%. Nobody
+checks which of the twelve matter. Four come from a table owned by another team. *Debt created:*
+underutilised, bundled and unstable data dependencies.
+
+**Month 9.** The other team changes the semantics of a column in that table. Offline metrics are fine
+(training data is recomputed consistently); online, the Go feature code still reads the old meaning.
+Click-through falls 4% over three weeks before anyone connects the dots. The marketing email, fed by the
+same scores, sends irrelevant items to two million users.
+
+**Month 10.** The fix is a retrain — which shifts score calibration, which breaks the adjustment model
+and a hard-coded threshold in the email job.
+
+Count the cost: one upstream change produced a three-week silent regression, a second incident in
+another team, and a risky emergency retrain. Now replay the year with small investments: one feature
+library used by both paths (or a feature store) plus a parity test; a data contract with the upstream
+table and a schema check at ingestion; predictions published through a versioned, access-controlled
+interface so consumers are known; ablation of the twelve features before adoption; monitoring of
+prediction distributions. None of these is exotic. Each costs days, not months — and each maps to one
+row of the ML Test Score.
+
+### Prioritising debt repayment
+
+You cannot fix everything. A useful rule is to rank debt items by **(probability of an incident) ×
+(blast radius) ÷ (cost to fix)**:
+
+| Debt item | Likelihood | Blast radius | Fix cost | Priority |
+|---|---|---|---|---|
+| Duplicate feature implementations | high | all online predictions | medium | **1** |
+| No monitoring of prediction distribution | high (you would not notice anything) | all | low | **1** |
+| Undeclared consumers | medium | other teams | low (access control, catalogue) | 2 |
+| Correction cascade | medium | two models | high (retrain jointly) | 3 |
+| Twelve unpruned features | low per feature | model quality | medium | 3 |
+
+Monitoring usually comes first because it converts unknown failures into known ones — you cannot
+prioritise what you cannot see.
+
+> [!TIP]
+> Debt is not always bad. Shipping a manual level-0 model to learn whether the product idea works is a
+> rational loan. The failure mode is never scheduling the repayment once the model has proven its value.
+
 ## Summary
 
 - Responsibilities in ML span product, data engineering, data science, ML engineering, platform and SRE.

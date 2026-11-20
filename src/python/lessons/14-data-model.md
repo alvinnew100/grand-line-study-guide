@@ -276,6 +276,112 @@ The dot product is O(min(nnz)) rather than O(n): the data model lets you present
 > [!INTERVIEW]
 > "What are dunder methods?" — special methods Python calls to implement syntax and built-ins (`__len__` for `len`, `__add__` for `+`, `__iter__` for `for`, `__enter__/__exit__` for `with`). Mention that they're looked up on the type, that binary operators return `NotImplemented` to trigger the reflected `__radd__`, that `__eq__` without `__hash__` makes objects unhashable, and the `__repr__` vs `__str__` distinction.
 
+## Under the hood: why special methods live on the type
+
+For *implicit* invocations — through syntax or a built-in — Python skips the instance entirely and looks the special method up on the type. This is both a speed optimisation and a correctness requirement (otherwise `len(SomeClass)` could not be told apart from `len(instance)`).
+
+```python-run
+class Box:
+    def __len__(self):
+        return 3
+
+b = Box()
+b.__len__ = lambda: 99              # an instance attribute named __len__ ...
+print(len(b), b.__len__())          # ... is ignored by len(), but found by an explicit call
+
+Box.__len__ = lambda self: 7        # patching the CLASS does change behaviour
+print(len(b))
+```
+
+A consequence for proxy objects: `__getattr__` forwarding does **not** make a wrapper work with `len()`, `+`, `in` or `for`, because those never go through instance attribute lookup. A proxy must define each special method it wants to forward.
+
+```python-run
+class Proxy:
+    def __init__(self, target): self._t = target
+    def __getattr__(self, name): return getattr(self._t, name)
+
+p = Proxy([1, 2, 3])
+print(p.count(2))                   # ordinary method: forwarded
+try:
+    len(p)
+except TypeError as e:
+    print("TypeError:", e)
+
+class ListProxy(Proxy):
+    def __len__(self): return len(self._t)
+    def __iter__(self): return iter(self._t)
+    def __getitem__(self, i): return self._t[i]
+print(len(ListProxy([1, 2, 3])), 2 in ListProxy([1, 2, 3]), ListProxy("abc")[::-1])
+```
+
+## The fallback chains
+
+Many operations try several methods in order. Knowing the chains tells you the *minimum* you must implement:
+
+| Operation | Tries, in order |
+|---|---|
+| `bool(x)` | `__bool__` → `__len__() != 0` → `True` |
+| `x in c` | `__contains__` → iterate with `__iter__` → index with `__getitem__` |
+| `iter(x)` | `__iter__` → `__getitem__(0), (1), ...` |
+| `reversed(x)` | `__reversed__` → `__len__` + `__getitem__` |
+| `str(x)`, `print(x)`, `f"{x}"` | `__str__` → `__repr__` |
+| `x != y` | `__ne__` → `not __eq__` |
+| `x += y` | `__iadd__` → `__add__` → `y.__radd__` |
+| `x < y` | `x.__lt__(y)` → `y.__gt__(x)` |
+| `hash(x)` | `__hash__`; set to `None` automatically if you define `__eq__` only |
+| `sorted`, `min`, `max`, `heapq`, `bisect` | need only `__lt__` |
+
+```python-run
+class Playlist:
+    def __init__(self, *songs): self.songs = list(songs)
+    def __len__(self): return len(self.songs)
+    def __getitem__(self, i): return self.songs[i]
+
+empty, pl = Playlist(), Playlist("Binks", "Bink's Sake", "New World")
+print(bool(empty), bool(pl), "Binks" in pl, list(reversed(pl))[0], [s.upper() for s in pl][:1])
+```
+
+Two methods bought truthiness, membership, iteration, reversal and slicing.
+
+## Equality, hashing and ordering: getting the contracts right
+
+Three rules prevent the subtle bugs:
+
+1. **Equal objects must have equal hashes.** Build both from the same tuple of fields: `__eq__` compares `(self.a, self.b)`, `__hash__` returns `hash((self.a, self.b))`.
+2. **Hash only immutable state.** If instances are mutable, set `__hash__ = None` and accept that they can't be dict keys.
+3. **Return `NotImplemented` for foreign types** so mixed comparisons fall back sensibly (`==` to `False`, `<` to `TypeError`) instead of raising `AttributeError` from deep inside your method.
+
+```python-run
+class Money:
+    def __init__(self, amount, cur): self.amount, self.cur = amount, cur
+    def _key(self): return (self.cur, self.amount)
+    def __eq__(self, o): return self._key() == o._key() if isinstance(o, Money) else NotImplemented
+    def __hash__(self): return hash(self._key())
+    def __lt__(self, o):
+        if not isinstance(o, Money) or o.cur != self.cur:
+            return NotImplemented
+        return self.amount < o.amount
+    def __repr__(self): return f"Money({self.amount}, {self.cur!r})"
+
+a, b = Money(5, "EUR"), Money(5, "EUR")
+print(a == b, hash(a) == hash(b), len({a, b}), a == 5, a != b, sorted([Money(9, "EUR"), a]))
+for attempt in (lambda: a < 3, lambda: a < Money(1, "USD")):
+    try:
+        attempt()
+    except TypeError as e:
+        print("TypeError:", e)
+```
+
+Because `__lt__` returned `NotImplemented`, Python produced the standard, informative `TypeError` itself.
+
+## Debugging dunder methods
+
+- **`TypeError: unsupported operand type(s) for +: 'A' and 'B'`**: neither `A.__add__` nor `B.__radd__` handled the pair (both missing or both returned `NotImplemented`).
+- **`TypeError: unhashable type`**: you defined `__eq__` without `__hash__`.
+- **`RecursionError` in `__repr__`, `__eq__`, `__getattr__` or `__setattr__`**: the method triggers itself — a `__repr__` printing a structure that contains the object, an `__init__` assigning attributes while `__setattr__` reads them, or `__getattr__` accessing a missing attribute on `self`. Use `object.__setattr__(self, ...)` / `self.__dict__` inside these hooks.
+- **`print(x)` shows something different from the REPL**: `__str__` versus `__repr__`; containers always use the `repr` of their elements.
+- **Your `__eq__` isn't called**: for `a == b` where `type(b)` is a subclass of `type(a)`, the *subclass's* reflected method runs first.
+
 ## Pitfalls recap
 
 - Raising `TypeError` or returning `False` instead of returning `NotImplemented` from binary operators/comparisons.

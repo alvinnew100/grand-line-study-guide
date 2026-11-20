@@ -245,6 +245,116 @@ print("raw data changed:");     lock = run(files, lock)
 > via lockfile and Docker image digest; random seeds; and all of these linked from the model registry
 > entry. Mention `dvc.lock` or MLflow run metadata as the lineage record.
 
+## Designing an expectation suite: a worked example
+
+Take the `customers` table that feeds churn training and write its contract deliberately, column by
+column, deciding **severity** as you go.
+
+| Column | Expectation | Severity | Rationale |
+|---|---|---|---|
+| `customer_id` | not null, unique | error | join key; duplicates multiply rows |
+| `signup_ts` | not null, ≤ run date | error | future timestamps indicate clock or timezone bugs |
+| `plan` | in {basic, pro, premium} | error | unseen category breaks encoding assumptions |
+| `monthly_charges` | between 0 and 10,000 (mostly 0.999) | error | unit changes show up here |
+| `monthly_charges` | mean within ±15% of reference | warn | drift, pricing change |
+| `last_login_days` | null rate ≤ 10% | warn | upstream join degradation |
+| table | row count within ±20% of 7-day average | error | partial load or duplication |
+| table | max(`updated_ts`) within 26 h | error | stale source |
+| `churned` (label) | rate between 2% and 30% | error | broken label join |
+
+Three principles are visible. **Errors** are things that make training results meaningless; **warnings**
+are things a human should look at. Thresholds for distribution checks come from *observed history*, not
+guesses — compute them from the last N healthy partitions and review them when they fire. And the suite
+includes **table-level** checks (volume, freshness), which catch the most common failure of all: the
+data is fine but incomplete.
+
+```python-run
+import pandas as pd, numpy as np
+rng = np.random.default_rng(0)
+n = 5000
+df = pd.DataFrame({
+    "customer_id": np.arange(n),
+    "plan": rng.choice(["basic", "pro", "premium"], n),
+    "monthly_charges": rng.uniform(20, 120, n),
+    "last_login_days": np.where(rng.random(n) < 0.04, np.nan, rng.integers(0, 60, n)),
+    "churned": (rng.random(n) < 0.12).astype(int),
+})
+# inject realistic faults
+df.loc[:399, "monthly_charges"] = df.loc[:399, "monthly_charges"].clip(upper=99) * 100   # 8% of rows switched to cents
+df.loc[10:14, "plan"] = "Premium"                 # casing change upstream
+
+reference = {"rows_7d_avg": 5100, "charges_mean": 70.0}
+checks = [
+    ("customer_id unique",           "error", df.customer_id.is_unique),
+    ("plan in allowed set",          "error", df.plan.isin(["basic", "pro", "premium"]).all()),
+    ("charges in [0, 10000] mostly", "error", df.monthly_charges.between(0, 10_000).mean() >= 0.999),
+    ("charges mean within 15%",      "warn",  abs(df.monthly_charges.mean() / reference["charges_mean"] - 1) <= 0.15),
+    ("last_login null rate <= 10%",  "warn",  df.last_login_days.isna().mean() <= 0.10),
+    ("row count within 20%",         "error", abs(len(df) / reference["rows_7d_avg"] - 1) <= 0.20),
+    ("label rate in [2%, 30%]",      "error", 0.02 <= df.churned.mean() <= 0.30),
+]
+failed_errors = [name for name, sev, ok in checks if not ok and sev == "error"]
+for name, sev, ok in checks:
+    print(f"{'PASS' if ok else sev.upper():5s}  {name}")
+print("\npipeline decision:", "STOP - quarantine batch, alert owner" if failed_errors else "continue (with warnings attached to the run)")
+```
+
+Notice which check caught the cents bug: not the hard range check (values stayed under 10,000) but the
+**mean-shift warning** — and the casing change was caught by the allowed-set check. Different faults
+need different kinds of expectations; a suite with only null checks would have passed this batch.
+
+### Where validation results should go
+
+A validation run is itself an artifact. Store the report with the training run (MLflow artifact) so that
+for any model you can answer "what did the data look like, and did anything warn?". Emit summary
+metrics (number of failed expectations, null rates) to your monitoring system to see trends, and send
+failures to the **data owner**, not only to the ML team.
+
+## DVC day-to-day: the collaboration loop
+
+```bash
+# Alice updates the dataset and retrains
+dvc add data/raw/customers.parquet          # new hash written to the .dvc file
+dvc repro                                    # reruns affected stages, updates dvc.lock and metrics.json
+git add data/raw/customers.parquet.dvc dvc.lock metrics.json params.yaml
+git commit -m "data: customers snapshot 2025-02-01; retrain"
+dvc push && git push                         # push data to the remote, pointers to Git
+
+# Bob reproduces exactly
+git pull && dvc pull                         # fetch pointers, then the matching data and model
+dvc status                                   # "Data and pipelines are up to date."
+
+# Compare with the previous model
+dvc metrics diff HEAD~1                      # pr_auc: 0.712 -> 0.731
+dvc params diff HEAD~1
+
+# Go back in time
+git checkout v1.2.0 && dvc checkout          # code, data and model as of that tag
+```
+
+Common pitfalls:
+
+- **Forgetting `dvc push`**: the pointer is in Git but the data is not in the remote; teammates get
+  "missing cache files". Add `dvc push` to a pre-push hook (`dvc install` sets this up).
+- **Editing tracked files in place**: DVC may link files from its cache; use `dvc unprotect` or re-add
+  after writing a new file.
+- **Huge numbers of small files**: track the directory, and prefer consolidated formats (Parquet, tar
+  shards).
+- **Credentials**: give CI read access to the remote through its cloud role; never commit keys in
+  `.dvc/config` (use `.dvc/config.local`, which is git-ignored).
+
+### DVC, lakeFS or table time travel?
+
+| Situation | Good fit |
+|---|---|
+| Files and models in a Git-centred project, up to roughly hundreds of GB | DVC |
+| Data lake shared by many teams, need branches/merges over object storage | lakeFS |
+| Data lives in warehouse/lakehouse tables | Delta/Iceberg snapshots or warehouse time travel; record the snapshot ID |
+| Very large, append-only event data | immutable date partitions + recorded query and date window |
+
+Whatever the mechanism, the requirement is the same: **a training run must record an identifier that
+resolves to exactly the bytes it read.**
+
 ## Summary
 
 - Validate schema, values and distributions at ingestion, before training, and at serving.

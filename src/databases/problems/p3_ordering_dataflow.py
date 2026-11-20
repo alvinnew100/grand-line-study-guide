@@ -543,7 +543,7 @@ do the following with **squared Euclidean distance**:
    nearest first (ties → lower id). Return fewer than `k` ids if the probed clusters hold fewer vectors.
 
 **Example:** `centroids = [[0,0],[10,10]]`, `vectors = [[1,1],[9,9],[0,2],[6,6]]`, `query = [5,5]`, `nprobe = 1`, `k = 2`
-→ `[2, 0]`. Vector 3 at `[6,6]` is the true nearest neighbour, but it lives in the other cluster and is
+→ `[0, 2]`. Vector 3 at `[6,6]` is the true nearest neighbour, but it lives in the other cluster and is
 missed - that is the recall cost of approximate search. (The query is equally far from both centroids, and the tie goes to centroid 0.)
 """,
     starter='''def ivf_search(centroids: List[List[float]], vectors: List[List[float]],
@@ -623,7 +623,7 @@ missed - that is the recall cost of approximate search. (The query is equally fa
             "Rank centroids by distance to the query, keep `nprobe`, gather their lists, then sort candidates by `(distance, id)`.",
         ],
         brute_force="Exact k-NN: compute the distance to all N vectors and take the k smallest - O(N d). It is the recall = 100 % baseline against which every approximate index is measured (and the first wrong solution here, since it ignores `nprobe`).",
-        approach="1. Assign vectors to centroids (`min` with a `(distance, index)` key handles ties).\n2. Choose the probe set.\n3. Collect candidates and sort.\n\nDry run of the example: lists = {0: [0, 2], 1: [1, 3]}. The query `[5,5]` is 50 from both centroids → tie → centroid 0. Candidates 0 (`[1,1]`, distance 32) and 2 (`[0,2]`, distance 34) → `[0, 2]`... check the order: 32 < 34, so the answer is `[0, 2]`? Recompute: `[0,2]` → 25 + 9 = 34 and `[1,1]` → 16 + 16 = 32, so id 0 comes first.",
+        approach="1. Assign vectors to centroids (`min` with a `(distance, index)` key handles ties).\n2. Choose the probe set.\n3. Collect candidates and sort.\n\nDry run of the example: lists = {0: [0, 2], 1: [1, 3]}. The query `[5,5]` is 50 from both centroids → tie → centroid 0. Candidates: id 0 (`[1,1]`, distance 16 + 16 = 32) and id 2 (`[0,2]`, distance 25 + 9 = 34) → `[0, 2]`. Vector 3 (distance 2) is never examined.",
         complexity="Build O(N C d); query O(C d + (N nprobe / C) d) on balanced clusters, versus O(N d) for brute force. Choosing C near sqrt(N) balances the two terms.",
         pitfalls="Returning candidates in list order instead of by distance; ignoring `nprobe`; inconsistent tie-breaking; taking square roots of every distance for no benefit.",
         follow_up="Increase `nprobe` and watch recall rise towards the brute-force answer while cost grows linearly. Production systems combine IVF with product quantisation to compress the vectors inside each list; graph indexes (HNSW) take a different route entirely.",

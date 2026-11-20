@@ -182,6 +182,103 @@ print("binary + rescore recall@10:", round(recall(resc), 3))
 - Evaluating embedders on public benchmarks only. Build a small labelled set of your own queries and
   measure recall@k (module 5).
 
+## 7. Worked example: pooling with a padding mask
+
+The most common implementation bug in hand-rolled embedding code is averaging over padding. Here are
+token states for a batch of two sentences, the second padded from two tokens to four:
+
+```python-run
+import numpy as np
+rng = np.random.default_rng(0)
+h = rng.standard_normal((2, 4, 3))            # (batch, tokens, hidden)
+mask = np.array([[1, 1, 1, 1],
+                 [1, 1, 0, 0]])               # sentence 2 has two real tokens
+h[1, 2:] = 9.0                                # padding positions hold arbitrary junk
+
+wrong = h.mean(axis=1)
+m = mask[:, :, None]
+right = (h * m).sum(axis=1) / m.sum(axis=1)   # sum real tokens, divide by their count
+last = h[np.arange(2), mask.sum(1) - 1]       # last-token pooling: index of the final real token
+np.set_printoptions(precision=3, suppress=True)
+print("naive mean, sentence 2 :", wrong[1])
+print("masked mean, sentence 2:", right[1])
+print("check                  :", h[1, :2].mean(axis=0))
+print("last real token        :", last[1], "== h[1, 1]:", np.allclose(last[1], h[1, 1]))
+```
+
+The naive mean is dominated by the junk at padded positions. Worse, with real models the bug is
+*silent*: embeddings still look plausible, but a sentence's vector changes depending on what else was in
+its batch, so retrieval quality degrades in a way that is hard to trace. A good regression test: embed a
+sentence alone and inside a batch with a much longer sentence, and assert the two vectors match.
+
+Last-token pooling has its own trap: it needs **right** padding (or an explicit index as above); with
+left padding the last position is always a real token, with right padding the last position is padding.
+
+## 8. Measuring an embedding model on your own data
+
+Leaderboard rank is a starting point, not a decision. The experiment that matters takes an afternoon:
+collect 50 to 200 real queries, label the passage(s) that answer each, and compute recall@k for every
+candidate model. The demo simulates two embedders of different quality to show the harness.
+
+```python-run
+import numpy as np
+rng = np.random.default_rng(1)
+n_docs, n_q, d = 2000, 150, 64
+truth = rng.standard_normal((n_docs, d))                  # "true meaning" of each document
+gold = rng.integers(0, n_docs, n_q)                       # the relevant document for each query
+
+def embedder(noise):                                      # a weaker model = noisier view of the meaning
+    D = truth + noise * rng.standard_normal((n_docs, d))
+    Q = truth[gold] + noise * 1.5 * rng.standard_normal((n_q, d))   # queries are short and vaguer
+    norm = lambda M: M / np.linalg.norm(M, axis=1, keepdims=True)
+    return norm(Q), norm(D)
+
+def evaluate(Q, D, ks=(1, 5, 20)):
+    ranks = np.argsort(-(Q @ D.T), axis=1)
+    pos = np.array([int(np.where(ranks[i] == gold[i])[0][0]) + 1 for i in range(n_q)])
+    return {f"recall@{k}": round(float((pos <= k).mean()), 3) for k in ks} | {"MRR": round(float((1 / pos).mean()), 3)}
+
+for name, noise in [("model A (strong)", 0.8), ("model B (weak)  ", 1.15)]:
+    print(name, evaluate(*embedder(noise)))
+```
+
+Things to vary in the real version of this harness, one at a time: the model, the query prefix, the
+chunk size, Matryoshka truncation, and quantisation. Report recall at the depth you actually pass to the
+reranker, and keep the per-query results so you can read the failures.
+
+## 9. Similarity thresholds are model-specific
+
+"Return results with cosine above 0.8" is a frequent requirement and a frequent mistake. Different models
+squeeze scores into very different ranges: for some, unrelated texts already score 0.6 and near
+duplicates 0.9; for others the same pairs score 0.1 and 0.7. A threshold must be **calibrated per model**
+on labelled pairs, choosing the operating point from a precision-recall trade-off:
+
+```python-run
+import numpy as np
+rng = np.random.default_rng(2)
+pos = np.clip(rng.normal(0.78, 0.07, 500), 0, 1)          # cosine of truly relevant pairs for this model
+neg = np.clip(rng.normal(0.62, 0.06, 5000), 0, 1)         # cosine of irrelevant pairs: high baseline!
+print("threshold  precision  recall")
+for th in [0.60, 0.70, 0.75, 0.80, 0.85]:
+    tp, fp = (pos >= th).sum(), (neg >= th).sum()
+    print(f"  {th:.2f}      {tp / max(tp + fp, 1):.3f}     {tp / len(pos):.3f}")
+```
+
+With this model, 0.80 keeps under half of the relevant pairs, while 0.70 lets in a flood of irrelevant
+ones because negatives are ten times more common. In retrieval pipelines it is usually better to take a
+fixed top-k and let a reranker (whose scores are designed to be thresholded) decide what is relevant.
+
+## 10. Hard negatives in one paragraph
+
+Random negatives are too easy: after a few steps the model separates "parental leave policy" from
+"GPU memory" and learns nothing more. **Hard negatives** are passages that look relevant but are not,
+for example the top BM25 or dense hits for a query that are not labelled positive. Mining them with the
+current model, filtering out likely false negatives (unlabelled passages that actually answer the
+query, typically by dropping candidates that score above the positive), and retraining is the standard
+recipe behind strong retrievers and is supported directly by `sentence_transformers.util.mine_hard_negatives`.
+When you fine-tune an embedder on your own domain, a few thousand (query, positive, hard negative)
+triples usually give a larger gain than switching to a bigger general-purpose model.
+
 > [!INTERVIEW]
 > **"Cosine vs dot product vs Euclidean?"** For L2-normalised vectors they produce identical rankings
 > because $\|a-b\|^2 = 2 - 2\cos$. Use dot product on normalised vectors for speed; use raw dot

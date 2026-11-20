@@ -210,6 +210,102 @@ for s, a, b in zip(sizes, tr.mean(1), va.mean(1)):
     print(f"n_train={s:3d}  train={a:.3f}  validation={b:.3f}")
 ```
 
+## 8. Worked example: classifying one point by hand
+
+Doing one prediction on paper fixes the algorithm in memory, and it is a common warm-up question. Six
+training points have two features and a class:
+
+| point | $x_1$ | $x_2$ | class |
+|---|---|---|---|
+| P1 | 1 | 1 | A |
+| P2 | 2 | 1 | A |
+| P3 | 1 | 3 | A |
+| P4 | 5 | 4 | B |
+| P5 | 6 | 5 | B |
+| P6 | 3 | 3 | B |
+
+Classify the query $q = (3, 2)$. Squared Euclidean distances are enough, since the square root does not
+change the ordering:
+
+| point | $(x_1 - 3)^2 + (x_2 - 2)^2$ | class |
+|---|---|---|
+| P6 | $0 + 1 = 1$ | B |
+| P2 | $1 + 1 = 2$ | A |
+| P1 | $4 + 1 = 5$ | A |
+| P3 | $4 + 1 = 5$ | A |
+| P4 | $4 + 4 = 8$ | B |
+| P5 | $9 + 9 = 18$ | B |
+
+- With $k=1$ the nearest point is P6, so the prediction is **B**.
+- With $k=3$ the neighbours are P6 (B), P2 (A) and one of P1/P3 (A). The vote is 2 to 1 for **A**.
+- With $k=5$ the neighbours are P6, P2, P1, P3, P4: three A and two B, so **A**.
+
+The answer changes with $k$. With $k=1$ a single nearby point decides everything, which makes the model
+sensitive to noise: if P6 were a labelling mistake, the prediction would be wrong. Larger $k$ averages
+over more evidence.
+
+Note the tie between P1 and P3 at distance 5. Here it does not matter, because both are class A. In
+general an implementation needs a rule. scikit-learn keeps whichever comes first in the training data.
+Problem *ml-knn-predict* specifies the rule exactly.
+
+```python-run
+import numpy as np
+from sklearn.neighbors import KNeighborsClassifier
+X = np.array([[1, 1], [2, 1], [1, 3], [5, 4], [6, 5], [3, 3]])
+y = np.array(["A", "A", "A", "B", "B", "B"])
+q = np.array([[3, 2]])
+print("squared distances:", ((X - q) ** 2).sum(axis=1))
+for k in [1, 3, 5]:
+    knn = KNeighborsClassifier(n_neighbors=k).fit(X, y)
+    print(f"k={k}: predict {knn.predict(q)[0]}  class probabilities {dict(zip(knn.classes_, knn.predict_proba(q)[0].round(2)))}")
+weighted = KNeighborsClassifier(n_neighbors=5, weights="distance").fit(X, y)
+print("k=5, distance-weighted:", weighted.predict(q)[0], dict(zip(weighted.classes_, weighted.predict_proba(q)[0].round(2))))
+```
+
+`predict_proba` for k-NN is the fraction of neighbours in each class. With `weights="distance"`, each
+neighbour's vote is weighted by $1/d$, so the very close P6 counts for more.
+
+## 9. Design choices and pitfalls
+
+**Choosing the distance.** Euclidean distance is the default. Manhattan distance (`metric="manhattan"`,
+the sum of absolute differences) is less dominated by one large difference. Cosine distance suits text
+and embeddings, where direction matters and length does not. The right metric is part of the model. It
+encodes what "similar" means in your problem.
+
+**Choosing $k$.** Use cross-validation on the training data (module 5). A common starting range is 1 to
+about $\sqrt{n}$. For two classes, an odd $k$ avoids tied votes.
+
+**Why many features hurt.** Every feature contributes to the distance, including irrelevant ones. With a
+few informative features and many noisy ones, the noise swamps the signal. The demonstration below adds
+random features to iris.
+
+```python-run
+import numpy as np
+from sklearn.datasets import load_iris
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.model_selection import cross_val_score
+from sklearn.preprocessing import StandardScaler
+from sklearn.pipeline import make_pipeline
+
+X, y = load_iris(return_X_y=True)
+rng = np.random.RandomState(0)
+for n_noise in [0, 5, 20, 100, 500]:
+    X_noisy = np.hstack([X, rng.randn(len(X), n_noise)])
+    acc = cross_val_score(make_pipeline(StandardScaler(), KNeighborsClassifier(5)), X_noisy, y, cv=5).mean()
+    print(f"4 real features + {n_noise:3d} noise features: CV accuracy = {acc:.3f}")
+```
+
+**Other pitfalls.**
+
+- *Duplicates.* If the same row appears in both training and test data, $k=1$ gets it right by lookup.
+  The score then says nothing about generalisation.
+- *Imbalanced classes.* With large $k$ the majority class wins most votes. Use distance weighting or a
+  smaller $k$.
+- *Memory.* The model **is** the training set. A million rows of 100 features must be kept in memory and
+  shipped with the model.
+- *Categorical features.* A distance between category codes is meaningless. One-hot encode them and think
+  about how they should be weighted against numeric features.
+
 ## Summary
 
 - Generalisation, meaning performance on unseen data, is the goal. The training score alone is meaningless.

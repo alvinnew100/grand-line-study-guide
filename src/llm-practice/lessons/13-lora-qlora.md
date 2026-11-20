@@ -202,6 +202,81 @@ merged.save_pretrained("llama3-8b-support-merged")
   products, or learned rescaling vectors.
 - **Prompt / prefix tuning**: train virtual tokens only; tiny, but usually weaker than LoRA on LLMs.
 
+## 7. Training a LoRA adapter by hand
+
+To see LoRA learn, we fit an adapter with plain gradient descent in numpy. The frozen base $W_0$ should
+have been a different matrix $W^\star = W_0 + \Delta^\star$, where the true change $\Delta^\star$ has
+rank 2. We minimise the squared error of the adapted layer's outputs and compare ranks. The gradients
+follow from the chain rule with $\Delta W = sBA$, $s = \alpha/r$:
+
+$$
+G = \frac{\partial \mathcal{L}}{\partial \Delta W},\qquad
+\frac{\partial \mathcal{L}}{\partial B} = s\,G A^\top,\qquad
+\frac{\partial \mathcal{L}}{\partial A} = s\,B^\top G
+$$
+
+```python-run
+import numpy as np
+rng = np.random.default_rng(0)
+d_out, d_in, n = 32, 32, 512
+W0 = rng.standard_normal((d_out, d_in)) / np.sqrt(d_in)
+delta_true = rng.standard_normal((d_out, 2)) @ rng.standard_normal((2, d_in)) * 0.3    # rank-2 task shift
+X = rng.standard_normal((n, d_in))
+Y = X @ (W0 + delta_true).T
+
+def train_lora(r, alpha, steps=1500, lr=0.02):
+    A = rng.standard_normal((r, d_in)) / np.sqrt(d_in)       # random init
+    B = np.zeros((d_out, r))                                 # zero init: start at the base model
+    s = alpha / r
+    for _ in range(steps):
+        err = X @ (W0 + s * B @ A).T - Y                     # (n, d_out)
+        G = err.T @ X / n                                    # dL/d(deltaW)
+        B, A = B - lr * s * G @ A.T, A - lr * s * B.T @ G    # simultaneous update
+    return float(((X @ (W0 + s * B @ A).T - Y) ** 2).mean()), r * (d_in + d_out)
+
+print(f"base model loss: {float(((X @ W0.T - Y) ** 2).mean()):.4f}   (full fine-tune would train {d_in * d_out} params)")
+for r in [1, 2, 4, 8]:
+    loss, params = train_lora(r, alpha=2 * r)
+    print(f"rank {r}: loss {loss:.5f}   trainable params {params}")
+```
+
+What to notice:
+
+- **Rank 1 cannot fit a rank-2 change**: the loss plateaus well above zero. Capacity is a hard limit.
+- **Rank 2 suffices**, and higher ranks add parameters without improving the fit. On real tasks the
+  required rank is unknown, which is why people sweep 8, 16, 32, 64 and watch validation metrics.
+- At step 0 only $B$ receives a non-zero gradient (because $B = 0$ makes $\partial\mathcal{L}/\partial A = 0$);
+  $A$ starts moving once $B$ is non-zero. This asymmetry is what LoRA+ exploits with a larger learning
+  rate for $B$.
+- Keeping `alpha = 2r` fixed the effective step size across ranks, so one learning rate worked for all.
+
+## 8. Choosing among adaptation methods
+
+| situation | reasonable choice |
+|---|---|
+| style, format or tone; small dataset; one GPU | LoRA, r 8 to 16, all linear layers |
+| the model does not fit in memory even for inference at 16-bit | QLoRA (4-bit base) |
+| large dataset, substantial new skill or language | higher rank (64+), rsLoRA or DoRA; consider full fine-tuning |
+| many customers or tasks on one deployment | one adapter each, hot-swapped on a shared base |
+| adding new special tokens | LoRA plus `modules_to_save=["embed_tokens", "lm_head"]` (or `trainable_token_indices`) so the new rows train |
+| need zero added latency | merge the adapter before serving |
+| tiny budgets, classification-style behaviour | prompt tuning or IA3, accepting lower quality |
+
+## 9. Debugging LoRA runs
+
+- **`trainable params: 0`** or a tiny number: `target_modules` did not match any layer names. Print
+  `[n for n, _ in model.named_modules()]` and compare; names differ across families (`q_proj` versus
+  `query`, `c_attn` in GPT-2, `Wqkv` in some encoders).
+- **Loss is NaN with a 4-bit base**: missing `prepare_model_for_kbit_training`, or fp16 instead of
+  bf16 for the compute dtype.
+- **The adapter "does nothing" at inference**: it was saved but never loaded (you are running the bare
+  base model), or it was loaded onto a different base revision than it was trained on.
+- **Quality drops after merging**: merged into a quantised model; merge into the bf16 base instead and
+  quantise afterwards if needed.
+- **New tokens produce garbage**: embeddings were resized but the new rows were left frozen.
+- **Outputs degrade on unrelated tasks**: rank or learning rate too high, or too many epochs; LoRA
+  forgets less than full fine-tuning but is not immune.
+
 > [!INTERVIEW]
 > **"Explain LoRA and QLoRA."** LoRA freezes $W_0$ and learns $\Delta W = \frac{\alpha}{r}BA$ with
 > $r \ll d$, $B$ zero-initialised so training starts at the base model; trainable parameters drop from

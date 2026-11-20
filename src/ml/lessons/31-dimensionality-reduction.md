@@ -232,6 +232,54 @@ for name, Z in [("PCA  ", Z_pca), ("t-SNE", Z_tsne)]:
 | the best 2-D picture of cluster structure | t-SNE or UMAP (exploration only) |
 | sparse high-dimensional text counts | `TruncatedSVD` (PCA without centring, keeps sparsity) |
 
+## 5. Worked example: PCA on four points by hand
+
+A calculation small enough to follow on paper shows every step. Take four 2-D points:
+$(2, 0)$, $(0, 2)$, $(4, 2)$, $(2, 4)$.
+
+**Step 1: centre.** The mean is $(2, 2)$. The centred points are $(0,-2)$, $(-2,0)$, $(2,0)$, $(0,2)$.
+
+**Step 2: covariance matrix.** With $n-1 = 3$ in the denominator,
+
+$$C = \frac13 X_c^\top X_c = \frac13\begin{pmatrix}8 & 0\\ 0 & 8\end{pmatrix}.$$
+
+Both variances are equal and the covariance is zero. The data is spread equally in every direction, so
+*no direction is preferred*: any pair of orthogonal axes is a valid answer. PCA cannot compress this
+data. Reducing to one dimension loses exactly half of the variance, whichever direction you keep.
+
+Now move the last two points to $(4, 4)$ and $(0, 0)$, so the data is $(2,0)$, $(0,2)$, $(4,4)$, $(0,0)$.
+The mean is $(1.5, 1.5)$ and
+
+$$C = \frac13\begin{pmatrix}11 & 5\\ 5 & 11\end{pmatrix}.$$
+
+**Step 3: eigenvectors.** For a symmetric matrix of the form $\begin{pmatrix}a & b\\ b & a\end{pmatrix}$
+the eigenvectors are $(1,1)/\sqrt2$ with eigenvalue $a+b$ and $(1,-1)/\sqrt2$ with eigenvalue $a-b$.
+Here the eigenvalues are $16/3$ and $6/3$.
+
+**Step 4: explained variance.** The first component explains $16/(16+6) = 72.7\%$ of the variance. Its
+direction, the diagonal $(1,1)$, is the line along which the points are most spread out.
+
+**Step 5: project.** The coordinate of a centred point on the first component is its dot product with
+$(1,1)/\sqrt2$. For $(4,4)$, centred to $(2.5, 2.5)$, that is $5/\sqrt2 = 3.54$.
+
+```python-run
+import numpy as np
+from sklearn.decomposition import PCA
+X = np.array([[2.0, 0.0], [0.0, 2.0], [4.0, 4.0], [0.0, 0.0]])
+Xc = X - X.mean(axis=0)
+C = Xc.T @ Xc / (len(X) - 1)
+vals, vecs = np.linalg.eigh(C)
+print("covariance matrix:\n", C.round(3))
+print("eigenvalues:", vals.round(3), " -> explained variance ratio:", (vals[::-1] / vals.sum()).round(3))
+pca = PCA(n_components=1).fit(X)
+print("sklearn component:", pca.components_[0].round(3), " ratio:", pca.explained_variance_ratio_.round(3))
+print("projections:", pca.transform(X).ravel().round(2))
+```
+
+The sign of a component is arbitrary: $(1,1)/\sqrt2$ and $(-1,-1)/\sqrt2$ describe the same line. Two
+libraries, or two versions of one library, may return opposite signs. That is why problem *ml-pca-svd*
+fixes a sign convention.
+
 ## Summary
 
 - PCA: centre, then rotate onto orthogonal directions of maximum variance (SVD). Keep the top $k$. Scale

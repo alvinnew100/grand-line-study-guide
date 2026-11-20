@@ -215,6 +215,93 @@ every hyperparameter with its default. `repr(model)` prints the non-default ones
 > evaluate once on the test set with metrics suited to the problem (not just accuracy on imbalanced data).
 > Mention that fitted attributes end in `_` and that `fit` returns `self`.
 
+## 10. k-NN from scratch, to see what `fit` and `predict` really do
+
+A model stops being a black box once you have written it yourself. Here is the whole k-NN classifier in
+numpy, checked against scikit-learn. The steps are the ones described in section 6.
+
+1. For each test point, compute the Euclidean distance to every training point:
+   $d(x, x_i) = \sqrt{\sum_j (x_j - x_{ij})^2}$.
+2. Sort the distances and keep the $k$ smallest.
+3. Count the labels of those $k$ neighbours and return the most common one.
+
+```python-run
+import numpy as np
+from sklearn.datasets import load_iris
+from sklearn.model_selection import train_test_split
+from sklearn.neighbors import KNeighborsClassifier
+
+X, y = load_iris(return_X_y=True)
+X_train, X_test, y_train, y_test = train_test_split(X, y, random_state=0)
+
+def knn_predict(X_train, y_train, X_test, k):
+    # broadcasting: (n_test, 1, p) - (1, n_train, p) -> (n_test, n_train, p)
+    diff = X_test[:, None, :] - X_train[None, :, :]
+    dist = np.sqrt((diff ** 2).sum(axis=2))                 # (n_test, n_train)
+    nearest = np.argsort(dist, axis=1)[:, :k]               # indices of the k closest training points
+    votes = y_train[nearest]                                # their labels, shape (n_test, k)
+    return np.array([np.bincount(row).argmax() for row in votes])
+
+mine = knn_predict(X_train, y_train, X_test, k=3)
+theirs = KNeighborsClassifier(n_neighbors=3).fit(X_train, y_train).predict(X_test)
+print("distance matrix shape:", (len(X_test), len(X_train)))
+print("identical to scikit-learn:", np.array_equal(mine, theirs))
+print("accuracy:", round(float((mine == y_test).mean()), 3))
+i = 0
+d = np.sqrt(((X_train - X_test[i]) ** 2).sum(axis=1))
+order = np.argsort(d)[:3]
+print("test flower 0 -> neighbour distances", d[order].round(2), "labels", y_train[order], "=> predict", mine[i])
+```
+
+Two things to take from this. First, "training" really is nothing more than keeping `X_train` and
+`y_train`. Second, all the cost is at prediction time: one distance for every pair of test and training
+points. That is $O(n_{test}\cdot n_{train}\cdot p)$ work, which is why the book warns that k-NN predicts
+slowly on large training sets. Problem *ml-knn-predict* asks you to write this with exact tie-breaking
+rules.
+
+## 11. Reproducibility and common first-week errors
+
+A result you cannot reproduce is hard to trust and impossible to debug. Three sources of randomness
+appear in almost every script:
+
+- the **split** (`train_test_split(..., random_state=0)`);
+- the **model**, if it uses randomness (`RandomForestClassifier(random_state=0)`, `KMeans`, `MLPClassifier`);
+- the **cross-validation shuffle**, if you ask for one (`KFold(shuffle=True, random_state=0)`).
+
+Fix all three while developing. When you report a final number, vary the seed on purpose and report the
+spread, so readers see how much of the result is luck.
+
+```python-run
+import numpy as np
+from sklearn.datasets import load_iris
+from sklearn.model_selection import train_test_split
+from sklearn.neighbors import KNeighborsClassifier
+
+X, y = load_iris(return_X_y=True)
+def run(seed):
+    X_tr, X_te, y_tr, y_te = train_test_split(X, y, random_state=seed)
+    return KNeighborsClassifier(n_neighbors=3).fit(X_tr, y_tr).score(X_te, y_te)
+print("same seed twice:", run(0), run(0))
+scores = [run(s) for s in range(30)]
+print(f"30 different seeds: mean={np.mean(scores):.3f}  min={min(scores):.3f}  max={max(scores):.3f}")
+```
+
+The single number "97%" from section 6 is one draw from this range. With only 38 test flowers, one extra
+mistake moves the accuracy by 2.6 points. The cross-validation lesson (module 5) turns this observation
+into a method.
+
+Errors nearly everyone makes in their first week, and how to read them:
+
+| message or symptom | cause | fix |
+|---|---|---|
+| `Expected 2D array, got 1D array instead` | a single sample passed as a flat list | `x.reshape(1, -1)` or `[[...]]` |
+| `Found input variables with inconsistent numbers of samples` | `X` and `y` have different lengths | check the shapes; you probably split or filtered only one of them |
+| `NotFittedError` | `predict` or `transform` called before `fit` | fit first; check you are using the fitted object |
+| `could not convert string to float` | a text column in `X` | encode categorical columns (module 4) |
+| `Input contains NaN` | missing values | impute them (modules 3 and 6) |
+| training accuracy 100%, test much lower | memorisation | simpler model or more regularisation (next module) |
+| test accuracy suspiciously perfect | the target leaked into the features | inspect the columns (module 6) |
+
 ## Summary
 
 - Iris is a three-class supervised classification problem: 150 samples × 4 features.

@@ -235,6 +235,82 @@ def ingest(doc_id, title, sections):          # sections: list of (heading_path,
 - Losing tables and multi-column order in PDF extraction.
 - Enforcing permissions only in the prompt ("do not reveal HR docs") instead of filtering retrieval.
 
+## 8. Experiment: how chunk size trades recall against context cost
+
+The claim "chunk size is a trade-off" is easy to verify. The simulation below builds documents in which
+each answer is a short span of tokens, chunks them at several sizes with and without overlap, and
+measures two things: how often the **whole** answer span lands inside a single chunk (a proxy for
+"retrievable and usable"), and how many tokens you must send to the LLM if you pass the top 5 chunks.
+
+```python-run
+import numpy as np
+rng = np.random.default_rng(0)
+DOC_LEN, N = 6000, 4000
+starts = rng.integers(0, DOC_LEN - 60, N)
+spans = np.stack([starts, starts + rng.integers(15, 60, N)], axis=1)      # answer = 15 to 60 tokens
+
+def intact_rate(size, overlap):
+    step = size - overlap
+    chunk_starts = np.arange(0, DOC_LEN, step)
+    ok = 0
+    for s, e in spans:
+        c = chunk_starts[(chunk_starts <= s)]                 # chunks starting at or before the answer
+        ok += bool(len(c)) and bool(((c + size) >= e).any())  # ...one of which also covers its end
+    return ok / N
+
+print("size  overlap  answer intact  tokens for top-5")
+for size in [64, 128, 256, 512, 1024]:
+    for overlap in [0, size // 8]:
+        print(f"{size:5d} {overlap:7d}      {intact_rate(size, overlap):.3f}        {5 * size:5d}")
+```
+
+Reading the table: tiny chunks split a large share of answers across a boundary; overlap repairs a good
+part of that damage at every size; large chunks keep answers intact but multiply the tokens you send
+(and blur each chunk's embedding, which this simulation does not model). That is the quantitative case
+for the usual advice: a few hundred tokens with 10 to 20 percent overlap, or small chunks for matching
+plus parent expansion for context.
+
+## 9. Debugging ingestion: a checklist that finds most problems
+
+When retrieval is poor, work down this list before touching the embedding model:
+
+1. **Look at ten random chunks** exactly as they are stored. Are there page headers, navigation text,
+   broken tables, hyphen-split words, or two columns interleaved line by line?
+2. **Search for a sentence you know is in the corpus** with exact-match (keyword) search. If it is not
+   found, the problem is parsing or ingestion coverage, not retrieval.
+3. **Check chunk length distribution** in the embedder's tokens. A spike at the maximum length means
+   truncation; a long tail of five-token chunks means over-splitting (headings indexed alone).
+4. **Count chunks per document** and look for outliers: zero chunks (a failed parse or a scanned PDF)
+   or thousands (a table exploded into rows).
+5. **Check for duplicates**: the same paragraph ingested from several versions crowds the top-k with
+   copies and hides other evidence.
+6. **Verify metadata** on a sample: correct source URL, page, section path and access-control fields.
+7. **Re-run ingestion twice** and confirm the chunk count does not change (idempotency).
+
+```python-run
+import numpy as np
+from collections import Counter
+chunks = [{"doc": "handbook.pdf", "text": "Parental leave is 16 weeks at full pay. " * 3},
+          {"doc": "handbook.pdf", "text": "Page 12 of 80"},
+          {"doc": "handbook.pdf", "text": "Parental leave is 16 weeks at full pay. " * 3},
+          {"doc": "faq.html", "text": "Home | Products | About | Contact"},
+          {"doc": "faq.html", "text": "How do I reset my API key? Go to Settings and click Rotate. " * 40},
+          {"doc": "scan.pdf", "text": ""}]
+MAX_TOKENS = 256
+tok = lambda s: s.split()
+lengths = np.array([len(tok(c["text"])) for c in chunks])
+dupes = [t for t, n in Counter(c["text"] for c in chunks).items() if n > 1 and t]
+print("empty chunks            :", int((lengths == 0).sum()))
+print("tiny chunks (< 8 tokens):", [c["text"] for c, n in zip(chunks, lengths) if 0 < n < 8])
+print("over the embedder limit :", int((lengths > MAX_TOKENS).sum()), "chunk(s) will be silently truncated")
+print("exact duplicate texts   :", len(dupes))
+print("chunks per document     :", dict(Counter(c["doc"] for c in chunks)))
+```
+
+A report like this, run after every ingestion job and tracked over time, catches most regressions (a
+parser upgrade that starts emitting boilerplate, a source that silently became scanned images) long
+before users notice worse answers.
+
 > [!INTERVIEW]
 > **"How would you choose a chunk size?"** It depends on document structure and question type; start
 > with structure-aware splitting at a few hundred tokens with about 15 percent overlap, keep chunks

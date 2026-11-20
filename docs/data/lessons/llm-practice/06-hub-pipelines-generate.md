@@ -231,6 +231,113 @@ print((emb[0] @ emb[1]).item())                            # cosine similarity
 
 Mean pooling must respect the attention mask, or padding tokens dilute the embedding.
 
+## 7. Greedy versus beam search, traced by hand
+
+Greedy decoding commits to the single best token at every step, which can miss a sequence whose first
+token is slightly less likely but whose continuation is much better. **Beam search** keeps the
+`num_beams` best partial sequences by total log-probability. The toy model below has a vocabulary of
+three tokens and hand-written conditional probabilities so you can follow every step.
+
+```python-run
+import math
+# P(next | prefix) for a tiny "language model": after token A the future is uncertain, after B it is confident.
+def next_probs(prefix):
+    if prefix == ():        return {"A": 0.5, "B": 0.4, "C": 0.1}
+    if prefix[-1] == "A":   return {"A": 0.4, "B": 0.3, "C": 0.3}
+    if prefix[-1] == "B":   return {"A": 0.05, "B": 0.05, "C": 0.9}
+    return {"A": 0.34, "B": 0.33, "C": 0.33}
+
+def greedy(steps):
+    seq, lp = (), 0.0
+    for _ in range(steps):
+        tok, p = max(next_probs(seq).items(), key=lambda kv: kv[1])
+        seq, lp = seq + (tok,), lp + math.log(p)
+    return seq, lp
+
+def beam_search(steps, num_beams):
+    beams = [((), 0.0)]
+    for step in range(steps):
+        cand = [(seq + (t,), lp + math.log(p)) for seq, lp in beams for t, p in next_probs(seq).items()]
+        beams = sorted(cand, key=lambda x: -x[1])[:num_beams]
+        print(f"  step {step + 1}:", [("".join(s), round(math.exp(lp), 3)) for s, lp in beams])
+    return beams[0]
+
+g = greedy(2); print("greedy:", "".join(g[0]), "p =", round(math.exp(g[1]), 3))
+b = beam_search(2, num_beams=2); print("beam  :", "".join(b[0]), "p =", round(math.exp(b[1]), 3))
+```
+
+Greedy picks `A` (0.5) and ends with probability 0.20; beam search keeps `B` alive and finds `BC` with
+probability 0.36. Three practical notes:
+
+- Beam search optimises **likelihood**, which is the right target for translation, summarisation and
+  speech recognition, where there is one faithful output. For open-ended chat, the most likely text is
+  often bland and repetitive, which is why sampling is the default there.
+- Longer sequences accumulate more negative log-probability, so beam search favours short outputs;
+  `length_penalty` rescales scores by length to compensate.
+- Cost grows linearly with `num_beams` (each step runs the model on every beam), and the KV cache must
+  be reordered when beams are pruned.
+
+## 8. Repetition controls and how they work
+
+Low-temperature decoding can loop ("the the the" or repeating a whole paragraph). Three knobs act on
+the logits before sampling:
+
+- `repetition_penalty` $\rho > 1$: for every token already present, divide its logit by $\rho$ if
+  positive, or multiply by $\rho$ if negative, making it less likely either way.
+- `no_repeat_ngram_size = n`: hard-ban any token that would complete an n-gram already generated.
+- OpenAI-style `frequency_penalty` and `presence_penalty` subtract an amount proportional to (or
+  independent of) how often a token has appeared.
+
+```python-run
+import numpy as np
+def softmax(z): z = z - z.max(); e = np.exp(z); return e / e.sum()
+
+def repetition_penalty(logits, generated, rho):
+    out = logits.copy()
+    for t in set(generated):
+        out[t] = out[t] / rho if out[t] > 0 else out[t] * rho
+    return out
+
+logits = np.array([3.0, 2.5, -1.0, 0.5])
+np.set_printoptions(precision=3, suppress=True)
+print("before          :", softmax(logits))
+print("penalise 0 and 2:", softmax(repetition_penalty(logits, [0, 2, 0], rho=1.3)))
+```
+
+Use these sparingly: a strong penalty breaks legitimate repetition (code, JSON keys, names, numbers in a
+table), and penalising tokens from the *prompt* can stop a model quoting its sources. If a model loops at
+sensible settings, suspect the chat template or a missing stop token first.
+
+## 9. Streaming tokens to a user
+
+```python
+from threading import Thread
+from transformers import TextIteratorStreamer
+
+streamer = TextIteratorStreamer(tok, skip_prompt=True, skip_special_tokens=True)
+thread = Thread(target=model.generate, kwargs=dict(**inputs, max_new_tokens=256, streamer=streamer))
+thread.start()
+for piece in streamer:            # yields decoded text as soon as whole words are available
+    print(piece, end="", flush=True)
+thread.join()
+```
+
+The streamer buffers until a complete word (or a complete multi-byte character) can be decoded, which is
+why text appears in small chunks rather than one token at a time. Module 10 covers streaming over HTTP.
+
+## 10. A debugging table for generate()
+
+| symptom | likely cause | fix |
+|---|---|---|
+| output repeats the prompt | decoded the full sequence | slice off `input_ids.shape[1]` tokens before decoding |
+| output stops after about 20 tokens | default `max_length` of 20 | set `max_new_tokens` |
+| never stops, invents new user turns | end-of-turn token not in `eos_token_id` | add it; check `generation_config.json` |
+| gibberish from a batched call only | right padding on a decoder-only model, or missing `attention_mask` | `padding_side="left"`, pass the mask |
+| warning "Setting pad_token_id to eos_token_id" | tokenizer has no pad token | set `pad_token` explicitly and pass `pad_token_id` |
+| different outputs for the same prompt at temperature 0 | sampling still enabled by the repo's generation config, or batch-dependent numerics | pass `do_sample=False`; expect tiny GPU nondeterminism |
+| out of memory on long prompts | KV cache and activations grow with length and batch | lower batch size, quantise, enable a static or offloaded cache |
+| very slow first call | weights loading, kernels compiling, cache warm-up | benchmark from the second call onwards |
+
 > [!INTERVIEW]
 > **"Walk me through loading and running an 8B model on a 24 GB GPU."** bf16 weights need about 16 GB,
 > leaving room for KV cache; use `device_map="auto"`, `dtype=torch.bfloat16`, SDPA or FlashAttention;

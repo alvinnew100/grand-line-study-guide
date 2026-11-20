@@ -182,6 +182,74 @@ The book's toolset, which is still the standard for "classical" ML:
 > qualitative review with the business, and ultimately by whether the segments drive better decisions.
 > Bonus: mention that unsupervised outputs often become *features* for a supervised model.
 
+## 9. Learning rules from examples: a miniature demonstration
+
+To make the contrast in section 1 concrete, here is one small task solved both ways. Each message is
+described by two numbers: how many times it contains the word "free", and how many exclamation marks it
+has. A programmer writes a rule by hand. A learning algorithm is given labelled examples and finds its
+own rule.
+
+```python-run
+import numpy as np
+from sklearn.tree import DecisionTreeClassifier, export_text
+
+rng = np.random.RandomState(0)
+n = 400
+is_spam = rng.rand(n) < 0.3
+free_count = rng.poisson(np.where(is_spam, 2.0, 0.2))
+exclamations = rng.poisson(np.where(is_spam, 3.0, 0.6))
+X = np.column_stack([free_count, exclamations])
+X_train, y_train, X_test, y_test = X[:300], is_spam[:300], X[300:], is_spam[300:]
+
+# 1) a hand-written rule
+hand_rule = lambda X: X[:, 0] >= 1
+print("hand-written rule 'contains free':", round(float((hand_rule(X_test) == y_test).mean()), 3))
+
+# 2) a rule learned from 300 labelled examples
+tree = DecisionTreeClassifier(max_depth=2, random_state=0).fit(X_train, y_train)
+print("learned rule:                     ", round(tree.score(X_test, y_test), 3))
+print(export_text(tree, feature_names=["free_count", "exclamations"]))
+```
+
+The learned model is also a set of if/else rules. The difference is who wrote them. The algorithm chose
+the thresholds, and it found that the two features should be combined. If spammers change their habits,
+you retrain on new examples instead of rewriting code. That is the practical argument for machine
+learning in one experiment.
+
+It also shows the limits. The model is only as good as the examples and the features. If you had not
+thought to count exclamation marks, no algorithm could have used them. And if the labelled examples came
+from last year's spam, the rule describes last year.
+
+## 10. When machine learning is the wrong tool
+
+Because ML is fashionable, it is worth being explicit about when *not* to use it. Ask these questions
+before starting a project.
+
+| question | if the answer is "no" |
+|---|---|
+| Is there a pattern to learn, and does the data contain it? | No model can predict a fair coin toss. |
+| Do I have enough representative examples? | Collect data first, or use rules and expert knowledge. |
+| Can I say what a correct output is? | Without labels or a clear objective, you cannot train or evaluate. |
+| Is an occasional wrong answer acceptable? | ML models are statistical. If every error is unacceptable, use deterministic logic, or keep a human in the loop. |
+| Will the future resemble the data I train on? | If the process changes quickly, the model goes stale; plan for retraining or choose another approach. |
+| Is the value worth the cost? | A model must be built, deployed, monitored and maintained. A simple rule may capture most of the benefit. |
+
+Müller & Guido make the last point with a thought experiment in their final chapter: imagine you built the
+*perfect* model. If perfectly detecting fraud would save the company \$100 a month, the effort is not
+justified. If it would save tens of thousands, it is worth exploring. Estimating the value of a perfect
+solution takes ten minutes and can save months.
+
+They also stress that building the model is only a small part of the workflow. Model building sits inside
+a feedback cycle of collecting data, cleaning it, building models and analysing their mistakes. Looking
+at the errors a model makes often shows what is missing from the data, or how the task could be phrased
+better. In their words, collecting more or different data, or changing the formulation of the task
+slightly, may pay off far more than running endless grid searches.
+
+> [!TIP]
+> A useful first deliverable in any ML project is not a model. It is a table with three rows: the
+> business metric, the baseline's score, and the score of a perfect model. The gap between the last two
+> tells you how much there is to gain.
+
 ## Summary
 
 - ML learns rules from examples instead of hand-coding them. It shines when rules are hard to write down

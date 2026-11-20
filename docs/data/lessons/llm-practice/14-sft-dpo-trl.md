@@ -231,6 +231,83 @@ helpfulness preferences.
 lighteval accelerate "model_name=./qwen3-support-sft" "leaderboard|ifeval|0" --output-dir evals/
 ```
 
+## 7. Packing, traced: why short examples waste compute
+
+With padding, a batch costs as much as its longest example times the batch size. **Packing** fits several
+examples into each fixed-length sequence instead. TRL's default strategy is best-fit decreasing (`bfd`):
+sort examples by length, and place each into the fullest bin that still has room.
+
+```python-run
+import numpy as np
+rng = np.random.default_rng(0)
+MAX_LEN = 1024
+lengths = np.clip(rng.lognormal(5.0, 0.8, 2000).astype(int), 10, MAX_LEN)   # token length of each example
+
+def best_fit_decreasing(lengths, cap):
+    bins = []                                   # remaining space in each bin
+    for L in sorted(lengths, reverse=True):
+        fits = [i for i, free in enumerate(bins) if free >= L]
+        if fits:
+            i = min(fits, key=lambda i: bins[i])    # the tightest bin that still fits
+            bins[i] -= L
+        else:
+            bins.append(cap - L)
+    return bins
+
+bins = best_fit_decreasing(lengths, MAX_LEN)
+real = int(lengths.sum())
+B = 8
+padded = sum(int(lengths[i:i + B].max()) * len(lengths[i:i + B]) for i in range(0, len(lengths), B))
+print(f"examples: {len(lengths)}   real tokens: {real:,}")
+print(f"padded batches of {B}: {padded:,} token slots  ({100 * real / padded:.0f}% useful)")
+print(f"packed sequences  : {len(bins)} x {MAX_LEN} = {len(bins) * MAX_LEN:,} token slots  ({100 * real / (len(bins) * MAX_LEN):.0f}% useful)")
+```
+
+Roughly doubling the useful fraction of every forward pass is typical on chat datasets with many short
+turns. The subtlety is isolation: examples packed into one sequence must not attend to each other, and
+position ids must restart for each example. TRL's `bfd` strategy handles this with padding-free
+attention; the older `wrapped` strategy simply concatenates and cuts, letting examples bleed into one
+another, which is acceptable for raw-text pretraining but not for instruction data.
+
+## 8. A debugging table for SFT and DPO
+
+| symptom | likely cause | fix |
+|---|---|---|
+| fine-tuned model never stops | end-of-turn token masked from labels, wrong `eos_token`, pad token equal to EOS | check labels of one batch; set `eos_token` to the template's end-of-turn token; use a distinct pad token |
+| model echoes or continues the user's text | loss computed on prompt tokens | prompt-completion format or `assistant_only_loss=True` |
+| great training loss, poor real answers | template at serving differs from training | assert the rendered strings are identical |
+| loss starts very high (above about 5) for an instruct model | wrong template or double BOS | print the rendered text and token ids |
+| replies become short and generic | too many epochs on a narrow dataset | fewer epochs, lower LR, more diverse data |
+| DPO loss stays at 0.693 | policy is not moving: LR too low or adapters not attached | check trainable parameters and `rewards/margins` |
+| DPO loss collapses to 0 quickly and outputs degrade | LR too high or beta too low; the policy runs away from the reference | lower LR, raise beta, fewer steps |
+| DPO `rewards/accuracies` high from step 0 | pairs are trivially separable, e.g. rejected answers are much shorter or malformed | build harder, on-policy pairs |
+| eval metric better, users unhappy | eval set does not reflect real traffic | rebuild the eval set from production samples |
+
+Before any long run, do the two cheap checks from the previous module: decode one collated batch
+(inputs *and* labels, with special tokens visible), and overfit a handful of examples.
+
+## 9. How much data, and what kind?
+
+Rough guidance that holds up across reports from practitioners:
+
+- **Format and style adaptation** (always answer in this JSON shape, in this voice): hundreds to a few
+  thousand examples.
+- **A narrow task** (classify, extract, route): a few thousand; here a fine-tuned small model often
+  matches a much larger prompted one at a fraction of the cost and latency, which is the classic
+  business case for fine-tuning.
+- **New domain behaviour or multi-step skills**: tens of thousands, with careful coverage of edge cases.
+- **Injecting facts**: prefer retrieval. Fine-tuning stores facts unreliably and they go stale.
+
+Diversity matters more than count: 1,000 examples covering the full range of inputs beat 10,000
+near-duplicates. Hold out the evaluation set **before** generating synthetic data or augmentations, so
+paraphrases of test items cannot leak into training, and include examples of what the model should
+*decline* or escalate, or it will learn that every input deserves a confident answer.
+
+**Distillation** is the common way to get such data: have a strong teacher model answer real inputs
+(optionally with reasoning), filter the outputs with automatic checks or a judge, and fine-tune the small
+student on the survivors. Check the teacher's licence terms; some providers restrict using outputs to
+train competing models.
+
 > [!INTERVIEW]
 > **"Derive or explain DPO."** Start from the KL-regularised reward maximisation of RLHF; its optimal
 > policy is $\pi^*(y|x) \propto \pi_{ref}(y|x)\exp(r(x,y)/\beta)$, so $r = \beta\log(\pi^*/\pi_{ref})$
