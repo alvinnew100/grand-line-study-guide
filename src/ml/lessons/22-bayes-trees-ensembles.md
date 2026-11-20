@@ -202,7 +202,7 @@ for n in [1, 5, 25, 100]:
     rf = RandomForestClassifier(n_estimators=n, random_state=0).fit(X_tr, y_tr)
     print(f"forest of {n:3d} trees    test={rf.score(X_te, y_te):.3f}")
 top = np.argsort(rf.feature_importances_)[::-1][:5]
-print("top features:", [(data.feature_names[i], round(rf.feature_importances_[i], 3)) for i in top])
+print("top features:", [(str(data.feature_names[i]), round(float(rf.feature_importances_[i]), 3)) for i in top])
 ```
 
 **Parameters and advice (from the book).**

@@ -857,7 +857,7 @@ the answer is the intersection of the two reachable sets.
 2. `reach` is multi-source BFS that moves from `(r,c)` to a neighbour with `heights[n] >= heights[r][c]`.
 3. Return cells in both sets.
 
-**Dry run** on Example 1: (2,2) with height 5 — the Pacific search climbs 1→2→... e.g. (0,2)=2 → (1,2)=3 → (2,2)=5 ✓; the Atlantic search climbs (4,2)=1 → (3,2)=1? no, from (2,4)=1 → (2,3)=3 → (2,2)=5 ✓. So (2,2) is in both.
+**Dry run** on Example 1, cell (2,2) with height 5: the Pacific search climbs (0,2)=2 → (1,2)=3 → (2,2)=5 ✓; the Atlantic search climbs (2,4)=1 → (2,3)=3 → (2,2)=5 ✓. So (2,2) is in both sets.
 """,
         complexity="O(m·n) time: each search visits each cell once. O(m·n) space.",
         pitfalls=r"""

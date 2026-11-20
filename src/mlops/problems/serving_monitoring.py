@@ -302,7 +302,7 @@ Return `[z, p, winner]` where `winner` is `"B"` if `p < alpha` and `z > 0`, `"A"
 
 Degenerate cases: if `n_a == 0`, `n_b == 0`, or `SE == 0`, return `[0.0, 1.0, "none"]`.
 
-**Example:** `abTest(200, 10000, 260, 10000, 0.05)` → `z ≈ 2.8284`, `p ≈ 0.00468`, `"B"`.
+**Example:** `abTest(200, 10000, 260, 10000, 0.05)` → `z ≈ 2.8303`, `p ≈ 0.00465`, `"B"`.
 """,
     starter='''import math
 

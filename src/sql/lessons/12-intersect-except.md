@@ -39,15 +39,16 @@ Try writing that with a single WHERE clause: `status = 'cancelled' AND status = 
 
 `A EXCEPT B` returns the rows of A that do **not** appear in B, with duplicates removed. Order matters.
 
-Tellers assigned to Woburn who have **not** opened an account there:
+Headquarters employees who have **never** opened an account:
 
 ```sql-run dataset=bank
 SELECT emp_id FROM employee
-WHERE assigned_branch_id = 2
+WHERE assigned_branch_id = 1
 EXCEPT
-SELECT open_emp_id FROM account
-WHERE open_branch_id = 2;
+SELECT open_emp_id FROM account;
 ```
+
+Swap the two queries and you ask the opposite question — account openers who are *not* headquarters employees — and get a different answer.
 
 Products that have never been sold in a delivered order:
 

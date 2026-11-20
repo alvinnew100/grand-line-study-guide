@@ -296,6 +296,7 @@ remaining ones do not overlap. Here intervals that merely **touch** (like `[1,2]
         [[[1, 10], [2, 3], [3, 4], [4, 5]]],
         [[[-50000, 50000], [0, 1]]],
         [[[0, 1], [3, 4], [1, 2]]],
+        [[[1, 100], [2, 3], [4, 5]]],
         [_erase_big],
         [[[i, i + 2] for i in range(8000)]],
     ],
@@ -349,7 +350,7 @@ Equivalent variant: sort by start, and on overlap delete the one with the **larg
 """,
         complexity="Time **O(n log n)**, space O(n) (sorted copy).",
         pitfalls=r"""
-- Sorting by start and greedily keeping the first one: `[[1,100],[11,22],[1,11],[2,12]]` fails.
+- Sorting by start and greedily keeping the first one: `[[1,100],[2,3],[4,5]]` keeps the long one and removes 2 instead of 1.
 - Treating touching intervals as overlapping (`>` vs `>=`).
 - Shortest-interval-first is another wrong greedy (see lesson counterexamples).
 """,

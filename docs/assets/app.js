@@ -76,8 +76,10 @@
   $("#menuBtn").onclick = () => { sidebar.classList.toggle("open"); scrim.classList.toggle("show", sidebar.classList.contains("open")); };
   scrim.onclick = closeMenu;
   function renderSidebar(activeTrack, activeLesson) {
-    let html = `<a class="side-track ${!activeTrack ? "active" : ""}" href="#/"><span class="ico">🏴‍☠️</span><span class="lbl">Home & study plan</span></a>
-      <a class="side-track" href="#/problems"><span class="ico">🧩</span><span class="lbl">All problems</span></a>`;
+    let html = `<a class="side-track ${!activeTrack ? "active" : ""}" href="#/"><span class="ico">🍃</span><span class="lbl">Home</span></a>
+      <a class="side-track" href="#/roadmap"><span class="ico">🗺️</span><span class="lbl">Roadmap</span></a>
+      <a class="side-track" href="#/problems"><span class="ico">🧩</span><span class="lbl">All problems</span></a>
+      <a class="side-track" href="#/gallery"><span class="ico">🖼️</span><span class="lbl">Gallery</span></a>`;
     let group = null;
     DATA.index.forEach((ti) => {
       const t = DATA.tracks[ti.id];
@@ -409,11 +411,89 @@
     btn.onclick = go;
   }
 
+
+  // ---------------------------------------------------------------- Ghibli stills & quotes
+  const TRACK_FILM = { csapp: "laputa", python: "baron", "dsa-foundations": "mimi", "neet-arrays": "majo", "neet-window-stack": "howl",
+    "neet-linked-trees": "totoro", "neet-heap-graphs": "mononoke", "neet-dp": "chihiro", "neet-greedy-math": "porco", sql: "kokurikozaka",
+    databases: "nausicaa", ml: "kazetachinu", fastapi: "ponyo", mlops: "karigurashi", "ai-eng": "kimitachi", "llm-practice": "kaguyahime" };
+  const Ghibli = {
+    works: {}, list: [], quotes: [], note: "", terms: "",
+    async load() {
+      try {
+        const m = await getJSON("assets/ghibli/manifest.json");
+        this.list = m.works; this.terms = m.terms;
+        m.works.forEach((w) => (this.works[w.id] = w));
+        const q = await getJSON("assets/ghibli/quotes.json");
+        this.quotes = q.quotes; this.note = q.note;
+      } catch (_) {}
+    },
+    hash(str) { let x = 2166136261; for (let i = 0; i < str.length; i++) { x ^= str.charCodeAt(i); x = Math.imul(x, 16777619); } return x >>> 0; },
+    still(workId, seed) {
+      let w = this.works[workId];
+      if (!w || !w.files.length) {
+        const ok = this.list.filter((x) => x.files.length);
+        if (!ok.length) return null;
+        w = ok[this.hash("w" + seed) % ok.length];
+      }
+      const f = w.files[this.hash(String(seed)) % w.files.length];
+      return { w, f, src: `assets/ghibli/${w.id}/${f}.webp`, thumb: `assets/ghibli/${w.id}/t/${f}.webp` };
+    },
+    credit(w) { return `<a href="${esc(w.url)}" target="_blank" rel="noopener">${esc(w.title)} (${esc(w.year)})</a> · ${esc(w.copyright)} · official still, ghibli.jp`; },
+    figure(workId, seed, cls = "") {
+      const st = this.still(workId, seed);
+      if (!st) return "";
+      return `<figure class="still ${cls}"><img loading="lazy" src="${st.src}" alt="Still from ${esc(st.w.title)}" width="1024" height="554"><figcaption>${this.credit(st.w)}</figcaption></figure>`;
+    },
+    quoteHTML(seed) {
+      if (!this.quotes.length) return "";
+      const q = this.quotes[this.hash("q" + seed) % this.quotes.length];
+      const w = this.works[q.work];
+      const ref = w ? `<a href="${esc(w.url)}" target="_blank" rel="noopener"><cite>${esc(w.title)}</cite> (${esc(w.year)})</a>` : "";
+      return `<blockquote class="gq"><p>“${esc(q.q)}”</p><footer>— ${esc(q.by)}${ref ? ", " + ref : ""}</footer></blockquote>`;
+    },
+  };
+  const dayKey = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const bump = (s) => { const k = dayKey(); (s.activity = s.activity || {})[k] = (s.activity[k] || 0) + 1; };
+  function streaks() {
+    const a = S().activity || {};
+    let cur = 0, best = 0, run = 0;
+    const d = new Date();
+    if (!a[dayKey(d)]) d.setDate(d.getDate() - 1);
+    while (a[dayKey(d)]) { cur++; d.setDate(d.getDate() - 1); }
+    let prev = null;
+    Object.keys(a).sort().forEach((k) => { const t = new Date(k + "T00:00:00"); run = prev && Math.round((t - prev) / 864e5) === 1 ? run + 1 : 1; best = Math.max(best, run); prev = t; });
+    return { cur, best: Math.max(best, cur) };
+  }
+  function calendarHTML() {
+    const a = S().activity || {}, now = new Date(), y = now.getFullYear(), m = now.getMonth();
+    const first = new Date(y, m, 1).getDay(), days = new Date(y, m + 1, 0).getDate();
+    let cells = "SMTWTFS".split("").map((c) => `<span class="cal-h">${c}</span>`).join("") + "<span></span>".repeat(first);
+    for (let d = 1; d <= days; d++) {
+      const n = a[dayKey(new Date(y, m, d))] || 0;
+      cells += `<span class="cal-d ${n ? "l" + Math.min(3, n) : ""} ${d === now.getDate() ? "today" : ""}" title="${n} item(s)">${d}</span>`;
+    }
+    return `<div class="cal-title">${now.toLocaleString(undefined, { month: "long", year: "numeric" })}</div><div class="cal">${cells}</div>`;
+  }
+  function difficultyStats() {
+    const s = S(), out = { Easy: [0, 0], Medium: [0, 0], Hard: [0, 0] };
+    Object.keys(DATA.problemTrack).forEach((pid) => {
+      const m = DATA.tracks[DATA.problemTrack[pid].track].problemIndex[pid];
+      if (!m || !out[m.difficulty]) return;
+      out[m.difficulty][1]++; if (s.solved[pid]) out[m.difficulty][0]++;
+    });
+    return out;
+  }
+  function randomUnsolved() {
+    const s = S(), pool = Object.keys(DATA.problemTrack).filter((p) => !s.solved[p]);
+    return pool.length ? pool[Math.floor(Math.random() * pool.length)] : null;
+  }
+
   // ---------------------------------------------------------------- views
   const main = $("#main");
   function setPage(html, opts = {}) {
     document.body.classList.toggle("workspace", !!opts.workspace);
     document.body.classList.toggle("wide", !!opts.workspace);
+    const rbar = $("#readbar"); if (rbar) rbar.remove();
     main.innerHTML = html;
     if (!opts.keepScroll) window.scrollTo(0, 0);
     closeMenu();
@@ -423,48 +503,163 @@
     renderSidebar(null);
     const s = S();
     const totals = DATA.index.reduce((a, t) => ({ lessons: a.lessons + (t.lessons || 0), problems: a.problems + (t.problems || 0), words: a.words + (t.words || 0) }), { lessons: 0, problems: 0, words: 0 });
-    const solved = Object.keys(s.solved).length, read = Object.keys(s.lessons).length;
+    const solved = Object.keys(s.solved).filter((p) => DATA.problemTrack[p]).length, read = Object.keys(s.lessons).length;
+    const hero = Ghibli.still(null, "hero" + dayKey());
+    const diff = difficultyStats(), st = streaks();
+    const nProb = Object.keys(DATA.problemTrack).length;
+    const C = 2 * Math.PI * 52, frac = nProb ? solved / nProb : 0;
     let groups = "", group = null, buf = "";
     const flush = () => { if (group !== null) groups += `<div class="section-h"><h2>${esc(group)}</h2></div><div class="grid">${buf}</div>`; buf = ""; };
     DATA.index.forEach((ti) => {
       const t = DATA.tracks[ti.id];
       if (!t) return;
       if (t.group !== group) { flush(); group = t.group; }
-      const p = trackProgress(t);
-      buf += `<a class="card" href="#/track/${t.id}" style="--card-accent:${esc(t.color || "#d1412b")}">
-        <div class="card-top"><div class="card-ico">${esc(t.icon || "📘")}</div><h3>${esc(t.title)}</h3></div>
+      const p = trackProgress(t), im = Ghibli.still(TRACK_FILM[t.id], "card" + t.id);
+      buf += `<a class="card tcard" href="#/track/${t.id}" style="--card-accent:${esc(t.color || "#3f6b4f")}">
+        ${im ? `<div class="tcard-img"><img loading="lazy" src="${im.thumb}" alt="Still from ${esc(im.w.title)}"><span class="tcard-film">${esc(im.w.title)}</span></div>` : ""}
+        <div class="tcard-body"><div class="card-top"><div class="card-ico">${esc(t.icon || "📘")}</div><h3>${esc(t.title)}</h3></div>
         <p>${esc(t.blurb || "")}</p>
         <div class="bar"><i style="width:${p.pct}%"></i></div>
-        <div class="card-meta"><span>${ti.modules} modules</span><span>${ti.lessons} lessons</span><span>${ti.problems} problems</span><span>${p.pct}% done</span></div></a>`;
+        <div class="card-meta"><span>${ti.lessons} lessons</span><span>${ti.problems} problems</span><span>${p.pct}% done</span></div></div></a>`;
     });
     flush();
-    let cont = "";
-    if (s.last) {
-      cont = `<div class="section-h"><h2>Continue your voyage</h2></div><a class="card" href="${esc(s.last.href)}"><div class="card-top"><div class="card-ico">⏩</div><div><h3>${esc(s.last.title)}</h3><p>${esc(s.last.sub || "")}</p></div></div></a>`;
-    }
+    const cont = s.last ? `<a class="btn primary" href="${esc(s.last.href)}">Continue: ${esc(s.last.title)}</a>` : `<a class="btn primary" href="#/roadmap">Start with the roadmap</a>`;
     setPage(`<div class="page">
-      <section class="hero">
-        <h1>Set sail for the Grand Line</h1>
-        <p>A full, interactive study guide: computer systems, Python, data structures & algorithms with a LeetCode-style judge, SQL & databases, machine learning, FastAPI, MLOps and AI engineering. Every lesson ends with a quiz. Every problem has hints and a full walkthrough.</p>
-        <div class="hero-stats">
-          <div class="hero-stat"><b>${totals.lessons}</b>lessons</div>
-          <div class="hero-stat"><b>${totals.problems}</b>judged problems</div>
-          <div class="hero-stat"><b>${Math.round(totals.words / 1000)}k</b>words</div>
-          <div class="hero-stat"><b>${read}</b>lessons read</div>
-          <div class="hero-stat"><b>${solved}</b>problems solved</div>
+      <section class="hero2" ${hero ? `style="background-image:url('${hero.src}')"` : ""}>
+        <div class="hero2-in">
+          <p class="hero2-kicker">A Studio Ghibli themed, fan-made study guide</p>
+          <h1>Study a little every day. The wind will carry you.</h1>
+          <p>Computer systems, Python, algorithms with a live judge, SQL and databases, machine learning, FastAPI, MLOps and AI engineering.</p>
+          <div class="hero2-cta">${cont}<a class="btn glass" href="#/roadmap">Roadmap</a><button class="btn glass" id="rndBtn" type="button">Random problem</button></div>
         </div>
+        ${hero ? `<div class="hero2-credit">${Ghibli.credit(hero.w)}</div>` : ""}
       </section>
-      ${cont}
-      <div class="section-h"><h2>How to use this guide</h2></div>
-      <div class="grid">
-        <div class="card"><h3>1 · Read the lesson</h3><p>Each module starts with topic lessons drawn from the source books and official docs. Run the code blocks right in the page.</p></div>
-        <div class="card"><h3>2 · Check yourself</h3><p>Answer the quiz at the end of each lesson. Explanations show up as you answer.</p></div>
-        <div class="card"><h3>3 · Solve the problems</h3><p>Each problem has a prerequisites note, three hints, the brute force and the optimal walkthrough. Reveal them one at a time, only when you're stuck.</p></div>
+      <div class="dash">
+        <div class="card dash-ring">
+          <svg viewBox="0 0 120 120" width="120" height="120" aria-hidden="true"><circle cx="60" cy="60" r="52" fill="none" stroke="var(--surface-2)" stroke-width="10"/>
+            <circle cx="60" cy="60" r="52" fill="none" stroke="var(--accent)" stroke-width="10" stroke-linecap="round" stroke-dasharray="${(C * frac).toFixed(1)} ${C.toFixed(1)}" transform="rotate(-90 60 60)"/>
+            <text x="60" y="58" text-anchor="middle" font-size="24" font-weight="800" fill="currentColor">${solved}</text><text x="60" y="76" text-anchor="middle" font-size="11" fill="currentColor" opacity=".6">of ${nProb} solved</text></svg>
+          <div class="dash-diff">${["Easy", "Medium", "Hard"].map((d) => `<div><span class="diff ${d}">${d}</span><b>${diff[d][0]}/${diff[d][1]}</b></div>`).join("")}
+            <div><span class="muted">Lessons read</span><b>${read}/${totals.lessons}</b></div></div>
+        </div>
+        <div class="card dash-streak">
+          <div class="streak-row"><div><b>${st.cur}</b><span>day streak</span></div><div><b>${st.best}</b><span>best streak</span></div><div><b>${Object.keys(s.activity || {}).length}</b><span>active days</span></div></div>
+          ${calendarHTML()}
+          <p class="muted" style="font-size:12px;margin:8px 0 0">Finish a lesson or solve a problem to light up today.</p>
+        </div>
+        <div class="card dash-quote">${Ghibli.quoteHTML("day" + dayKey())}<a class="muted" style="font-size:12px" href="#/credits">Image and quote credits</a></div>
       </div>
       ${groups}
-      <div class="footer">Progress is stored locally in your browser · ⚙ to export or import</div>
+      <div class="footer">Fan-made study site, not affiliated with Studio Ghibli. Stills are the official free images from <a href="https://www.ghibli.jp/works/" target="_blank" rel="noopener">ghibli.jp</a>. <a href="#/gallery">Gallery</a> · <a href="#/credits">Credits</a><br>${totals.lessons} lessons · ${totals.problems} problems · ${Math.round(totals.words / 1000)}k words · progress is stored in this browser</div>
     </div>`);
+    const rb = $("#rndBtn");
+    if (rb) rb.onclick = () => { const p = randomUnsolved(); if (p) location.hash = `#/problem/${p}`; };
   }
+
+  // ---------------------------------------------------------------- roadmap
+  const ROADMAP = {
+    pos: { csapp: [0, 0], python: [2, 0], sql: [4, 0], "dsa-foundations": [1, 1], fastapi: [2, 1], ml: [3, 1], databases: [4, 1],
+      "neet-arrays": [1, 2], mlops: [3, 2], "ai-eng": [4, 2], "neet-window-stack": [0, 3], "neet-linked-trees": [1, 3], "llm-practice": [4, 3],
+      "neet-greedy-math": [0, 4], "neet-heap-graphs": [1, 4], "neet-dp": [2, 4] },
+    edges: [["python", "dsa-foundations"], ["python", "fastapi"], ["python", "ml"], ["sql", "databases"], ["dsa-foundations", "neet-arrays"],
+      ["neet-arrays", "neet-window-stack"], ["neet-arrays", "neet-linked-trees"], ["neet-window-stack", "neet-greedy-math"],
+      ["neet-linked-trees", "neet-heap-graphs"], ["neet-linked-trees", "neet-dp"], ["ml", "mlops"], ["fastapi", "mlops"], ["databases", "mlops"],
+      ["ml", "ai-eng"], ["ai-eng", "llm-practice"]],
+  };
+  function viewRoadmap() {
+    renderSidebar(null);
+    const CW = 218, RH = 128, NW = 196, NH = 76, PAD = 16;
+    const xy = (id) => { const [c, r] = ROADMAP.pos[id]; return [PAD + c * CW, PAD + r * RH]; };
+    const ids = Object.keys(ROADMAP.pos).filter((id) => DATA.tracks[id]);
+    const W = PAD * 2 + 4 * CW + NW, H = PAD * 2 + 4 * RH + NH;
+    const lines = ROADMAP.edges.filter(([a, b]) => DATA.tracks[a] && DATA.tracks[b]).map(([a, b]) => {
+      const [ax, ay] = xy(a), [bx, by] = xy(b);
+      const x1 = ax + NW / 2, y1 = ay + NH, x2 = bx + NW / 2, y2 = by, my = (y1 + y2) / 2;
+      const done = trackProgress(DATA.tracks[a]).pct === 100;
+      return `<path d="M${x1},${y1} C${x1},${my} ${x2},${my} ${x2},${y2}" class="${done ? "done" : ""}"/>`;
+    }).join("");
+    const nodes = ids.map((id) => {
+      const t = DATA.tracks[id], [x, y] = xy(id), p = trackProgress(t);
+      return `<a class="rnode ${p.pct === 100 ? "done" : p.pct ? "started" : ""}" href="#/track/${id}" style="left:${x}px;top:${y}px;width:${NW}px;height:${NH}px">
+        <span class="rn-t"><span>${esc(t.icon || "")}</span>${esc(t.title)}</span><span class="bar"><i style="width:${p.pct}%"></i></span><span class="rn-m">${p.done}/${p.total} · ${p.pct}%</span></a>`;
+    }).join("");
+    setPage(`<div class="page"><div class="crumbs"><a href="#/">Home</a></div><h1 class="page-title">Roadmap</h1>
+      <p class="muted">Arrows point from a track to the ones that build on it. Start at the top; anything with no arrow into it needs no prerequisites.</p>
+      <div class="roadmap-scroll"><div class="roadmap" style="width:${W}px;height:${H}px"><svg width="${W}" height="${H}">${lines}</svg>${nodes}</div></div>
+      ${Ghibli.figure("laputa", "roadmap", "wide")}</div>`);
+  }
+
+  // ---------------------------------------------------------------- gallery & credits
+  function viewGallery(wid) {
+    renderSidebar(null);
+    const w = wid && Ghibli.works[wid];
+    if (w) {
+      setPage(`<div class="page"><div class="crumbs"><a href="#/">Home</a> / <a href="#/gallery">Gallery</a></div>
+        <h1 class="page-title">${esc(w.title)} <small class="muted">(${esc(w.year)})</small></h1><p class="muted">${esc(w.title_ja)} · ${esc(w.copyright)} · <a href="${esc(w.url)}" target="_blank" rel="noopener">source page on ghibli.jp</a></p>
+        <div class="gal">${w.files.map((f) => `<a href="assets/ghibli/${w.id}/${f}.webp" target="_blank" rel="noopener"><img loading="lazy" src="assets/ghibli/${w.id}/t/${f}.webp" alt="Still from ${esc(w.title)}"></a>`).join("")}</div></div>`);
+      return;
+    }
+    const withStills = Ghibli.list.filter((x) => x.files.length);
+    const total = withStills.reduce((a, x) => a + x.files.length, 0);
+    setPage(`<div class="page"><div class="crumbs"><a href="#/">Home</a></div><h1 class="page-title">Gallery</h1>
+      <p class="muted">${total} official stills from ${withStills.length} films, published by Studio Ghibli at <a href="https://www.ghibli.jp/works/" target="_blank" rel="noopener">ghibli.jp/works</a>. <a href="#/credits">Credits and terms</a>.</p>
+      <div class="grid">${withStills.map((x) => `<a class="card tcard" href="#/gallery/${x.id}"><div class="tcard-img"><img loading="lazy" src="assets/ghibli/${x.id}/t/${x.files[0]}.webp" alt="Still from ${esc(x.title)}"></div>
+        <div class="tcard-body"><h3>${esc(x.title)}</h3><p>${esc(x.title_ja)} · ${esc(x.year)} · ${x.files.length} stills</p></div></a>`).join("")}</div></div>`);
+  }
+  function viewCredits() {
+    renderSidebar(null);
+    setPage(`<div class="page narrow"><div class="crumbs"><a href="#/">Home</a></div><h1 class="page-title">Credits</h1>
+      <div class="prose">
+      <p>This is a personal, fan-made study site. It is not affiliated with or endorsed by Studio Ghibli.</p>
+      <h2>Images</h2>
+      <p>Every film still on this site is an official image published by Studio Ghibli at <a href="https://www.ghibli.jp/works/" target="_blank" rel="noopener">https://www.ghibli.jp/works/</a>. ${esc(Ghibli.terms)} The images here are resized copies of those files; each one is captioned with its film and copyright line where it appears.</p>
+      <table><thead><tr><th>Film</th><th>Year</th><th>Copyright</th><th>Source</th></tr></thead><tbody>${Ghibli.list.filter((x) => x.files.length).map((x) => `<tr><td><a href="#/gallery/${x.id}">${esc(x.title)}</a><br><span class="muted">${esc(x.title_ja)}</span></td><td>${esc(x.year)}</td><td>${esc(x.copyright)}</td><td><a href="${esc(x.url)}" target="_blank" rel="noopener">ghibli.jp</a></td></tr>`).join("")}</tbody></table>
+      <h2>Quotes</h2>
+      <p>${esc(Ghibli.note)}</p>
+      <table><thead><tr><th>Quote</th><th>Speaker</th><th>Film</th></tr></thead><tbody>${Ghibli.quotes.map((q) => { const w = Ghibli.works[q.work]; return `<tr><td>“${esc(q.q)}”</td><td>${esc(q.by)}</td><td>${w ? `<a href="${esc(w.url)}" target="_blank" rel="noopener">${esc(w.title)} (${esc(w.year)})</a>` : esc(q.work)}</td></tr>`; }).join("")}</tbody></table>
+      <h2>Study content</h2>
+      <p>Lessons are original summaries that cite their source books and documentation at the end of each lesson. Problem statements are written for this site; links go to the original problems on LeetCode and NeetCode.</p>
+      </div></div>`);
+  }
+
+  // ---------------------------------------------------------------- command palette (Ctrl/Cmd+K)
+  function openPalette() {
+    let dlg = $("#pal");
+    if (!dlg) {
+      dlg = h(`<dialog id="pal" class="dlg pal"><input id="palIn" type="search" placeholder="Jump to a track, lesson or problem…" autocomplete="off"><div id="palList"></div><p class="muted pal-hint">↑ ↓ to move · Enter to open · Esc to close</p></dialog>`);
+      document.body.appendChild(dlg);
+    }
+    const items = [{ t: "Home", s: "", href: "#/" }, { t: "Roadmap", s: "", href: "#/roadmap" }, { t: "All problems", s: "", href: "#/problems" }, { t: "Gallery", s: "", href: "#/gallery" }, { t: "Credits", s: "", href: "#/credits" }];
+    DATA.index.forEach((ti) => {
+      const t = DATA.tracks[ti.id];
+      if (!t) return;
+      items.push({ t: t.title, s: "Track", href: `#/track/${t.id}` });
+      t.modules.forEach((m) => {
+        (m.lessons || []).forEach((l) => items.push({ t: l.title, s: `Lesson · ${t.title}`, href: `#/lesson/${t.id}/${l.id}` }));
+        (m.problems || []).forEach((pid) => { const x = t.problemIndex[pid]; if (x) items.push({ t: x.title, s: `Problem · ${x.difficulty}`, href: `#/problem/${pid}` }); });
+      });
+    });
+    const inp = $("#palIn"), list = $("#palList");
+    let sel = 0, shown = [];
+    const draw = () => {
+      const q = inp.value.toLowerCase().trim();
+      shown = (q ? items.filter((i) => (i.t + " " + i.s).toLowerCase().includes(q)) : items).slice(0, 12);
+      sel = Math.min(sel, Math.max(0, shown.length - 1));
+      list.innerHTML = shown.map((i, n) => `<a class="pal-i ${n === sel ? "on" : ""}" href="${i.href}"><b>${esc(i.t)}</b><span>${esc(i.s)}</span></a>`).join("") || `<p class="muted" style="padding:8px">Nothing found.</p>`;
+    };
+    inp.value = ""; sel = 0; draw();
+    inp.oninput = () => { sel = 0; draw(); };
+    inp.onkeydown = (e) => {
+      if (e.key === "ArrowDown") { sel = Math.min(sel + 1, shown.length - 1); draw(); e.preventDefault(); }
+      else if (e.key === "ArrowUp") { sel = Math.max(sel - 1, 0); draw(); e.preventDefault(); }
+      else if (e.key === "Enter" && shown[sel]) { location.hash = shown[sel].href; dlg.close(); e.preventDefault(); }
+    };
+    list.onclick = (e) => { if (e.target.closest("a")) dlg.close(); };
+    dlg.onclick = (e) => { if (e.target === dlg) dlg.close(); };
+    dlg.showModal();
+  }
+  document.addEventListener("keydown", (e) => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); openPalette(); } });
+  window.addEventListener("scroll", () => { const b = $("#readbar"); if (b) { const d = document.documentElement; b.style.width = Math.min(100, (100 * d.scrollTop) / Math.max(1, d.scrollHeight - d.clientHeight)) + "%"; } }, { passive: true });
 
   function lessonMinutes(l) { return Math.max(3, Math.round((l.words || 0) / 220)); }
 
@@ -487,6 +682,7 @@
     }).join("");
     setPage(`<div class="page narrow" style="--card-accent:${esc(t.color || "#d1412b")}">
       <div class="crumbs"><a href="#/">Home</a> / <span>${esc(t.group || "")}</span></div>
+      ${Ghibli.figure(TRACK_FILM[tid], "track" + tid, "banner")}
       <div class="track-head"><div class="card-ico">${esc(t.icon || "📘")}</div><div>
         <h1 class="page-title">${esc(t.title)}</h1><p class="muted" style="margin:0 0 8px">${esc(t.blurb || "")}</p>
         ${t.sources && t.sources.length ? `<div class="sources">Sources: ${t.sources.map(esc).join(" · ")}</div>` : ""}
@@ -569,6 +765,9 @@
     if (!body) return;
     if (!/^\s*#\s/.test(md)) md = `# ${l.title}\n\n` + md;
     renderMarkdown(md, body, { key: `${tid}/${lid}` });
+    const h1 = $("h1", body), fig = Ghibli.figure(TRACK_FILM[tid], `${tid}/${lid}`, "banner");
+    if (fig && h1) h1.insertAdjacentHTML("afterend", fig);
+    if (!$("#readbar")) document.body.appendChild(h(`<div id="readbar"></div>`));
     store.set((s) => (s.last = { href: location.hash, title: l.title, sub: t.title }));
     // TOC
     const heads = $$("h2, h3", body);
@@ -587,6 +786,7 @@
     const key = `${tid}/${lid}`;
     const foot = h(`<div>
       ${isLastInModule && (mod.problems || []).length ? `<h2 id="practice">Practice: ${esc(mod.title)}</h2><p>Put the lesson to work. Each problem has hints and a full walkthrough in its Guide tab.</p><div class="table-wrap">${problemTable(mod.problems, t)}</div>` : ""}
+      ${Ghibli.quoteHTML(key)}
       <div class="lesson-foot">
         <button class="btn ${S().lessons[key] ? "ok" : "primary"}" id="doneBtn">${S().lessons[key] ? "✓ Completed" : "Mark lesson complete"}</button>
         <div class="navs">${prev ? `<a class="btn" href="#/lesson/${tid}/${prev.id}">← ${esc(prev.title)}</a>` : ""}${next ? `<a class="btn" href="#/lesson/${tid}/${next.id}">${esc(next.title)} →</a>` : `<a class="btn" href="#/track/${tid}">Back to track</a>`}</div>
@@ -594,7 +794,7 @@
     body.appendChild(foot);
     $("#doneBtn").onclick = () => {
       const on = !S().lessons[key];
-      store.set((s) => { if (on) s.lessons[key] = Date.now(); else delete s.lessons[key]; });
+      store.set((s) => { if (on) { s.lessons[key] = Date.now(); bump(s); } else delete s.lessons[key]; });
       if (on && next) location.hash = `#/lesson/${tid}/${next.id}`;
       else viewLesson(tid, lid);
     };
@@ -771,7 +971,7 @@
         if (submit) {
           tr.subs.push({ at: Date.now(), verdict, passed, total, ok: verdict === "Accepted" });
           if (tr.subs.length > 30) tr.subs.shift();
-          if (verdict === "Accepted") s.solved[pid] = Date.now();
+          if (verdict === "Accepted") { if (!s.solved[pid]) bump(s); s.solved[pid] = Date.now(); }
         }
       });
     }
@@ -851,7 +1051,7 @@
     }
 
     function nextSteps() {
-      return `<div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">${nextP ? `<a class="btn primary sm" href="#/problem/${nextP}">Next problem →</a>` : `<a class="btn primary sm" href="#/track/${t.id}">Back to track</a>`}<button class="btn sm" onclick="document.querySelector('[data-t=guide]').click()">Compare with the walkthrough</button></div>`;
+      return Ghibli.quoteHTML("ok" + pid) + `<div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">${nextP ? `<a class="btn primary sm" href="#/problem/${nextP}">Next problem →</a>` : `<a class="btn primary sm" href="#/track/${t.id}">Back to track</a>`}<button class="btn sm" onclick="document.querySelector('[data-t=guide]').click()">Compare with the walkthrough</button></div>`;
     }
 
     async function runSql(code, submit) {
@@ -957,6 +1157,9 @@
       else if (parts[0] === "lesson") await viewLesson(parts[1], parts[2]);
       else if (parts[0] === "problem") await viewProblem(parts[1]);
       else if (parts[0] === "problems") viewProblems(new URLSearchParams(query || "").get("q"));
+      else if (parts[0] === "roadmap") viewRoadmap();
+      else if (parts[0] === "gallery") viewGallery(parts[1]);
+      else if (parts[0] === "credits") viewCredits();
       else if (parts[0] === "search") viewSearch(new URLSearchParams(query || "").get("q") || "");
       else viewNotFound();
     } catch (e) {
@@ -995,7 +1198,7 @@
   $("#resetBtn").onclick = () => { if (confirm("Erase ALL progress, code and notes in this browser?")) { store.replace({}); dlg.close(); route(); } };
 
   // ---------------------------------------------------------------- boot
-  loadAll().then(route).catch((e) => {
+  Promise.all([loadAll(), Ghibli.load()]).then(route).catch((e) => {
     main.innerHTML = `<div class="page narrow"><h1 class="page-title">Could not load content</h1><p class="muted">${esc(e.message)}</p><p>If you opened the file directly, serve the <code>docs/</code> folder over HTTP (e.g. <code>python -m http.server</code>).</p></div>`;
   });
 })();

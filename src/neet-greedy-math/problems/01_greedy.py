@@ -637,7 +637,7 @@ step is forced, so if any step fails the answer is `False`.
 
 Processing a whole batch of `k` groups at once keeps it fast even with many duplicates.
 """,
-        complexity="Time **O(n log n)** for sorting distinct values plus O(n·g)/… in the worst case it is O(m·g) where m is the number of distinct values; space O(n).",
+        complexity="Time **O(n log n)**: sorting the distinct values dominates; the subtraction work totals O(n) because every card is consumed once per group it belongs to (each inner step removes at least one card, or fails). Space O(n) for the counter.",
         pitfalls=r"""
 - Checking only that the distinct values are consecutive ignores multiplicities.
 - Using a min-heap and popping the wrong element when duplicates exist — the batch (`k`) approach avoids that.
@@ -1076,7 +1076,7 @@ two more `$5` bills and one fewer `$10`. Any later change the `$10` would have p
 bills can provide too, so the swapped strategy never gets stuck where the original did not.
 """,
         complexity="Time **O(n)**, space **O(1)**.",
-        pitfalls="Spending three `$5`s first when a `$10` is available fails sequences like `[5,5,5,10,20,5,10]`-style mixes.",
+        pitfalls="Spending three `$5`s first when a `$10` is available fails `[5,5,5,5,10,20,10,10]`: the `$20` eats three fives, leaving none for the next `$10`. Also: you never need to track `$20` bills.",
         follow_up="Classic **coin change** greedy only works for *canonical* coin systems (e.g. 1,5,10,25); with coins 1,3,4 and amount 6 greedy gives 4+1+1 instead of 3+3 — see the lesson.",
     ),
 ),

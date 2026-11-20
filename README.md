@@ -1,4 +1,6 @@
-# Grand Line Study Guide
+# Whispering Wind Study Guide
+
+A fan-made, Studio Ghibli themed study site (not affiliated with Studio Ghibli). Film stills are the official free images from https://www.ghibli.jp/works/; see the Credits page on the site.
 
 An interactive, static study guide (GitHub Pages) covering:
 

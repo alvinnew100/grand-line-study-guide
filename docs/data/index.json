@@ -8,10 +8,10 @@
   "sources": [
    "Chip Huyen, AI Engineering: Building Applications with Foundation Models (O'Reilly, 2025), ch. 1-10"
   ],
-  "words": 24670,
+  "words": 46556,
   "modules": 10,
   "lessons": 27,
-  "problems": 8
+  "problems": 24
  },
  {
   "id": "csapp",
@@ -22,10 +22,10 @@
   "sources": [
    "Bryant & O'Hallaron, Computer Systems: A Programmer's Perspective, 3rd ed. (CS:APP 3e)"
   ],
-  "words": 22619,
+  "words": 53288,
   "modules": 13,
   "lessons": 34,
-  "problems": 10
+  "problems": 18
  },
  {
   "id": "databases",
@@ -54,10 +54,10 @@
   "sources": [
    "Goodrich, Tamassia & Goldwasser, Data Structures and Algorithms in Python (Wiley, 2013), ch. 3-15"
   ],
-  "words": 30583,
-  "modules": 6,
-  "lessons": 16,
-  "problems": 12
+  "words": 60175,
+  "modules": 10,
+  "lessons": 29,
+  "problems": 22
  },
  {
   "id": "fastapi",
@@ -70,7 +70,7 @@
    "FastAPI official documentation — https://fastapi.tiangolo.com/",
    "Pydantic v2 documentation — https://docs.pydantic.dev/"
   ],
-  "words": 8079,
+  "words": 55681,
   "modules": 12,
   "lessons": 29,
   "problems": 18
@@ -89,10 +89,10 @@
    "Chip Huyen, AI Engineering (O'Reilly, 2025), ch. 2, 5, 6, 7, 9, 10",
    "Vaswani et al. 2017; Su et al. 2021 (RoPE); Hu et al. 2021 (LoRA); Dettmers et al. 2023 (QLoRA); Rafailov et al. 2023 (DPO)"
   ],
-  "words": 21319,
+  "words": 53170,
   "modules": 10,
   "lessons": 26,
-  "problems": 0
+  "problems": 10
  },
  {
   "id": "ml",
@@ -106,7 +106,7 @@
    "Chip Huyen, AI Engineering (O'Reilly) — background for deep learning and system design",
    "Goodfellow, Bengio & Courville, Deep Learning — background for the maths and optimisers"
   ],
-  "words": 2235,
+  "words": 30160,
   "modules": 10,
   "lessons": 26,
   "problems": 25
@@ -125,7 +125,7 @@
    "Sculley et al., Hidden Technical Debt in Machine Learning Systems (NeurIPS 2015)",
    "Official docs: MLflow, DVC, Docker, Kubernetes, KServe, GitHub Actions, Prometheus, Evidently, Feast, Airflow, Prefect, BentoML, Ray Serve, vLLM, Hugging Face"
   ],
-  "words": 22260,
+  "words": 51483,
   "modules": 13,
   "lessons": 37,
   "problems": 17
@@ -173,7 +173,7 @@
    "Bryant & O'Hallaron, Computer Systems: A Programmer's Perspective — ch. 2 (bit-level operations, two's complement, integer arithmetic)",
    "NeetCode 150"
   ],
-  "words": 0,
+  "words": 22712,
   "modules": 4,
   "lessons": 8,
   "problems": 34
@@ -189,10 +189,10 @@
    "Goodrich, Tamassia & Goldwasser, Data Structures and Algorithms in Python, ch. 14 (Graph Algorithms)",
    "NeetCode 150 roadmap"
   ],
-  "words": 0,
+  "words": 11455,
   "modules": 4,
   "lessons": 11,
-  "problems": 29
+  "problems": 35
  },
  {
   "id": "neet-linked-trees",
@@ -238,7 +238,7 @@
   "words": 29039,
   "modules": 13,
   "lessons": 32,
-  "problems": 13
+  "problems": 26
  },
  {
   "id": "sql",
@@ -251,9 +251,9 @@
    "SQLite documentation (window functions, WITH clause, EXPLAIN QUERY PLAN)",
    "PostgreSQL and MySQL reference manuals (dialect notes)"
   ],
-  "words": 14790,
+  "words": 55370,
   "modules": 19,
-  "lessons": 8,
+  "lessons": 28,
   "problems": 40
  }
 ]

@@ -28,7 +28,7 @@ NTP may adjust the *frequency* at which the monotonic clock moves forward (calle
 ```python-run
 import time
 t_wall, t_mono = time.time(), time.monotonic()
-sum(range(200_000))
+sum(i * i for i in range(300_000))   # some work to time
 print(f"elapsed by wall clock     : {(time.time() - t_wall)*1000:.3f} ms  (may jump if NTP steps the clock!)")
 print(f"elapsed by monotonic clock: {(time.monotonic() - t_mono)*1000:.3f} ms  (safe for timeouts)")
 print("monotonic absolute value is meaningless:", round(time.monotonic(), 2))
