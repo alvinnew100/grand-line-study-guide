@@ -94,3 +94,12 @@ language sql security definer set search_path = public stable as $$
 $$;
 grant execute on function public.sg_leaderboard() to anon, authenticated;
 notify pgrst, 'reload schema';
+
+-- Used by the "judge" Edge Function to confirm a caller is logged in.
+create or replace function public.sg_check(p_username text, p_token text) returns boolean
+language sql security definer set search_path = public, extensions stable as $$
+  select exists (select 1 from study_sessions
+                 where username = p_username and token_hash = encode(digest(p_token, 'sha256'), 'hex'));
+$$;
+grant execute on function public.sg_check(text, text) to anon, authenticated;
+notify pgrst, 'reload schema';
