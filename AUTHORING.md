@@ -211,3 +211,16 @@ Each `test` is evaluated inside the rendered page after load and must be truthy,
 (compare computed values, not source text) and make sure the solution passes all of them and the
 starter fails at least one. Web problems have no `tests`/`entry`; the build only checks their shape,
 so double-check each expression by reasoning through it against your solution.
+
+## 6. Write for a complete beginner
+
+Assume the reader has never seen the topic before and has no computer-science background.
+
+- Open every lesson with a short "In plain words" section: what this thing is, an everyday analogy, and why it matters for a job.
+- Define every technical term the first time it appears, in one plain sentence, before using it. Spell out acronyms.
+- Build up in small steps: the simplest possible example first, then one new idea at a time, then the realistic example.
+- Explain what each line of a code example does the first few times a construct appears; show the output and say why.
+- State what the reader should already know at the top ("Before this lesson") and link the earlier lesson that teaches it.
+- Never say "simply", "obviously", "just" or "as you know". Anticipate the confusion a newcomer would have and answer it.
+- Keep the depth: beginner-friendly means explained from zero, not shortened. Interview-level material still belongs, after the foundations.
+- Add a short glossary of the lesson's new terms before the quiz.
