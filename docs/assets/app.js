@@ -481,7 +481,7 @@
   // ---------------------------------------------------------------- Ghibli stills & quotes
   const TRACK_FILM = { csapp: "laputa", python: "baron", "dsa-foundations": "mimi", "neet-arrays": "majo", "neet-window-stack": "howl",
     "neet-linked-trees": "totoro", "neet-heap-graphs": "mononoke", "neet-dp": "chihiro", "neet-greedy-math": "porco", sql: "kokurikozaka",
-    databases: "nausicaa", ml: "kazetachinu", fastapi: "ponyo", mlops: "karigurashi", "ai-eng": "kimitachi", "llm-practice": "kaguyahime", os: "ged", "linux-cli": "yamada", vim: "marnie", cicd: "umi", thinking: "omoide", "html-css": "tanuki", javascript: "red-turtle", git: "aya", networking: "ghiblies", "web-security": "onyourmark", docker: "umi", redis: "baron", mongodb: "nausicaa", nodejs: "howl", react: "totoro", firebase: "ponyo", graphql: "kaguyahime", django: "majo", nginx: "porco", "js-testing": "mimi" };
+    databases: "nausicaa", ml: "kazetachinu", fastapi: "ponyo", mlops: "karigurashi", "ai-eng": "kimitachi", "llm-practice": "kaguyahime", os: "ged", "linux-cli": "yamada", vim: "marnie", cicd: "umi", thinking: "omoide", "html-css": "tanuki", javascript: "red-turtle", git: "aya", networking: "ghiblies", "web-security": "onyourmark", docker: "umi", redis: "baron", mongodb: "nausicaa", nodejs: "howl", react: "totoro", firebase: "ponyo", graphql: "kaguyahime", django: "majo", nginx: "porco", "js-testing": "mimi", typescript: "kazetachinu", go: "laputa" };
   const Ghibli = {
     works: {}, list: [], quotes: [], note: "", terms: "",
     async load() {
