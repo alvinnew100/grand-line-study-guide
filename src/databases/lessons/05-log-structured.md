@@ -41,7 +41,7 @@ flowchart LR
 - **Write**: append the record and set `index[key] = offset`.
 - **Read**: look up the offset, seek, and read the record. That is one disk seek, or zero if the page is in the OS cache.
 
-This is essentially **Bitcask**, the default storage engine in Riak. It suits workloads where each key's value is updated often but there are not too many distinct keys, so all keys fit in RAM. An example is a counter of video plays per URL.
+This is essentially **Bitcask**, the default storage engine in Riak. Its sweet spot is a modest number of distinct keys that are overwritten again and again: the key set stays small enough for memory while the values churn. An example is a counter of video plays per URL.
 
 ### 2.1 Segments and compaction
 
@@ -57,7 +57,7 @@ Each segment has its own in-memory hash map. A read checks the newest segment's 
 
 - **File format.** Binary, with length-prefixed records, is faster and simpler than CSV.
 - **Deleting records.** Append a special **tombstone** record. Merging discards earlier values for the deleted key.
-- **Crash recovery.** In-memory hash maps are lost on restart. Rebuilding them by scanning every segment is slow, so Bitcask stores a **snapshot of each segment's hash map** on disk.
+- **Crash recovery.** In-memory hash maps are lost on restart. A full rescan of all segments at startup would take too long, so Bitcask also saves **each segment's hash map as a snapshot file** and loads that instead.
 - **Partially written records.** Checksums let you detect and ignore torn writes after a crash.
 - **Concurrency control.** Use a single writer thread. Segments are append-only and otherwise immutable, so readers can read them concurrently.
 

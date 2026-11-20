@@ -312,6 +312,59 @@ def run_tests_json(code, spec_json, tests_json, on_result=None):
     )
 
 
+# ---------------------------------------------------------------- browser entry point
+_TRACKS = {}
+
+
+def load_track(tid, text):
+    _TRACKS[tid] = json.loads(text)
+
+
+def _s(v, n=3000):
+    try:
+        s = json.dumps(v, default=str)
+    except Exception:  # noqa: BLE001
+        s = repr(v)
+    return s if len(s) <= n else s[:n] + " ... (%d chars)" % len(s)
+
+
+def judge_problem(code, tid, pid, mode, lines_json, on_result=None):
+    """Judge inside Python so test data never round-trips through JavaScript numbers."""
+    p = _TRACKS[tid][pid]
+    spec = p["spec"]
+    if mode == "submit":
+        tests = [dict(t, has=True) for t in p["tests"]]
+    else:
+        tests = []
+        for ln in json.loads(lines_json):
+            try:
+                args = json.loads(ln)
+            except Exception as e:  # noqa: BLE001
+                return json.dumps({"invalid": "Could not parse %r: %s" % (ln[:80], e)})
+            if not isinstance(args, list):
+                return json.dumps({"invalid": "Each line must be a JSON list of arguments"})
+            known = next((t for t in p["tests"] if t["args"] == args), None)
+            if known:
+                tests.append(dict(known, has=True))
+            else:
+                got, _o, e, _ms = execute(p["solution"], spec, args)
+                tests.append({"args": args, "expected": got, "has": e is None})
+    results = []
+    for i, t in enumerate(tests):
+        got, out, err, ms = execute(code, spec, t["args"])
+        ok = err is None and (not t["has"] or compare(spec, t["args"], got, t.get("expected")))
+        args_s = ", ".join(json.dumps(a, default=str) for a in t["args"])
+        if len(args_s) > 1500:
+            args_s = args_s[:1500] + " ... (%d chars, truncated)" % len(args_s)
+        results.append({"i": i, "ok": ok, "stdout": out, "error": err, "ms": round(ms, 2), "ref_ms": t.get("ref_ms"),
+                        "args_s": args_s, "got_s": _s(got), "exp_s": _s(t.get("expected")) if t["has"] else None})
+        if on_result:
+            on_result(json.dumps({"i": i, "ok": ok}))
+        if err and "SyntaxError" in err:
+            break
+    return json.dumps({"passed": sum(r["ok"] for r in results), "total": len(tests), "results": results})
+
+
 def _patch_asyncio_for_browser():
     """Pyodide's event loop cannot block, so asyncio.run() fails there.
     Replace it with a small blocking loop (timers and tasks only, no sockets)."""

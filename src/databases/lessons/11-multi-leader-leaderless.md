@@ -29,7 +29,7 @@ flowchart LR
 
 The big downside is that **the same data may be modified concurrently in two DCs**, so write conflicts must be resolved. Multi-leader replication is also often retrofitted onto databases, and features such as auto-increment keys, triggers and integrity constraints interact with it badly. The book's verdict: it is often considered **dangerous territory** to be avoided if possible. Tools include Tungsten Replicator for MySQL, BDR for PostgreSQL and GoldenGate for Oracle.
 
-**Clients with offline operation.** A calendar app on your phone, laptop and other devices must work offline. Each device has a local database that acts as a **leader**, and an async multi-leader process syncs replicas when online. The replication lag may be hours or days. In effect, each device is a "datacenter" with an extremely unreliable network. CouchDB is designed for this mode.
+**Clients with offline operation.** A calendar app on your phone, laptop and other devices must work offline. The database on every device accepts writes like a **leader**, and whenever a connection is available the devices reconcile with one another asynchronously, multi-leader style. The replication lag may be hours or days. In effect, each device is a "datacenter" with an extremely unreliable network. CouchDB is designed for this mode.
 
 **Collaborative editing.** Google Docs-style real-time collaboration resembles offline editing: changes are applied to a local replica and then replicated. To avoid conflicts you could take a lock on the document, which is the same as single-leader with transactions. Fast collaboration wants a very small unit of change (a keystroke) and no locking, which brings all the multi-leader challenges, including conflict resolution. Operational transformation and CRDTs address this.
 
@@ -43,7 +43,7 @@ Suppose two users edit a wiki page title at the same time. User 1 changes "A" to
   - Give each write a unique id (a timestamp, UUID or hash) and pick the **highest id as the winner**. With timestamps this is **last write wins (LWW)**. It is popular and **prone to data loss**.
   - Give each replica an id and let writes from the **higher-numbered replica** win. This also loses data.
   - **Merge** the values, for example by ordering alphabetically and concatenating: "B/C".
-  - **Record the conflict** in an explicit data structure that preserves all information, and resolve it later in application code, perhaps by prompting the user.
+  - **Record the conflict** by storing every conflicting version, losing nothing, and let the application sort it out afterwards - possibly by asking the user.
 - **Custom conflict resolution logic:**
   - **On write**: when the replication log detects a conflict, call a handler. Bucardo lets you write a Perl snippet for this. It runs in a background process and cannot prompt the user.
   - **On read**: store all conflicting versions. The next read returns them all to the application, which resolves them and writes the result back. CouchDB works this way.
@@ -97,7 +97,7 @@ How does a stale replica catch up? Two mechanisms:
 
 ### 2.2 Quorums for reading and writing
 
-With $n$ replicas, every write must be confirmed by $w$ nodes, and every read must query at least $r$ nodes. As long as
+Given $n$ replicas, a write counts as successful once $w$ of them acknowledge it, and a read has to consult no fewer than $r$ of them. As long as
 
 $$w + r > n,$$
 
@@ -146,9 +146,9 @@ Even with $w + r > n$ there are edge cases where stale values are returned:
 
 - With a **sloppy quorum** (below), the $w$ writes may land on different nodes from the $r$ reads, so overlap is no longer guaranteed.
 - Two writes happen **concurrently**, and it is unclear which came first. Merging with LWW can lose writes because of clock skew.
-- A write happens **concurrently with a read**. The write may be reflected on only some replicas, and it is undetermined whether the read returns the old or new value.
-- A write succeeded on fewer than $w$ replicas and failed on the rest. It is reported as failed, but it is **not rolled back** on the replicas where it succeeded, so later reads may or may not return it.
-- A node carrying a new value **fails and is restored from a replica with an old value**. The number of replicas storing the new value may drop below $w$, which breaks the quorum condition.
+- A write happens **concurrently with a read**. At that moment only part of the replica set has the write, so the read can legitimately come back with either value.
+- A write succeeded on fewer than $w$ replicas and failed on the rest. The client is told it failed, yet the replicas that did accept it **keep it**, and subsequent reads might see it or might not.
+- A node carrying a new value **fails and is restored from a replica with an old value**. Fewer than $w$ replicas may then hold the new value, and the quorum arithmetic no longer protects you.
 - Even if everything works, there are timing edge cases (see linearizability in Chapter 9).
 
 So $w$ and $r$ adjust the *probability* of stale reads, but they are **not absolute guarantees**. Dynamo-style databases are optimised for use cases that tolerate **eventual consistency**. In particular they generally do not provide read-your-writes, monotonic reads or consistent prefix reads. Stronger guarantees need **transactions or consensus**.
@@ -157,14 +157,14 @@ So $w$ and $r$ adjust the *probability* of stale reads, but they are **not absol
 
 ### 2.4 Sloppy quorums and hinted handoff
 
-In a large cluster with significantly more than $n$ nodes, a client may be cut off from the $n$ "home" nodes for a key during a network interruption but still reach other nodes. Should it:
+When the cluster is much larger than $n$, a network fault can separate a client from the $n$ "home" nodes of a key while leaving plenty of other nodes reachable. Should it:
 
 - return errors for every request that cannot reach a quorum of $w$ or $r$ home nodes, or
 - accept writes anyway, writing them to **some reachable nodes that are not among the $n$ home nodes** for that value?
 
-The second option is a **sloppy quorum**. Writes and reads still require $w$ and $r$ successful responses, but those can include nodes outside the designated home set. The analogy is being locked out of your house and knocking on the neighbour's door to ask if you can stay on their couch. Once the network is fixed, the stand-in node forwards the writes to the proper home nodes. This is **hinted handoff**.
+The second option is a **sloppy quorum**. The counts $w$ and $r$ still have to be reached, only now nodes that are not among the key's home nodes are allowed to count. The analogy is being locked out of your house and knocking on the neighbour's door to ask if you can stay on their couch. Once the network is fixed, the stand-in node forwards the writes to the proper home nodes. This is **hinted handoff**.
 
-Sloppy quorums **increase write availability**, but even with $w + r > n$ **you cannot be sure to read the latest value**, because it may sit on nodes outside the $n$. A sloppy quorum is not really a quorum. It is only an assurance of **durability**: the data is stored on $w$ nodes somewhere. Riak enables them by default, while Cassandra and Voldemort disable them by default.
+A sloppy quorum **keeps writes available**, at a price: **a read is no longer guaranteed to see the newest value** even when $w + r > n$, since that value may be parked on stand-in nodes. A sloppy quorum is not really a quorum. It is only an assurance of **durability**: the data is stored on $w$ nodes somewhere. Riak enables them by default, while Cassandra and Voldemort disable them by default.
 
 ### 2.5 Multi-datacenter leaderless operation
 

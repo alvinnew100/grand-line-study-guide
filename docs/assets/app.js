@@ -27,9 +27,69 @@
     let s = { lessons: {}, solved: {}, tried: {}, quiz: {}, code: {}, notes: {}, last: null, opts: {} };
     try { Object.assign(s, JSON.parse(localStorage.getItem(KEY) || "{}")); } catch (_) {}
     const save = debounce(() => { try { localStorage.setItem(KEY, JSON.stringify(s)); } catch (_) {} }, 250);
-    return { get: () => s, save, set(fn) { fn(s); save(); }, replace(n) { s = Object.assign({ lessons: {}, solved: {}, tried: {}, quiz: {}, code: {}, notes: {}, opts: {} }, n); save(); } };
+    return { get: () => s, save, set(fn) { fn(s); s._dirty = true; save(); cloudTouch(); }, replace(n) { s = Object.assign({ lessons: {}, solved: {}, tried: {}, quiz: {}, code: {}, notes: {}, opts: {} }, n); save(); } };
   })();
+  let cloudTouch = () => {};
   const S = () => store.get();
+
+  // ---------------------------------------------------------------- optional account (progress sync)
+  const Cloud = (() => {
+    const BASE = "https://xupqehazxffimjdvdgbh.supabase.co/rest/v1/rpc/";
+    const KEY = "sb_publishable_r5G_XYJgL6BTRmahCPFniQ__Pr9qr0Y";
+    const SKEY = "glsg:acct";
+    let sess = null, timer = null, last = null, busy = false;
+    try { sess = JSON.parse(localStorage.getItem(SKEY) || "null"); } catch (_) {}
+    async function rpc(fn, body, keepalive) {
+      const r = await fetch(BASE + fn, { method: "POST", keepalive: !!keepalive, headers: { apikey: KEY, "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const j = await r.json().catch(() => null);
+      if (!r.ok) throw new Error((j && j.message) || `Sync failed (${r.status})`);
+      return j;
+    }
+    const creds = () => ({ p_username: sess.u, p_token: sess.t });
+    function setSess(v) { sess = v; try { v ? localStorage.setItem(SKEY, JSON.stringify(v)) : localStorage.setItem(SKEY, "null"); } catch (_) {} }
+    const clean = (o) => { const c = { ...o }; c._dirty = undefined; return c; };
+    function merge(local, remote) {
+      // union of both devices; on a conflict the local (unsynced) value wins
+      const out = { ...remote, ...local };
+      ["lessons", "solved", "quiz", "notes", "code", "tried", "opts"].forEach((k) => (out[k] = { ...(remote[k] || {}), ...(local[k] || {}) }));
+      const a = { ...(remote.activity || {}) };
+      Object.entries(local.activity || {}).forEach(([d, n]) => (a[d] = Math.max(a[d] || 0, n)));
+      out.activity = a;
+      return out;
+    }
+    async function push(keepalive) {
+      if (!sess || busy) return;
+      busy = true;
+      try { await rpc("sg_save", { ...creds(), p_data: clean(S()) }, keepalive); S()._dirty = false; store.save(); last = new Date(); }
+      catch (e) { if (/Session expired/.test(e.message)) setSess(null); throw e; }
+      finally { busy = false; }
+    }
+    async function pull() {
+      if (!sess) return false;
+      const remote = (await rpc("sg_load", creds())) || {};
+      const local = S(), dirty = local._dirty || !Object.keys(remote).length;
+      store.replace(clean(dirty ? merge(local, remote) : merge(remote, local)));  // not dirty: the account copy wins
+      last = new Date();
+      if (dirty) await push();
+      return true;
+    }
+    async function enter(fn, u, p) {
+      u = (u || "").trim().toLowerCase();
+      if (!/^[a-z0-9_]{3,20}$/.test(u)) throw new Error("Username must be 3-20 characters using a-z, 0-9 or _");
+      if ((p || "").length < 6) throw new Error("Password must be at least 6 characters");
+      const t = await rpc(fn, { p_username: u, p_password: p });
+      setSess({ u, t });
+      S()._dirty = true;   // first login on this device: keep what is here and add the account's data
+      await pull();
+    }
+    cloudTouch = () => { if (!sess) return; clearTimeout(timer); timer = setTimeout(() => push().catch(() => {}), 4000); };
+    document.addEventListener("visibilitychange", () => { if (document.hidden && sess && S()._dirty) push(true).catch(() => {}); });
+    return {
+      user: () => (sess ? sess.u : null), last: () => last, pull, push,
+      register: (u, p) => enter("sg_register", u, p), login: (u, p) => enter("sg_login", u, p),
+      async logout() { if (sess) { try { await push(); await rpc("sg_logout", creds()); } catch (_) {} } setSess(null); },
+    };
+  })();
 
   // ---------------------------------------------------------------- theme
   const root = document.documentElement;
@@ -276,7 +336,7 @@
     let worker = null, ready = null, seq = 0;
     const handlers = new Map();
     function start() {
-      worker = new Worker("assets/judge/worker.js?v=4");
+      worker = new Worker("assets/judge/worker.js?v=5");
       ready = new Promise((res, rej) => {
         const onmsg = (e) => {
           if (e.data.type === "ready") res();
@@ -313,7 +373,7 @@
       warm: () => ensure().catch(() => {}),
       isReady: () => !!worker,
       run: (code, onEvent, t = 30000) => call({ type: "run", code }, onEvent, t),
-      judge: (code, spec, tests, onEvent, t = 20000) => call({ type: "judge", code, spec, tests }, onEvent, t),
+      judge: (code, track, pid, mode, lines, onEvent, t = 20000) => call({ type: "judge", code, track, pid, mode, lines }, onEvent, t),
     };
   })();
 
@@ -953,9 +1013,9 @@
       const show = (i) => {
         btns.forEach((b) => b.classList.toggle("on", +b.dataset.i === i));
         const c = lastCases[i];
-        holder.innerHTML = `<div class="io-label">Input</div><div class="io">${esc(argsLabel(c.args))}</div>
-          ${c.error ? `<div class="io-label">Error</div><div class="io err">${esc(c.error)}</div>` : `<div class="io-label">Your output</div><div class="io">${esc(trunc(fmt(c.got)))}</div>`}
-          ${c.expected !== undefined ? `<div class="io-label">Expected</div><div class="io">${esc(trunc(fmt(c.expected)))}</div>` : ""}
+        holder.innerHTML = `<div class="io-label">Input</div><div class="io">${esc(c.args_s)}</div>
+          ${c.error ? `<div class="io-label">Error</div><div class="io err">${esc(c.error)}</div>` : `<div class="io-label">Your output</div><div class="io">${esc(c.got_s)}</div>`}
+          ${c.exp_s != null ? `<div class="io-label">Expected</div><div class="io">${esc(c.exp_s)}</div>` : ""}
           ${c.stdout ? `<div class="io-label">Stdout</div><div class="io">${esc(c.stdout)}</div>` : ""}
           ${c.ms !== undefined ? `<div class="io-label">Runtime</div><div class="muted" style="font-size:13px">${c.ms} ms</div>` : ""}`;
       };
@@ -985,41 +1045,22 @@
       store.set((s) => (s.code[pid] = code));
       if (window.innerWidth < 900) showPane("console");
       if (isSql) return runSql(code, submit);
-      let tests;
-      if (submit) tests = p.tests;
-      else {
-        try {
-          const lines = (customText ?? "").split("\n").map((x) => x.trim()).filter(Boolean);
-          tests = lines.map((ln) => {
-            const args = JSON.parse(ln);
-            if (!Array.isArray(args)) throw new Error("Each line must be a JSON list of arguments");
-            const known = p.tests.find((tc) => fmt(tc.args) === fmt(args));
-            return { args, expected: known ? known.expected : undefined };
-          });
-        } catch (e) {
-          showConsole("result"); cbody.innerHTML = `<p class="verdict bad">Invalid test input</p><div class="io err">${esc(e.message)}</div>`; return;
-        }
-        // compute expected for custom cases with the reference solution
-        const unknown = tests.filter((x) => x.expected === undefined);
-        if (unknown.length) {
-          try {
-            setBusy(true, "Computing expected output for custom input…");
-            const ref = await Py.judge(p.solution, p.spec, unknown.map((x) => ({ args: x.args, expected: null })), null, 20000);
-            ref.results.forEach((r, i) => (unknown[i].expected = r.error ? undefined : r.got));
-          } catch (_) {}
-        }
-      }
-      setBusy(true, Py.isReady() ? `Running ${tests.length} test${tests.length > 1 ? "s" : ""}…` : "Starting Python in your browser (first run downloads ~10 MB)…");
+      const lines = submit ? [] : (customText ?? "").split("\n").map((x) => x.trim()).filter(Boolean);
+      const total = submit ? p.tests.length : lines.length;
+      setBusy(true, Py.isReady() ? `Running ${total} test${total > 1 ? "s" : ""}…` : "Starting Python in your browser (first run downloads ~10 MB)…");
       let done = 0;
-      const total = tests.length;
       try {
-        const res = await Py.judge(code, p.spec, tests, (d) => {
+        // Tests are loaded and compared inside Python (lossless for big ints and floats).
+        const res = await Py.judge(code, t.id, pid, submit ? "submit" : "run", lines, (d) => {
           if (d.type === "progress") { done++; const pl = $(".muted", cbody); if (pl) pl.textContent = `Running… ${done}/${total}`; }
-        }, submit ? 25000 : 15000);
-        const cases = res.results.map((r, i) => {
-          const c = { ...r, args: tests[i].args, expected: tests[i].expected };
+        }, submit ? 25000 : 20000);
+        if (res.invalid) {
+          lastCases = []; lastResultHTML = `<p class="verdict bad">Invalid test input</p><div class="io err">${esc(res.invalid)}</div>`;
+          showConsole("result"); cbody.innerHTML = lastResultHTML; return;
+        }
+        const cases = res.results.map((c) => {
           // Per-test time limit: 40x the reference (native CPython) runtime, at least 1 s.
-          const limit = tests[i].ref_ms !== undefined ? Math.max(1000, tests[i].ref_ms * 40) : Infinity;
+          const limit = c.ref_ms != null ? Math.max(1000, c.ref_ms * 40) : Infinity;
           if (c.ok && c.ms > limit) { c.ok = false; c.slow = true; c.error = `Time Limit Exceeded: ${c.ms.toFixed(0)} ms (limit ${limit.toFixed(0)} ms). Your answer is correct but too slow; look for a better time complexity.`; }
           return c;
         });
@@ -1182,7 +1223,34 @@
 
   // ---------------------------------------------------------------- settings
   const dlg = $("#settingsDlg");
-  $("#settingsBtn").onclick = () => { $("#optVim").checked = !!S().opts.vim; $("#optWrap").checked = !!S().opts.wrap; dlg.showModal(); };
+  function drawAcct(msg, bad) {
+    const box = $("#acct");
+    if (!box) return;
+    const u = Cloud.user();
+    box.innerHTML = u
+      ? `<h3>Account</h3><p>Signed in as <b>${esc(u)}</b>. Progress syncs automatically${Cloud.last() ? " · last synced " + Cloud.last().toLocaleTimeString() : ""}.</p>
+         <div class="dlg-row"><button type="button" class="btn" id="acSync">Sync now</button><button type="button" class="btn" id="acOut">Log out</button></div>`
+      : `<h3>Save progress across devices (optional)</h3>
+         <p class="acct-warn"><b>Read this first.</b> Choose a simple username and a <b>new password you have never used anywhere else</b>. Accounts exist only to save study progress, and this site may be shared by several people, so do not use a real password. There is no password reset.</p>
+         <div class="acct-form"><input id="acU" placeholder="username (a-z, 0-9, _)" autocomplete="username" maxlength="20" autocapitalize="none" spellcheck="false">
+         <input id="acP" type="password" placeholder="new password (6+ characters)" autocomplete="new-password" maxlength="72"></div>
+         <div class="dlg-row"><button type="button" class="btn primary" id="acReg">Create account</button><button type="button" class="btn" id="acIn">Log in</button></div>`;
+    box.insertAdjacentHTML("beforeend", `<p id="acMsg" class="${bad ? "acct-bad" : "muted"}" style="font-size:13px;min-height:1.2em">${esc(msg || "")}</p>`);
+    const drawMsg = (m) => { const el = $("#acMsg"); if (el) { el.className = "muted"; el.textContent = m; } };
+    const act = (fn, working, done) => async () => {
+      drawMsg(working);
+      try { await fn(); drawAcct(done); route(); } catch (e) { drawAcct(e.message, true); }
+    };
+    if (u) {
+      $("#acSync").onclick = act(async () => { await Cloud.pull(); await Cloud.push(); }, "Syncing…", "Synced.");
+      $("#acOut").onclick = act(() => Cloud.logout(), "Logging out…", "Logged out. Your progress stays in this browser.");
+    } else {
+      const vals = () => [$("#acU").value, $("#acP").value];
+      $("#acReg").onclick = () => { const [a, b] = vals(); act(() => Cloud.register(a, b), "Creating account…", "Account created. Progress will sync from now on.")(); };
+      $("#acIn").onclick = () => { const [a, b] = vals(); act(() => Cloud.login(a, b), "Logging in…", "Logged in and synced.")(); };
+    }
+  }
+  $("#settingsBtn").onclick = () => { drawAcct(); $("#optVim").checked = !!S().opts.vim; $("#optWrap").checked = !!S().opts.wrap; dlg.showModal(); };
   $("#optVim").onchange = (e) => store.set((s) => (s.opts.vim = e.target.checked));
   $("#optWrap").onchange = (e) => store.set((s) => (s.opts.wrap = e.target.checked));
   $("#exportBtn").onclick = () => {
@@ -1203,7 +1271,7 @@
 
   // ---------------------------------------------------------------- boot
   window.__sg = { Py, Sql, DATA, getProblem }; // debugging hook used by the self-test
-  Promise.all([loadAll(), Ghibli.load()]).then(route).catch((e) => {
+  Promise.all([loadAll(), Ghibli.load(), Cloud.pull().catch(() => {})]).then(route).catch((e) => {
     main.innerHTML = `<div class="page narrow"><h1 class="page-title">Could not load content</h1><p class="muted">${esc(e.message)}</p><p>If you opened the file directly, serve the <code>docs/</code> folder over HTTP (e.g. <code>python -m http.server</code>).</p></div>`;
   });
 })();

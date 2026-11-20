@@ -1,6 +1,6 @@
 # Single-leader replication and replication lag
 
-**Replication** means keeping a copy of the same data on several machines connected by a network. Reasons to do it:
+**Replication** means that several networked machines each hold a copy of the same data. Reasons to do it:
 
 - **Reduce latency** by keeping data geographically close to users.
 - **Increase availability** so the system keeps working when some parts fail.
@@ -30,7 +30,7 @@ This is built into PostgreSQL (streaming replication), MySQL, Oracle Data Guard 
 
 ## 2. Synchronous vs asynchronous replication
 
-- **Synchronous.** The leader waits until a follower confirms it received the write before reporting success to the user. The follower is then guaranteed to have an up-to-date copy. The downside: if that follower does not respond because it crashed, the network failed or it is slow, **the write cannot proceed**, and the leader blocks.
+- **Synchronous.** The leader does not tell the client "done" until the follower has acknowledged the write. The follower is then guaranteed to have an up-to-date copy. The downside: if that follower does not respond because it crashed, the network failed or it is slow, **the write cannot proceed**, and the leader blocks.
 - **Asynchronous.** The leader sends the change and does not wait for confirmation.
 
 ```mermaid
@@ -61,7 +61,7 @@ You cannot just copy the data files, because clients keep writing and a naive co
 
 1. Take a **consistent snapshot** of the leader at some point in time, without taking a lock. Most databases can do this for backups. Tools like `innobackupex` exist for MySQL, and for PostgreSQL you use `pg_basebackup`.
 2. Copy the snapshot to the new follower.
-3. The follower connects to the leader and requests every change **since the snapshot**. The snapshot must be associated with an exact position in the leader's replication log: PostgreSQL's **log sequence number (LSN)**, MySQL's **binlog coordinates** or GTID.
+3. The follower connects to the leader and requests every change **since the snapshot**. You need to know precisely which point in the leader's replication log the snapshot corresponds to: PostgreSQL's **log sequence number (LSN)**, MySQL's **binlog coordinates** or GTID.
 4. Once the follower has processed the backlog, it has **caught up** and continues streaming.
 
 ## 4. Handling node outages
@@ -75,13 +75,13 @@ Each follower keeps a log of the changes it received. After a crash or network i
 **Failover** is trickier. One follower must be promoted, clients must send writes to it, and the other followers must follow it. Automatic failover has three steps:
 
 1. **Determine that the leader has failed.** There is no foolproof way, so nearly all systems use a **timeout**: no response for, say, 30 seconds means the node is assumed dead.
-2. **Choose a new leader** by election (a majority of replicas) or by appointing one through a previously elected **controller** node. The best candidate is the replica with the most up-to-date data. Getting nodes to agree is a **consensus** problem (Chapter 9).
+2. **Choose a new leader** by election (a majority of replicas) or by appointing one through a previously elected **controller** node. Normally the follower that has replicated the most is chosen. Getting nodes to agree is a **consensus** problem (Chapter 9).
 3. **Reconfigure** clients to send writes to the new leader. If the old leader comes back it may still believe it is the leader, so the system must make it step down and become a follower.
 
 Failover is full of things that can go wrong:
 
 - **Lost writes with async replication.** The new leader may not have received all the old leader's writes. If the old leader rejoins, what should happen to the conflicting writes? The usual answer is to **discard** them, which violates clients' durability expectations.
-- **Discarding writes is dangerous when other systems depend on them.** In a GitHub incident, an out-of-date MySQL follower was promoted. It reused auto-increment primary keys that had already been assigned by the old leader. Those keys were also used in a **Redis** store, so private data leaked between users.
+- **Discarding writes is dangerous when other systems depend on them.** In a GitHub incident, an out-of-date MySQL follower was promoted. It reused auto-increment primary keys that had already been assigned by the old leader. Because a **Redis** store referenced the same keys, some users ended up seeing other users' private data.
 - **Split brain.** Two nodes both believe they are the leader. If both accept writes with no conflict resolution, data is lost or corrupted. Some systems shut one node down when two leaders are detected, a mechanism called **STONITH** ("Shoot The Other Node In The Head"), but a badly designed version can shut down *both*.
 - **Choosing the timeout.** Too long means a long recovery. Too short means unnecessary failovers: a temporary load spike or network glitch triggers a failover that makes an overloaded system worse.
 
@@ -127,7 +127,7 @@ A user submits a comment and then views the page. If the read goes to a lagging 
 
 **Read-after-write consistency** (read-your-writes) guarantees that a user always sees their own updates. It makes no promise about other users' updates. Techniques:
 
-- Read data the user **may have modified** from the leader, and everything else from followers. Example: always read the user's own profile from the leader.
+- Read data the user **may have modified** from the leader, and everything else from followers. Example: serve a user's view of their own profile from the leader, always.
 - If most things are editable, track **time since last update**. For one minute after a write, read from the leader. Or monitor follower lag and avoid followers that are more than a minute behind.
 - The client remembers the **timestamp** (or log position) of its most recent write, and the system ensures the replica serving its reads is updated at least to that point. If it is not, it tries another replica or waits.
 - Multi-datacenter: requests that must go to the leader are routed to the datacenter containing it.

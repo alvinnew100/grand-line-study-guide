@@ -3,6 +3,8 @@ importScripts("https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.js");
 
 let py = null;
 let currentId = null;
+const loadedTracks = {};
+let hashOk = false;
 
 const ready = (async () => {
   py = await loadPyodide();
@@ -16,6 +18,12 @@ const ready = (async () => {
 
 async function loadPkgs(code) {
   try {
+    if (!hashOk && /hashlib|hmac/.test(code)) {
+      // the default hashlib has no OpenSSL-backed functions (pbkdf2_hmac, scrypt)
+      await py.loadPackage("hashlib", { messageCallback: () => {} });
+      py.runPython("import importlib, hashlib; importlib.reload(hashlib)");
+      hashOk = true;
+    }
     await py.loadPackagesFromImports(code, { messageCallback: () => {} });
   } catch (e) {
     /* missing packages surface as ImportError when the code runs */
@@ -28,13 +36,19 @@ onmessage = async (e) => {
   currentId = id;
   try {
     if (type === "judge") {
-      const { code, spec, tests } = e.data;
-      await loadPkgs(code);
+      const { code, track, pid, mode, lines } = e.data;
+      if (!loadedTracks[track]) {
+        const txt = await (await fetch(`../../data/problems/${track}.json`, { cache: "no-cache" })).text();
+        py.globals.set("_T", txt);
+        py.runPython(`harness.load_track(${JSON.stringify(track)}, _T)`);
+        loadedTracks[track] = true;
+      }
       py.globals.set("_CODE", code);
-      py.globals.set("_SPEC", JSON.stringify(spec));
-      py.globals.set("_TESTS", JSON.stringify(tests));
+      py.globals.set("_LINES", JSON.stringify(lines || []));
+      const ref = py.runPython(`harness._TRACKS[${JSON.stringify(track)}][${JSON.stringify(pid)}]["solution"]`);
+      await loadPkgs(code + "\n" + ref);
       py.globals.set("_on_result", (s) => postMessage({ id, type: "progress", data: JSON.parse(s) }));
-      const out = py.runPython("harness.run_tests_json(_CODE, _SPEC, _TESTS, _on_result)");
+      const out = py.runPython(`harness.judge_problem(_CODE, ${JSON.stringify(track)}, ${JSON.stringify(pid)}, ${JSON.stringify(mode)}, _LINES, _on_result)`);
       postMessage({ id, type: "done", data: JSON.parse(out) });
     } else if (type === "run") {
       const { code } = e.data;

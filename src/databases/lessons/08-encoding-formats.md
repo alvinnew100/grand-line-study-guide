@@ -2,8 +2,8 @@
 
 Applications change. New features need new fields, and new fields mean data formats and schemas must change. In a large application, code changes cannot happen everywhere at once:
 
-- **Server-side** applications use **rolling upgrades**: deploy the new version to a few nodes at a time, check that it works, then continue. This avoids downtime and makes frequent small releases safe.
-- **Client-side** applications depend on the user, who may not install the update for a long time.
+- **Server-side** applications use **rolling upgrades**: upgrade a small batch of nodes, watch them for trouble, and only then move on to the next batch. This avoids downtime and makes frequent small releases safe.
+- **Client-side** applications are updated whenever the user gets round to it, which can be months later.
 
 So **old and new versions of code, and old and new data formats, coexist**. To keep working we need compatibility in **both directions**:
 
@@ -37,7 +37,7 @@ The advice is to use them only for very transient purposes.
 
 Textual formats are widely supported and human-readable, and they are the de facto standard for data interchange between organisations. They have subtle problems:
 
-- **Numbers are ambiguous.** XML and CSV cannot distinguish a number from a string of digits without a schema. JSON separates strings and numbers but not integers and floats, and specifies no precision. Integers greater than $2^{53}$ cannot be represented exactly by an IEEE-754 double, so they get silently rounded in JavaScript. Twitter's API returns tweet IDs **twice**, once as a JSON number and once as a decimal string, for exactly this reason.
+- **Numbers are ambiguous.** XML and CSV cannot distinguish a number from a string of digits without a schema. JSON separates strings and numbers but not integers and floats, and specifies no precision. Integers greater than $2^{53}$ cannot be represented exactly by an IEEE-754 double, so they get silently rounded in JavaScript. This is why Twitter's API includes each tweet ID in two forms: a JSON number and, to be safe, the same digits as a string.
 - **No binary strings.** JSON and XML support Unicode text but not raw bytes. People Base64-encode binary data, which grows it by 33% and is hacky.
 - **Optional, complex schemas.** XML Schema and JSON Schema are powerful but complicated, and many JSON tools ignore schemas, so the correct interpretation of the data is hardcoded in application code.
 - **CSV has no schema at all**, and its escaping rules (commas or newlines inside values) are vague, so many parsers get them wrong.
@@ -108,7 +108,7 @@ Run it and you get exactly 33 bytes, matching DDIA's figure.
 - **Removing a field.** You can only remove **optional** fields, and you must **never reuse the tag number**, because old data with that tag may still exist. Protobuf has `reserved 4;` for this.
 - **Changing a field name** is fine, since names are not in the encoded data. **Changing a tag** breaks everything.
 - **Changing a datatype** is possible in some cases but risky. Widening int32 to int64 works for new code reading old data, but old code reading a 64-bit value into a 32-bit variable truncates it.
-- Protobuf has no list type. A `repeated` field is the same field tag appearing several times. That makes it fine to change an `optional` (single) field into a `repeated` one: old code reading new data sees only the last element. Thrift has a dedicated list type that supports nested lists but does not allow this change.
+- Protobuf has no list type. A `repeated` field is the same field tag appearing several times. That makes it fine to change an `optional` (single) field into a `repeated` one: an old reader that still expects one value keeps just the final element of the list. Thrift has a dedicated list type that supports nested lists but does not allow this change.
 
 > [!NOTE]
 > proto3 removed `required` altogether. Every field is optional with a zero-value default, because `required` turned out to be an evolution hazard. You cannot safely add or remove one.
@@ -170,7 +170,7 @@ except ValueError as e:
     print("ERROR:", e)
 ```
 
-### 5.2 How does the reader know the writer's schema?
+### 5.2 Where does the reader get the writer's schema from?
 
 Including the whole schema in every record would defeat the compactness. It depends on context:
 

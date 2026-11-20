@@ -505,3 +505,9 @@ h1, h2, h3, .brand, .page-title, .p-title, .verdict { font-family: var(--display
 .side-track.active { background: var(--accent-soft); color: var(--accent); }
 
 @media (max-width: 767px) { .hero2-in { padding-bottom: 64px; } .hero2-credit { left: 12px; } }
+
+.acct-warn { background: var(--warn-soft); border-left: 4px solid var(--warn); padding: 10px 12px; border-radius: 0 10px 10px 0; font-size: 14px; margin: 8px 0 12px; }
+.acct-form { display: grid; gap: 8px; }
+.acct-form input { height: 40px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); font: inherit; padding: 0 12px; }
+.acct-bad { color: var(--bad); }
+.dlg { max-height: 90vh; overflow: auto; }

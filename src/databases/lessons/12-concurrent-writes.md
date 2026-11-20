@@ -26,9 +26,9 @@ To become **eventually consistent**, replicas must **converge** toward the same 
 
 One approach: each replica stores only the "most recent" value and lets older values be overwritten. Neither client knew about the other's write when sending its own, so "recent" is ill-defined. The writes are **concurrent** and their order is undefined.
 
-**Last write wins (LWW)** forces an arbitrary order. Attach a **timestamp** to each write, pick the biggest as most recent, and discard the rest. It is the **only** conflict resolution method supported in **Cassandra**, and an optional feature in Riak.
+**Last write wins (LWW)** forces an arbitrary order. Stamp every write with a **timestamp**, keep the one with the highest stamp, and throw the others away. It is the **only** conflict resolution method supported in **Cassandra**, and an optional feature in Riak.
 
-LWW achieves eventual convergence **at the cost of durability**. If several writes are concurrent, all of them are reported as successful to their clients (each was written to $w$ replicas), but only one survives and the others are **silently discarded**. LWW may even drop writes that are *not* concurrent, because of **clock skew** (Chapter 8).
+LWW achieves eventual convergence **at the cost of durability**. If several writes are concurrent, all of them are reported as successful to their clients (each was written to $w$ replicas), but only one survives and the others are **silently discarded**. With **skewed clocks** (Chapter 8) LWW can discard a write that actually came later, not just one of two concurrent ones.
 
 When is LWW acceptable? When losing data is acceptable, as in caching. When it is not, the only safe way to use LWW is to ensure a key is **written only once** and treated as immutable afterwards. The recommended Cassandra pattern is to use a **UUID as the key**, so every write gets a unique key.
 
@@ -50,12 +50,12 @@ print("silently lost  :", [w[0] for w in (w1, w2, w3) if w is not state])
 
 ## 2. The "happens-before" relationship and concurrency
 
-How do we decide whether two operations are concurrent?
+What exactly makes two operations concurrent?
 
 - Client A inserts a value, and client B **increments** it. B's operation **builds upon** A's, so B is **causally dependent** on A, and A **happened before** B.
 - Two clients each set a key without knowing about the other. Neither knows about the other, so they are **concurrent**.
 
-Formally: operation A happens before B if B knows about A, depends on A, or builds upon A in some way. Two operations are **concurrent if neither happens before the other**, that is, neither knows about the other. For any two operations A and B there are exactly three possibilities: A happened before B, B happened before A, or they are concurrent.
+Formally: A precedes B when B was made with knowledge of A - it reads A's result, relies on it, or extends it. If no such relation holds in either direction - each was made in ignorance of the other - the operations are **concurrent**. For any two operations A and B there are exactly three possibilities: A happened before B, B happened before A, or they are concurrent.
 
 > [!NOTE]
 > **Concurrency is not about wall-clock time overlap.** Because of network delays, two operations can be "concurrent" even if they occurred seconds apart on the clock, as long as neither was aware of the other. This mirrors relativity: information cannot travel faster than light, so two events that cannot affect each other are concurrent.
@@ -115,7 +115,7 @@ Siblings push work onto the application, which must **merge** them. A simple app
 
 Union fails for **removals**. If one sibling removed `milk` and another still has it, the union brings milk back. So a removal must leave a marker, a **tombstone** with an appropriate version, so the merge knows the item was removed.
 
-Merging siblings in application code is complex and error-prone. **CRDTs** (Conflict-free Replicated Data Types) are data structures that can be merged automatically in sensible ways, including handling deletions. Riak's datatypes support this.
+Hand-written sibling merging is fiddly code that is easy to get wrong. **CRDTs** (Conflict-free Replicated Data Types) are data structures that can be merged automatically in sensible ways, including handling deletions. Riak's datatypes support this.
 
 ### 4.1 CRDT intro
 

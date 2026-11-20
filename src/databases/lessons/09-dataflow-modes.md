@@ -8,7 +8,7 @@ Compatibility is a relationship between one process that **encodes** data and an
 
 ## 1. Dataflow through databases
 
-The process writing to the database encodes the data and the process reading decodes it. It can be the *same* process at a later time, in which case storing data is like **sending a message to your future self**.
+Whoever writes a record encodes it; whoever reads it later has to decode it. It can be the *same* process at a later time, in which case storing data is like **sending a message to your future self**.
 
 - **Backward compatibility** is clearly needed, or your future self cannot read what you wrote.
 - **Forward compatibility** is usually needed too. During a rolling upgrade, a value written by a *newer* instance may be read by an *older* one that has not been upgraded yet.
@@ -34,7 +34,7 @@ sequenceDiagram
 
 > **Data outlives code.** Deploying a new application version replaces the code within minutes, but a database may hold five-year-old data in its original encoding unless you explicitly rewrote it.
 
-Rewriting (**migrating**) a large dataset is expensive, so most databases avoid it where possible. Relational databases allow simple changes such as adding a column with a `NULL` default without rewriting existing data. When an old row is read, the database fills in `NULL` for missing columns. LinkedIn's document database Espresso uses Avro for storage so it can use Avro's schema evolution rules. Schema evolution lets the whole database *appear* to be encoded with one schema even though the underlying storage holds records encoded with many historical versions.
+Rewriting (**migrating**) a large dataset is expensive, so most databases avoid it where possible. Relational databases allow simple changes such as adding a column with a `NULL` default without rewriting existing data. Rows written before the column existed simply come back with `NULL` in it. Espresso, a document store built at LinkedIn, keeps its documents in Avro precisely to inherit those evolution rules. Schema evolution lets the whole database *appear* to be encoded with one schema even though the underlying storage holds records encoded with many historical versions.
 
 ### 1.3 Archival storage
 
@@ -44,7 +44,7 @@ When you take a **snapshot** for backup or for loading into a warehouse, the dum
 
 The most common arrangement on a network has two roles, **clients** and **servers**. Servers expose an **API**, which makes them a *service*. Web browsers are clients that make GET and POST requests. Native apps and client-side JavaScript applications (Ajax) also make requests, often receiving JSON.
 
-A server can itself be a client of another service. Decomposing a large application into smaller services by area of functionality is called **service-oriented architecture (SOA)**, more recently refined and rebranded as **microservices**. A key design goal is to make each service **independently deployable and evolvable**. Each service is owned by one team, which can release new versions frequently without coordinating with other teams. So we must expect old and new versions of servers and clients to run at the same time, and the data encoding must be compatible across versions of the service API.
+A server can itself be a client of another service. Splitting one big application into several services, each owning one area of functionality, used to be called **service-oriented architecture (SOA)**; today's refinement of the idea goes by **microservices**. A key design goal is to make each service **independently deployable and evolvable**. Each service is owned by one team, which can release new versions frequently without coordinating with other teams. Mixed versions of clients and servers will therefore be talking to each other at any given moment, so the encoding used by the API has to stay compatible from one version to the next.
 
 ### 2.1 Web services: REST vs SOAP
 
@@ -56,12 +56,12 @@ When HTTP is the transport, the service is called a *web service*, although such
 
 Two popular approaches:
 
-- **REST** is not a protocol but a **design philosophy** built on HTTP's principles. It uses simple data formats, URLs to identify resources, and HTTP features for cache control, authentication and content-type negotiation. APIs designed this way are *RESTful*. Definition formats such as **OpenAPI (Swagger)** describe them and produce documentation.
+- **REST** is not a protocol but a **design philosophy** built on HTTP's principles. It favours plain data formats, names each resource with a URL, and leans on what HTTP already provides: caching headers, authentication, content negotiation. APIs designed this way are *RESTful*. Definition formats such as **OpenAPI (Swagger)** describe them and produce documentation.
 - **SOAP** is an XML-based protocol that aims to be independent of HTTP. It comes with a sprawl of related standards (WS-*) and is described with WSDL, which enables code generation. Because it is complex and not human-readable, it relies heavily on tool support and IDEs. It is now out of fashion outside large enterprises.
 
 ### 2.2 The problems with remote procedure calls
 
-RPC (Remote Procedure Call), dating from the 1980s, tries to make a request to a remote service **look like calling a local function**. This is called *location transparency*. DDIA argues the abstraction is **fundamentally flawed**, because a network request is very different from a local call:
+RPC (Remote Procedure Call), dating from the 1980s, tries to make a request to a remote service **look like calling a local function**. This is called *location transparency*. DDIA's verdict is that the abstraction is **broken at its root**: calling over a network differs from calling a local function in ways that cannot be hidden:
 
 - A local call is **predictable**: it succeeds or fails depending on parameters you control. A network request can fail because the request or response was **lost**, or the remote machine is slow or unavailable. These problems are outside your control, and you must anticipate them, for example by retrying.
 - A network request may **time out** and return *no result at all*. You do not know whether the request got through (Chapter 8).
@@ -90,7 +90,7 @@ For evolvability, RPC clients and servers must be changeable and deployable inde
 
 - Thrift, gRPC (protobuf) and Avro RPC evolve according to their encoding's rules.
 - In SOAP, requests and responses are XML schemas, which can evolve with some pitfalls.
-- RESTful APIs commonly use JSON with no formally specified schema. Adding optional request parameters and adding new fields to responses are usually compatible changes.
+- RESTful APIs commonly use JSON with no formally specified schema. New optional parameters on requests and extra fields on responses rarely break anyone.
 
 Service compatibility is harder when the API crosses organisational boundaries, because you cannot force clients to upgrade. You may have to maintain several API versions side by side. There is no agreement on how to version: a version number in the **URL** (`/v2/users`), in the **`Accept` header**, or stored server-side per API key, as Stripe does.
 
@@ -131,7 +131,7 @@ print("balances:", svc.balance)
 
 Advantages of a broker over direct RPC:
 
-- It acts as a **buffer** if the recipient is unavailable or overloaded, which improves reliability.
+- When the receiver is down or swamped, the broker holds the messages as a **buffer**, so the system as a whole is more robust.
 - It can **redeliver** messages to a process that crashed, so messages are not lost.
 - The sender does not need to know the recipient's **IP address and port**, which is useful in cloud deployments where VMs come and go.
 - One message can go to **several recipients**.
@@ -141,9 +141,9 @@ The communication is usually **one-way**. The sender normally does not expect a 
 
 ### 3.1 Message brokers
 
-In the past the market was dominated by commercial software from TIBCO, IBM WebSphere and webMethods. Open-source brokers include **RabbitMQ**, ActiveMQ, HornetQ, NATS and **Apache Kafka**, compared in detail in Chapter 11. The general pattern: a process sends a message to a named **queue** or **topic**, and the broker delivers it to one or more **consumers** or **subscribers**. A topic can have many producers and many consumers.
+In the past the market was dominated by commercial software from TIBCO, IBM WebSphere and webMethods. Open-source brokers include **RabbitMQ**, ActiveMQ, HornetQ, NATS and **Apache Kafka**, compared in detail in Chapter 11. The general pattern: the sender addresses a named **queue** or **topic**; the broker sees to it that the **consumers** (**subscribers**) of that name receive the message. A topic can have many producers and many consumers.
 
-Brokers typically do not enforce a data model. A message is a sequence of bytes with some metadata, so you can use any encoding. If the encoding is backward and forward compatible, publishers and consumers can be changed and deployed independently. A consumer that republishes messages to another topic must take care to **preserve unknown fields**, the same issue as with databases.
+Brokers typically do not enforce a data model. To the broker a message is opaque bytes plus a little metadata, which leaves the choice of encoding to you. If the encoding is backward and forward compatible, publishers and consumers can be changed and deployed independently. A consumer that republishes messages to another topic must take care to **preserve unknown fields**, the same issue as with databases.
 
 ```mermaid
 flowchart LR
@@ -156,9 +156,9 @@ flowchart LR
 
 ### 3.2 Distributed actor frameworks
 
-The **actor model** is a programming model for concurrency within a single process. Logic lives in **actors**, each representing one client or entity, with its own local state that is not shared, communicating by sending and receiving asynchronous messages. Delivery is not guaranteed, and messages may be lost in some error scenarios. Each actor processes one message at a time, so it needs no threads or locks of its own.
+The **actor model** is a way of structuring concurrent code inside one process. Logic lives in **actors**, each representing one client or entity, with its own local state that is not shared, communicating by sending and receiving asynchronous messages. Delivery is not guaranteed, and messages may be lost in some error scenarios. Each actor processes one message at a time, so it needs no threads or locks of its own.
 
-In a **distributed actor framework**, the same model scales across nodes, and messages are transparently encoded and sent over the network if the recipient is elsewhere. Location transparency works *better* here than in RPC, because the actor model **already assumes messages may be lost**, even within one process. Examples include **Akka** (Java serialization by default, can be swapped for protobuf to support rolling upgrades), **Orleans** (custom encoding that by default does not support rolling upgrades), and **Erlang OTP** (record schema changes are hard).
+In a **distributed actor framework**, the same model scales across nodes, and messages are transparently encoded and sent over the network if the recipient is elsewhere. Hiding location is *less* dangerous here than with RPC: actors are **written from the start to tolerate lost messages**, even when sender and receiver share a process. Examples include **Akka** (Java serialization by default, can be swapped for protobuf to support rolling upgrades), **Orleans** (custom encoding that by default does not support rolling upgrades), and **Erlang OTP** (record schema changes are hard).
 
 ## 4. Choosing among the three
 

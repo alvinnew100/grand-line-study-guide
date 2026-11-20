@@ -1,19 +1,19 @@
 # OLTP vs OLAP, warehouses and column-oriented storage
 
-Early business databases handled **commercial transactions**: making a sale, placing an order, paying a salary. The word *transaction* stuck even as databases took on blog comments, game moves and contacts. Here it does not necessarily mean ACID. It means a group of reads and writes that make up a logical unit and allows **low-latency** reads and writes, as opposed to batch jobs.
+Early business databases handled **commercial transactions**: making a sale, placing an order, paying a salary. The word *transaction* stuck even as databases took on blog comments, game moves and contacts. Here it does not necessarily mean ACID. Here it simply denotes a handful of reads and writes that belong together and are answered **interactively**, in contrast to work done by periodic batch jobs.
 
 ## 1. Two access patterns
 
-**Online transaction processing (OLTP).** An application looks up a small number of records by key with an index, then inserts or updates records based on user input. It is interactive.
+**Online transaction processing (OLTP).** Driven by what a user does, the application fetches a few rows through an index and writes a few rows back. It is interactive.
 
-**Online analytic processing (OLAP).** An analyst scans a huge number of records, reads only a few columns per record, and computes **aggregates** (count, sum, average). Example: "What was the total revenue of each store in January?" or "How many more bananas than usual did we sell during our latest promotion?"
+**Online analytic processing (OLAP).** An analyst scans a huge number of records, reads only a few columns per record, and computes **aggregates** (count, sum, average). Example: "Which region's subscriptions grew fastest last quarter?" or "Did the weekend discount lift sales of umbrellas above their usual level?"
 
 | Property | OLTP | OLAP |
 |---|---|---|
-| Main read pattern | Small number of records per query, fetched by key | Aggregate over a large number of records |
-| Main write pattern | Random-access, low-latency writes from user input | Bulk import (ETL) or event stream |
+| Main read pattern | A few rows per query, located by key | Summaries computed across very many rows |
+| Main write pattern | Small interactive writes scattered across the data | Large periodic loads (ETL) or a feed of events |
 | Primarily used by | End user/customer via web app | Internal analyst, decision support |
-| What data represents | Latest state of data (current point in time) | History of events that happened over time |
+| What data represents | How things stand right now | A record of what happened, kept over time |
 | Dataset size | Gigabytes to terabytes | Terabytes to petabytes |
 | Bottleneck | Disk **seek** time / index lookups | Disk **bandwidth** (bytes scanned) |
 
@@ -43,7 +43,7 @@ The warehouse's data model is usually relational, because SQL fits analytics wel
 Most warehouses use a **star schema**, also called **dimensional modelling**.
 
 - At the centre is a **fact table**. Each row is an **event** at a particular time, such as one product purchased by one customer. Facts are captured individually for maximum flexibility later. Fact tables can be enormous: tens of petabytes at Apple, Walmart or eBay.
-- Some columns are **attributes** such as price or cost. Others are **foreign keys** to **dimension tables**, which answer the *who, what, where, when, how and why* of the event.
+- Some columns are **attributes** such as price or cost. The remaining columns are **foreign keys** into **dimension tables** that describe the event's context: the customer, the product, the place, the date and so on.
 - Even date and time get a dimension table (`dim_date`), which can encode extra information such as public holidays so queries can compare holiday and non-holiday sales.
 
 ```mermaid
@@ -165,9 +165,9 @@ Rows are stored in insertion order by default, but you can choose a **sort order
 
 ### 4.3 Writing to column-oriented storage
 
-Compression and sorting make reads fast but writes hard. An **update-in-place** approach like a B-tree's is impossible with compressed columns: inserting a row in the middle of a sorted table would mean rewriting every column file.
+Compression and sorting make reads fast but writes hard. An **update-in-place** approach like a B-tree's is impossible with compressed columns: a row that belongs in the middle of the sort order would force all column files to be rewritten.
 
-The fix is the **LSM-tree** idea again. All writes go first to an in-memory store, where they are sorted and accumulated, and then they are merged with the column files on disk in bulk. Vertica does essentially this. Queries must read both the on-disk column data and the recent writes in memory and combine the two, and the query optimiser hides that from the user.
+The fix is the **LSM-tree** idea again. New rows are collected and kept sorted in memory; once enough have built up they are merged into the on-disk column files in one bulk operation. Vertica does essentially this. Queries must read both the on-disk column data and the recent writes in memory and combine the two, and the query optimiser hides that from the user.
 
 ## 5. Aggregation: data cubes and materialized views
 
