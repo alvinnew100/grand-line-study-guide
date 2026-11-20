@@ -138,16 +138,18 @@ class SplayTree:
         if parent is not None: self._splay(parent)           # splay the parent of the removed node
         return True
 
-    def height(self, n="root"):
-        if n == "root": n = self._root
-        return -1 if n is None else 1 + max(self.height(n.left), self.height(n.right))
+    def height(self):                                    # iterative: the tree may be a long chain
+        h, level = -1, [self._root] if self._root else []
+        while level:
+            h += 1
+            level = [c for n in level for c in (n.left, n.right) if c is not None]
+        return h
     def depth_of(self, key):
         d, p = 0, self._root
         while p.key != key:
             p = p.left if key < p.key else p.right; d += 1
         return d
 
-import sys; sys.setrecursionlimit(5000)
 T = SplayTree()
 for k in range(1, 1001):
     T.insert(k)                      # sorted insertions: each new key is splayed to the root

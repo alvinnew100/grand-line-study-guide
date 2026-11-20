@@ -248,14 +248,130 @@ a 2-D array is stored in **row-major order** — row 0, then row 1, … — as o
 friendly); iterating column by column jumps by $c$ each step. A Python list of lists is not
 contiguous, but the same "iterate rows in the outer loop" habit is still the idiomatic choice.
 
-## 5. Pitfalls
+## 5. Completing the scoreboard: removal, and the cost of keeping an array sorted
+
+The book's scoreboard discussion also covers **removing** the entry at a given rank (say, a
+disqualified cheater). It is the mirror image of insertion: every entry *below* the removed one
+shifts one cell **left** to close the gap, and the vacated last cell is reset to `None`.
+
+```python-run
+board = [("Mike", 1105), ("Rob", 750), ("Paul", 720), ("Anna", 660), ("Rose", 590), None, None]
+n = 5                                             # number of real entries
+
+def remove(i):
+    """Remove and return the entry at rank i (0 = highest), shifting lower entries up."""
+    global n
+    entry = board[i]
+    for j in range(i, n - 1):                     # left to right: each cell takes its right neighbour
+        board[j] = board[j + 1]
+    board[n - 1] = None                           # clear the duplicate left in the last used cell
+    n -= 1
+    return entry
+
+def add(entry):
+    global n
+    if n < len(board): n += 1
+    elif entry[1] <= board[-1][1]: return
+    j = n - 1
+    while j > 0 and board[j - 1][1] < entry[1]:   # right to left: each cell takes its left neighbour
+        board[j] = board[j - 1]; j -= 1
+    board[j] = entry
+
+print("removed:", remove(1)); print(board)
+add(("Jill", 740)); print(board)
+```
+
+### Dry run of `remove(1)`
+
+| step | array (5 entries, then unused cells) |
+|---|---|
+| before | Mike, **Rob**, Paul, Anna, Rose, –, – |
+| j = 1: `board[1] = board[2]` | Mike, Paul, Paul, Anna, Rose, –, – |
+| j = 2: `board[2] = board[3]` | Mike, Paul, Anna, Anna, Rose, –, – |
+| j = 3: `board[3] = board[4]` | Mike, Paul, Anna, Rose, Rose, –, – |
+| clear `board[4]` | Mike, Paul, Anna, Rose, –, –, – |
+
+**Direction matters.** Removal copies **left to right** (`board[j] = board[j+1]` for increasing
+`j`), insertion copies **right to left**. Do either in the opposite direction and one value is
+smeared across the whole range. The rule: always copy *into the cell you no longer need*.
+
+**Cost.** Removing at rank $i$ shifts $n - i - 1$ entries; inserting at rank $i$ shifts $n - i$.
+Both are $O(n)$ in the worst case (the front) and $O(1)$ at the back — the same asymmetry as
+`list.pop(k)` and `list.insert(k, v)`. Keeping an array sorted under updates therefore costs
+$O(n)$ per update even though *finding* the right position takes only $O(\log n)$ with binary
+search. That tension — fast search, slow update — is what the linked structures and search trees of
+later modules are designed to resolve.
+
+## 6. Working with matrices as lists of lists
+
+A table of numbers with $r$ rows and $c$ columns is the workhorse of scientific computing. Three
+operations show how to reason about cost on 2-D data.
+
+```python-run
+def transpose(A):
+    r, c = len(A), len(A[0])
+    return [[A[i][j] for i in range(r)] for j in range(c)]          # c rows of length r
+
+def mat_mul(A, B):
+    """Product of an r x m matrix and an m x c matrix: r * m * c scalar multiplications."""
+    r, m, c = len(A), len(B), len(B[0])
+    assert len(A[0]) == m, "inner dimensions must agree"
+    C = [[0] * c for _ in range(r)]                                 # independent rows!
+    for i in range(r):
+        for j in range(c):
+            total = 0
+            for k in range(m):
+                total += A[i][k] * B[k][j]
+            C[i][j] = total
+    return C
+
+def spiral(A):
+    """Visit every cell once, clockwise from the outside in."""
+    out, top, bottom, left, right = [], 0, len(A) - 1, 0, len(A[0]) - 1
+    while top <= bottom and left <= right:
+        out += [A[top][j] for j in range(left, right + 1)]
+        out += [A[i][right] for i in range(top + 1, bottom + 1)]
+        if top < bottom:
+            out += [A[bottom][j] for j in range(right - 1, left - 1, -1)]
+        if left < right:
+            out += [A[i][left] for i in range(bottom - 1, top, -1)]
+        top, bottom, left, right = top + 1, bottom - 1, left + 1, right - 1
+    return out
+
+A = [[1, 2, 3], [4, 5, 6]]
+B = [[7, 8], [9, 10], [11, 12]]
+print("transpose:", transpose(A), "==", [list(col) for col in zip(*A)])
+print("product:  ", mat_mul(A, B))
+print("spiral:   ", spiral([[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12]]))
+```
+
+- **Transpose** touches each of the $rc$ cells once: $\Theta(rc)$. The idiom `zip(*A)` does the same
+  thing by unpacking the rows as arguments.
+- **Matrix multiplication** has three nested loops with bounds $r$, $c$ and $m$: $\Theta(rmc)$ scalar
+  multiplications, i.e. $\Theta(n^3)$ for two $n \times n$ matrices — the standard example of the
+  cubic function from the first lesson, and the cost model behind the matrix-chain problem in the
+  dynamic-programming lesson.
+- **Spiral order** is a pure index-management exercise: four boundaries shrink towards the centre,
+  with the two `if` guards preventing a single remaining row or column from being emitted twice.
+  $\Theta(rc)$.
+
+**Input size.** For 2-D data be explicit about what $n$ means. An algorithm that is "quadratic in
+the side length" of a square grid is **linear in the number of cells** — the actual size of the
+input. Flood fill on an $r \times c$ image is $O(rc)$, which is optimal, not "quadratic".
+
+**Space.** A list of lists costs one outer array of $r$ references plus $r$ separate row arrays of
+$c$ references each, scattered in memory. For large numeric tables use NumPy, which stores all
+$rc$ numbers in one contiguous compact array (row-major order) and performs these loops in compiled
+code — typically 10 to 100 times faster than the pure-Python versions above.
+
+## 7. Pitfalls
 
 - `[[0]*c]*r` aliasing.
 - In insertion sort, comparing with `>=` instead of `>` breaks stability.
 - Forgetting to wrap with `% 26` in ciphers (or using `-` with a language whose `%` can be negative).
 - Mutating a string in place — impossible; convert to a list, then `join`.
 
-## 6. Summary
+## 8. Summary
 
 - Sorted arrays support insertion by shifting: $O(n)$ per insert.
 - Insertion sort: $O(n^2)$ worst, $O(n)$ best, $O(n + \text{inversions})$ in general; in place and

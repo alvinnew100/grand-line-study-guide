@@ -263,7 +263,79 @@ print("MAD,      N=100:", collisions([((a * c + b) % p) % 100 for c in codes]))
 > expected $O(1)$ operations. Then mention the worst case $O(n)$ and the requirement that keys be
 > immutable with consistent `__eq__`/`__hash__`.
 
-## 5. Pitfalls
+## 5. Worked example: hashing a string by hand, then measuring collisions
+
+**Horner's rule on `"cat"` with $a = 33$.** The character codes are `c` = 99, `a` = 97, `t` = 116.
+The polynomial is $99 \cdot 33^2 + 97 \cdot 33 + 116$; Horner's rule evaluates it left to right
+with one multiplication and one addition per character:
+
+| step | character | computation | running value |
+|---|---|---|---|
+| 0 | | start | 0 |
+| 1 | c (99) | $0 \cdot 33 + 99$ | 99 |
+| 2 | a (97) | $99 \cdot 33 + 97$ | 3364 |
+| 3 | t (116) | $3364 \cdot 33 + 116$ | 111128 |
+
+Hash code 111128. For the anagram `"act"` the running values are 97, 3300, 109016 — a different
+code, because each character's contribution depends on its position.
+
+**Compression.** With a table of $N = 11$ buckets and the division method:
+$111128 \bmod 11 = 6$ and $109016 \bmod 11 = 6$ — a collision *after* compression even though the
+hash codes differ. This is normal: with only 11 buckets, many codes must share. A good hash function
+does not avoid collisions; it makes them no more frequent than chance.
+
+**Measuring quality.** Throw $n$ keys into $N$ buckets. If the function behaves like a random one,
+the bucket sizes follow a balls-in-bins pattern: with load factor 1, about 37% of buckets empty and
+the longest chain around $\ln n / \ln\ln n$. The cell compares four hash codes on 5,000 synthetic
+identifiers of the kind programs really contain (`item0`, `item1`, …, `user_17`), where weak
+functions show their flaws.
+
+```python-run
+def sum_code(s):
+    return sum(ord(c) for c in s)
+def first_three(s):                               # uses only part of the key
+    return sum(ord(c) << (8 * i) for i, c in enumerate(s[:3]))
+def poly_code(s, a=33):
+    h = 0
+    for c in s:
+        h = (h * a + ord(c)) & 0xFFFFFFFF
+    return h
+def cyclic_code(s):
+    h = 0
+    for c in s:
+        h = ((h << 5) & 0xFFFFFFFF) | (h >> 27)
+        h += ord(c)
+    return h
+
+keys = [f"{prefix}{i}" for prefix in ("item", "user_", "tmp", "node", "x") for i in range(1000)]
+N = 5003                                          # a prime, load factor about 1
+print(f"{len(keys)} keys into {N} buckets")
+print(f"{'hash code':12s} {'distinct codes':>15} {'empty buckets':>14} {'longest chain':>14}")
+for name, h in [("sum", sum_code), ("first three", first_three), ("polynomial", poly_code), ("cyclic shift", cyclic_code)]:
+    buckets = [0] * N
+    for k in keys:
+        buckets[h(k) % N] += 1
+    print(f"{name:12s} {len({h(k) for k in keys}):>15} {buckets.count(0):>14} {max(buckets):>14}")
+print("ideal (random):", f"{'5000':>12} {'about 1840':>14} {'about 6':>14}")
+```
+
+Reading the table:
+
+- **Sum of codes** produces only a few hundred distinct values for 5,000 keys — digits rearranged
+  give the same sum (`item12`, `item21`) — so almost every bucket is empty and a few chains are
+  enormous. Lookups degrade towards a linear scan.
+- **First three characters** is even worse: every key with the same prefix collides, regardless of
+  table size. A hash code must depend on the **whole** key.
+- **Polynomial** and **cyclic-shift** codes give 5,000 distinct codes, no long chains, and bucket
+  statistics at least as good as the random ideal. (They leave *fewer* empty buckets than chance
+  would, because these keys are so regular — consecutive numbers — that the codes spread out more
+  evenly than random values. Do not count on that for arbitrary data.)
+
+The experiment also explains the advice to make $N$ prime (or to use MAD compression): with a
+polynomial code and $N$ a multiple of the multiplier $a$, the bucket index would depend only on the
+last character. A prime modulus removes such arithmetic coincidences.
+
+## 6. Pitfalls
 
 - Using a mutable object as a key (or mutating a key object that defines its own hash).
 - Defining `__eq__` without `__hash__` (Python then makes the class unhashable) or with an
@@ -273,7 +345,7 @@ print("MAD,      N=100:", collisions([((a * c + b) % p) % 100 for c in codes]))
   not guarantee order).
 - Relying on `hash(str)` being the same across program runs.
 
-## 6. Summary
+## 7. Summary
 
 - Map ADT: get/set/delete by key, length, iteration; `MutableMapping` supplies the rest.
 - Unsorted list map: $O(n)$ per operation.

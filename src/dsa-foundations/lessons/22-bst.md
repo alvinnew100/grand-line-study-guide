@@ -242,8 +242,7 @@ So everything depends on the height $h$:
   (sorted input is very common in practice!) break this assumption.
 
 ```python-run
-import random, sys
-sys.setrecursionlimit(10000)
+import random
 def insert(root, k):
     if root is None: return [k, None, None]
     node = root
@@ -252,7 +251,12 @@ def insert(root, k):
         if node[i] is None:
             node[i] = [k, None, None]; return root
         node = node[i]
-def height(n): return -1 if n is None else 1 + max(height(n[1]), height(n[2]))
+def height(root):                      # iterative (level by level): safe for chains of any length
+    h, level = -1, [root] if root else []
+    while level:
+        h += 1
+        level = [c for node in level for c in (node[1], node[2]) if c is not None]
+    return h
 n = 2000
 keys = list(range(n))
 root = None

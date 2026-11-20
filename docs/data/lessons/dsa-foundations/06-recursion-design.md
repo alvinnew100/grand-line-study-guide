@@ -227,7 +227,98 @@ def draw_interval_iter(c):
 print("\n".join(draw_interval_iter(3)))
 ```
 
-## 6. Pitfalls
+## 6. Worked design example: the Towers of Hanoi
+
+A problem where the recursive design is short and the iterative one is genuinely harder. There are
+three pegs and $n$ discs of different sizes stacked on peg A, largest at the bottom. Move the whole
+stack to peg C, moving one disc at a time and never placing a larger disc on a smaller one.
+
+**Apply the recipe.** *If someone handed me the solution for $n - 1$ discs, how would I finish?*
+The largest disc can only move when the $n - 1$ smaller discs are all out of the way, stacked on the
+spare peg. So:
+
+1. move the top $n - 1$ discs from the source to the **spare** peg (recursively);
+2. move the largest disc from the source to the target;
+3. move the $n - 1$ discs from the spare peg to the target (recursively).
+
+**Base case:** zero discs — nothing to do. **Progress:** each call has one disc fewer.
+**Parameterisation:** the pegs must be parameters, because their roles (source, spare, target)
+rotate from call to call.
+
+```python-run
+def hanoi(n, source, target, spare, moves):
+    if n == 0:
+        return                                    # base case: nothing to move
+    hanoi(n - 1, source, spare, target, moves)    # clear the way
+    moves.append((n, source, target))             # move the largest disc
+    hanoi(n - 1, spare, target, source, moves)    # bring the rest back on top
+
+def check(n, moves):
+    """Replay the moves and verify the rules."""
+    pegs = {"A": list(range(n, 0, -1)), "B": [], "C": []}
+    for disc, src, dst in moves:
+        assert pegs[src] and pegs[src][-1] == disc, "disc is not on top of its peg"
+        assert not pegs[dst] or pegs[dst][-1] > disc, "larger disc placed on a smaller one"
+        pegs[dst].append(pegs[src].pop())
+    return pegs["C"] == list(range(n, 0, -1))
+
+moves = []
+hanoi(3, "A", "C", "B", moves)
+for disc, src, dst in moves:
+    print(f"move disc {disc}: {src} -> {dst}")
+for n in [3, 10, 16]:
+    moves = []
+    hanoi(n, "A", "C", "B", moves)
+    print(f"n = {n:2d}: {len(moves):6d} moves (2^n - 1 = {2**n - 1}), valid = {check(n, moves)}")
+```
+
+### Analysis
+
+Let $T(n)$ be the number of moves: $T(0) = 0$ and $T(n) = 2T(n-1) + 1$ — the same recurrence as the
+English ruler — so $T(n) = 2^n - 1$. This is optimal: the largest disc must move at least once, and
+before and after that move the other $n - 1$ discs must be fully transferred, so any solution needs
+at least $2T(n-1) + 1$ moves. The **recursion depth**, however, is only $n$: the stack holds one
+frame per disc size, so memory is $O(n)$ even though time is $O(2^n)$. Depth and total work are
+different quantities — a point worth internalising before the divide-and-conquer sorting lessons.
+
+### Eliminating the recursion
+
+`hanoi` makes **two** recursive calls, and only the second is a tail call. We can turn the tail call
+into a loop by reassigning parameters, and simulate the first call with an explicit stack of pending
+work. Each stack entry is either a subproblem to expand or a single move to perform:
+
+```python-run
+def hanoi_iterative(n, source="A", target="C", spare="B"):
+    moves = []
+    stack = [("solve", n, source, target, spare)]
+    while stack:
+        kind, k, src, dst, tmp = stack.pop()
+        if kind == "move":
+            moves.append((k, src, dst))
+        elif k > 0:
+            # push in REVERSE order of execution: the stack is last-in, first-out
+            stack.append(("solve", k - 1, tmp, dst, src))     # step 3
+            stack.append(("move", k, src, dst, tmp))          # step 2
+            stack.append(("solve", k - 1, src, tmp, dst))     # step 1
+    return moves
+
+def hanoi_recursive(n, source="A", target="C", spare="B"):
+    if n == 0: return []
+    return (hanoi_recursive(n - 1, source, spare, target) + [(n, source, target)]
+            + hanoi_recursive(n - 1, spare, target, source))
+
+print(hanoi_iterative(4) == hanoi_recursive(4), len(hanoi_iterative(12)))
+```
+
+Two things to notice. First, the pending steps are pushed in **reverse** order, because a stack
+returns them last-in, first-out — the commonest bug when hand-converting a recursion. Second, the
+iterative version is neither shorter nor clearer than the recursive one, and it uses the same
+$O(n)$ auxiliary space: the explicit stack simply *is* the call stack, written out. That is the
+general truth about recursion elimination — it buys freedom from Python's recursion limit and from
+call overhead, not asymptotic savings. Here, with depth only $n$ for a $2^n$-step computation, the
+recursive version is the right engineering choice.
+
+## 7. Pitfalls
 
 - Believing Python will optimise tail calls. It will not.
 - Converting a non-tail recursion by "just using a loop" and losing the post-call work.
@@ -235,7 +326,7 @@ print("\n".join(draw_interval_iter(3)))
   calls. Use `None` and initialise inside.
 - Memoising a function whose arguments are unhashable (lists) — convert to tuples first.
 
-## 7. Summary
+## 8. Summary
 
 - Design: base cases first, then recursive calls that make progress; parameterise with indices and
   wrap in a clean public function.

@@ -252,14 +252,100 @@ def sort_count(A):
 print(sort_count([5, 2, 4, 6, 1, 3]))
 ```
 
-## 6. Pitfalls
+## 6. Stability in action, and a merge-sort for linked lists
+
+**Seeing stability.** Sort a list of (name, grade) records by grade. A stable sort keeps students
+with the same grade in their original (here alphabetical) order; an unstable merge scrambles them.
+The only difference between the two functions below is `<=` versus `<` in the merge.
+
+```python-run
+def merge_sort_by(records, key, take_left_on_ties=True):
+    if len(records) < 2:
+        return records
+    mid = len(records) // 2
+    L = merge_sort_by(records[:mid], key, take_left_on_ties)
+    R = merge_sort_by(records[mid:], key, take_left_on_ties)
+    out, i, j = [], 0, 0
+    while i < len(L) and j < len(R):
+        left_first = key(L[i]) <= key(R[j]) if take_left_on_ties else key(L[i]) < key(R[j])
+        if left_first: out.append(L[i]); i += 1
+        else: out.append(R[j]); j += 1
+    return out + L[i:] + R[j:]
+
+students = [("Ana", "B"), ("Ben", "A"), ("Cy", "B"), ("Dee", "A"), ("Eli", "B"), ("Fay", "A")]
+grade = lambda s: s[1]
+print("stable  :", merge_sort_by(students, grade, True))
+print("unstable:", merge_sort_by(students, grade, False))
+```
+
+In the stable output the A-students appear as Ben, Dee, Fay and the B-students as Ana, Cy, Eli —
+input order preserved within each grade. With the strict comparison, ties are resolved in favour of
+the **right** run, so later records overtake earlier ones. Stability is what makes multi-key sorting
+by successive passes work: sort by the secondary key, then stably by the primary key.
+
+**Merge-sort on a linked list.** No random access is needed, so linked lists can be sorted without
+any auxiliary array: split by walking with slow and fast pointers, sort both halves, and merge by
+**relinking the existing nodes**.
+
+```python-run
+class Node:
+    __slots__ = "val", "next"
+    def __init__(self, val, next=None): self.val, self.next = val, next
+def from_list(xs):
+    head = None
+    for x in reversed(xs): head = Node(x, head)
+    return head
+def to_list(h):
+    out = []
+    while h: out.append(h.val); h = h.next
+    return out
+
+def merge(a, b):
+    dummy = tail = Node(None)              # dummy header: no special case for the first node
+    while a and b:
+        if a.val <= b.val: tail.next, a = a, a.next
+        else: tail.next, b = b, b.next
+        tail = tail.next
+    tail.next = a or b                     # splice in whatever is left: O(1), no copying
+    return dummy.next
+
+def merge_sort_list(head):
+    if head is None or head.next is None:
+        return head
+    slow, fast = head, head.next
+    while fast and fast.next:              # slow stops at the end of the first half
+        slow, fast = slow.next, fast.next.next
+    second, slow.next = slow.next, None    # cut the list in two
+    return merge(merge_sort_list(head), merge_sort_list(second))
+
+print(to_list(merge_sort_list(from_list([85, 24, 63, 45, 17, 31, 96, 50, 7]))))
+```
+
+### Dry run of the split and merge on `85 → 24 → 63 → 45 → 17`
+
+| step | detail |
+|---|---|
+| find the middle | (slow, fast) = (85, 24) → (24, 45) → (63, None-after-17): slow stops at 63 |
+| cut | first half `85 → 24 → 63`, second half `45 → 17` |
+| recurse | first half becomes `24 → 63 → 85`; second half becomes `17 → 45` |
+| merge | compare 24/17 → take 17; 24/45 → 24; 63/45 → 45; second list empty → splice `63 → 85` |
+| result | `17 → 24 → 45 → 63 → 85` |
+
+**Cost.** Finding the middle and merging are both linear in the length of the list, so the
+recurrence is still $T(n) = 2T(n/2) + cn$: $O(n \log n)$ time. But the merge allocates **no new
+nodes** — it only rewrites `next` references — so the extra space is just the $O(\log n)$ recursion
+stack, compared with $O(n)$ for arrays. The final splice `tail.next = a or b` also shows a small
+advantage over the array version: the leftover run is attached in $O(1)$ instead of being copied
+element by element.
+
+## 7. Pitfalls
 
 - Using `<` instead of `<=` for the left run breaks stability.
 - Forgetting to copy the leftover tail of the non-exhausted run.
 - Recursing on `n < 1` only: a one-element list would recurse forever (`mid = 0`).
 - Allocating new lists at every level in a hot loop — prefer one auxiliary buffer.
 
-## 7. Summary
+## 8. Summary
 
 - Divide-and-conquer: divide, conquer recursively, combine.
 - Merge-sort: split in half, sort halves, merge in linear time — $O(n \log n)$ always, stable,

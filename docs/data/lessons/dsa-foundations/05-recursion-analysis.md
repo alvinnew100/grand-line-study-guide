@@ -241,14 +241,112 @@ The number of calls is $n(n-1)(n-2)\cdots$ — exponential-like growth — which
 only practical for small $n$, and why pruning (abandoning a partial assignment as soon as it cannot
 succeed) matters so much.
 
-## 5. Pitfalls
+## 5. Solving recurrences by unrolling: four worked examples
+
+The table in section 2 listed solutions; here is how to obtain them. **Unrolling** (iterated
+substitution) expands the recurrence until a pattern appears, sums the pattern, and then — because a
+guess is not a proof — confirms it by induction.
+
+**Example A: $T(n) = T(n-1) + n$, $T(0) = 0$** (a recursion that does linear work and shrinks by
+one — selection sort, or quick-sort's worst case).
+
+$$T(n) = n + T(n-1) = n + (n-1) + T(n-2) = \cdots = n + (n-1) + \cdots + 1 = \frac{n(n+1)}{2}.$$
+
+$\Theta(n^2)$. *Check:* assuming $T(n-1) = (n-1)n/2$, we get
+$T(n) = n + \frac{(n-1)n}{2} = \frac{n(n+1)}{2}$. ✓
+
+**Example B: $T(n) = T(n/2) + c$, $T(1) = c$** (binary search).
+
+$$T(n) = c + T(n/2) = 2c + T(n/4) = \cdots = kc + T(n/2^k).$$
+
+The recursion bottoms out when $n/2^k = 1$, i.e. $k = \log_2 n$: $T(n) = c\log_2 n + c$.
+$\Theta(\log n)$.
+
+**Example C: $T(n) = T(n/2) + cn$, $T(1) = c$** (prune-and-search: linear work, then recurse on
+*one* half — the pattern of quick-select).
+
+$$T(n) = cn + \frac{cn}{2} + \frac{cn}{4} + \cdots + c \;<\; cn\left(1 + \tfrac12 + \tfrac14 + \cdots\right) = 2cn.$$
+
+A geometric series: $\Theta(n)$. The first level dominates; all later levels together cost no more
+than the first.
+
+**Example D: $T(n) = 2T(n/2) + cn$, $T(1) = c$** (merge-sort).
+
+$$T(n) = cn + 2T(n/2) = cn + cn + 4T(n/4) = \cdots = k\,cn + 2^k\,T(n/2^k).$$
+
+With $k = \log_2 n$: $T(n) = cn\log_2 n + cn$. $\Theta(n \log n)$. Every level costs the same $cn$,
+and there are $\log_2 n$ of them.
+
+Compare C and D: identical per-call work, but one recursive call versus two changes the total from
+$n$ to $n \log n$. And compare D with $T(n) = 2T(n/2) + c$ (binary sum), where level $i$ costs
+$2^i c$: there the **last** level dominates and the total is $\Theta(n)$. In general, ask *which
+level of the recursion tree is the most expensive*:
+
+| Pattern | Level costs | Total | Example |
+|---|---|---|---|
+| decreasing geometrically | root dominates | $\Theta(\text{root cost})$ | $T(n/2) + cn = \Theta(n)$ |
+| equal on every level | all levels count | $\Theta(\text{level cost} \times \text{depth})$ | $2T(n/2) + cn = \Theta(n\log n)$ |
+| increasing geometrically | leaves dominate | $\Theta(\text{number of leaves})$ | $2T(n/2) + c = \Theta(n)$ |
+
+### Checking the algebra by counting
+
+A recurrence is a claim about a program, so it can be tested: instrument the function to count its
+basic steps and compare with the closed form.
+
+```python-run
+import math
+
+def steps_A(n):                       # T(n) = T(n-1) + n
+    return 0 if n == 0 else n + steps_A(n - 1)
+def steps_B(n):                       # T(n) = T(n/2) + 1
+    return 1 if n <= 1 else 1 + steps_B(n // 2)
+def steps_C(n):                       # T(n) = T(n/2) + n
+    return 1 if n <= 1 else n + steps_C(n // 2)
+def steps_D(n):                       # T(n) = 2 T(n/2) + n
+    return 1 if n <= 1 else n + 2 * steps_D(n // 2)
+def steps_E(n):                       # T(n) = 2 T(n/2) + 1
+    return 1 if n <= 1 else 1 + 2 * steps_E(n // 2)
+
+print(f"{'n':>6} {'A: n(n+1)/2':>14} {'B: log n + 1':>14} {'C: < 2n':>12} {'D: n log n + n':>16} {'E: 2n - 1':>12}")
+for n in [16, 64, 256, 512]:
+    lg = int(math.log2(n))
+    print(f"{n:>6} {steps_A(n):>6} = {n*(n+1)//2:<6} {steps_B(n):>6} = {lg + 1:<6}"
+          f" {steps_C(n):>6} < {2*n:<4} {steps_D(n):>8} = {n*lg + n:<6} {steps_E(n):>6} = {2*n - 1}")
+```
+
+Every column matches its closed form exactly (for powers of two). When $n$ is not a power of two the
+floors and ceilings perturb the constants but not the growth rate.
+
+### A recurrence that is not divide-and-conquer
+
+For `bad_fibonacci`, $c_n = 1 + c_{n-1} + c_{n-2}$. Unrolling does not telescope neatly, so bound it
+instead. Dropping the 1 and using $c_{n-1} \ge c_{n-2}$ gives $c_n \ge 2c_{n-2}$, hence
+$c_n \ge 2^{n/2}$; and $c_n \le 2c_{n-1}$ (roughly) gives $c_n \le 2^n$. The truth lies between:
+$c_n$ grows like $\phi^n$ with $\phi = (1 + \sqrt5)/2 \approx 1.618$, because the recurrence is the
+Fibonacci recurrence itself — in fact $c_n = 2F_{n+1} - 1$.
+
+```python-run
+def calls(n):
+    return 1 if n <= 1 else 1 + calls(n - 1) + calls(n - 2)
+def fib(n):
+    a, b = 0, 1
+    for _ in range(n): a, b = b, a + b
+    return a
+for n in [5, 10, 20, 25]:
+    print(n, calls(n), 2 * fib(n + 1) - 1, "ratio to previous n ~", round(calls(n) / calls(n - 1), 3))
+```
+
+The ratio of consecutive call counts settles at about 1.618: each extra unit of $n$ multiplies the
+running time by the golden ratio.
+
+## 6. Pitfalls
 
 - Calling the same subproblem twice (`power` with two calls, `bad_fibonacci`).
 - Passing slices (`S[1:]`) instead of indices: each slice copies, turning $O(n)$ into $O(n^2)$.
 - Forgetting the "undo" step in backtracking, so state leaks between branches.
 - Assuming recursion uses no extra memory: every pending call holds a frame.
 
-## 6. Summary
+## 7. Summary
 
 - Analyse recursion by summing per-activation work over the recursion trace/tree.
 - Overlapping subproblems can make innocent recursions exponential; fix by computing each once.

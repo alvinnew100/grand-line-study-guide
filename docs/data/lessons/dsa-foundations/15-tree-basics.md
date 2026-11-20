@@ -230,7 +230,67 @@ binary tree.
 > from the leaves up (leaf height 0). LeetCode's "maximum depth" counts *nodes* on the longest path,
 > which is height + 1. Clarify the convention before coding.
 
-## 6. Pitfalls
+## 6. Worked example: one pass down, one pass up
+
+Depth, height and subtree size are all defined recursively, so two linear passes compute all three
+for every node. The example also shows a common *input format*: a **parent array**, where
+`parent[v]` is the parent of node `v` and the root has parent `-1`.
+
+```python-run
+def analyse(parent):
+    n = len(parent)
+    children = [[] for _ in range(n)]
+    root = None
+    for v, p in enumerate(parent):
+        if p == -1: root = v
+        else: children[p].append(v)          # build child lists: O(n)
+
+    depth, height, size = [0] * n, [0] * n, [1] * n
+    order, stack = [], [root]
+    while stack:                             # iterative preorder: parents before children
+        v = stack.pop()
+        order.append(v)
+        for c in children[v]:
+            depth[c] = depth[v] + 1          # depth flows DOWN from the parent
+            stack.append(c)
+    for v in reversed(order):                # reversed preorder: children before parents
+        for c in children[v]:
+            height[v] = max(height[v], height[c] + 1)   # height and size flow UP
+            size[v] += size[c]
+    return root, children, depth, height, size
+
+#          0   1  2  3  4  5  6  7  8
+parent = [-1,  0, 0, 1, 1, 2, 4, 4, 7]
+root, children, depth, height, size = analyse(parent)
+print("node  children   depth height size")
+for v in range(len(parent)):
+    print(f"{v:>4}  {str(children[v]):<10} {depth[v]:>5} {height[v]:>6} {size[v]:>4}")
+leaves = [v for v in range(len(parent)) if not children[v]]
+print("leaves:", leaves, "| tree height:", height[root], "= max leaf depth:", max(depth[v] for v in leaves))
+print("edges:", sum(len(c) for c in children), "= n - 1 =", len(parent) - 1)
+```
+
+### Reading the output
+
+The tree is `0 → {1, 2}`, `1 → {3, 4}`, `2 → {5}`, `4 → {6, 7}`, `7 → {8}`.
+
+| node | depth | height | size | how it was obtained |
+|---|---|---|---|---|
+| 8 | 4 | 0 | 1 | a leaf: height 0, size 1 |
+| 7 | 3 | 1 | 2 | 1 + height(8); 1 + size(8) |
+| 4 | 2 | 2 | 4 | 1 + max(height(6), height(7)) = 1 + 1; 1 + 1 + 2 |
+| 1 | 1 | 3 | 6 | 1 + max(height(3), height(4)) = 1 + 2; 1 + 1 + 4 |
+| 0 | 0 | 4 | 9 | 1 + max(3, 1); 1 + 6 + 2 |
+
+Two directions of information flow appear, and recognising which one a quantity needs is the key
+skill for tree problems: **depth** is inherited from the parent (computed top-down, in preorder),
+while **height** and **size** are assembled from the children (bottom-up, in postorder). The whole
+computation is $O(n)$: building the child lists touches each node once, and the two passes do work
+proportional to $\sum_v (c_v + 1) = 2n - 1$. Processing the nodes in *reversed preorder* is a handy
+way to obtain a children-before-parents order without recursion — important in Python when the tree
+may be a path of 100,000 nodes.
+
+## 7. Pitfalls
 
 - Computing height as the max depth of all leaves: $O(n^2)$.
 - Assuming a binary tree with $n$ nodes has height $\log n$ — only if it is balanced; worst case
@@ -238,7 +298,7 @@ binary tree.
 - Array representation for sparse trees: exponential space.
 - Forgetting to set the parent reference when adding children (breaks depth and upward navigation).
 
-## 7. Summary
+## 8. Summary
 
 - Trees model hierarchies: root, parent/child, leaves, internal nodes, depth, height.
 - Height via recursion is $O(n)$ thanks to $\sum c_p = n - 1$.

@@ -153,9 +153,3 @@ TRACK = dict(
         ),
     ],
 )
-
-# While the track is being written, show only modules whose lessons all exist.
-import os as _os
-_here = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "lessons")
-TRACK["modules"] = [m for m in TRACK["modules"]
-                    if all(_os.path.exists(_os.path.join(_here, l["file"])) for l in m["lessons"])]

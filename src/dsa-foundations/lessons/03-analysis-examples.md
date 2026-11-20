@@ -259,14 +259,88 @@ print(prefix_average3([10, 20, 30, 40]))
 
 Asserting invariants while developing is a cheap, powerful debugging habit.
 
-## 8. Pitfalls
+## 8. Loops that are not what they seem
+
+Most analysis mistakes come from assuming "a loop inside a loop is $n^2$". The inner loop's bound
+often depends on the outer variable, and the total must be **summed**, not multiplied. Four
+instructive shapes:
+
+```python
+def shape_a(n):                 # inner loop doubles
+    for i in range(n):
+        j = 1
+        while j < n:
+            j *= 2
+
+def shape_b(n):                 # inner loop runs about n / i times
+    for i in range(1, n + 1):
+        for j in range(0, n, i):
+            pass
+
+def shape_c(n):                 # outer loop doubles, inner runs i times
+    i = 1
+    while i < n:
+        for j in range(i):
+            pass
+        i *= 2
+
+def shape_d(n):                 # two pointers that only move forward
+    j = 0
+    for i in range(n):
+        while j < n and j < 2 * i:
+            j += 1
+```
+
+- **Shape A:** the inner loop runs $\lceil \log_2 n \rceil$ times for *every* $i$:
+  $n \log n$ in total.
+- **Shape B:** the inner loop runs about $n/i$ times, so the total is
+  $n(1 + \tfrac12 + \tfrac13 + \cdots + \tfrac1n) = n H_n = \Theta(n\log n)$ — the harmonic number
+  again. This is the cost of any "visit every multiple of $i$" computation, such as a prime sieve.
+- **Shape C:** the inner loop runs $1 + 2 + 4 + \cdots < 2n$ times in total — a geometric series —
+  so the whole thing is $\Theta(n)$ despite the nesting.
+- **Shape D:** the inner `while` can run several times for one value of $i$, but $j$ never decreases
+  and never exceeds $n$, so across the **entire** execution it runs at most $n$ times:
+  $\Theta(n)$. This "the pointer only moves forward" argument is the basis of two-pointer and
+  sliding-window algorithms, and is an amortised argument in miniature.
+
+```python-run
+import math
+def count_a(n):
+    c = 0
+    for i in range(n):
+        j = 1
+        while j < n: j *= 2; c += 1
+    return c
+def count_b(n):
+    return sum(len(range(0, n, i)) for i in range(1, n + 1))
+def count_c(n):
+    c, i = 0, 1
+    while i < n: c += i; i *= 2
+    return c
+def count_d(n):
+    c, j = 0, 0
+    for i in range(n):
+        while j < n and j < 2 * i: j += 1; c += 1
+    return c
+print(f"{'n':>7} {'A':>9} {'n log2 n':>9} {'B':>9} {'n ln n':>9} {'C':>7} {'D':>7}")
+for n in [1000, 10000, 100000]:
+    print(f"{n:>7} {count_a(n):>9} {int(n*math.log2(n)):>9} {count_b(n):>9} {int(n*math.log(n)):>9} {count_c(n):>7} {count_d(n):>7}")
+```
+
+Multiply $n$ by 10 and columns A and B grow by a little more than 10 (the extra logarithmic
+factor), while C and D grow by about 10: linear. **Method:** write the cost of the inner loop as a
+function of the outer variable, then sum that function over the outer loop's range — using the
+arithmetic, geometric or harmonic sum as appropriate — or find a quantity that only ever increases
+and bound it.
+
+## 9. Pitfalls
 
 - Multiplying loop bounds blindly: `disjoint2` has three nested loops but is $O(n^2)$.
 - Forgetting the cost of slicing, `sum`, `in`, `sorted`, string `+` in loops.
 - Induction with too few base cases.
 - Loop invariants that are true but too weak to imply the result at termination.
 
-## 9. Summary
+## 10. Summary
 
 | Algorithm | Running time |
 |---|---|

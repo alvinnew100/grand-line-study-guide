@@ -212,7 +212,96 @@ is final at that moment.
 > (Bellman-Ford). A classic follow-up: "what if there are at most $k$ stops?" — the state becomes
 > (vertex, stops used).
 
-## 6. Pitfalls
+## 6. Dry run with the heap: watching lazy deletion
+
+The table in section 2.1 showed the labels. The `heapq` implementation carries one more piece of
+state — the heap itself, including **stale entries**. Trace the same graph from A (heap contents
+shown in sorted order):
+
+| pop | action | heap afterwards |
+|---|---|---|
+| (0, A) | finalise A; push (8, B), (2, C), (4, D) | (2,C) (4,D) (8,B) |
+| (2, C) | finalise C; D improves 4 → 3: push (3, D); push (9, E) | (3,D) (4,D) (8,B) (9,E) |
+| (3, D) | finalise D; B improves 8 → 5: push (5, B); E improves 9 → 6: push (6, E) | (4,D) (5,B) (6,E) (8,B) (9,E) |
+| (4, D) | **stale** — D is already in the cloud: skip | (5,B) (6,E) (8,B) (9,E) |
+| (5, B) | finalise B; push (10, F) | (6,E) (8,B) (9,E) (10,F) |
+| (6, E) | finalise E; F improves 10 → 7: push (7, F) | (7,F) (8,B) (9,E) (10,F) |
+| (7, F) | finalise F | (8,B) (9,E) (10,F) |
+| (8, B), (9, E), (10, F) | all stale: skipped | empty |
+
+Ten entries were pushed for six vertices; four were stale. In general each successful relaxation
+pushes one entry, so the heap never holds more than $m$ entries and the total work is
+$O(m\log m) = O(m \log n)$ — the same bound as the adaptable-priority-queue version, with a simpler
+data structure.
+
+The next cell instruments the algorithm to print exactly this trace, then compares the two
+priority-queue choices of section 3 on a sparse and a dense graph.
+
+```python-run
+import heapq, random, time
+
+def dijkstra_trace(g, src):
+    d, cloud, pq = {src: 0}, set(), [(0, src)]
+    pushed = stale = 0
+    while pq:
+        dist, u = heapq.heappop(pq)
+        if u in cloud:
+            stale += 1; print(f"pop ({dist},{u})  stale, skipped"); continue
+        cloud.add(u)
+        notes = []
+        for v, w in g[u]:
+            if v not in cloud and dist + w < d.get(v, float("inf")):
+                d[v] = dist + w
+                heapq.heappush(pq, (d[v], v)); pushed += 1
+                notes.append(f"{v}={d[v]}")
+        print(f"pop ({dist},{u})  finalised; relaxed: {', '.join(notes) or 'nothing'}")
+    print("pushed", pushed + 1, "entries;", stale, "were stale")
+    return d
+
+edges = [("A","B",8),("A","C",2),("A","D",4),("C","D",1),("B","D",2),("C","E",7),("D","E",3),("B","F",5),("E","F",1)]
+g = {v: [] for v in "ABCDEF"}
+for u, v, w in edges:
+    g[u].append((v, w)); g[v].append((u, w))
+dijkstra_trace(g, "A")
+
+def dijkstra_heap(adj, s):
+    n = len(adj); d = [float("inf")] * n; d[s] = 0; done = [False] * n; pq = [(0, s)]
+    while pq:
+        du, u = heapq.heappop(pq)
+        if done[u]: continue
+        done[u] = True
+        for v, w in adj[u]:
+            if du + w < d[v]: d[v] = du + w; heapq.heappush(pq, (d[v], v))
+    return d
+def dijkstra_array(adj, s):
+    """Unsorted-sequence PQ: remove_min is a linear scan. O(n^2 + m)."""
+    n = len(adj); d = [float("inf")] * n; d[s] = 0; done = [False] * n
+    for _ in range(n):
+        u = min((v for v in range(n) if not done[v]), key=d.__getitem__, default=None)
+        if u is None or d[u] == float("inf"): break
+        done[u] = True
+        for v, w in adj[u]:
+            if d[u] + w < d[v]: d[v] = d[u] + w
+    return d
+def random_graph(n, m):
+    adj = [[] for _ in range(n)]
+    for _ in range(m):
+        a, b = random.randrange(n), random.randrange(n)
+        w = random.randint(1, 100)
+        adj[a].append((b, w)); adj[b].append((a, w))
+    return adj
+for label, n, m in [("sparse", 3000, 9000), ("dense", 500, 120000)]:
+    adj = random_graph(n, m)
+    t0 = time.perf_counter(); a = dijkstra_heap(adj, 0); t1 = time.perf_counter()
+    b = dijkstra_array(adj, 0); t2 = time.perf_counter()
+    print(f"{label:6s} n={n:5d} m={m:6d}: heap {1000*(t1-t0):6.1f} ms   array {1000*(t2-t1):7.1f} ms   same answer: {a == b}")
+```
+
+On the sparse graph the heap version wins easily: $(n + m)\log n$ is tiny next to $n^2$. On the
+dense graph the two are comparable — $m \log n$ against $n^2 + m$ — matching the analysis: the
+unsorted-array priority queue is competitive only when $m$ approaches $n^2$.
+
+## 7. Pitfalls
 
 - Using Dijkstra with negative edge weights.
 - Marking a vertex as final when it is *pushed* rather than when it is *popped* — a later, cheaper
@@ -223,7 +312,7 @@ is final at that moment.
   compares the second field and raises `TypeError` — add a tie-breaking counter.
 - Forgetting both directions for undirected graphs.
 
-## 7. Summary
+## 8. Summary
 
 - Dijkstra grows a cloud from the source, always adding the closest outside vertex and relaxing its
   edges; correctness needs non-negative weights.

@@ -256,7 +256,96 @@ set_priority("a", 5); set_priority("b", 9); set_priority("b", 1); set_priority("
 print(pop_task(), pop_task(), pop_task(), pop_task())
 ```
 
-## 4. Pitfalls
+## 4. Dry run: how locators stay valid
+
+The whole adaptable design rests on one invariant: **`loc._index` is always the position of `loc`
+in the heap array.** Trace it. Add four items, keeping the locators:
+
+| operation | heap array (key:name) | indices stored in the locators |
+|---|---|---|
+| `a = add(5, "ann")` | `5:ann` | ann 0 |
+| `b = add(9, "bob")` | `5:ann 9:bob` | ann 0, bob 1 |
+| `c = add(3, "cat")` | `3:cat 9:bob 5:ann` | cat 0, bob 1, ann 2 |
+| `d = add(7, "dan")` | `3:cat 7:dan 5:ann 9:bob` | cat 0, dan 1, ann 2, bob 3 |
+
+In the third step `cat` was appended at index 2 and swapped with its parent `ann`; `_swap` rewrote
+**both** index fields. In the fourth, `dan` (index 3) swapped with its parent `bob` (index 1).
+
+Now `update(b, 1, "bob")`: `bob` sits at index 3. Its key becomes 1, smaller than its parent's
+(`dan`, 7), so `_bubble` chooses up-heap: swap with `dan` (index 1), then with `cat` (index 0).
+Result: `1:bob 3:cat 5:ann 7:dan`, with locator indices bob 0, cat 1, ann 2, dan 3.
+
+Then `remove(c)`: `cat` is at index 1. It is swapped with the last item (`dan`, index 3), popped,
+and `_bubble(1)` is called on `dan`: its parent is `bob` (1 < 7), so no up-heap; it has no children
+within the array, so no down-heap. Result: `1:bob 7:dan 5:ann`.
+
+At no point did we *search* for an item — each locator led straight to its cell. That is the entire
+difference between $O(\log n)$ and $O(n)$ for `update` and `remove`.
+
+`_check` guards the invariant from the outside: a locator is valid only if its index is in range
+**and** the array cell at that index is that very object (`self._data[j] is loc`). A locator whose
+item was already removed fails the test, as does a locator from a different queue.
+
+## 5. The three priority-queue sorts, side by side
+
+All three sorts of section 1 can be run in place on an array, and counting their basic operations
+shows the table's bounds concretely — including the fact that selection-sort is indifferent to the
+input order while insertion-sort is not.
+
+```python-run
+import random
+def selection_sort(A):
+    A, comps = A[:], 0
+    for i in range(len(A) - 1):
+        m = i
+        for j in range(i + 1, len(A)):          # scan the unsorted part for the minimum
+            comps += 1
+            if A[j] < A[m]: m = j
+        A[i], A[m] = A[m], A[i]
+    return A, comps
+def insertion_sort(A):
+    A, comps = A[:], 0
+    for k in range(1, len(A)):
+        cur, j = A[k], k
+        while j > 0:
+            comps += 1
+            if A[j - 1] <= cur: break
+            A[j] = A[j - 1]; j -= 1
+        A[j] = cur
+    return A, comps
+def heap_sort(A):
+    A, comps, n = A[:], 0, len(A)
+    def down(j, size):
+        nonlocal comps
+        while 2 * j + 1 < size:
+            c = 2 * j + 1
+            if c + 1 < size:
+                comps += 1
+                if A[c + 1] > A[c]: c += 1
+            comps += 1
+            if A[c] > A[j]: A[j], A[c] = A[c], A[j]; j = c
+            else: break
+    for j in range(n // 2 - 1, -1, -1): down(j, n)
+    for end in range(n - 1, 0, -1):
+        A[0], A[end] = A[end], A[0]; down(0, end)
+    return A, comps
+
+n = 2000
+inputs = {"random": random.sample(range(n), n), "sorted": list(range(n)), "reversed": list(range(n, 0, -1))}
+print(f"{'input':9s} {'selection':>10} {'insertion':>10} {'heap':>8}   (comparisons, n = {n})")
+for name, data in inputs.items():
+    results = [f(data) for f in (selection_sort, insertion_sort, heap_sort)]
+    assert all(r[0] == sorted(data) for r in results)
+    print(f"{name:9s} {results[0][1]:>10} {results[1][1]:>10} {results[2][1]:>8}")
+```
+
+Selection-sort always performs exactly $n(n-1)/2 = 1{,}999{,}000$ comparisons. Insertion-sort
+ranges from $n - 1$ (sorted) through about $n^2/4$ (random) to $n(n-1)/2$ (reversed). Heap-sort
+stays between about 36,000 and 39,000 whatever the order — under the ceiling of
+$2n\log_2 n \approx 44{,}000$ (at most two comparisons per level of each down-heap) — which is what
+a worst-case $O(n\log n)$ guarantee looks like in numbers.
+
+## 6. Pitfalls
 
 - In-place heap-sort with a *min*-heap sorts into decreasing order (or forces a final reversal).
 - Forgetting to shrink the heap boundary before sifting down — the just-placed maximum gets pulled
@@ -264,7 +353,7 @@ print(pop_task(), pop_task(), pop_task(), pop_task())
 - In an adaptable PQ, forgetting to update indices in `_swap` silently corrupts every locator.
 - After `remove(loc)`, the displaced item may need to go **up or down** — always `_bubble`.
 
-## 5. Summary
+## 7. Summary
 
 - `pq_sort` + unsorted list = selection-sort ($O(n^2)$); + sorted list = insertion-sort ($O(n^2)$);
   + heap = heap-sort ($O(n\log n)$).

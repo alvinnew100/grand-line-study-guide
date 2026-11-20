@@ -321,14 +321,92 @@ print(t.infix(), "=", t.evaluate())
 > **inorder** for BST ordering, **BFS** for anything "by level" or "nearest". Saying this out loud
 > before coding is a strong signal.
 
-## 8. Pitfalls
+## 8. Traversals without recursion: the explicit stack
+
+Recursive traversals use the call stack implicitly, and on a degenerate tree (a path of $n$ nodes)
+they recurse $n$ deep — past Python's limit for large inputs. Making the stack explicit removes the
+limit and shows what the recursion is really doing.
+
+**Inorder** is the instructive one. The rule "left subtree, node, right subtree" becomes: *slide
+left as far as possible, pushing every node passed; pop a node and visit it; then move to its right
+child and repeat.*
+
+```python-run
+class N:
+    def __init__(self, v, l=None, r=None): self.v, self.l, self.r = v, l, r
+
+def inorder_iterative(root, trace=False):
+    out, stack, p = [], [], root
+    while stack or p is not None:
+        while p is not None:               # slide left, remembering the way back
+            stack.append(p)
+            p = p.l
+        p = stack.pop()                    # leftmost unvisited node
+        out.append(p.v)
+        if trace: print(f"visit {p.v}   stack now: {[n.v for n in stack]}")
+        p = p.r                            # continue in its right subtree (may be None)
+    return out
+
+def preorder_iterative(root):
+    out, stack = [], [root] if root else []
+    while stack:
+        p = stack.pop()
+        out.append(p.v)
+        if p.r: stack.append(p.r)          # push right first so that left is processed first
+        if p.l: stack.append(p.l)
+    return out
+
+def postorder_iterative(root):
+    out, stack = [], [(root, False)] if root else []
+    while stack:
+        p, children_done = stack.pop()
+        if children_done:
+            out.append(p.v)                # second time we see p: its subtrees are finished
+        else:
+            stack.append((p, True))        # come back to p after its children
+            if p.r: stack.append((p.r, False))
+            if p.l: stack.append((p.l, False))
+    return out
+
+root = N("A", N("B", N("D"), N("E")), N("C", N("F"), N("G")))
+print(inorder_iterative(root, trace=True))
+print(preorder_iterative(root), postorder_iterative(root))
+
+chain = None
+for i in range(50000):                     # a left-leaning path: recursion would overflow
+    chain = N(i, chain)
+print(len(inorder_iterative(chain)), "nodes traversed iteratively")
+```
+
+### Dry run of the inorder loop on A(B(D, E), C(F, G))
+
+| action | stack (bottom → top) | output |
+|---|---|---|
+| slide left from A: push A, B, D | A B D | |
+| pop D, visit; D has no right child | A B | D |
+| pop B, visit; move to B's right child E | A | D B |
+| slide left from E: push E; pop E, visit | A | D B E |
+| pop A, visit; move to A's right child C | | D B E A |
+| slide left from C: push C, F; pop F, visit | C | D B E A F |
+| pop C, visit; move to G; push G, pop G, visit | | D B E A F C G |
+
+The stack always holds exactly the **ancestors whose left subtree is being explored** — the nodes
+the recursion would have suspended. Its size never exceeds the height of the tree, so the space is
+$O(h)$, and each node is pushed and popped once: $O(n)$ time.
+
+Preorder is simpler (visit on pop), and postorder needs one extra bit per stack entry — "have my
+children been processed yet?" — which is precisely the *pre-visit / post-visit* distinction of the
+Euler tour. Seen this way, all three orders are the same walk around the tree; they differ only in
+*when*, during a node's time on the stack, its element is emitted.
+
+## 9. Pitfalls
 
 - Recursing on `None` children without a guard (or guarding inconsistently).
 - Popping operands in the wrong order when building expression trees (`a - b` vs `b - a`).
 - Using a stack instead of a queue for level order (that gives a DFS order).
 - Deep recursion on degenerate trees (height ~ $n$): use an explicit stack in Python for large inputs.
 
-## 9. Summary
+## 10. Summary
 
 | Traversal | Visit time | Typical use |
 |---|---|---|

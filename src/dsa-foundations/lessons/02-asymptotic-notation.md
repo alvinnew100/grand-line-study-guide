@@ -198,7 +198,65 @@ for fn, gn, f, g in pairs:
     print(f"{fn} / {gn}:", [round(f(n)/g(n), 4) for n in [2, 16, 64, 128]])
 ```
 
-## 7. Pitfalls
+## 7. Worked exercises: simplifying and proving bounds
+
+Practice turns the definitions into reflexes. For each function, the tight bound and the one-line
+reason:
+
+| $f(n)$ | Tight bound | Why |
+|---|---|---|
+| $3n^2 + 100n\log n + 10^6$ | $\Theta(n^2)$ | highest-order term wins; constants vanish |
+| $n(n-1)/2$ | $\Theta(n^2)$ | expands to $\tfrac12 n^2 - \tfrac12 n$ |
+| $\log(n^3)$ | $\Theta(\log n)$ | $= 3\log n$ |
+| $\log_2 n + \log_{10} n$ | $\Theta(\log n)$ | bases differ by a constant factor |
+| $2^{n+5}$ | $\Theta(2^n)$ | $= 32 \cdot 2^n$ |
+| $2^{2n}$ | $\Theta(4^n)$, **not** $O(2^n)$ | a constant in the exponent changes the base |
+| $n\log n + n^{1.1}$ | $\Theta(n^{1.1})$ | any positive power of $n$ beats $\log n$ |
+| $\sqrt{n} + \log^5 n$ | $\Theta(\sqrt n)$ | powers of logs lose to powers of $n$ |
+| $n!$ versus $2^n$ | $n!$ is $\omega(2^n)$ | $n! \ge 2^{n-1}$ and the ratio keeps growing |
+| $\sum_{i=1}^{n} i^2$ | $\Theta(n^3)$ | at least $n/2$ terms are $\ge (n/2)^2$, and all are $\le n^2$ |
+
+**A full two-sided proof.** Claim: $f(n) = \tfrac12 n^2 - 3n$ is $\Theta(n^2)$.
+
+- *Upper bound.* $\tfrac12 n^2 - 3n \le \tfrac12 n^2$ for all $n \ge 1$: take $c'' = \tfrac12$,
+  $n_0 = 1$.
+- *Lower bound.* We want $\tfrac12 n^2 - 3n \ge c' n^2$. Try $c' = \tfrac14$: the inequality becomes
+  $\tfrac14 n^2 \ge 3n$, i.e. $n \ge 12$. Take $c' = \tfrac14$, $n_0 = 12$.
+
+Both bounds hold for $n \ge 12$, so $f$ is $\Theta(n^2)$. Note how the subtracted term forces a larger
+$n_0$ for the lower bound: for small $n$ the function is even negative. Asymptotic statements say
+nothing about small inputs.
+
+**A one-sided relationship.** $n\log n$ is $O(n^2)$ (since $\log n \le n$) but **not**
+$\Omega(n^2)$: that would need $n \log n \ge c\,n^2$, i.e. $\log n \ge c\,n$, for all large $n$ —
+false for every $c > 0$ because $\log n / n \to 0$.
+
+The cell below finds, numerically, the crossover point $n_0$ beyond which one function stays below
+another — a useful sanity check for witnesses you derive by hand.
+
+```python-run
+import math
+def crossover(f, g, limit=10**6):
+    """Smallest n0 such that f(n) <= g(n) for every checked n in [n0, limit]."""
+    last_bad, n = 0, 1
+    while n <= limit:
+        if f(n) > g(n): last_bad = n
+        n = n + 1 if n < 5000 else int(n * 1.01) + 1
+    return last_bad + 1
+cases = [("8n + 5 <= 9n", lambda n: 8*n + 5, lambda n: 9*n),
+         ("n^2/4 <= n^2/2 - 3n", lambda n: n*n/4, lambda n: n*n/2 - 3*n),
+         ("100 n log n <= n^2", lambda n: 100*n*math.log2(n), lambda n: n*n),
+         ("n^3 <= 1.1^n", lambda n: n**3, lambda n: 1.1**n if n < 5000 else float("inf"))]
+for label, f, g in cases:
+    print(f"{label:22s} holds from n0 = {crossover(f, g)}")
+```
+
+The first two lines reproduce the witnesses found by hand ($n_0 = 5$ and $n_0 = 12$). The third is
+the practical moral of section 4.1: an $O(n\log n)$ algorithm with a constant of 100 only overtakes
+a simple quadratic one once inputs reach about a thousand. The fourth shows that an exponential,
+however small its base, eventually overtakes any polynomial.
+
+## 8. Pitfalls
 
 - Writing $O(2n)$ or $O(n + 5)$ — always simplify.
 - Forgetting $n_0$: $\log n$ is $0$ at $n = 1$, so a claim like "$3\log n \le c \log n$ for all
@@ -207,7 +265,7 @@ for fn, gn, f, g in pairs:
   Constants in the **exponent** matter.
 - Mixing up Θ and "average case".
 
-## 8. Summary
+## 9. Summary
 
 - $O$ = asymptotic upper bound, $\Omega$ = lower bound, $\Theta$ = both.
 - Drop constants and lower-order terms; a degree-$d$ polynomial is $\Theta(n^d)$.

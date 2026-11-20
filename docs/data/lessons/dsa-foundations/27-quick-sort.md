@@ -86,17 +86,16 @@ n$, and that the running time is $O(n\log n)$ **with high probability** — the 
 quadratic behaviour on a large input is astronomically small.
 
 ```python-run
-import random, sys
-sys.setrecursionlimit(20000)
+import random
 def comparisons(S, choose):
     if len(S) < 2: return 0
     p = choose(S)
     L = [x for x in S if x < p]; G = [x for x in S if x > p]
     return len(S) - 1 + comparisons(L, choose) + comparisons(G, choose)
-n = 3000
+n = 900                      # recursion depth reaches n with the bad pivot rule
 sorted_input = list(range(n))
 print("last-element pivot on sorted input:", comparisons(sorted_input, lambda S: S[-1]), "comparisons (n^2/2 =", n*n//2, ")")
-print("random pivot on sorted input:      ", comparisons(sorted_input, random.choice), "comparisons (1.39 n log2 n =", int(1.39*n*11.55), ")")
+print("random pivot on sorted input:      ", comparisons(sorted_input, random.choice), "comparisons (1.39 n log2 n =", int(1.39 * n * 9.8), ")")
 ```
 
 ## 4. In-place quick-sort
@@ -220,7 +219,118 @@ print(quick_sort(data[:]) == sorted(data), quick_sort(list(range(5000))) == list
 > explain why quick-sort is not stable (long-distance swaps). The partition routine is reused by
 > quick-select (finding the $k$-th smallest, last lesson of this module).
 
-## 7. Pitfalls
+## 7. Partition schemes compared: Lomuto, two-pointer and three-way
+
+The book's partition scans from both ends. The scheme most often seen in interviews is **Lomuto's**,
+which uses a single left-to-right scan and one boundary index:
+
+```
+lomuto_partition(S, a, b):            # pivot = S[b]
+    i = a                             # invariant: S[a..i-1] < pivot,  S[i..j-1] >= pivot
+    for j from a to b - 1:
+        if S[j] < pivot:
+            swap S[i], S[j];  i += 1
+    swap S[i], S[b]                   # pivot into its final position
+    return i
+```
+
+### Dry run of Lomuto on `[85, 24, 63, 45, 17, 31, 96, 50]` (pivot 50)
+
+| j | S[j] | action | array | i |
+|---|---|---|---|---|
+| 0 | 85 | ≥ pivot: nothing | 85 24 63 45 17 31 96 50 | 0 |
+| 1 | 24 | swap with S[0] | 24 85 63 45 17 31 96 50 | 1 |
+| 2 | 63 | nothing | 24 85 63 45 17 31 96 50 | 1 |
+| 3 | 45 | swap with S[1] | 24 45 63 85 17 31 96 50 | 2 |
+| 4 | 17 | swap with S[2] | 24 45 17 85 63 31 96 50 | 3 |
+| 5 | 31 | swap with S[3] | 24 45 17 31 63 85 96 50 | 4 |
+| 6 | 96 | nothing | 24 45 17 31 63 85 96 50 | 4 |
+| end | | swap pivot with S[4] | 24 45 17 31 **50** 85 96 63 | 4 |
+
+Same final position for the pivot (index 4) as the two-pointer scheme, with four swaps instead of
+two. The cell below counts element swaps and measures recursion depth for the three schemes on
+three kinds of input.
+
+```python-run
+import random
+
+def qs_lomuto(S, stats):
+    def sort(a, b, depth):
+        stats["depth"] = max(stats["depth"], depth)
+        if a >= b: return
+        r = random.randint(a, b); S[r], S[b] = S[b], S[r]
+        pivot, i = S[b], a
+        for j in range(a, b):
+            if S[j] < pivot:
+                S[i], S[j] = S[j], S[i]; stats["swaps"] += 1; i += 1
+        S[i], S[b] = S[b], S[i]
+        sort(a, i - 1, depth + 1); sort(i + 1, b, depth + 1)
+    sort(0, len(S) - 1, 1)
+
+def qs_two_pointer(S, stats):
+    def sort(a, b, depth):
+        stats["depth"] = max(stats["depth"], depth)
+        if a >= b: return
+        r = random.randint(a, b); S[r], S[b] = S[b], S[r]
+        pivot, left, right = S[b], a, b - 1
+        while left <= right:
+            while left <= right and S[left] < pivot: left += 1
+            while left <= right and pivot < S[right]: right -= 1
+            if left <= right:
+                S[left], S[right] = S[right], S[left]; stats["swaps"] += 1
+                left, right = left + 1, right - 1
+        S[left], S[b] = S[b], S[left]
+        sort(a, left - 1, depth + 1); sort(left + 1, b, depth + 1)
+    sort(0, len(S) - 1, 1)
+
+def qs_three_way(S, stats):
+    def sort(a, b, depth):
+        stats["depth"] = max(stats["depth"], depth)
+        if a >= b: return
+        pivot = S[random.randint(a, b)]
+        lt, i, gt = a, a, b
+        while i <= gt:
+            if S[i] < pivot: S[lt], S[i] = S[i], S[lt]; stats["swaps"] += 1; lt += 1; i += 1
+            elif S[i] > pivot: S[i], S[gt] = S[gt], S[i]; stats["swaps"] += 1; gt -= 1
+            else: i += 1
+        sort(a, lt - 1, depth + 1); sort(gt + 1, b, depth + 1)
+    sort(0, len(S) - 1, 1)
+
+n = 600
+inputs = {"random distinct": random.sample(range(10 * n), n),
+          "few distinct (0-9)": [random.randint(0, 9) for _ in range(n)],
+          "all equal": [7] * n}
+print(f"{'input':20s} {'scheme':12s} {'swaps':>9} {'max depth':>10}")
+for name, data in inputs.items():
+    for label, f in [("Lomuto", qs_lomuto), ("two-pointer", qs_two_pointer), ("three-way", qs_three_way)]:
+        S, stats = data[:], {"swaps": 0, "depth": 0}
+        f(S, stats)
+        assert S == sorted(data)
+        print(f"{name:20s} {label:12s} {stats['swaps']:>9} {stats['depth']:>10}")
+```
+
+### What the numbers show
+
+- **Random distinct keys.** All three reach depth of a few dozen ($\approx 2$–$3 \log_2 n$). The
+  two-pointer scheme uses roughly a third as many swaps as Lomuto: it swaps only pairs that are
+  *both* on the wrong side, whereas Lomuto swaps every element smaller than the pivot. Three-way partitioning performs the
+  most swaps of all on distinct keys — the price of its generality.
+- **All keys equal.** Lomuto's comparison `S[j] < pivot` is never true, so the pivot ends at the
+  **left end** of every range: sizes $n - 1, n - 2, \ldots$ — depth $n$ and $\Theta(n^2)$ time
+  *even with a random pivot*. The two-pointer scheme stops both scans on equal keys and swaps them,
+  which balances the split (depth $\approx \log n$) at the price of many pointless swaps. Three-way
+  partitioning finishes in a **single pass**: every key equals the pivot, so nothing is left to
+  recurse on.
+- **Few distinct keys.** Three-way partitioning recurses at most once per distinct value (depth
+  about 10 or less here), and runs in $O(n \cdot d)$ for $d$ distinct keys — linear when $d$ is a
+  constant.
+
+The practical conclusions: randomising the pivot protects against bad *orderings*, but not against
+bad *duplicates*; duplicates need a partition scheme that handles equal keys deliberately. This is
+why production quick-sorts use three-way ("fat") partitioning or a closely related dual-pivot
+scheme.
+
+## 8. Pitfalls
 
 - Fixed pivot (first/last) on sorted or reverse-sorted input: $\Theta(n^2)$ time **and** recursion
   depth $n$ — a `RecursionError` in Python.
@@ -228,7 +338,7 @@ print(quick_sort(data[:]) == sorted(data), quick_sort(list(range(5000))) == list
 - Recursing on ranges that include the pivot's final position — no progress.
 - Assuming stability.
 
-## 8. Summary
+## 9. Summary
 
 - Quick-sort: pick a pivot, partition into less/equal/greater, recurse on the outer parts.
 - $O(n^2)$ worst case, $O(n\log n)$ expected with random pivots; in place with $O(\log n)$ expected

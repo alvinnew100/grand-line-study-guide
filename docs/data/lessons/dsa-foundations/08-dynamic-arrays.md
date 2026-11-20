@@ -11,7 +11,8 @@ structures, and its analysis introduces **amortisation**.
 *not* the elements). Append items one at a time and watch:
 
 ```python-run
-import sys
+import sys, struct
+PTR = struct.calcsize('P')            # bytes per reference: 8 on 64-bit CPython, 4 in the browser
 data = []
 last = sys.getsizeof(data)
 print(f"len  0: {last} bytes")
@@ -19,7 +20,7 @@ for k in range(1, 70):
     data.append(None)
     size = sys.getsizeof(data)
     if size != last:
-        print(f"len {k:2d}: {size} bytes   (grew; room for about {(size - sys.getsizeof([])) // 8} refs)")
+        print(f"len {k:2d}: {size} bytes   (grew; room for about {(size - sys.getsizeof([])) // PTR} refs)")
         last = size
 ```
 
@@ -226,7 +227,112 @@ hash-table rehashing (maps module), splay trees, union-find with path compressio
 3. **Potential**: define a potential function of the data structure state whose increase pays for
    future work (used in the splay-tree analysis).
 
-## 7. Pitfalls
+## 7. Worked trace: the bank account during nine appends
+
+The cyber-dollar argument is easiest to believe when you watch the account. Charge **3** dollars per
+append. A plain write costs 1; a resize from capacity $c$ costs $c$ (one per element copied) plus 1
+for the write that follows.
+
+| append # | capacity before | resize? | actual cost | charged | bank balance after |
+|---|---|---|---|---|---|
+| 1 | 1 | no | 1 | 3 | 2 |
+| 2 | 1 | yes: copy 1 | 2 | 3 | 3 |
+| 3 | 2 | yes: copy 2 | 3 | 3 | 3 |
+| 4 | 4 | no | 1 | 3 | 5 |
+| 5 | 4 | yes: copy 4 | 5 | 3 | 3 |
+| 6 | 8 | no | 1 | 3 | 5 |
+| 7 | 8 | no | 1 | 3 | 7 |
+| 8 | 8 | no | 1 | 3 | 9 |
+| 9 | 8 | yes: copy 8 | 9 | 3 | 3 |
+
+Total actual cost: $1 + 2 + 3 + 1 + 5 + 1 + 1 + 1 + 9 = 24$; total charged: $27$. The balance never
+goes negative, and right after every resize it returns to the same small value: each expensive
+operation is fully paid for by the cheap ones that preceded it. The cell below runs the same
+bookkeeping for a million appends.
+
+```python-run
+def bank_trace(n, charge=3, show=9):
+    cap, size, balance, lowest, total = 1, 0, 0, 0, 0
+    for i in range(1, n + 1):
+        cost = 1
+        if size == cap:
+            cost += size                    # copy every existing element
+            cap *= 2
+        size += 1
+        total += cost
+        balance += charge - cost
+        lowest = min(lowest, balance)
+        if i <= show:
+            print(f"append {i}: cost {cost}, balance {balance}")
+    return total, lowest
+total, lowest = bank_trace(10**6)
+print(f"1,000,000 appends: total cost {total:,} (< 3n), lowest balance ever: {lowest}")
+total2, lowest2 = bank_trace(10**6, charge=2, show=0)
+print(f"charging only 2 per append: lowest balance {lowest2:,}  -> 2 is not enough")
+```
+
+Charging 2 is not enough — the balance sinks without bound — while 3 always suffices: the amortised
+cost of an append under doubling is at most 3 primitive operations.
+
+## 8. The potential method, and why the shrinking rule works
+
+The third standard technique expresses the "bank balance" as a function of the data structure's
+current state. Define the **potential**
+
+$$\Phi = 2n - c,$$
+
+where $n$ is the number of elements and $c$ the capacity. (With doubling the array is always at
+least half full once it holds an element, so $\Phi \ge 0$.) The **amortised cost** of an operation is
+its actual cost plus the change in potential, $\hat{c} = c_{\text{actual}} + \Delta\Phi$. Summed over
+a sequence, the $\Delta\Phi$ terms telescope, so total actual cost $\le$ total amortised cost
+whenever $\Phi$ ends no lower than it started.
+
+- **Append without resize:** actual cost 1; $n$ grows by one so $\Delta\Phi = +2$. Amortised cost
+  $1 + 2 = 3$.
+- **Append with resize** (the array is full, $n = c$): actual cost $n + 1$. Before: $\Phi = 2n - n = n$.
+  After: $n + 1$ elements, capacity $2n$, so $\Phi = 2(n + 1) - 2n = 2$. $\Delta\Phi = 2 - n$.
+  Amortised cost $(n + 1) + (2 - n) = 3$.
+
+Both cases cost exactly 3: the potential stored up during cheap appends is released precisely when
+the expensive copy happens. This is the cyber-dollar proof with the bookkeeping made algebraic, and
+it is the form of argument used later for splay trees.
+
+**Shrinking.** Now add `pop`, halving the capacity when the array becomes too empty. If we halved
+as soon as the array is half full, an adversary sitting at the boundary could alternate:
+
+```python-run
+def cost_of(ops, shrink_at):
+    """Total element copies for a sequence of '+' (append) and '-' (pop) operations."""
+    cap, size, copies = 1, 0, 0
+    for op in ops:
+        if op == '+':
+            if size == cap:
+                copies += size; cap *= 2
+            size += 1
+        else:
+            size -= 1
+            if cap > 1 and size <= cap * shrink_at:
+                copies += size; cap //= 2
+    return copies
+n = 1024
+ops = '+' * n + '+-' * 2000        # fill exactly to a power of two, then oscillate at the boundary
+print("halve when half full   :", cost_of(ops, 0.5), "copies")
+print("halve when quarter full:", cost_of(ops, 0.25), "copies")
+```
+
+With the half-full rule, each `+` at the boundary doubles the array and each `-` halves it again:
+every operation copies about $n$ elements — $\Theta(n)$ per operation, the **thrashing** mentioned
+above. With the quarter-full rule, after any resize (up or down) the array is about half full, so at
+least $c/4$ operations must happen before the next resize in either direction; those operations pay
+for it. Formally, use $\Phi = 2n - c$ when the array is at least half full and $\Phi = c/2 - n$ when
+it is less than half full; every operation then has amortised cost at most 3.
+
+> [!NOTE]
+> CPython's `list` does shrink: when the length falls below half of the allocated capacity, a
+> `pop` reallocates to a smaller array, with enough slack that alternating append/pop does not
+> thrash.
+
+## 9. Pitfalls
 
 - Saying "append is O(1)" without "amortised" — in real-time systems, the occasional $O(n)$ stall
   matters.
@@ -235,7 +341,7 @@ hash-table rehashing (maps module), splay trees, union-find with path compressio
 - Holding a reference to an element index across resizes is fine in Python, but in C/C++ a resize
   invalidates pointers into the old array.
 
-## 8. Summary
+## 10. Summary
 
 | Policy | Cost of $n$ appends | Per-append (amortised) |
 |---|---|---|

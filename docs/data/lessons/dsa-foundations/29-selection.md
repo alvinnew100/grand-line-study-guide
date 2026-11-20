@@ -182,7 +182,110 @@ implementations.
 > needs all data in memory and mutates it. State the trade-offs; mention median-of-medians for the
 > worst-case guarantee.
 
-## 4. Pitfalls
+## 4. Deterministic selection: median of medians, step by step
+
+Randomised quick-select is expected $O(n)$, but an unlucky run is $O(n^2)$. The *median of medians*
+algorithm removes the luck by **computing** a pivot that is guaranteed to be reasonably central.
+It is worth seeing in full once, because the analysis shows how a recurrence with two recursive
+calls can still be linear.
+
+**Choosing the pivot.**
+
+1. Split the $n$ elements into groups of 5 (the last group may be smaller).
+2. Find the median of each group directly — sorting 5 elements takes constant time — giving about
+   $n/5$ medians.
+3. **Recursively select** the median of those medians. Use it as the pivot.
+
+Then partition into $L$, $E$, $G$ and recurse into one side, exactly as in quick-select.
+
+**Why the pivot is good.** Let $p$ be the median of medians. Half of the $n/5$ groups — about
+$n/10$ of them — have a median $\le p$, and in each of those groups three elements (the median and
+the two below it) are $\le p$. So at least about $3n/10$ elements are $\le p$, and symmetrically at
+least $3n/10$ are $\ge p$. Whichever side we recurse into therefore contains **at most about
+$7n/10$** elements.
+
+**The recurrence.**
+
+$$T(n) \le \underbrace{T(n/5)}_{\text{median of the medians}} + \underbrace{T(7n/10)}_{\text{recursive selection}} + cn.$$
+
+Guess $T(n) \le an$ and substitute:
+$T(n) \le a\tfrac{n}{5} + a\tfrac{7n}{10} + cn = \tfrac{9}{10}an + cn$, which is $\le an$ as soon as
+$a \ge 10c$. So $T(n) = O(n)$ **in the worst case**. The proof works because the two subproblem
+sizes sum to $\tfrac15 + \tfrac7{10} = \tfrac9{10} < 1$ of the input: the total work per level of
+the recursion tree shrinks geometrically. (With groups of 3 the fractions are
+$\tfrac13 + \tfrac23 = 1$ and the argument fails; with groups of 7 it works again.)
+
+```python-run
+import random
+calls = 0
+def select(S, k):
+    """Deterministic k-th smallest (k is 1-based), worst-case O(n)."""
+    global calls
+    calls += 1
+    if len(S) <= 10:
+        return sorted(S)[k - 1]                              # constant-size base case
+    groups = [sorted(S[i:i + 5]) for i in range(0, len(S), 5)]
+    medians = [g[len(g) // 2] for g in groups]
+    pivot = select(medians, (len(medians) + 1) // 2)         # median of the medians
+    L = [x for x in S if x < pivot]
+    E = [x for x in S if x == pivot]
+    if k <= len(L):
+        return select(L, k)
+    if k <= len(L) + len(E):
+        return pivot
+    return select([x for x in S if x > pivot], k - len(L) - len(E))
+
+def worst_split(S):
+    """Fraction of elements on the larger side of the median-of-medians pivot."""
+    groups = [sorted(S[i:i + 5]) for i in range(0, len(S), 5)]
+    medians = [g[len(g) // 2] for g in groups]
+    pivot = select(medians, (len(medians) + 1) // 2)
+    smaller = sum(x < pivot for x in S)
+    larger = sum(x > pivot for x in S)
+    return max(smaller, larger) / len(S)
+
+for name, data in [("random", random.sample(range(10**6), 20001)),
+                   ("sorted", list(range(20001))),
+                   ("reverse", list(range(20001, 0, -1)))]:
+    calls = 0
+    med = select(data, 10001)
+    print(f"{name:8s}: median {med:7d} correct={med == sorted(data)[10000]}  "
+          f"recursive calls {calls:4d}  larger side after first split: {worst_split(data):.2f} of n")
+```
+
+Whatever the input order — including the sorted and reverse-sorted inputs that ruin a
+fixed-pivot quick-select — the larger side never exceeds about 70% of the elements, as the analysis
+promised.
+
+### Dry run on 15 elements
+
+Find the median (8th smallest) of
+`[12, 3, 17, 8, 5, 1, 20, 9, 14, 6, 11, 2, 15, 7, 4]`.
+
+| step | result |
+|---|---|
+| groups of 5 | `[12, 3, 17, 8, 5]`, `[1, 20, 9, 14, 6]`, `[11, 2, 15, 7, 4]` |
+| sorted groups | `[3, 5, 8, 12, 17]`, `[1, 6, 9, 14, 20]`, `[2, 4, 7, 11, 15]` |
+| group medians | 8, 9, 7 |
+| median of medians | **8** → pivot |
+| partition | $L$ = `[3, 5, 1, 6, 2, 7, 4]` (7 elements), $E$ = `[8]`, $G$ = 7 elements |
+| decide | $k = 8$ and $\lvert L\rvert + \lvert E\rvert = 8$ → the pivot is the answer: **8** |
+
+### Which selection method should you use?
+
+| Method | Time | Extra space | Notes |
+|---|---|---|---|
+| sort, then index | $O(n\log n)$ | $O(1)$–$O(n)$ | simplest; fine when you need many order statistics |
+| heap of size $k$ | $O(n\log k)$ | $O(k)$ | works on streams; ideal for small $k$ |
+| randomised quick-select | $O(n)$ expected, $O(n^2)$ worst | $O(1)$ in place | fastest in practice |
+| median of medians | $O(n)$ worst case | $O(n)$ here; $O(\log n)$ in place | large constants |
+| introselect | $O(n)$ worst case | $O(1)$ | quick-select that falls back to median of medians; `std::nth_element`, `numpy.partition` |
+
+In Python, `sorted(data)[k - 1]` is usually fastest for moderate sizes because the sort runs in C;
+`heapq.nsmallest(k, data)` is the right tool when $k$ is small, and `statistics.median` hides the
+choice entirely.
+
+## 5. Pitfalls
 
 - Mixing 0-based and 1-based $k$.
 - Forgetting the $E$ group: with many duplicates, a two-way partition can fail to make progress.
@@ -192,7 +295,7 @@ implementations.
 - Assuming quick-select leaves the array sorted — it only places the $k$-th element (and partitions
   around it).
 
-## 5. Summary
+## 6. Summary
 
 - Choose a sort by size, memory, stability and input structure; Python's Timsort is stable and
   adaptive, customised via `key=`.

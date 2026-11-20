@@ -217,7 +217,88 @@ except RecursionError as e:
     print("RecursionError:", e)
 ```
 
-## 7. Pitfalls
+## 7. Proving a recursion correct, and bending it to new questions
+
+A recursion trace shows *what* happens; **induction** shows that it is always right. Recursion and
+induction are the same idea seen from two sides: the base case of the function is the base case of
+the proof, and the recursive call is justified by the induction hypothesis.
+
+**Claim.** `binary_search(data, target, low, high)` returns `True` if and only if `target` occurs in
+`data[low..high]`, provided `data` is sorted.
+
+*Proof by strong induction on the size $r = high - low + 1$ of the range.*
+
+- **Base case, $r \le 0$** (`low > high`): the range is empty, so the target cannot occur in it, and
+  the function returns `False`. Correct.
+- **Inductive step, $r \ge 1$.** Assume the claim for all ranges smaller than $r$. Since
+  `low <= mid <= high`, the element `data[mid]` is inside the range.
+  - If `target == data[mid]`, returning `True` is correct.
+  - If `target < data[mid]`: because `data` is sorted, every element at index `mid` or beyond is
+    larger than the target, so the target occurs in `data[low..high]` iff it occurs in
+    `data[low..mid-1]`. That range has fewer than $r$ elements, so by the induction hypothesis the
+    recursive call answers correctly.
+  - If `target > data[mid]`: symmetric, with the range `data[mid+1..high]`. ∎
+
+Notice where each hypothesis was used: *sortedness* justifies discarding half the range, and
+*excluding `mid`* makes the new range strictly smaller, which is what lets the induction (and the
+recursion) terminate. Drop either one and both the proof and the program break.
+
+### Variation: the first position at or after the target
+
+The yes/no version throws information away. A more useful primitive — the one behind Python's
+`bisect` module and the sorted maps later in this track — returns the **leftmost index whose element
+is $\ge$ target** (equal to `len(data)` if there is none). It is where the target *is* if present,
+and where it *would be inserted* if absent. The recursion needs only a small change: never stop
+early, and keep `mid` as a candidate when `data[mid] >= target`.
+
+```python-run
+import bisect
+def lower_bound(data, target, low=0, high=None):
+    """Leftmost index i in [low, high] with data[i] >= target (high = len(data) at the top call)."""
+    if high is None:
+        high = len(data)
+    if low == high:                        # range of candidate answers has one element
+        return low
+    mid = (low + high) // 2
+    if data[mid] < target:
+        return lower_bound(data, target, mid + 1, high)   # answer is strictly right of mid
+    return lower_bound(data, target, low, mid)            # mid itself may be the answer
+
+data = [2, 4, 4, 4, 7, 9, 9, 12]
+for t in [4, 5, 1, 13, 9]:
+    i = lower_bound(data, t)
+    found = i < len(data) and data[i] == t
+    print(f"target {t:2d}: index {i}  found={found}  (bisect_left agrees: {bisect.bisect_left(data, t) == i})")
+first, after = lower_bound(data, 4), lower_bound(data, 5)
+print("number of 4s:", after - first)
+```
+
+### Dry run: `lower_bound(data, 4)` on `[2, 4, 4, 4, 7, 9, 9, 12]`
+
+| low | high | mid | data[mid] | decision |
+|---|---|---|---|---|
+| 0 | 8 | 4 | 7 | 7 ≥ 4 → answer in [0, 4] |
+| 0 | 4 | 2 | 4 | 4 ≥ 4 → answer in [0, 2] |
+| 0 | 2 | 1 | 4 | 4 ≥ 4 → answer in [0, 1] |
+| 0 | 1 | 0 | 2 | 2 < 4 → answer in [1, 1] |
+| 1 | 1 | – | – | return 1 |
+
+The invariant, stated the same way as before: *the answer always lies in `[low, high]`*. Here `high`
+is an **inclusive candidate** (hence the recursive call with `mid`, not `mid - 1`), and the range
+still shrinks every time because `mid < high` whenever `low < high`. Four rounds for eight elements:
+the same $\lfloor \log_2 n \rfloor + 1$ bound.
+
+This one function answers a family of questions on sorted data in $O(\log n)$: membership (check
+`data[i] == target`), the first and last occurrence of a duplicated key, how many elements are
+smaller than a value (the index itself), and how many copies of a key exist (the difference of two
+lower bounds, as in the last line of the cell).
+
+> [!TIP]
+> Whenever you write a recursion, say the induction out loud: "assuming the call on the smaller
+> input returns the right answer, is my combination step right? is the smaller input really smaller?
+> are the smallest inputs handled directly?" Those three questions catch nearly every recursion bug.
+
+## 8. Pitfalls
 
 - **Missing or unreachable base case** → infinite recursion → `RecursionError`.
 - **Not making progress**: `binary_search(data, target, low, mid)` can loop forever when
@@ -225,7 +306,7 @@ except RecursionError as e:
 - **Recomputing work** in multiple recursive calls (the next lesson's `bad_fibonacci`).
 - **Hidden copying**: passing `data[1:]` to each call costs $O(n)$ per call — pass indices instead.
 
-## 8. Summary
+## 9. Summary
 
 | Example | Recursion type | Time |
 |---|---|---|
