@@ -1,5 +1,37 @@
 # Greedy patterns: Kadane, frontiers, and running ranges
 
+> **Before this lesson:** read [When greedy works](#/lesson/neet-greedy-math/greedy-method) first — it explains what a greedy algorithm is and how to check one. You should also know Python lists, `for` loops, `enumerate`, `max` and dictionaries, and what `O(n)` means ([How to approach an interview problem](#/lesson/neet-arrays/approach)).
+
+## In plain words
+
+Many greedy solutions have the same shape: walk through the input **once**, from left to right, while remembering only **one or two numbers**. Those remembered numbers are called the **state**.
+
+Think of driving a long road with a fuel gauge. You do not remember every kilometre you drove; you only watch the gauge. One small piece of state — the fuel level — is enough to decide whether you can keep going. The six patterns in this lesson differ only in *what the gauge measures*: a running total, the furthest point you can reach, a range of possible values, and so on.
+
+**Why this matters for a job.** A single pass with a constant amount of memory is the cheapest kind of program there is. Monitoring systems, streaming data pipelines and network code are full of "keep a running value, update it per item" logic. In interviews, recognising which running value to keep turns a 40-line attempt into 6 lines.
+
+### Words used in this lesson
+
+- **Array / list**: a numbered row of values; `nums[i]` is the value at position (index) `i`, counting from 0.
+- **Subarray**: a block of neighbouring elements, such as `nums[2..5]`. It must be contiguous (no gaps).
+- **Subsequence**: elements picked in order but possibly with gaps.
+- **Prefix**: the beginning of an array up to some index. A **prefix sum** is the total of a prefix.
+- **Invariant**: a sentence that is true every time the loop reaches the same line (for example "`reach` is the furthest index I can get to using the elements seen so far"). Invariants are how you check a loop is right.
+- **BFS (breadth-first search)**: exploring in layers — everything one step away, then everything two steps away, and so on.
+- **DP (dynamic programming)**: solving a problem by storing answers to smaller versions of it.
+
+### The smallest possible example
+
+Find the largest value in `[3, 9, 2]` with one pass:
+
+```python
+best = nums[0]            # state: the largest value seen so far (starts as the first element)
+for x in nums[1:]:        # look at every later element once
+    best = max(best, x)   # update the state
+```
+
+After the loop `best` is 9. Every pattern below is this loop with a slightly cleverer piece of state.
+
 The previous lesson was about *whether* greedy is correct. This one is a field guide to the handful
 of shapes that greedy solutions take in interview problems. Almost every greedy question in the
 NeetCode list is one of six patterns, and each pattern is defined by **what tiny piece of state you
@@ -50,14 +82,14 @@ print(kadane([-3, -7, -1]))        # all negative: the single largest element
 ```
 
 Why is this correct? It is a DP. Let $E_i$ be the best sum ending at index $i$; any subarray ending
-at $i$ is either just `[x_i]` or a subarray ending at $i-1$ plus $x_i$, giving the recurrence above.
+at $i$ is either `[x_i]` alone or a subarray ending at $i-1$ plus $x_i$, giving the recurrence above.
 The overall answer is $\max_i E_i$ because the best subarray ends somewhere. Since $E_i$ depends only
 on $E_{i-1}$, one variable is enough.
 
 There is a second way to see it that connects to the next problem. With prefix sums
 $P_k = x_0 + \dots + x_{k-1}$, the sum of `nums[i..j]` is $P_{j+1} - P_i$. To maximise it for a fixed
 $j$, subtract the **smallest prefix seen so far**. "Reset when the running sum goes negative" is the
-same thing as "the smallest prefix so far just moved to here".
+same thing as "the smallest prefix so far has moved to here".
 
 > [!WARNING]
 > Initialise with `nums[0]`, not `0`. With `best = 0` an all-negative array returns 0, which
@@ -345,6 +377,19 @@ The same two-sweep shape solves *Trapping Rain Water* (max to the left, max to t
 - When a counter becomes uncertain, track the interval `[lo, hi]` of its possible values.
 - The smallest or largest element usually has a forced or dominant move.
 - Monotone operations let you filter out harmful items and take all the rest.
+
+## Glossary
+
+- **State** — the few values a loop keeps between iterations.
+- **Kadane's algorithm** — the one-pass method for the largest subarray sum: keep the best sum ending at the current position.
+- **Restart** — dropping the running total when keeping it can only hurt.
+- **Frontier** — the furthest position reachable (or required) so far.
+- **Window / layer** — in Jump Game II, the block of indices reachable with the same number of jumps.
+- **Wildcard** — a symbol (here `*`) that may stand for several different things.
+- **Forced move** — a choice with no alternative, so making it cannot be a mistake.
+- **Monotone operation** — an operation that only ever moves a value in one direction (`max` never decreases it).
+- **Two-pass technique** — solving left-side constraints in one sweep, right-side constraints in a reverse sweep, then combining.
+- **Invariant** — a statement that stays true on every loop iteration.
 
 ```quiz
 [

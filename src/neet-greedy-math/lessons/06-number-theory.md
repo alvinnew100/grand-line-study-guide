@@ -1,5 +1,41 @@
 # Interview number theory: digits, modular arithmetic, fast power, primes, gcd
 
+> **Before this lesson:** you should know Python integers, strings, `while` loops and functions, and the meaning of `O(n)` and `O(log n)` ([How to approach an interview problem](#/lesson/neet-arrays/approach)). Recursion (a function calling itself) is used once; it is introduced in [Thinking recursively](#/lesson/dsa-foundations/recursion-examples). No mathematics beyond school arithmetic is assumed.
+
+## In plain words
+
+**Number theory** is the study of whole numbers: their digits, their divisors, their remainders. For programming interviews you need only five small tools from it, and you met most of them in primary school:
+
+- **Digits and carrying** — adding 58 + 67 on paper, column by column.
+- **Remainders** — a clock: 5 hours after 10 o'clock is 3 o'clock, because clocks wrap around at 12.
+- **Powers** — repeated multiplication, done cleverly so that a huge power needs only a few steps.
+- **Primes** — numbers such as 2, 3, 5, 7 that cannot be split into smaller whole-number factors.
+- **Greatest common divisor** — the largest number that divides two numbers, used to reduce fractions such as 12/18 = 2/3.
+
+**Why this matters for a job.** Remainders drive hash tables, circular buffers and "every N-th request" logic. Fast powers and primes are the foundation of encryption (the padlock in your browser). Digit-by-digit arithmetic is how computers handle numbers too large for a single machine word — money amounts, cryptographic keys, IDs. Interviewers also like these problems because the code is short, so every line gets scrutinised.
+
+### Words used in this lesson
+
+- **Integer**: a whole number (…, −2, −1, 0, 1, 2, …).
+- **Quotient and remainder**: 17 divided by 5 is 3 remainder 2. In Python `17 // 5` is the quotient 3 and `17 % 5` is the remainder 2; `divmod(17, 5)` returns both as `(3, 2)`.
+- **Divisor / factor**: `d` divides `n` if `n % d == 0`. **Multiple**: `n` is a multiple of `d`.
+- **Carry**: the extra digit passed to the next column when a column's total needs two digits.
+- **Overflow**: a result too big for a fixed-size machine integer. Python integers do not overflow; C and Java integers do.
+- **Exponent**: the `n` in `x^n` (written `x ** n` in Python).
+- **Base**: how many different digits a number system uses — base 10 uses 0–9, base 2 (binary) uses 0 and 1.
+
+### The smallest possible example
+
+Take the number 472 apart, one digit at a time, from the right:
+
+```python
+x = 472
+print(x % 10)    # 2   -> the last digit (remainder after dividing by 10)
+print(x // 10)   # 47  -> everything except the last digit
+```
+
+Repeat on 47 to get 7 and 4, then on 4 to get 4 and 0, and stop at 0. This two-line move — "take the last digit, drop the last digit" — is the starting point of the first section.
+
 "Math" interview questions do not test mathematics so much as a short list of computational
 techniques that happen to be about numbers. There are five of them, and this lesson covers each:
 
@@ -120,7 +156,7 @@ print(multiply("0", "9999"))
 Why `m + n` digits? An `m`-digit number is below `10^m`, so the product is below `10^(m+n)`.
 
 > [!NOTE]
-> Python integers have arbitrary precision — `int("9" * 500) ** 2` just works. That is a gift for
+> Python integers have arbitrary precision — `int("9" * 500) ** 2` works without any special handling. That is a gift for
 > real programs and a trap in interviews, where the point of *Multiply Strings* or *Reverse Integer*
 > is to show you can manage carries and overflow yourself. Say so: "In Python I could call `int`, but
 > I'll implement the digit arithmetic."
@@ -408,6 +444,22 @@ Euclid by hand anyway — it is three lines and a common warm-up.
 - Trial division to `√n` tests one number; the sieve finds all primes below `n` in `O(n log log n)`.
 - Euclid: `gcd(a, b) = gcd(b, a % b)`; `lcm = a // gcd * b`.
 
+## Glossary
+
+- **`divmod(a, b)`** — returns the quotient and remainder of `a / b` together.
+- **Carry** — the part of a column sum that moves to the next, more significant, column.
+- **Modulo (`mod`, `%`)** — the remainder after division; "arithmetic on a clock".
+- **Residue** — a number already reduced modulo `m`, i.e. between 0 and `m − 1`.
+- **Modular inverse** — the number that plays the role of `1/b` under a modulus.
+- **Repeated squaring (fast exponentiation)** — computing `x^n` by squaring and halving the exponent, in `O(log n)` multiplications.
+- **Prime / composite** — a number above 1 with no divisors other than 1 and itself / a number that has some.
+- **Trial division** — testing divisibility by every candidate up to `√n`.
+- **Sieve of Eratosthenes** — finding all primes below `n` by crossing off multiples.
+- **gcd / lcm** — greatest common divisor / least common multiple.
+- **Euclid's algorithm** — computing a gcd by repeatedly replacing `(a, b)` with `(b, a % b)`.
+- **Cycle detection** — noticing that a repeating process has returned to a value it produced before.
+- **Arbitrary precision** — integers that can grow to any size, as in Python.
+
 ```quiz
 [
   {"q": "What does divmod(-123, 10) return in Python?",
@@ -434,7 +486,7 @@ Euclid by hand anyway — it is three lines and a common warm-up.
    "options": ["gcd(a, b) = gcd(a+b, b)", "gcd(a, b) = gcd(b, a mod b)", "gcd(a, b) = a*b / lcm(a, b) only", "gcd(a, b) = gcd(a/2, b/2)"],
    "answer": 1,
    "explain": "a mod b is a minus a multiple of b, so (a,b) and (b, a mod b) share exactly the same common divisors."},
-  {"q": "Which operation can NOT simply be reduced modulo m term by term?",
+  {"q": "Which operation can NOT be reduced modulo m term by term?",
    "options": ["Addition", "Multiplication", "Division", "Subtraction"],
    "answer": 2,
    "explain": "Division requires multiplying by a modular inverse (e.g. b^(p-2) mod p for prime p)."},

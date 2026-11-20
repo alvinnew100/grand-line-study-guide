@@ -1,5 +1,37 @@
 # Interval fundamentals: overlap, sorting, merging
 
+> **Before this lesson:** you should know Python lists of lists, `sorted` with a `key=` function, and Big-O notation ([How to approach an interview problem](#/lesson/neet-arrays/approach)). The idea of a greedy rule and of an exchange argument comes from [When greedy works](#/lesson/neet-greedy-math/greedy-method).
+
+## In plain words
+
+An **interval** is a stretch between two numbers — a start and an end. A meeting from 9:00 to 10:30 is an interval. So is "rows 120 to 180 of a file", "ages 18 to 25", or a hotel booking from the 3rd to the 7th. In code an interval is usually a two-element list `[start, end]`.
+
+Think of a paper wall calendar. Each appointment is a strip of tape stuck along the day. Interval questions are questions about those strips: Do two strips overlap? If I merge all the overlapping strips, which blocks of the day are busy? How many strips must I peel off so none overlap?
+
+**Why this matters for a job.** Booking systems, calendars, video editors, memory allocators, network firewalls (ranges of addresses) and databases (ranges of keys) all store and combine ranges. "Merge overlapping ranges" is one of the most commonly reused routines in real code bases, and one of the most commonly asked interview questions.
+
+### Words used in this lesson
+
+- **Endpoint**: the start or the end of an interval.
+- **Overlap**: two intervals share at least one point in time.
+- **Disjoint**: the opposite of overlapping — no shared point.
+- **Closed interval** `[s, e]`: both endpoints are included. **Half-open interval** `[s, e)`: the start is included, the end is not.
+- **Sort key**: the value `sorted` compares; `key=lambda iv: iv[1]` sorts intervals by their end. (`lambda iv: iv[1]` is a tiny unnamed function that takes an interval and returns its second element.)
+- **Sweep**: one left-to-right pass over the sorted intervals.
+- **Two pointers**: two index variables that move through one or two lists.
+- **De Morgan's rule**: "not (A or B)" is the same as "(not A) and (not B)".
+
+### The smallest possible example
+
+Two meetings: `[1, 3]` and `[2, 4]`. Draw them on a number line:
+
+```
+1---3
+  2---4
+```
+
+They share the stretch from 2 to 3, so they overlap; merged, they form `[1, 4]`. Now `[1, 2]` and `[5, 6]`: the first ends (2) before the second starts (5), so they are disjoint. Every rule in this lesson is built from that one comparison — *does one end before the other starts?*
+
 Calendars, bookings, IP ranges, genome segments, video clips, CPU bursts: a surprising amount of real
 software manipulates **intervals** — pairs `[start, end]` on a number line. Interview questions about
 them look varied, but nearly all of them reduce to three moves:
@@ -279,6 +311,19 @@ element whose future is fully determined.
   pass and one remembered block.
 - Sorting by end is for maximising the number of compatible intervals.
 - With two sorted lists, use two pointers and advance the interval that ends first.
+
+## Glossary
+
+- **Interval** — a pair `[start, end]` describing a continuous range.
+- **Closed / half-open** — whether the end point itself belongs to the interval (`[s, e]`) or not (`[s, e)`).
+- **Overlap** — two intervals share at least one point; test: the later start is not after the earlier end.
+- **Disjoint** — not overlapping.
+- **Intersection** — the part two intervals have in common: `[max of starts, min of ends]`.
+- **Union / merge** — the single interval covering two overlapping ones: `[min of starts, max of ends]`.
+- **Lexicographic order** — dictionary order: compare first elements, and only on a tie compare the second.
+- **Loop invariant** — a fact that stays true on every iteration, used to argue a loop is correct.
+- **Interval scheduling** — choosing the largest set of non-overlapping intervals; solved by taking the earliest end first.
+- **Two pointers** — walking two indices through sorted data so that each element is looked at once.
 
 ```quiz
 [

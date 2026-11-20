@@ -1,5 +1,49 @@
 # Bits in Python: operators, two's complement, and unbounded ints
 
+> **Before this lesson:** you should know Python integers, `while` loops and functions. No knowledge of binary is assumed — it is built up from zero below. If you want a deeper, hardware-level treatment afterwards, see [Bits, bytes and integers](#/lesson/csapp/bits-bytes).
+
+## In plain words
+
+A light switch has two positions: off and on. A **bit** is the computer's light switch: it holds 0 or 1 and nothing else. Every number, letter, photo and program inside a computer is stored as a long row of bits.
+
+We normally write numbers in **decimal** (base 10): the digits of 305 mean 3 hundreds, 0 tens, 5 ones — each position is worth ten times the one to its right. **Binary** (base 2) works the same way with only two digits, so each position is worth *twice* the one to its right: ones, twos, fours, eights, …
+
+```
+binary 1 0 1 1
+       | | | +-- 1 one
+       | | +---- 1 two
+       | +------ 0 fours
+       +-------- 1 eight        8 + 0 + 2 + 1 = 11
+```
+
+**Bit manipulation** means working on those switches directly — turning one on, turning one off, checking one, sliding the whole row left or right — using a handful of operators called **bitwise operators**.
+
+**Why this matters for a job.** File permissions, network addresses, colour values, feature flags, compression, hashing and encryption are all defined bit by bit. Even if you write high-level code, you will read values such as `0xFF` or flags combined with `|` in documentation and other people's code. Interviewers ask bit questions because the solutions are tiny and reveal whether you understand how numbers are stored.
+
+### Words used in this lesson
+
+- **Bit**: one binary digit, 0 or 1. **Byte**: 8 bits.
+- **Set / clear**: a bit that is 1 is *set*; making it 0 is *clearing* it.
+- **Word / width**: a fixed number of bits a machine handles at once, such as 32 or 64. A 32-bit word can hold 2³² different patterns.
+- **Hexadecimal (hex)**: base 16, digits 0–9 then A–F (A = 10 … F = 15), written with the prefix `0x`. It is shorthand for binary: one hex digit stands for exactly four bits.
+- **LSB / MSB**: least significant bit (the rightmost, worth 1) / most significant bit (the leftmost).
+- **Unsigned / signed**: a number type that cannot / can represent negative values.
+- **Overflow**: a result that needs more bits than the word has.
+- **Mask**: a number chosen so that its 1 bits mark the positions you care about.
+- **Operator precedence**: which operator is applied first when there are no parentheses.
+- **CS:APP**: the textbook *Computer Systems: A Programmer's Perspective*, the source for the machine-level facts in this lesson.
+
+### The smallest possible example
+
+```python
+print(bin(5))        # '0b101'  -> 5 is one 4, no 2, one 1. The prefix 0b means "binary".
+print(0b101)         # 5        -> writing a binary number directly
+print(5 & 1)         # 1        -> the last bit of 5 is 1, so 5 is odd
+print(6 & 1)         # 0        -> 6 is 110 in binary; its last bit is 0, so 6 is even
+```
+
+`&` (AND) compares two numbers bit by bit and keeps a 1 only where **both** have a 1. With `1` (binary `001`) as the second number, only the last position can survive, which is why `x & 1` reads the last bit.
+
 Every integer in a computer is a row of bits, and a small set of operators lets you read and write
 those bits directly. Bit manipulation problems are popular in interviews because the solutions are
 tiny, fast, and impossible to stumble into — you either know the operator algebra or you do not.
@@ -26,7 +70,7 @@ is shorthand: one hex digit is exactly four bits, so `0xFF` is eight ones and `0
 thirty-two ones.
 
 ```python-run
-x = 0b1011_0110                 # binary literal; underscores are just for readability
+x = 0b1011_0110                 # binary literal; underscores only aid readability
 print(x, bin(x), hex(x), format(x, "08b"), f"{x:#010b}")
 print(int("10110110", 2), int("b6", 16))
 print(x.bit_length(), (0).bit_length(), (255).bit_length(), (256).bit_length())
@@ -129,7 +173,7 @@ will simulate it in Python.
 Python `int`s are arbitrary precision. There is no top bit, no wrap-around, no overflow:
 
 ```python-run
-print(2**31 - 1 + 1)            # just keeps growing
+print(2**31 - 1 + 1)            # keeps growing, no overflow
 print(2**100)
 print(1 << 70)                  # left shift never loses bits
 print(bin(-5), bin(5))          # bin() shows a minus sign and the magnitude — NOT the bit pattern
@@ -154,7 +198,7 @@ Every consequence follows from that picture:
   the result stays negative (`−1 >> anything == −1`). It equals `floor(x / 2^k)`. C distinguishes
   *logical* right shift (fill with zeros) from *arithmetic* (fill with copies of the sign bit);
   Python only has the arithmetic one, and Java spells the logical one `>>>`.
-- `x << k` never discards anything; it is simply `x · 2^k`.
+- `x << k` never discards anything; it equals `x · 2^k`.
 - `x & mask` with a non-negative mask chops off the infinite sign extension and yields a
   **non-negative** number: the low bits of `x`'s two's-complement pattern. This is the key trick.
 
@@ -289,6 +333,22 @@ Fast exponentiation (previous lesson) reads the exponent with exactly these: `n 
 - Simulate a 32-bit register with `x & 0xFFFFFFFF`, and read it as signed by subtracting `2^32` when
   bit 31 is set.
 - Addition is XOR for the sum plus shifted AND for the carry, repeated until the carry dies.
+
+## Glossary
+
+- **Bit / byte** — a binary digit / eight of them.
+- **Binary, hexadecimal** — base 2 and base 16 notations (`0b…`, `0x…`).
+- **Bitwise operators** — `&` AND, `|` OR, `^` XOR, `~` NOT, `<<` left shift, `>>` right shift.
+- **Mask** — a bit pattern used with `&`, `|` or `^` to select, set or flip chosen bits.
+- **Two's complement** — the standard way to store negative integers: the top bit counts negatively.
+- **Sign bit** — the most significant bit of a signed word; 1 means negative.
+- **Sign extension** — copying the sign bit to the left when a number is widened; Python behaves as if this continued for ever.
+- **Truncation** — keeping only the lowest `w` bits; the same as arithmetic modulo `2^w`.
+- **Logical / arithmetic right shift** — filling vacated left bits with zeros / with copies of the sign bit.
+- **Overflow / wrap-around** — a result too large for the word, which then "wraps" to the other end of the range.
+- **Carry** — in addition, the bit passed to the next position when two 1s are added.
+- **Ripple-carry adder** — the hardware circuit that adds using XOR for sums and AND for carries.
+- **Arbitrary-precision integer** — Python's `int`, which grows as needed and never overflows.
 
 ```quiz
 [

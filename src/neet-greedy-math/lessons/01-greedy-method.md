@@ -1,5 +1,39 @@
 # When greedy works: exchange arguments and counterexamples
 
+> **Before this lesson:** you should be able to read basic Python (lists, loops, functions, `sorted`) and know what Big-O notation such as `O(n log n)` means — see [How to approach an interview problem](#/lesson/neet-arrays/approach). Nothing about greedy algorithms or proofs is assumed.
+
+## In plain words
+
+An **algorithm** is a step-by-step recipe a computer follows. An **optimisation problem** asks for the *best* answer among many allowed ones: the most meetings in one room, the fewest coins, the cheapest plan.
+
+A **greedy algorithm** solves such a problem the way a hungry person fills a plate at a buffet: at every step it takes whatever looks best *right now* and never puts anything back. It does not plan ahead and it does not reconsider.
+
+Everyday example: a cashier giving 63 cents of change reaches for the biggest coin that fits (25), then again (25), then 10, then three 1s. Nobody taught the cashier a formula; taking the biggest coin each time happens to give the fewest coins. That is greedy, and for those coins it is correct.
+
+The catch: "best right now" is not always "best overall". If the coins were 1, 3 and 4 and you owed 6, the biggest-first habit gives 4 + 1 + 1 (three coins) although 3 + 3 (two coins) is better. A greedy program does not crash when it is wrong — it returns a worse answer and looks confident about it.
+
+**Why this matters for a job.** Greedy solutions are short and fast, so they appear everywhere: scheduling, compression, routing, resource allocation. Interviewers use them to test whether you can *argue* that a shortcut is safe, because in real work a shortcut that is wrong only on rare inputs is a production bug. This lesson teaches both halves: how to convince yourself a greedy rule is right, and how to catch one that is wrong.
+
+### Words used in this lesson
+
+- **Feasible**: allowed by the rules of the problem (for example, no two chosen meetings overlap).
+- **Optimal**: feasible and as good as possible.
+- **Local choice**: the decision made at one step, looking only at what is in front of you.
+- **Counterexample**: one specific input on which a rule gives the wrong answer. A single counterexample is enough to prove a rule wrong.
+- **Proof**: an argument that a rule is right for *every* input, not only the ones you tried.
+- **DP (dynamic programming)**: a slower, more careful technique that tries all the sensible options and remembers results; it is the usual fallback when greedy fails. You do not need to know it yet.
+- **Interval**: a stretch of time with a start and an end, written `(start, end)`.
+- **Heap**: a container that hands back its smallest item quickly; mentioned only in passing here.
+
+### The smallest possible example
+
+Three meetings want the same room: A runs 1–4, B runs 2–3, C runs 3–5. You want to host as many as possible.
+
+- Rule "take the one that starts first": take A (1–4). B and C both collide with A. Total: 1 meeting.
+- Rule "take the one that ends first": take B (2–3). C starts at 3, when B is over, so take C. Total: 2 meetings.
+
+Same input, two greedy rules, different results. The rest of the lesson explains why the second rule is always right and how you could have predicted that.
+
 A greedy algorithm is the laziest possible optimiser. It builds a solution one decision at a time,
 always grabs whatever looks best *right now*, and never looks back. No table of subproblems, no
 backtracking, usually one sort and one pass. When that works it gives the shortest, fastest code of
@@ -180,7 +214,7 @@ What went wrong with the exchange argument? For US coins you can argue that an o
 holds five pennies (swap for a nickel), two nickels (swap for a dime), and so on — so the small coins
 can never add up to a larger coin's value, which forces the largest coin to be used. With `{1, 3, 4}`
 the swap fails: two 3s cannot be exchanged for a 4 plus something without increasing the count. The
-structure that made the exchange possible is simply absent, and you need dynamic programming (the
+structure that made the exchange possible is absent, and you need dynamic programming (the
 *Coin Change* problem).
 
 *Lemonade Change* in this module is a friendly cousin: the bills are `{5, 10, 20}`, each a multiple of
@@ -332,6 +366,19 @@ you can do it while practising, and it trains your instinct for which rules hold
 - Interval scheduling → earliest end first. Coins → greedy only for canonical systems. Fractional
   knapsack → greedy; 0/1 knapsack → DP.
 - Many greedy algorithms are a DP whose state collapsed to one number (Kadane, Jump Game).
+
+## Glossary
+
+- **Greedy algorithm** — builds an answer step by step, always taking the option that looks best at that moment, and never undoing a choice.
+- **Greedy-choice property** — the property of a problem that makes greedy correct: some best overall answer can be reached by locally best choices.
+- **Optimal substructure** — after the first choice, what remains is a smaller copy of the same problem, and the best overall answer contains a best answer to that remainder.
+- **Exchange argument** — a proof that takes any best answer and swaps its choices for the greedy ones, one at a time, without making it worse.
+- **Greedy stays ahead** — a proof by induction that after every step the greedy answer is at least as good as any other.
+- **Counterexample** — a concrete input on which a proposed rule fails.
+- **Canonical coin system** — a set of coin values for which biggest-coin-first always uses the fewest coins.
+- **Fractional knapsack / 0/1 knapsack** — packing problems where items can (fractional) or cannot (0/1) be split; greedy works only for the first.
+- **Brute force** — trying every possibility; slow, but certainly correct, so it is useful for checking a faster idea.
+- **Induction** — proving a statement for step 1, then showing that if it holds for step k it holds for step k+1.
 
 ```quiz
 [

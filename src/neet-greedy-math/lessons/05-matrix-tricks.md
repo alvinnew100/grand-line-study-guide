@@ -1,5 +1,40 @@
 # Matrix manipulation: rotate, spiral, mark in place
 
+> **Before this lesson:** you should be comfortable with Python lists, nested `for` loops and `range` (including a negative step such as `range(5, -1, -1)`). Big-O notation is explained in [How to approach an interview problem](#/lesson/neet-arrays/approach); two-dimensional lists are introduced in [Using arrays](#/lesson/dsa-foundations/using-arrays).
+
+## In plain words
+
+A **matrix** (also called a grid or 2-D array) is a table of values arranged in rows and columns — a spreadsheet, a chessboard, the pixels of a photo. In Python it is a list of rows, and each row is itself a list.
+
+Picture a sheet of squared paper. Rotating a photo on your phone, reading a table in a spiral, or blanking out a whole row and column of a spreadsheet are all operations on such a sheet. None of them needs advanced theory. What they need is care about *addresses*: which square moves to which square, and in what order you touch them so that you do not erase something you still need.
+
+**Why this matters for a job.** Images, game boards, maps, seating charts and spreadsheets are all grids. Bugs in grid code are almost always "off by one" mistakes — starting or stopping one cell too early or too late. Interviewers use matrix questions to see whether you can write careful index code, which is a daily requirement in real programming.
+
+### Words used in this lesson
+
+- **Row / column**: a horizontal / vertical line of cells. `matrix[r][c]` is the cell in row `r`, column `c`, both counted from 0.
+- **Square matrix**: same number of rows and columns (`n × n`).
+- **Main diagonal**: the cells where row equals column, running from top-left to bottom-right.
+- **Transpose**: flipping a matrix over its main diagonal, so rows become columns.
+- **In place**: changing the given object directly instead of building a new one; uses `O(1)` extra memory.
+- **Boundary**: the outermost row or column of the part still to be processed.
+- **Off-by-one error**: a loop that runs one step too many or too few.
+- **Aliasing**: two names referring to the same list, so a change through one shows up through the other.
+- **BFS / DFS**: breadth-first and depth-first search, two standard ways of exploring a grid or graph; only mentioned here.
+
+### The smallest possible example
+
+```python
+m = [[1, 2],
+     [3, 4]]
+print(m[0][1])   # row 0, column 1 -> 2
+print(len(m))    # number of rows -> 2
+print(len(m[0])) # number of columns -> 2
+m[1][0] = 9      # change the bottom-left cell in place
+```
+
+Read `m[0][1]` as two steps: `m[0]` picks the first row `[1, 2]`, then `[1]` picks the second item of that row.
+
 Matrix questions rarely need a clever algorithm. They need **index discipline**: knowing exactly
 which cell maps to which, where a loop starts and stops, and how to avoid overwriting data you still
 need. Interviewers like them for precisely that reason — a candidate who can write a spiral traversal
@@ -246,8 +281,8 @@ Problems on arrays do the same with signs (*Find All Duplicates*: negate `nums[a
 "seen"). The general principle: **find unused capacity in the data you already have.**
 
 > [!INTERVIEW]
-> For *Set Matrix Zeroes*, present the `O(m+n)` two-set solution first — it is short and obviously
-> correct — then upgrade it: "those two sets can live in the first row and column if I save their own
+> For *Set Matrix Zeroes*, present the `O(m+n)` two-set solution first — it is short and easy to
+> check — then upgrade it: "those two sets can live in the first row and column if I save their own
 > state in two booleans." Interviewers want to see the progression, not a memorised trick.
 
 ## 5. A little coordinate geometry
@@ -310,6 +345,20 @@ Other geometry facts that come up:
 - To save memory, separate reading from writing and store markers in the first row/column or in
   spare bits of each cell.
 - For point sets, hash the points and let geometry tell you where the remaining points must be.
+
+## Glossary
+
+- **Matrix / grid** — a list of rows; `matrix[r][c]` addresses one cell.
+- **Index map** — a formula saying where cell `(r, c)` ends up after a transformation.
+- **Transpose** — swap `matrix[r][c]` with `matrix[c][r]`.
+- **Reflection / rotation** — flipping over a line / turning by an angle; two reflections make a rotation.
+- **Layer (ring)** — the outer border of a rectangle; peeling layers processes a matrix from outside in.
+- **Boundary variables** — `top`, `bottom`, `left`, `right`: the edges of the unprocessed rectangle.
+- **Direction vector** — a pair `(dr, dc)` saying how row and column change for one step.
+- **Marker** — a value stored to remember a fact for later (here: "this row must be zeroed").
+- **In place** — modifying the input without allocating a second structure of the same size.
+- **Aliasing** — several references to one list, as produced by `[[0] * n] * m`.
+- **Multiplicity** — how many times the same point or value occurs.
 
 ```quiz
 [

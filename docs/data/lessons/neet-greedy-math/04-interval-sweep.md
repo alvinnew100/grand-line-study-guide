@@ -1,5 +1,42 @@
 # Sweep lines and heaps: meeting rooms and queries
 
+> **Before this lesson:** read [Interval fundamentals](#/lesson/neet-greedy-math/interval-basics) (overlap test, sorting by start or end). You also need the idea of a **heap** — a container that always hands you its smallest item quickly; it is taught in [Priority queues and binary heaps](#/lesson/dsa-foundations/heaps), and a short recap is given below.
+
+## In plain words
+
+Imagine watching the door of an office building. You do not care who is inside; you only click a counter **up** when someone enters and **down** when someone leaves. The highest number the counter ever shows is the largest crowd of the day.
+
+That is a **sweep line**: instead of comparing every interval with every other interval, you walk along the timeline and react only at the moments something changes — an interval starting or ending. Those moments are called **events**.
+
+Sometimes a counter is not enough because you need to know *which* of the people inside will leave first (to give their desk to the next arrival). For that you keep the people inside in a **heap**.
+
+**Why this matters for a job.** "How many things are happening at the same time?" is the question behind server capacity planning, meeting-room and seat allocation, rate limiting, and billing for concurrent usage. The sweep-line technique answers it in one sorted pass.
+
+### Words used in this lesson
+
+- **Event**: a point in time where something changes (an interval starts or ends).
+- **Active set**: the intervals that have started but not yet ended at the current moment.
+- **Peak**: the largest size the active set ever reaches.
+- **Heap / priority queue**: a container where `heappush` adds an item and `heappop` removes the *smallest* item, both in `O(log n)` time; `heap[0]` peeks at the smallest without removing it. Python's module is `heapq`, and a heap is stored in an ordinary list.
+- **Tuple**: a fixed group of values such as `(time, +1)`. Python compares tuples element by element, left to right.
+- **Query**: a question asked about the data, here "which interval covers this point?".
+- **Offline**: answering questions in an order you choose, because you know all of them in advance.
+- **Prefix sum**: a running total.
+
+### The smallest possible example
+
+Two meetings: 9–11 and 10–12. Events in time order: 9 (start, counter 1), 10 (start, counter 2), 11 (end, counter 1), 12 (end, counter 0). The peak is 2, so two rooms are needed. If the second meeting were 11–12 instead, the events at 11 would be "end" then "start", the counter would go 1 → 0 → 1, and one room would do.
+
+A short heap warm-up, since heaps appear throughout:
+
+```python
+import heapq
+h = []                     # an empty heap is an empty list
+heapq.heappush(h, 30)      # add 30
+heapq.heappush(h, 10)      # add 10; the smallest item is now h[0] == 10
+print(heapq.heappop(h))    # removes and prints 10, the smallest
+```
+
 The first intervals lesson answered questions about *pairs*: do these two overlap, which blocks
 merge. This lesson answers questions about **crowds**:
 
@@ -227,7 +264,7 @@ template. You will meet it again in *Sliding Window Maximum* (monotonic deque wi
 
 ## 5. A closer look at correctness: why peak overlap = rooms needed
 
-It is worth being able to justify the Meeting Rooms II answer rather than just asserting it.
+It is worth being able to justify the Meeting Rooms II answer rather than only asserting it.
 
 - **Lower bound.** If at some instant `k` meetings are in progress, they need `k` distinct rooms. So
   `rooms ≥ peak`.
@@ -263,6 +300,19 @@ greedy uses.
   rooms.
 - For point queries, sort the queries, add intervals as the sweep passes their left end, keep them in
   a heap ordered by what you want to minimise, and pop expired tops lazily.
+
+## Glossary
+
+- **Sweep line** — processing a timeline from left to right, stopping only at events.
+- **Event** — a start (+1) or end (−1) of an interval.
+- **Active set** — intervals currently "open" under the sweep line.
+- **Difference array** — an array storing only the *changes* at each position; its running total gives the actual values.
+- **Heap (min-heap)** — a structure that returns its smallest element in O(1) and adds/removes in O(log n).
+- **`heapq.heapreplace`** — pop the smallest and push a new item in one step.
+- **Offline queries** — sorting the questions so they can be answered in one sweep, then restoring their original order.
+- **Lazy deletion** — leaving outdated items inside a heap and discarding them only when they reach the top.
+- **Lower bound / upper bound** — an argument that at least / at most a certain amount is needed; when both agree the answer is exact.
+- **Tie-break** — the rule for ordering two events that happen at the same time.
 
 ```quiz
 [

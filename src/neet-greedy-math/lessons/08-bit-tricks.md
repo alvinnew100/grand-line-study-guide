@@ -1,5 +1,41 @@
 # Bit tricks for interviews: x & (x-1), XOR, masks, bit DP
 
+> **Before this lesson:** read [Bits in Python](#/lesson/neet-greedy-math/bits-python), which explains binary numbers, the six bitwise operators (`&`, `|`, `^`, `~`, `<<`, `>>`), two's complement, and how to imitate a 32-bit number in Python. This lesson uses all of them.
+
+## In plain words
+
+The previous lesson taught the alphabet of bit manipulation; this lesson teaches the common words. A **bit trick** is a short expression — often a single line — that does a job you would otherwise write a loop for.
+
+An everyday comparison: to check whether a number is divisible by 10 you do not divide it; you glance at the last digit. That works because of how decimal notation is built. Bit tricks are the same kind of shortcut for binary notation: because of how binary is built, "is this number a power of two?" or "which value has no partner?" can be answered by looking at the bits in the right way.
+
+There are only about a dozen such shortcuts worth knowing, and they fall into four groups. For each one this lesson shows *why* it works on a small example, so that you can rebuild it from understanding instead of memorising it.
+
+**Why this matters for a job.** These idioms appear in real systems code: memory allocators round sizes to powers of two, databases and network protocols pack several yes/no flags into one integer, checksums and error-correcting codes are built from XOR, and search engines store sets as rows of bits. Recognising `x & (x - 1)` or `mask |= 1 << k` when you read code is a practical skill, and interviewers treat it as a signal of comfort with low-level thinking.
+
+### Words used in this lesson
+
+- **Set bit**: a bit equal to 1. The **lowest set bit** is the rightmost 1.
+- **Popcount** (population count, also called **Hamming weight**): how many bits of a number are 1.
+- **Power of two**: 1, 2, 4, 8, 16, … — numbers with exactly one set bit.
+- **XOR** (exclusive or, `^`): outputs 1 where the two input bits differ.
+- **Commutative / associative**: the order (`a ^ b == b ^ a`) and the grouping (`(a ^ b) ^ c == a ^ (b ^ c)`) do not matter.
+- **Bitmask**: an integer used as a row of yes/no switches.
+- **Subset**: any selection of items from a set, including none or all of them.
+- **DP (dynamic programming)**: computing an answer from already-computed answers to smaller inputs.
+- **ASCII**: the standard numbering of English letters and symbols (`'A'` is 65, `'a'` is 97).
+
+### The smallest possible example
+
+XOR a number with itself and you get 0; XOR with 0 changes nothing:
+
+```python
+print(6 ^ 6)        # 0   -> every bit meets an equal bit, so every output bit is 0
+print(6 ^ 0)        # 6   -> XOR with zero keeps the number
+print(6 ^ 9 ^ 6)    # 9   -> the two 6s cancel wherever they stand; only 9 is left
+```
+
+That last line is the complete idea behind the *Single Number* problem later in the lesson.
+
 The previous lesson explained what the operators do and how Python's integers differ from machine
 words. This one is the playbook: the dozen identities that solve nearly every bit-manipulation
 question you will be asked, each with the reasoning that lets you re-derive it under pressure.
@@ -365,6 +401,21 @@ flowchart TD
 - `bits[i] = bits[i >> 1] + (i & 1)` computes all popcounts in linear time.
 - Integers double as sets; `range(1 << n)` enumerates all subsets.
 - When all else fails, count each bit position separately.
+
+## Glossary
+
+- **Lowest set bit** — the rightmost 1 of a number; `x & -x` isolates it, `x & (x - 1)` removes it.
+- **Popcount / Hamming weight** — the number of 1 bits.
+- **Hamming distance** — the number of positions in which two bit patterns differ: `popcount(a ^ b)`.
+- **Kernighan's method** — counting set bits by repeatedly clearing the lowest one.
+- **XOR cancellation** — equal values XOR to 0, so paired values vanish from a long XOR.
+- **Identity element** — a value that changes nothing under an operation (0 for XOR).
+- **Bitmask** — an integer whose bits are used as independent flags or as membership in a set.
+- **Sub-mask** — a mask whose 1 bits are all contained in another mask's 1 bits.
+- **Bit DP** — dynamic programming whose table is indexed by a bit pattern.
+- **State compression** — packing a small set of yes/no facts into one integer.
+- **Fenwick tree** — an array-based structure for running totals that relies on `x & -x`.
+- **Trie** — a tree of prefixes; a binary trie stores numbers bit by bit.
 
 ```quiz
 [

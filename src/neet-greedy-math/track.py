@@ -25,6 +25,8 @@ TRACK = dict(
                 "maximum-subarray", "jump-game", "jump-game-ii", "gas-station", "hand-of-straights",
                 "merge-triplets-to-form-target-triplet", "partition-labels", "valid-parenthesis-string",
                 "lemonade-change", "candy", "boats-to-save-people",
+                "assign-cookies", "maximum-units-on-a-truck", "two-city-scheduling",
+                "queue-reconstruction-by-height", "dota2-senate", "wiggle-subsequence", "largest-number",
             ],
         ),
         dict(
@@ -38,6 +40,8 @@ TRACK = dict(
             problems=[
                 "insert-interval", "merge-intervals", "non-overlapping-intervals", "meeting-rooms",
                 "meeting-rooms-ii", "minimum-interval-to-include-each-query",
+                "minimum-number-of-arrows-to-burst-balloons", "interval-list-intersections",
+                "my-calendar-i", "car-pooling", "summary-ranges",
             ],
         ),
         dict(
@@ -51,6 +55,8 @@ TRACK = dict(
             problems=[
                 "rotate-image", "spiral-matrix", "set-matrix-zeroes", "happy-number", "plus-one",
                 "powx-n", "multiply-strings", "detect-squares", "count-primes", "math-gcd",
+                "excel-sheet-column-title", "palindrome-number", "roman-to-integer", "integer-to-roman",
+                "add-binary", "robot-bounded-in-circle",
             ],
         ),
         dict(
@@ -64,6 +70,8 @@ TRACK = dict(
             problems=[
                 "single-number", "number-of-1-bits", "counting-bits", "reverse-bits", "missing-number",
                 "sum-of-two-integers", "reverse-integer",
+                "power-of-two", "bitwise-and-of-numbers-range", "single-number-ii", "single-number-iii",
+                "hamming-distance", "gray-code", "utf-8-validation", "maximum-xor-of-two-numbers-in-an-array",
             ],
         ),
     ],
