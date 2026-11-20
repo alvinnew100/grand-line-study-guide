@@ -18,17 +18,9 @@ pointer to its parent(s), an author and a message. Branches are just movable lab
 `HEAD` points at the branch you are on.
 
 ```mermaid
-gitGraph
-  commit id: "init"
-  commit id: "add data loader"
-  branch feature/new-features
-  checkout feature/new-features
-  commit id: "add rolling features"
-  commit id: "tests"
-  checkout main
-  commit id: "fix ci"
-  merge feature/new-features
-  commit id: "release v1.2.0" tag: "v1.2.0"
+flowchart LR
+  C1((init)) --> C2((add data loader)) --> C3((fix ci)) --> M((merge)) --> R((release v1.2.0))
+  C2 -->|branch feature/new-features| F1((add rolling features)) --> F2((tests)) --> M
 ```
 
 Three areas: **working tree** (your files), **index/staging area** (what goes into the next commit),

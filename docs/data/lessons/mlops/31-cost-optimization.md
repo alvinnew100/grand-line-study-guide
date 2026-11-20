@@ -240,8 +240,8 @@ print("biggest remaining item:", max(cur, key=cur.get))
 
 Two observations generalise. First, **the largest saving was not an ML optimisation at all** — it was
 turning off idle notebooks. Waste hunting beats clever engineering in most first cost reviews. Second,
-after the easy wins, serving becomes the largest remaining item, and further reduction needs the
-harder levers: a cheaper model, batching, caching, or moving to batch scoring.
+after the easy wins, what remains is dominated by genuinely used capacity (the notebooks people
+actually work in, and serving), and further reduction needs the harder levers: a cheaper model, batching, caching, or moving to batch scoring.
 
 ## Is the model worth what it costs?
 

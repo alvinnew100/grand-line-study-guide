@@ -145,24 +145,23 @@ Thresholds hand-tuned on last year's data, monitoring that only checks averages,
 seasonality. *Mitigation:* monitoring of prediction distributions, slices, and action limits (module 10).
 
 ```mermaid
-mindmap
-  root((ML tech debt))
-    Entanglement
-      CACE
-      Correction cascades
-      Undeclared consumers
-    Data dependencies
-      Unstable
-      Underutilised
-    Feedback loops
-      Direct
-      Hidden
-    Anti-patterns
-      Glue code
-      Pipeline jungles
-      Dead codepaths
-    Configuration
-    External world
+flowchart LR
+  ROOT((ML tech debt)) --> ENT[Entanglement]
+  ROOT --> DD[Data dependencies]
+  ROOT --> FL[Feedback loops]
+  ROOT --> AP[Anti-patterns]
+  ROOT --> CFG[Configuration debt]
+  ROOT --> EXT[External world changes]
+  ENT --> E1[CACE]
+  ENT --> E2[Correction cascades]
+  ENT --> E3[Undeclared consumers]
+  DD --> D1[Unstable inputs]
+  DD --> D2[Underutilised features]
+  FL --> F1[Direct loops]
+  FL --> F2[Hidden loops]
+  AP --> A1[Glue code]
+  AP --> A2[Pipeline jungles]
+  AP --> A3[Dead codepaths]
 ```
 
 > [!INTERVIEW]

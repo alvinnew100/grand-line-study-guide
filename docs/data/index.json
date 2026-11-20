@@ -125,7 +125,7 @@
    "Sculley et al., Hidden Technical Debt in Machine Learning Systems (NeurIPS 2015)",
    "Official docs: MLflow, DVC, Docker, Kubernetes, KServe, GitHub Actions, Prometheus, Evidently, Feast, Airflow, Prefect, BentoML, Ray Serve, vLLM, Hugging Face"
   ],
-  "words": 95449,
+  "words": 95487,
   "modules": 13,
   "lessons": 37,
   "problems": 17
