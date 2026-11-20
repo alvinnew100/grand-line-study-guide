@@ -40,7 +40,7 @@
    "Chacon & Straub, Pro Git, 2nd edition (CC BY-NC-SA 3.0), chapters 1-10",
    "Original material on team workflows, commit conventions and rescue scenarios"
   ],
-  "words": 122503,
+  "words": 122517,
   "modules": 12,
   "lessons": 31,
   "problems": 25
@@ -220,6 +220,20 @@
   "problems": 25
  },
  {
+  "id": "spring",
+  "title": "Spring Boot",
+  "icon": "🌱",
+  "blurb": "tmp",
+  "color": "#5aa02c",
+  "sources": [
+   "tmp"
+  ],
+  "words": 0,
+  "modules": 1,
+  "lessons": 0,
+  "problems": 13
+ },
+ {
   "id": "go",
   "title": "Go (Learning Go)",
   "icon": "🐹",
@@ -230,7 +244,7 @@
    "The Go Programming Language Specification, go.dev/ref/spec",
    "Go documentation: Effective Go, the Go Memory Model, the Go blog and package docs, go.dev/doc and pkg.go.dev"
   ],
-  "words": 57693,
+  "words": 100499,
   "modules": 18,
   "lessons": 42,
   "problems": 30
@@ -378,13 +392,23 @@
   "id": "thinking",
   "title": "Open-Ended Engineering Questions",
   "icon": "🧩",
-  "blurb": "tmp",
+  "blurb": "How to answer interview questions that have no single right answer: testing a product, updating a decision table, designing classes, APIs, schemas and systems, debugging from evidence, weighing trade-offs, planning, security, ML and behavioural stories. Reusable frameworks, fully worked answers, 230 practice questions and judged coding problems.",
   "color": "#7b5ea7",
-  "sources": [],
-  "words": 0,
-  "modules": 1,
-  "lessons": 0,
-  "problems": 24
+  "sources": [
+   "ISTQB Certified Tester Foundation Level syllabus v4.0 (https://www.istqb.org)",
+   "Winters, Manshreck & Wright, Software Engineering at Google (https://abseil.io/resources/swe-book)",
+   "Beyer et al., Site Reliability Engineering (https://sre.google/sre-book/table-of-contents/)",
+   "Martin Fowler and colleagues, articles on delivery, design and data (https://martinfowler.com)",
+   "Trunk Based Development (https://trunkbaseddevelopment.com) and DORA research (https://dora.dev)",
+   "Google API Improvement Proposals (https://google.aip.dev) and Google Engineering Practices (https://google.github.io/eng-practices/)",
+   "OWASP threat modelling, Top 10 and cheat sheets (https://owasp.org)",
+   "Donne Martin, System Design Primer (https://github.com/donnemartin/system-design-primer); Yangshun Tay, Tech Interview Handbook (https://www.techinterviewhandbook.org)",
+   "Martin Zinkevich, Rules of Machine Learning (https://developers.google.com/machine-learning/guides/rules-of-ml)"
+  ],
+  "words": 195357,
+  "modules": 21,
+  "lessons": 51,
+  "problems": 31
  },
  {
   "id": "csapp",
