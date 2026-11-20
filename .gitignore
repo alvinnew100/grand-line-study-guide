@@ -4,3 +4,5 @@ __pycache__/
 Thumbs.db
 *.pdf
 .claude/
+.judge-credentials
+tools/.judge-cache.json

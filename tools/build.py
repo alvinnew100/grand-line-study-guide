@@ -145,6 +145,88 @@ def build_js_problem(p):
     return out
 
 
+JUDGE_FN = "https://xupqehazxffimjdvdgbh.supabase.co"
+JUDGE_KEY = "sb_publishable_r5G_XYJgL6BTRmahCPFniQ__Pr9qr0Y"
+_judge = {"token": None, "user": None, "cache": None}
+
+
+def _post(url, body):
+    import urllib.request
+    req = urllib.request.Request(url, data=json.dumps(body).encode(), headers={"apikey": JUDGE_KEY, "Content-Type": "application/json"})
+    return json.load(urllib.request.urlopen(req, timeout=120))
+
+
+def judge_remote(lang, files):
+    """Run files on the judge server as the builder account in .judge-credentials (username, password on two lines).
+    Returns None when no credentials file exists. Results are cached by content hash in tools/.judge-cache.json."""
+    import hashlib, urllib.error
+    cred = ROOT / ".judge-credentials"
+    if not cred.exists():
+        return None
+    cache_file = ROOT / "tools" / ".judge-cache.json"
+    if _judge["cache"] is None:
+        _judge["cache"] = json.loads(cache_file.read_text(encoding="utf-8")) if cache_file.exists() else {}
+    key = hashlib.sha256(json.dumps([lang, files], sort_keys=True).encode()).hexdigest()
+    if key in _judge["cache"]:
+        return _judge["cache"][key]
+    if not _judge["token"]:
+        user, pw = cred.read_text(encoding="utf-8").split()[:2]
+        _judge["user"], _judge["token"] = user, _post(JUDGE_FN + "/rest/v1/rpc/sg_login", {"p_username": user, "p_password": pw})
+    for attempt in range(8):
+        try:
+            res = _post(JUDGE_FN + "/functions/v1/judge", {"username": _judge["user"], "token": _judge["token"], "language": lang, "files": files})
+            break
+        except urllib.error.HTTPError as e:
+            if e.code != 429:
+                raise
+            time.sleep(15)
+    else:
+        raise RuntimeError("judge rate limit")
+    _judge["cache"][key] = res
+    cache_file.write_text(json.dumps(_judge["cache"]), encoding="utf-8")
+    return res
+
+
+def _server_verdict(p, code):
+    """(all_ok, detail) for `code` run with the problem's harness; (None, reason) if the judge is not configured."""
+    java = p["kind"] == "java"
+    files = ([{"name": "Main.java", "content": p["harness"]}, {"name": "Solution.java", "content": code}] if java
+             else [{"name": "main.go", "content": p["harness"]}, {"name": "solution.go", "content": code}])
+    res = judge_remote(p["kind"], files)
+    if res is None:
+        return None, "no .judge-credentials"
+    if res.get("compile_error"):
+        return False, "compile error: " + res.get("stderr", "")[:300]
+    cases = re.findall(r"^CASE ([0-9]+) (OK|FAIL)", res.get("stdout", ""), re.M)
+    ok = res.get("code") == 0 and len(cases) == p["cases"] and all(c[1] == "OK" for c in cases)
+    return ok, f"{sum(c[1] == 'OK' for c in cases)}/{p['cases']} ok, exit {res.get('code')} {res.get('stderr', '')[:200]}"
+
+
+def build_server_problem(p):
+    """Java or Go problem judged on the server: `harness` is the test driver, `cases` the number of CASE lines it prints."""
+    for k in ("harness", "cases"):
+        if k not in p:
+            err(f"{p['id']}: missing {k}")
+            return None
+    if not isinstance(p["cases"], int) or p["cases"] < 3:
+        err(f"{p['id']}: cases must be an integer >= 3")
+    if p["starter"].strip() == p["solution"].strip():
+        err(f"{p['id']}: starter equals solution")
+    try:
+        ok, detail = _server_verdict(p, p["solution"])
+        if ok is None:
+            print(f"  warn: {p['id']} not verified on the judge ({detail})")
+        elif not ok:
+            err(f"{p['id']}: reference solution does not pass on the judge: {detail}")
+        else:
+            for j, bad in enumerate(p.get("wrong_solutions", [])):
+                if _server_verdict(p, bad)[0]:
+                    err(f"{p['id']}: wrong_solutions[{j}] passes all tests - add stronger tests")
+    except Exception as e:  # noqa: BLE001
+        err(f"{p['id']}: judge call failed: {e}")
+    return {k: v for k, v in p.items() if k not in ("wrong_solutions",)}
+
+
 def build_web_problem(p):
     """HTML/CSS problem: `checks` are JavaScript expressions evaluated inside the rendered page (verified in the browser)."""
     checks = p.get("checks") or []
@@ -214,7 +296,7 @@ def build_track(track_dir):
             err(f"{f.name}: failed to import: {e}")
             continue
         for p in plist:
-            missing = [k for k in REQUIRED_PROBLEM if k not in p and not (k == "tests" and p.get("kind") in ("sql", "web"))]
+            missing = [k for k in REQUIRED_PROBLEM if k not in p and not (k == "tests" and p.get("kind") in ("sql", "web", "java", "go"))]
             if missing:
                 err(f"{f.name}:{p.get('id')}: missing {missing}")
                 continue
@@ -224,7 +306,7 @@ def build_track(track_dir):
                 err(f"{p['id']}: duplicate problem id")
             kind = p.get("kind")
             built = (build_sql_problem(p, track_dir) if kind == "sql" else build_js_problem(p) if kind == "js"
-                     else build_web_problem(p) if kind == "web" else build_code_problem(p))
+                     else build_web_problem(p) if kind == "web" else build_server_problem(p) if kind in ("java", "go") else build_code_problem(p))
             if built:
                 built["track"] = tid
                 problems[p["id"]] = built

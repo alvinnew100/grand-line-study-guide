@@ -87,6 +87,15 @@
     document.addEventListener("visibilitychange", () => { if (document.hidden && sess && S()._dirty) push(true).catch(() => {}); });
     return {
       user: () => (sess ? sess.u : null), last: () => last, pull, push, board: () => rpc("sg_leaderboard", {}),
+      async judge(language, files, stdin) {
+        if (!sess) throw new Error("LOGIN");
+        const r = await fetch("https://xupqehazxffimjdvdgbh.supabase.co/functions/v1/judge", { method: "POST", headers: { apikey: KEY, "Content-Type": "application/json" },
+          body: JSON.stringify({ username: sess.u, token: sess.t, language, files, stdin: stdin || "" }) });
+        const j = await r.json().catch(() => null);
+        if (r.status === 401) throw new Error("LOGIN");
+        if (!r.ok || !j) throw new Error((j && j.error) || `Judge error (${r.status})`);
+        return j;
+      },
       register: (u, p) => enter("sg_register", u, p), login: (u, p) => enter("sg_login", u, p),
       async logout() { if (sess) { try { await push(); await rpc("sg_logout", creds()); } catch (_) {} } setSess(null); },
     };
@@ -424,7 +433,7 @@
   function makeEditor(host, value, mode, opts = {}) {
     const o = S().opts || {};
     const cm = CodeMirror(host, {
-      value, mode: mode === "sql" ? "text/x-sqlite" : mode === "js" ? "javascript" : mode === "html" ? "htmlmixed" : { name: "python", version: 3 },
+      value, mode: mode === "sql" ? "text/x-sqlite" : mode === "java" ? "text/x-java" : mode === "go" ? "text/x-go" : mode === "js" ? "javascript" : mode === "html" ? "htmlmixed" : { name: "python", version: 3 },
       lineNumbers: opts.lineNumbers !== false, indentUnit: 4, tabSize: 4, indentWithTabs: false,
       matchBrackets: true, autoCloseBrackets: true, lineWrapping: !!o.wrap || !!opts.wrap,
       keyMap: o.vim ? "vim" : "default", viewportMargin: opts.auto ? Infinity : 10,
@@ -958,7 +967,7 @@
     const t = DATA.tracks[p._loc.track];
     const mod = t.modules.find((m) => m.id === p._loc.module);
     renderSidebar(t.id);
-    const isSql = p.kind === "sql", isJs = p.kind === "js", isWeb = p.kind === "web";
+    const isSql = p.kind === "sql", isJs = p.kind === "js", isWeb = p.kind === "web", isSrv = p.kind === "java" || p.kind === "go";
     const saved = S().code[pid];
     store.set((s) => (s.last = { href: location.hash, title: p.title, sub: `${t.title} · ${p.difficulty}` }));
     const plist = mod.problems, pi = plist.indexOf(pid);
@@ -973,7 +982,7 @@
         <section class="pane editor">
           <div class="editor-bar">
             <a class="btn sm" href="#/track/${t.id}" title="Back to track">←</a>
-            <span class="lang">${isSql ? "SQLite" : isJs ? "JavaScript" : isWeb ? "HTML · CSS" : "Python 3"}</span>
+            <span class="lang">${isSql ? "SQLite" : isJs ? "JavaScript" : isWeb ? "HTML · CSS" : isSrv ? (p.kind === "java" ? "Java 21" : "Go 1.23") : "Python 3"}</span>
             ${prevP ? `<a class="btn sm" href="#/problem/${prevP}" title="Previous problem">‹</a>` : ""}${nextP ? `<a class="btn sm" href="#/problem/${nextP}" title="Next problem">›</a>` : ""}
             <span class="sp"></span>
             <button class="btn sm" id="resetCodeBtn" title="Reset to starter code">Reset</button>
@@ -1034,7 +1043,7 @@
         sol.addEventListener("toggle", () => {
           if (sol.open && !sol._r) {
             sol._r = 1;
-            renderMarkdown("```" + (isSql ? "sql" : isJs ? "javascript" : isWeb ? "html" : "python") + "\n" + p.solution.trim() + "\n```", $(".prose", sol));
+            renderMarkdown("```" + (isSql ? "sql" : isJs ? "javascript" : isWeb ? "html" : isSrv ? p.kind : "python") + "\n" + p.solution.trim() + "\n```", $(".prose", sol));
             const b = h(`<button class="btn sm" style="margin:0 0 12px">Load into editor</button>`);
             b.onclick = () => { if (confirm("Replace your code with the reference solution?")) { cm.setValue(p.solution.trim() + "\n"); showPane("editor"); } };
             $(".prose", sol).appendChild(b);
@@ -1057,7 +1066,7 @@
     tabs.desc();
 
     // editor
-    const cm = makeEditor($("#editorHost"), saved || p.starter, isSql ? "sql" : isJs ? "js" : isWeb ? "html" : "python", {
+    const cm = makeEditor($("#editorHost"), saved || p.starter, isSql ? "sql" : isJs ? "js" : isWeb ? "html" : isSrv ? p.kind : "python", {
       keys: { "Ctrl-Enter": () => run(false), "Cmd-Enter": () => run(false), "Shift-Ctrl-Enter": () => run(true), "Shift-Cmd-Enter": () => run(true) },
     });
     cm.on("change", debounce(() => store.set((s) => (s.code[pid] = cm.getValue())), 400));
@@ -1071,6 +1080,7 @@
     function drawCases() {
       showConsole("cases");
       if (isWeb) { cbody.innerHTML = `<p class="muted" style="margin-top:0"><b>Run</b> shows a live preview of your page. <b>Submit</b> checks it against these requirements:</p><ul class="checks">${(p.checks || []).map((c) => `<li>${esc(c.name)}</li>`).join("")}</ul>`; return; }
+      if (isSrv) { cbody.innerHTML = `<p class="muted" style="margin-top:0">${p.kind === "java" ? "Java" : "Go"} runs on the judge server, so you need to be logged in (open ⚙). <b>Run</b> and <b>Submit</b> both compile your code and run all ${p.cases || ""} tests; expect a result in two or three seconds.</p>`; return; }
       if (isJs) { cbody.innerHTML = `<p class="muted" style="margin-top:0"><b>Run</b> checks the example tests; <b>Submit</b> runs all ${p.tests.length} tests. Use <code>console.log</code> to debug; its output appears with the result.</p>`; return; }
       if (isSql) {
         cbody.innerHTML = `<p class="muted" style="margin-top:0">Your query runs against the <code>${esc(p.dataset)}</code> dataset. <b>Run</b> shows your result; <b>Submit</b> compares it with the expected result${p.ordered ? " (row order matters)" : " (row order ignored)"}.</p><div id="schemaBox"></div>`;
@@ -1135,6 +1145,7 @@
       if (isSql) return runSql(code, submit);
       if (isJs) return runJs(code, submit);
       if (isWeb) return runWeb(code, submit);
+      if (isSrv) return runServer(code);
       const lines = submit ? [] : (customText ?? "").split("\n").map((x) => x.trim()).filter(Boolean);
       const total = submit ? p.tests.length : lines.length;
       setBusy(true, Py.isReady() ? `Running ${total} test${total > 1 ? "s" : ""}…` : "Starting Python in your browser (first run downloads ~10 MB)…");
@@ -1189,6 +1200,42 @@
       return Ghibli.quoteHTML("ok" + pid) + `<div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">${nextP ? `<a class="btn primary sm" href="#/problem/${nextP}">Next problem →</a>` : `<a class="btn primary sm" href="#/track/${t.id}">Back to track</a>`}<button class="btn sm" onclick="document.querySelector('[data-t=guide]').click()">Compare with the walkthrough</button></div>`;
     }
 
+    async function runServer(code) {
+      setBusy(true, "Sending to the judge server…");
+      try {
+        const java = p.kind === "java", NL = String.fromCharCode(10);
+        const files = java ? [{ name: "Main.java", content: p.harness }, { name: "Solution.java", content: code }]
+          : [{ name: "main.go", content: p.harness }, { name: "solution.go", content: code }];
+        let r;
+        try { r = await Cloud.judge(p.kind, files, ""); }
+        catch (e) {
+          lastCases = [];
+          lastResultHTML = e.message === "LOGIN"
+            ? `<p class="verdict warn">Log in to run ${java ? "Java" : "Go"}</p><p class="muted">Java and Go run on the judge server, which needs an account. Open ⚙ to create one or log in, then run again.</p>`
+            : `<p class="verdict bad">Judge unavailable</p><div class="io err">${esc(e.message)}</div>`;
+          showConsole("result"); cbody.innerHTML = lastResultHTML; return;
+        }
+        const cases = [], other = [];
+        (r.stdout || "").split(NL).forEach((ln) => {
+          const m = ln.match(/^CASE ([0-9]+) (OK|FAIL) ?(.*)$/);
+          if (m) cases.push({ i: +m[1], ok: m[2] === "OK", msg: m[3] }); else if (ln.trim()) other.push(ln);
+        });
+        const passed = cases.filter((c) => c.ok).length, total = p.cases || cases.length;
+        let verdict, cls = "bad";
+        if (r.compile_error) verdict = "Compile Error";
+        else if (r.timed_out) { verdict = "Time Limit Exceeded"; cls = "warn"; }
+        else if (total > 0 && passed === total && cases.length === total && r.code === 0) { verdict = "Accepted"; cls = "ok"; }
+        else if (r.code !== 0 && cases.length < total) verdict = "Runtime Error";
+        else verdict = "Wrong Answer";
+        record(true, verdict, passed, total);
+        lastCases = [];
+        lastResultHTML = `<p class="verdict ${cls}">${verdict}</p><p class="muted" style="margin:0 0 8px">${passed} / ${total} tests passed · ${r.ms} ms on the server${cls === "ok" ? " · 🎉 marked as solved" : ""}</p>
+          ${cases.length ? `<ul class="checks">${cases.map((c) => `<li class="${c.ok ? "ok" : "bad"}">${c.ok ? "✓" : "✗"} Test ${c.i}${c.msg ? ` <span class="muted">${esc(c.msg)}</span>` : ""}</li>`).join("")}</ul>` : ""}
+          ${r.stderr ? `<div class="io-label">${r.compile_error ? "Compiler output" : "Errors"}</div><div class="io err">${esc(r.stderr)}</div>` : ""}
+          ${other.length ? `<div class="io-label">Your output</div><div class="io">${esc(other.join(NL))}</div>` : ""}${cls === "ok" ? nextSteps() : ""}`;
+        showConsole("result"); cbody.innerHTML = lastResultHTML;
+      } finally { setBusy(false); }
+    }
     async function runJs(code, submit) {
       const tests = submit ? p.tests : p.tests.slice(0, p.examples || 3);
       setBusy(true, `Running ${tests.length} tests…`);
@@ -1258,7 +1305,7 @@
     $("#submitBtn").onclick = () => run(true);
     $("#runBtnM").onclick = () => run(false);
     $("#submitBtnM").onclick = () => run(true);
-    if (isSql) Sql.warm(); else if (!isJs && !isWeb) Py.warm();
+    if (isSql) Sql.warm(); else if (!isJs && !isWeb && !isSrv) Py.warm();
     if (isSql) {
       // show dataset schema under testcases
       getText(`data/datasets/${p.dataset}.sql`).then((sql) => {
@@ -1401,7 +1448,7 @@
   $("#resetBtn").onclick = () => { if (confirm("Erase ALL progress, code and notes in this browser?")) { store.replace({}); dlg.close(); route(); } };
 
   // ---------------------------------------------------------------- boot
-  window.__sg = { Py, Sql, DATA, getProblem }; // debugging hook used by the self-test
+  window.__sg = { Py, Sql, DATA, getProblem, Cloud }; // debugging hook used by the self-test
   Promise.all([loadAll(), Ghibli.load(), Cloud.pull().catch(() => {})]).then(route).catch((e) => {
     main.innerHTML = `<div class="page narrow"><h1 class="page-title">Could not load content</h1><p class="muted">${esc(e.message)}</p><p>If you opened the file directly, serve the <code>docs/</code> folder over HTTP (e.g. <code>python -m http.server</code>).</p></div>`;
   });

@@ -224,3 +224,52 @@ Assume the reader has never seen the topic before and has no computer-science ba
 - Never say "simply", "obviously", "just" or "as you know". Anticipate the confusion a newcomer would have and answer it.
 - Keep the depth: beginner-friendly means explained from zero, not shortened. Interview-level material still belongs, after the foundations.
 - Add a short glossary of the lesson's new terms before the quiz.
+
+## 7. Java and Go problems (judged on the server)
+
+Java 21 and Go 1.23 run on a small judge server, not in the browser. Use `kind="java"` or `kind="go"`.
+
+Fields: `id`, `title`, `difficulty`, `pattern`, `description`, `starter`, `solution`, `harness`, `cases`,
+optional `wrong_solutions`, and the usual `guide`. No `tests` or `entry`.
+
+- The learner edits ONE file: `Solution.java` (a class named `Solution`, not public is fine) or `solution.go`
+  (`package main`, exported or unexported functions/types, no `main`).
+- `harness` is the test driver you write: `Main.java` with `public class Main` and `main`, or `main.go`
+  with `package main` and `func main()`. It calls the learner's code and prints exactly one line per test:
+  `CASE <n> OK` or `CASE <n> FAIL <short reason>`, numbered from 1, then exits with status 0.
+  Catch exceptions/panics per test so one failure does not stop the rest (Java: try/catch Throwable;
+  Go: a helper with `defer recover()`).
+- `cases` is the number of CASE lines the harness prints (at least 3; aim for 8–12 including edge cases).
+- Standard library only. No network, no file system outside /tmp, 512 MB memory, 25 s wall time in total,
+  so keep inputs modest and avoid long sleeps.
+- Anything else the program prints is shown to the learner as "Your output", so do not print noise.
+- In Go harness strings prefer `fmt.Println("CASE", n, "OK")` over format strings with escape sequences.
+
+```python
+dict(
+    id="java-twice", title="Twice", difficulty="Easy", pattern="Methods", kind="java", cases=3,
+    description="Write `static int twice(int x)` in class `Solution` that returns double its argument.",
+    starter="class Solution {\n    static int twice(int x) {\n        // your code\n        return 0;\n    }\n}\n",
+    solution="class Solution {\n    static int twice(int x) {\n        return 2 * x;\n    }\n}\n",
+    wrong_solutions=["class Solution {\n    static int twice(int x) {\n        return x + 2;\n    }\n}\n"],
+    harness='''public class Main {
+    static int n = 0;
+    static void check(int got, int want) {
+        n++;
+        System.out.println("CASE " + n + (got == want ? " OK" : " FAIL got " + got + " want " + want));
+    }
+    public static void main(String[] args) {
+        try { check(Solution.twice(2), 4); } catch (Throwable t) { n++; System.out.println("CASE " + n + " FAIL " + t); }
+        try { check(Solution.twice(0), 0); } catch (Throwable t) { n++; System.out.println("CASE " + n + " FAIL " + t); }
+        try { check(Solution.twice(-5), -10); } catch (Throwable t) { n++; System.out.println("CASE " + n + " FAIL " + t); }
+    }
+}
+''',
+    guide=dict(...),
+)
+```
+
+`python tools/build.py --track <id>` sends each reference `solution` (and each wrong solution) to the judge and
+fails the build if the reference does not pass every case or a wrong solution passes them all. Results are cached,
+and the judge allows about 30 runs a minute, so a first build of many problems takes a few minutes.
+If the build prints "not verified on the judge", the credentials file is missing: tell the lead.
