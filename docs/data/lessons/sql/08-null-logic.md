@@ -2,6 +2,53 @@
 
 The book titles its NULL section "Null: That Four-Letter Word", and with good reason: NULL causes more silent wrong answers than any other feature of SQL. NULL is not zero, not an empty string, not false. It is the *absence of a value*, and SQL handles it with a three-valued logic that surprises almost everyone the first time. This lesson explains what NULL means, how it behaves in comparisons, arithmetic, aggregates, sorting and joins, and the tools — `IS NULL`, `COALESCE`, `NULLIF` — that tame it.
 
+## Before this lesson
+
+You should be able to write `WHERE` clauses with comparisons, `AND`, `OR`, `NOT` and `IN` ([Building conditions](#/lesson/sql/conditions)).
+
+## In plain words
+
+Sometimes a value is not there. A customer did not give an email address; a job is still running, so it has no end time; a question on a form did not apply. A database marks such an empty spot with a special marker called **NULL**. NULL is not the number zero and not empty text: it means **"no value recorded"**.
+
+An everyday picture: a class register with a column for each pupil's test mark. A pupil who was ill on the day has a blank box. Blank is not the same as a mark of 0 — and that difference matters the moment you calculate the class average or ask "who scored below 50?". Is the absent pupil below 50? You cannot say yes, and you cannot say no. SQL takes the same honest position: a comparison involving NULL gives the answer **unknown**.
+
+**Why it matters for a job.** NULL is behind a large share of wrong-but-plausible numbers in real reports, because it produces no error — rows quietly drop out of a filter or a calculation. It is also a favourite interview topic: "why does this query return no rows?" very often has NULL as its answer.
+
+### The smallest demonstration, line by line
+
+The bank's `txn` (transaction) table has a column `teller_emp_id` holding the id of the employee who handled the transaction. Transactions made at a cash machine have no teller, so the column is NULL for them.
+
+```sql-run dataset=bank
+SELECT txn_id, amount, teller_emp_id
+FROM txn
+WHERE txn_id <= 6;
+```
+
+Look at the last column: some rows show a number, some show nothing. The empty cells are NULL.
+
+Now try to find those rows with an ordinary comparison:
+
+```sql-run dataset=bank
+SELECT txn_id, amount, teller_emp_id
+FROM txn
+WHERE txn_id <= 6
+  AND teller_emp_id = NULL;
+```
+
+No rows at all — and no error. The test `teller_emp_id = NULL` is never *true*, because "is this unknown thing equal to that unknown thing?" has the answer unknown. SQL provides a separate test for emptiness:
+
+```sql-run dataset=bank
+SELECT txn_id, amount, teller_emp_id
+FROM txn
+WHERE txn_id <= 6
+  AND teller_emp_id IS NULL;
+```
+
+- `IS NULL` asks "is there no value here?" and always answers plainly yes or no.
+- Its opposite is `IS NOT NULL`.
+
+That one rule — **use `IS NULL`, never `= NULL`** — prevents the most common mistake. The rest of the lesson explains the logic behind it and its consequences for filters, arithmetic, counting and joining.
+
 ## What NULL means
 
 The book lists three situations in which a value is NULL:
@@ -58,7 +105,7 @@ With UNKNOWN in play, AND, OR and NOT follow these truth tables:
 
 `NOT UNKNOWN` is UNKNOWN. A useful intuition: treat UNKNOWN as "could be either". `FALSE AND anything` is FALSE regardless; `TRUE OR anything` is TRUE regardless; otherwise the answer is unknown.
 
-The consequence for queries: a row whose condition evaluates to UNKNOWN is **dropped by WHERE** just like a FALSE one — and *also* dropped by the negated condition. Rows with NULLs can fall out of both a filter and its opposite.
+The consequence for queries: a row whose condition evaluates to UNKNOWN is **dropped by WHERE** exactly as a FALSE one is — and *also* dropped by the negated condition. Rows with NULLs can fall out of both a filter and its opposite.
 
 ## The classic trap: forgetting NULLs in a negative filter
 
@@ -301,6 +348,28 @@ GROUP BY places all NULLs in one group, and COALESCE gives that group a readable
 - `NOT IN` with a NULL in the list returns nothing — prefer `NOT EXISTS`.
 - Expressions with NULL yield NULL; use `COALESCE` for defaults and `NULLIF` to avoid division by zero.
 - Aggregates skip NULLs; `COUNT(*)` counts rows.
+
+## Glossary
+
+| Term | Meaning in one sentence |
+|---|---|
+| **NULL** | The marker for "no value recorded" in a column. |
+| **Nullable** | Describes a column that is allowed to contain NULL. |
+| **UNKNOWN** | The third possible result of a condition, alongside TRUE and FALSE, produced when NULL is involved. |
+| **Three-valued logic** | Logic with three results — TRUE, FALSE and UNKNOWN — instead of two. |
+| **`IS NULL` / `IS NOT NULL`** | The tests for whether a value is missing or present. |
+| **`IS DISTINCT FROM`** | A comparison that treats two NULLs as equal, giving a plain yes or no. |
+| **`COALESCE(a, b, ...)`** | A function that returns the first of its arguments that is not NULL — used to supply a default. |
+| **`NULLIF(a, b)`** | A function that returns NULL when `a` equals `b`, used to avoid dividing by zero. |
+| **`NOT IN` trap** | The fact that `NOT IN` returns no rows when its list contains a NULL. |
+| **`EXISTS` / `NOT EXISTS`** | Tests for whether a related row exists, which are not affected by NULL. |
+| **Aggregate function** | A calculation over many rows giving one value (`COUNT`, `SUM`, `AVG`); these skip NULLs. |
+| **`COUNT(*)` vs `COUNT(column)`** | The first counts rows; the second counts rows where the column is not NULL. |
+| **Sentinel (magic) value** | A real value such as `-1` misused to mean "missing" — a practice to avoid. |
+| **Impute** | To fill in a missing value with a substitute. |
+| **Inner join** | Combining two tables and keeping only rows that find a match; rows with a NULL key find none. |
+| **Left join** | Combining two tables while keeping every row of the first, matched or not. |
+| **Data profile** | A quick summary of a table — row counts, missing values — made before analysing it. |
 
 ```quiz
 [

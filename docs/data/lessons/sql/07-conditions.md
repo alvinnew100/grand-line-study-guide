@@ -2,6 +2,54 @@
 
 Most queries are not interested in every row. The `WHERE` clause (and later `HAVING` and join `ON` clauses) uses **conditions** to decide which rows survive. This lesson covers how conditions are evaluated and combined with `AND`, `OR` and `NOT`, then works through the four condition types the book identifies: equality, range, membership and matching. The next lesson tackles the special case of NULL.
 
+## Before this lesson
+
+You should be able to write `SELECT ... FROM ... ORDER BY ...` queries ([SELECT and FROM](#/lesson/sql/select-from), [ORDER BY, LIMIT and how clauses are evaluated](#/lesson/sql/order-limit)).
+
+## In plain words
+
+Most of the time you want *some* of a table's rows, not all of them: the orders from last week, the customers in one country, the accounts above a certain balance. The **`WHERE`** clause does that selecting. It contains a **condition** — a test that is carried out on each row — and only the rows that pass the test are kept.
+
+An everyday picture: the filter panel on a shopping website. You tick "Laptops", drag the price slider to "under 1,000", and type "pro" into the search box. Each of those is a condition; the site shows the products that satisfy all of them. A `WHERE` clause is that filter panel written as text.
+
+**Why it matters for a job.** Filtering is in practically every query you will ever write, and a slightly wrong filter gives a wrong answer *without any error message* — the report looks fine and is not. Interviewers like filter questions for exactly that reason: the traps are in the details (inclusive or exclusive boundaries, "and" versus "or").
+
+### The smallest filter, then one new idea at a time
+
+**Step 1 — one condition.**
+
+```sql-run dataset=bank
+SELECT fname, lname, title
+FROM employee
+WHERE title = 'Teller';
+```
+
+- `WHERE title = 'Teller'` — for each employee row, compare the `title` column with the text `Teller`. Keep the row if they are equal.
+- `=` is a **comparison operator**. The others are `<>` (not equal), `<`, `>`, `<=` (less than or equal), `>=` (greater than or equal).
+- Text is written in single quotes and must match exactly, including capital letters.
+
+**Step 2 — two conditions that must both hold.** Join them with `AND`.
+
+```sql-run dataset=bank
+SELECT fname, lname, title, start_date
+FROM employee
+WHERE title = 'Teller'
+  AND start_date >= '2021-01-01';
+```
+
+Fewer rows now: tellers who also started in 2021 or later. Dates are written as text in the form `'YYYY-MM-DD'`.
+
+**Step 3 — either condition is enough.** Use `OR`.
+
+```sql-run dataset=bank
+SELECT fname, lname, title
+FROM employee
+WHERE title = 'President'
+   OR title = 'Treasurer';
+```
+
+A row is kept if at least one of the two tests succeeds. `AND` and `OR` are **logical operators**: they combine smaller conditions into bigger ones. Everything else in this lesson is a refinement of these three steps.
+
 ## How conditions are evaluated
 
 A WHERE clause contains one or more conditions joined by `AND` and `OR`. For each row the server evaluates the whole expression and keeps the row only if the result is **TRUE**.
@@ -25,7 +73,7 @@ The second query returns tellers *plus* anyone hired before 2020, whatever their
 
 ### Using parentheses
 
-When you mix AND and OR, **AND binds tighter** — just as multiplication binds tighter than addition. `a OR b AND c` means `a OR (b AND c)`. The book's advice: always use parentheses when mixing them, so that neither the server nor the next reader has to guess.
+When you mix AND and OR, **AND binds tighter** — in the same way that multiplication binds tighter than addition. `a OR b AND c` means `a OR (b AND c)`. The book's advice: always use parentheses when mixing them, so that neither the server nor the next reader has to guess.
 
 ```sql-run dataset=bank
 -- Tellers or head tellers who started before 2021
@@ -98,7 +146,7 @@ WHERE avail_balance BETWEEN 3000 AND 5000
 ORDER BY avail_balance;
 ```
 
-Always put the **lower bound first**. `BETWEEN 5000 AND 3000` is not an error; it simply means `>= 5000 AND <= 3000`, which matches nothing.
+Always put the **lower bound first**. `BETWEEN 5000 AND 3000` is not an error; it means `>= 5000 AND <= 3000`, which matches nothing.
 
 ### String ranges
 
@@ -339,6 +387,29 @@ SELECT 'Tokyo' LIKE 'tokyo' AS like_ci,
 - Condition types: **equality** (`=`, `<>`), **range** (`<`, `>=`, `BETWEEN`), **membership** (`IN`, `NOT IN`, lists or subqueries), **matching** (`LIKE` with `_` and `%`, regular expressions, SQLite `GLOB`).
 - Use half-open ranges for periods.
 - Prefix patterns can use indexes; leading-wildcard patterns cannot.
+
+## Glossary
+
+| Term | Meaning in one sentence |
+|---|---|
+| **Condition (predicate)** | A test on a row that is either satisfied or not, such as `price > 100`. |
+| **`WHERE` clause** | The part of a query that keeps only rows satisfying a condition. |
+| **Comparison operator** | A symbol that compares two values: `=`, `<>`, `<`, `>`, `<=`, `>=`. |
+| **Logical operator** | A word that combines conditions: `AND`, `OR`, `NOT`. |
+| **Precedence** | The rule for which operator is applied first; `AND` is applied before `OR`. |
+| **Equality condition** | A test that two values are the same. |
+| **Range condition** | A test that a value lies between two limits. |
+| **`BETWEEN a AND b`** | Shorthand for "greater than or equal to `a` and less than or equal to `b`". |
+| **Inclusive / exclusive** | Whether a limit itself counts as inside the range (inclusive) or not (exclusive). |
+| **Half-open range** | A range that includes its start but not its end, written `>= start AND < end`. |
+| **Membership condition (`IN`)** | A test that a value is one of a listed set of values. |
+| **Matching condition (`LIKE`)** | A test that a text value fits a pattern. |
+| **Wildcard** | A symbol in a pattern that stands for other characters: `%` for any run of characters, `_` for exactly one. |
+| **Regular expression** | A richer pattern language for matching text. |
+| **Escape character** | A character that makes the next wildcard be treated as an ordinary character. |
+| **De Morgan's laws** | The rules for negating a combined condition: `NOT (a OR b)` equals `NOT a AND NOT b`. |
+| **Sargable** | Describes a condition written so that the database can use an index to evaluate it quickly. |
+| **Case-sensitive** | Treating capital and small letters as different. |
 
 ```quiz
 [

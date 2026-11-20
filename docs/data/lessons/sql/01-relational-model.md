@@ -2,9 +2,38 @@
 
 Before writing a single query it helps to know *why* relational databases look the way they do. Almost every design rule you will meet later in this track — primary keys, foreign keys, joins, normalization — is a direct consequence of one idea published in 1970. This lesson tells that story, defines the vocabulary you will use for the rest of the course, and introduces the three practice databases that every runnable example in this guide uses.
 
+## Before this lesson
+
+Nothing. This is the first lesson of the track. You do not need to have programmed before, and you do not need to install anything: every example runs inside this page.
+
+## In plain words
+
+A **database** is an organised place to keep facts so that you can find them again and change them safely. A **relational database** keeps those facts in **tables** — grids of rows and columns, like the sheets of a spreadsheet — and it lets one table refer to another.
+
+An everyday picture: think of a school office with three ring binders. One binder has a page per **student**, one has a page per **class**, and a third lists **enrolments** — each line says "student number 17 is in class number 4". Nobody copies the student's address onto the enrolment line; the line only carries the student's *number*, and you look the address up in the student binder when you need it. That habit — store each fact once, and point to it by number — is the whole idea of the relational model.
+
+**Why it matters for a job.** Almost every company keeps its important records (customers, orders, payments, model results) in relational databases. Data analysts, data engineers, backend developers and machine-learning engineers all read from them daily, and "how would you design the tables for this?" is a standard interview question. The vocabulary in this lesson — table, row, column, primary key, foreign key — is used in every later lesson and in every such interview.
+
+### A first look, one line at a time
+
+Here is the smallest useful request you can make of a database. Press **Run**.
+
+```sql-run dataset=bank
+SELECT name, city
+FROM branch;
+```
+
+Read it as an English sentence: *"show me the name and the city of every branch."*
+
+- `SELECT name, city` — the list of **columns** (the vertical slices of the table) you want to see.
+- `FROM branch` — the **table** to read them from. The bank has a table called `branch` with one row per bank office.
+- `;` — marks the end of the request.
+
+The result is itself a small table: one **row** (horizontal line) per branch and the two columns you asked for. A request like this is called a **query**. You will learn to write queries properly from the *Query primer* module onwards; for now it is enough to recognise the two words `SELECT` and `FROM` when they appear in this lesson's examples.
+
 ## What is a database?
 
-A database is simply a collection of related information. A paper telephone directory is a database: names, addresses and numbers for everyone in a region. It is also a good example of what goes wrong with *manual* data storage:
+A database is a collection of related information. A paper telephone directory is a database: names, addresses and numbers for everyone in a region. It is also a good example of what goes wrong with *manual* data storage:
 
 - **Finding things is slow.** You can only search efficiently by the one order the book was printed in (last name, first name). Looking up *who lives at 12 Elm St.* means reading every page.
 - **It goes stale immediately.** The day it is printed, people start moving and changing numbers, and the book cannot change.
@@ -60,7 +89,7 @@ erDiagram
 
 This has two huge consequences.
 
-1. **Questions are separated from storage.** Because relationships are just values, *any* question that can be phrased in terms of matching values can be answered without new navigation code. The database's query optimizer decides how to get the data.
+1. **Questions are separated from storage.** Because relationships are nothing more than values, *any* question that can be phrased in terms of matching values can be answered without new navigation code. The database's query optimizer decides how to get the data.
 2. **The rules for good design become precise.** Since the only links are values, you can reason mathematically about which data should be stored where, so that each fact lives in exactly one place.
 
 ### Keys
@@ -124,7 +153,7 @@ JOIN product p ON p.product_cd = a.product_cd
 WHERE a.cust_id = 1;
 ```
 
-You will study joins properly in a later module; for now just notice that the query says *what* to fetch, not *how* to walk to it.
+You will study joins properly in a later module; for now, notice that the query says *what* to fetch, not *how* to walk to it.
 
 ## The three practice databases
 
@@ -212,6 +241,28 @@ Other models have niches: document stores for nested, schema-flexible data; key-
 - Each fact should live in exactly one place; foreign keys are the only sanctioned duplication.
 - Tables are sets — unordered — and queries describe *what* you want, not how to fetch it.
 - This track's datasets: `bank` (from the book), `shop` (e-commerce) and `mlops` (experiment tracking and serving).
+
+## Glossary
+
+| Term | Meaning in one sentence |
+|---|---|
+| **Database** | An organised collection of related information kept by a computer. |
+| **Database system (DBMS)** | The software that stores the data and answers requests about it (DBMS = database management system). |
+| **Relational model** | The idea, published by E. F. Codd in 1970, of storing all data in tables that refer to each other by matching values. |
+| **Table** | A grid of rows and columns that holds one kind of thing, for example customers. |
+| **Row** (record) | One horizontal line of a table: one customer, one account. |
+| **Column** (field) | One vertical slice of a table: one property, such as `city`. |
+| **Primary key** | The column (or columns) whose value identifies each row uniquely, like a student number. |
+| **Foreign key** | A column that holds the primary-key value of a row in another table, creating a link between the two. |
+| **Natural key** | A key made from real-world data, such as an email address. |
+| **Surrogate key** | A key that is a meaningless number invented only to identify the row. |
+| **Compound key** | A primary key made of two or more columns together. |
+| **Query** | A request to the database for data, written in the SQL language. |
+| **Result set** | The table of rows a query returns. |
+| **Join** | Combining rows from two tables by matching the values of a column they share. |
+| **Normalization** | Arranging tables so that each fact is stored in exactly one place. |
+| **Schema** | The full description of a database's tables, columns and the links between them. |
+| **ER diagram** | Entity-relationship diagram: a drawing of tables as boxes and their links as lines. |
 
 ```quiz
 [

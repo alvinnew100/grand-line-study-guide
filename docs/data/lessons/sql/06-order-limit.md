@@ -2,6 +2,43 @@
 
 Results from a relational database come back in no particular order unless you ask for one. This lesson covers sorting with `ORDER BY` — ascending and descending, multiple keys, sorting by expressions, NULL placement — limiting results with `LIMIT`/`OFFSET` (and its many dialect spellings), a first look at `WHERE`, `GROUP BY` and `HAVING`, and the single most useful mental model for reading SQL: the **logical order of evaluation**.
 
+## Before this lesson
+
+You should be able to write a basic `SELECT ... FROM ...` query with chosen columns and aliases ([SELECT and FROM](#/lesson/sql/select-from)).
+
+## In plain words
+
+A database hands rows back in **no promised order**. If you want them sorted — newest first, largest first, alphabetical — you must say so with **`ORDER BY`**. And if you want only the first few, you say so with **`LIMIT`**. This lesson also explains the order in which a database works through the parts of a query, which is different from the order in which you type them and explains many puzzling error messages.
+
+An everyday picture: a pile of exam papers handed in as students left the room. The pile has *an* order, but not a useful one. To find the top three you first sort the pile by mark, highest on top (`ORDER BY mark DESC`), and then take three from the top (`LIMIT 3`). Do it the other way round — take any three, then sort those — and you get the wrong students.
+
+**Why it matters for a job.** "Top ten customers", "latest order", "five slowest requests" — a large share of everyday questions and interview exercises are a sort followed by a cut. The evaluation order covered at the end is one of the most common screening questions in SQL interviews.
+
+### The smallest sorted query, line by line
+
+```sql-run dataset=bank
+SELECT name, city
+FROM branch
+ORDER BY city;
+```
+
+- The first two lines are the query you already know: two columns from the `branch` table.
+- `ORDER BY city` — sort the result rows by the `city` column. Text is sorted alphabetically, numbers from small to large, dates from early to late. This "small to large" direction is called **ascending**.
+
+Now one new idea: reverse the direction and keep only the first two rows.
+
+```sql-run dataset=bank
+SELECT name, city
+FROM branch
+ORDER BY city DESC
+LIMIT 2;
+```
+
+- `DESC` (short for **descending**) reverses the sort: Z before A, large before small, late before early.
+- `LIMIT 2` — after sorting, return only the first two rows.
+
+Four branches exist; you see the two whose city names come last in the alphabet. The rest of the lesson builds on these two clauses: sorting by several columns, sorting by calculations, where empty values go, and how to page through long results.
+
 ## Why order is never guaranteed without ORDER BY
 
 A table is a set. When the engine executes a query it reads rows in whatever order is cheapest — table order, index order, the order a hash join emits them, or interleaved from parallel workers. Today's order is an accident of today's plan.
@@ -331,6 +368,29 @@ That inner-compute, outer-filter shape is portable to every engine and is the pa
 - NULL placement varies by engine; use `NULLS FIRST/LAST` where supported.
 - `LIMIT/OFFSET` (or `FETCH FIRST`, `TOP`) restricts rows; always pair with ORDER BY and a tie-breaker; prefer keyset pagination for deep pages.
 - Logical evaluation order: FROM → WHERE → GROUP BY → HAVING → SELECT → DISTINCT → ORDER BY → LIMIT.
+
+## Glossary
+
+| Term | Meaning in one sentence |
+|---|---|
+| **`ORDER BY`** | The clause that sorts the rows of a result. |
+| **Ascending (`ASC`)** | Sorting from small to large, A to Z, early to late — the default. |
+| **Descending (`DESC`)** | Sorting from large to small, Z to A, late to early. |
+| **Sort key** | A column or calculation that rows are sorted by. |
+| **Tie** | Two rows with equal values in the sort key. |
+| **Tie-breaker** | An extra sort key added so that tied rows always come out in the same order. |
+| **Deterministic** | Giving exactly the same result every time it is run. |
+| **`LIMIT`** | The clause that keeps only the first *n* rows of the result. |
+| **`OFFSET`** | The clause that skips a number of rows before starting to return them. |
+| **Pagination** | Returning a long result one "page" of rows at a time. |
+| **Keyset pagination** | Fetching the next page by asking for rows after the last one already seen, instead of skipping a count. |
+| **Collation** | The rules for comparing and sorting text, including whether capital letters matter. |
+| **`NULLS FIRST` / `NULLS LAST`** | Wording that says where empty values go in a sort. |
+| **`WHERE`** | The clause that keeps only the rows meeting a condition. |
+| **`GROUP BY`** | The clause that gathers rows with equal values into groups, one result row per group. |
+| **`HAVING`** | The clause that keeps only the groups meeting a condition. |
+| **Aggregate** | A calculation over many rows that produces one value, such as a count or a total. |
+| **Logical order of evaluation** | The fixed sequence in which a query's clauses are applied: FROM, WHERE, GROUP BY, HAVING, SELECT, ORDER BY, LIMIT. |
 
 ```quiz
 [

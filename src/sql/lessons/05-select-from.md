@@ -2,6 +2,51 @@
 
 `SELECT` is the statement you will write a thousand times more often than any other. It looks simple — pick some columns from a table — but each of its clauses has more power than first appears. This lesson covers the two mandatory-ish clauses, `SELECT` and `FROM`: what you can put in the select list, column aliases, removing duplicates, the kinds of "tables" a FROM clause accepts, and table aliases.
 
+## Before this lesson
+
+You should know what a table, row and column are ([Databases and the relational model](#/lesson/sql/relational-model)) and have seen the overall shape of a SQL statement ([What is SQL?](#/lesson/sql/what-is-sql)). You do not need the two lessons on creating tables to follow this one.
+
+## In plain words
+
+`SELECT` is the statement that **reads** data. It never changes anything, so you cannot break the database with it — which makes it the best place to start experimenting. Its two essential parts answer two questions: **which columns do I want to see?** (the `SELECT` clause) and **from which table?** (the `FROM` clause).
+
+An everyday picture: a spreadsheet with forty columns. To make a readable report you hide the columns you do not need, and perhaps add one that computes "price minus cost". `SELECT` does exactly that: it picks columns, and it can calculate new ones.
+
+**Why it matters for a job.** Nearly every piece of analytics work, every report and every interview exercise starts with `SELECT`. In practice, people who work with data write this one statement far more often than all the others put together.
+
+### The smallest query, then one new idea at a time
+
+**Step 1 — every column of a table.** The star `*` means "all columns".
+
+```sql-run dataset=bank
+SELECT *
+FROM department;
+```
+
+Three rows come back, because the `department` table has three rows, each with two columns: `dept_id` and `name`.
+
+**Step 2 — chosen columns only.** Name them, separated by commas, in the order you want them.
+
+```sql-run dataset=bank
+SELECT name, dept_id
+FROM department;
+```
+
+Same three rows; the columns now appear in the order you asked for. The table itself has not changed — a query only decides what is *shown*.
+
+**Step 3 — a calculated column with a name of its own.**
+
+```sql-run dataset=bank
+SELECT name,
+       dept_id * 10 AS dept_code
+FROM department;
+```
+
+- `dept_id * 10` is an **expression**: a small calculation carried out separately for each row.
+- `AS dept_code` gives the calculated column a readable name, called an **alias**. Without it, the column's heading would be the raw text `dept_id * 10`.
+
+Those three steps are the whole foundation. The rest of this lesson explores each part in depth: what else can appear in the list of columns, how to remove repeated rows, and what the `FROM` clause can read besides an ordinary table.
+
 ## The clauses of a query
 
 A `SELECT` statement is made of up to six main clauses. The book summarises them in a table that is worth memorising:
@@ -311,6 +356,29 @@ The choice between them is about **lifetime and reuse**, not about what they can
 - `DISTINCT` removes duplicate *rows* at the cost of a sort or hash.
 - FROM reads permanent tables, derived tables (subqueries), temporary tables and views, and contains the join conditions.
 - Table aliases shorten queries and are required to use a table twice.
+
+## Glossary
+
+| Term | Meaning in one sentence |
+|---|---|
+| **`SELECT` clause** | The list of columns and calculations a query should return. |
+| **`FROM` clause** | The table or tables a query reads. |
+| **`*` (star)** | Shorthand for "every column". |
+| **Expression** | A calculation that produces a value for each row, such as `price - cost`. |
+| **Literal** | A fixed value written directly in the query, such as `'ACTIVE'` or `3.14`. |
+| **Function** | A named built-in calculation, such as `upper(name)`, which returns the name in capital letters. |
+| **Column alias** | A name you give to a result column with `AS`. |
+| **Table alias** | A short name you give to a table inside one query, such as `e` for `employee`. |
+| **`DISTINCT`** | A keyword that removes repeated rows from the result. |
+| **Duplicate** | A row that is identical to another row in every selected column. |
+| **Permanent table** | An ordinary table, created with `CREATE TABLE`, that stays until it is dropped. |
+| **Derived table** | A query written in parentheses inside `FROM` and used as if it were a table. |
+| **Subquery** | A query placed inside another query. |
+| **Temporary table** | A table that exists only for your current session. |
+| **View** | A saved query that can be used like a table. |
+| **Qualified name** | A column name with its table in front, such as `employee.fname`, to say exactly which column is meant. |
+| **Grain** | What one row of a result represents — one customer, one order, one order line. |
+| **Fan-out** | The multiplication of rows that happens when a table is combined with another that has several matching rows. |
 
 ```quiz
 [

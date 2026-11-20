@@ -106,6 +106,33 @@ _MODULES = [
          lessons=[L("normalization", "Normal forms and denormalization", "37-normalization.md"),
                   L("performance", "Query performance tuning", "38-performance.md")],
          problems=["sql-denormalized-order-summary"]),
+    dict(id="analytics-interview-set", title="Analytics Interview Set",
+         summary="53 company-style analytics questions on three new datasets: a social network, a ride-hailing "
+                 "service and a B2B subscription product.",
+         lessons=[L("interview-set-guide", "The interview set: datasets, method and pattern map",
+                    "39-interview-set-guide.md")],
+         problems=[
+             # social network
+             "sql-post-type-mix", "sql-users-who-never-posted", "sql-topic-audience-sets",
+             "sql-unread-message-rate", "sql-likes-per-post-type", "sql-top-posts-per-topic",
+             "sql-mutual-follows", "sql-follower-leaderboard", "sql-days-to-first-post",
+             "sql-like-count-histogram", "sql-daily-active-users", "sql-busiest-conversations",
+             "sql-dau-mau-stickiness", "sql-longest-posting-streak", "sql-comment-thread-depth",
+             "sql-follow-suggestions", "sql-new-vs-returning-posters",
+             # ride hailing
+             "sql-trip-outcome-share", "sql-idle-active-drivers", "sql-tipping-by-payment-method",
+             "sql-fare-by-distance-band", "sql-yoy-monthly-trips", "sql-rolling-three-month-revenue",
+             "sql-top-drivers-per-city", "sql-rider-first-and-latest-trip", "sql-cancellations-by-daypart",
+             "sql-unpaid-completed-trips", "sql-driver-rating-ranks", "sql-city-revenue-ytd",
+             "sql-loyal-rider-driver-pairs", "sql-busiest-weekday-per-city", "sql-median-fare-by-city",
+             "sql-pickup-wait-percentiles", "sql-driver-cancellation-runs", "sql-rider-lifecycle-by-month",
+             # B2B subscriptions
+             "sql-mrr-by-plan", "sql-csat-by-category", "sql-user-email-types", "sql-churned-accounts",
+             "sql-plan-transitions", "sql-open-invoice-aging", "sql-slow-paying-accounts",
+             "sql-ticket-resolution-by-priority", "sql-weekly-active-accounts", "sql-duplicate-events",
+             "sql-revenue-concentration", "sql-paying-but-inactive", "sql-accounts-using-every-core-feature",
+             "sql-onboarding-funnel", "sql-account-retention-cohorts", "sql-month-end-mrr",
+             "sql-family-mrr-rollup", "sql-ticket-backlog-by-week"]),
 ]
 
 # Only lessons whose file exists are published (keeps the build green while writing).
@@ -119,7 +146,7 @@ TRACK = dict(
     color="#2b7bb9",
     group="Data & Databases",
     blurb="Relational thinking and standard SQL from first SELECT to window functions, recursive CTEs and "
-          "interview patterns - run every query live on bank, shop and MLOps datasets.",
+          "interview patterns - run every query live on six seeded datasets, then practise on 93 problems.",
     sources=["Alan Beaulieu, Learning SQL (O'Reilly), ch. 1-15 and appendices",
              "SQLite documentation (window functions, WITH clause, EXPLAIN QUERY PLAN)",
              "PostgreSQL and MySQL reference manuals (dialect notes)"],

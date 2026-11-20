@@ -2,6 +2,39 @@
 
 Every column in a table has a data type, and choosing types well is the first design decision you make. Types decide what values are legal, how much space they take, how they sort and compare, and which functions work on them. This lesson follows the book's tour of character, numeric and temporal types, shows how SQLite's very different type system works, and then designs and creates a table step by step.
 
+## Before this lesson
+
+You should know what tables, rows, columns and keys are ([Databases and the relational model](#/lesson/sql/relational-model)) and be able to read a short `SELECT ... FROM ...` statement ([What is SQL?](#/lesson/sql/what-is-sql)).
+
+## In plain words
+
+Before a table can hold anything, you have to describe it: what its columns are called and **what kind of value each column may hold**. That "kind of value" is the column's **data type** — whole number, decimal number, text, date. The statement that describes a new table is `CREATE TABLE`.
+
+An everyday picture: a paper form. A well-designed form has a box for the date with `DD / MM / YYYY` printed in it, a row of single-letter boxes for the postcode, and a box marked "numbers only" for the amount. The form's designer decided in advance what each box may contain, so nobody can write "next Tuesday" where an amount belongs. Data types and **constraints** (rules a value must satisfy) are how a database table does the same job.
+
+**Why it matters for a job.** A wrong type is one of the most expensive mistakes in data work because it is hard to change once a table is full: money stored in a type that cannot represent cents exactly, dates stored as free text that will not sort, an id column too small for the number of rows. Interviewers who ask you to "design a table for X" are checking exactly these choices.
+
+### The smallest possible table, one line at a time
+
+```sql-run dataset=bank
+CREATE TABLE pet (
+  pet_id  INTEGER PRIMARY KEY,
+  name    VARCHAR(30) NOT NULL,
+  born_on DATE
+);
+INSERT INTO pet (name, born_on) VALUES ('Biscuit', '2021-04-02');
+SELECT * FROM pet;
+```
+
+- `CREATE TABLE pet (` — make a new, empty table called `pet`. The column descriptions follow inside the parentheses, separated by commas.
+- `pet_id INTEGER PRIMARY KEY` — a column named `pet_id` holding whole numbers (`INTEGER`). `PRIMARY KEY` says this column identifies each row; the database fills it in automatically (1, 2, 3, ...).
+- `name VARCHAR(30) NOT NULL` — a text column of up to 30 characters (`VARCHAR` = "variable-length characters"). `NOT NULL` means a value is required: a pet must have a name.
+- `born_on DATE` — a calendar date. Without `NOT NULL`, the value may be left empty; an empty value is called **NULL**.
+- `INSERT INTO pet ... VALUES (...)` — add one row. (The next lesson covers `INSERT`.)
+- `SELECT * FROM pet` — show every column (`*` means "all columns") of every row.
+
+The result has one row: `1 | Biscuit | 2021-04-02`. We never typed the 1 — the primary key was generated for us. The rest of this lesson looks at each family of types in turn, then at how the database in this page (SQLite) treats types differently from the big server databases, and then designs a realistic table step by step.
+
 ## Character data
 
 Text comes in two classic flavours:
@@ -17,7 +50,7 @@ Two related concepts matter as soon as you leave ASCII:
 - **Collation** — the rules for comparing and sorting text: is `'a' = 'A'`? does `'é'` sort next to `'e'`? MySQL's default collations are case-insensitive; PostgreSQL's comparisons are case-sensitive by default.
 
 > [!NOTE]
-> In PostgreSQL there is no performance difference between `VARCHAR(n)` and `TEXT`; the length limit is just a constraint. In MySQL the declared length affects index limits and memory use for temporary tables, so it is worth keeping it realistic.
+> In PostgreSQL there is no performance difference between `VARCHAR(n)` and `TEXT`; the length limit is only a constraint. In MySQL the declared length affects index limits and memory use for temporary tables, so it is worth keeping it realistic.
 
 ## Numeric data
 
@@ -249,6 +282,31 @@ SELECT * FROM line_demo;
 - Temporal types: `DATE`, `TIME`, `TIMESTAMP`, intervals; use ISO-8601 and UTC.
 - SQLite uses dynamic typing with column **affinity**; declared lengths are ignored unless you use STRICT tables.
 - Design in three steps: list facts, refine (keys, single-valued columns, constraints), write DDL.
+
+## Glossary
+
+| Term | Meaning in one sentence |
+|---|---|
+| **Data type** | The kind of value a column may hold: whole number, decimal, text, date and so on. |
+| **`CREATE TABLE`** | The statement that defines a new table and its columns. |
+| **`CHAR(n)`** | Text that is always exactly `n` characters long (shorter values are padded with spaces). |
+| **`VARCHAR(n)`** | Text of varying length, up to `n` characters. |
+| **`INTEGER`** | A whole number, with no fractional part. |
+| **`DECIMAL(p, s)` / `NUMERIC`** | An exact decimal number with `p` digits in total, `s` of them after the decimal point — the right type for money. |
+| **Floating point (`REAL`, `FLOAT`, `DOUBLE`)** | An approximate number with a fractional part; fast, but cannot store most decimal fractions exactly. |
+| **`DATE`, `TIME`, `TIMESTAMP`** | A calendar date, a time of day, and a date with a time. |
+| **ISO-8601** | The international date format `YYYY-MM-DD HH:MM:SS`, which sorts correctly even as plain text. |
+| **UTC** | Coordinated Universal Time, the world's reference clock, used to store times without time-zone confusion. |
+| **NULL** | The marker for "no value here". |
+| **Constraint** | A rule that every row must satisfy, enforced by the database. |
+| **`NOT NULL`** | A constraint saying the column must always have a value. |
+| **`UNIQUE`** | A constraint saying no two rows may share the same value in the column. |
+| **`CHECK`** | A constraint with a condition of your own, such as `CHECK (price > 0)`. |
+| **`DEFAULT`** | The value the database fills in when you do not supply one. |
+| **Type affinity** | SQLite's rule that a column *prefers* a type but will still store other kinds of value. |
+| **Character set / collation** | Which characters can be stored, and the rules for comparing and sorting them. |
+| **Generated column** | A column whose value is computed from other columns of the same row. |
+| **Migration** | A versioned script that changes a database's structure in a controlled, repeatable way. |
 
 ```quiz
 [

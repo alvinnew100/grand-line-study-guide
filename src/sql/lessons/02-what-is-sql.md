@@ -2,6 +2,33 @@
 
 SQL is the language every relational database speaks. It is more than fifty years old, it is on nearly every data-related job description, and it is unusual among programming languages: you describe the *result* you want and let the engine decide how to compute it. This lesson covers where SQL came from, the families of SQL statements, what "nonprocedural" really means, the major dialects (and how this guide handles them), and the mechanics of sending a query to a server.
 
+## Before this lesson
+
+You should have read [Databases and the relational model](#/lesson/sql/relational-model): you know what a table, a row, a column, a primary key and a foreign key are. Nothing else is assumed.
+
+## In plain words
+
+**SQL** is the language you use to talk to a relational database. (It is pronounced "S-Q-L" or "sequel"; the letters originally stood for *Structured Query Language*.) You type a sentence such as "show me the customers who live in Woburn", written in SQL's fixed vocabulary, and the database replies with a table of answers.
+
+An everyday picture: ordering in a restaurant. You tell the waiter **what** you want — "the soup, no onions" — and you do not walk into the kitchen to explain which pan to use. The kitchen decides **how**. SQL works the same way: you describe the result you want, and the database works out the steps. Languages that work like this are called **declarative**. Most programming languages (Python, Java) are the opposite — you spell out every step — and are called **procedural**.
+
+**Why it matters for a job.** SQL is the single most requested skill in data-related job advertisements, and it is tested in interviews for analysts, data engineers, backend developers and machine-learning engineers alike. It has also barely changed in its essentials for decades, so what you learn here stays useful.
+
+### The smallest SQL statement, one line at a time
+
+```sql-run dataset=shop
+SELECT first_name, country
+FROM customers
+WHERE country = 'Japan';
+```
+
+- `SELECT first_name, country` — which columns to show.
+- `FROM customers` — which table to read.
+- `WHERE country = 'Japan'` — which rows to keep: only those whose `country` column holds the text `Japan`. Text values are written between **single quotes**.
+- `;` — ends the statement.
+
+Each line begins with a **keyword** (a word with a fixed meaning in SQL, such as `SELECT`) and is called a **clause**. A complete request is a **statement**. In this lesson you will meet the different families of statements and see what happens inside the database between pressing Run and seeing rows. Some words used along the way are defined where they first appear and again in the glossary at the end: a **dialect** is one product's variant of SQL; the **optimizer** is the part of the database that chooses how to carry out your request; an **index** is a lookup structure that makes searching faster, like the index at the back of a book.
+
 ## A short history
 
 Along with the relational model, Codd proposed a query language called DSL/Alpha. An IBM team building a prototype simplified it into **SQUARE**, refined that into **SEQUEL**, and finally renamed it **SQL** (trademark issues ended "SEQUEL"). Pronounce it "S-Q-L" or "sequel"; both are common.
@@ -260,6 +287,30 @@ FROM account;
 - Schema objects are recorded in the queryable **data dictionary**.
 - Every vendor speaks a dialect; this guide runs SQLite and flags MySQL/PostgreSQL differences.
 - A query is parsed, bound, optimized and executed; its result is itself a table, which makes SQL composable.
+
+## Glossary
+
+| Term | Meaning in one sentence |
+|---|---|
+| **SQL** | The standard language for asking questions of, and making changes to, a relational database. |
+| **Statement** | One complete SQL request, ending with a semicolon. |
+| **Clause** | One part of a statement that starts with a keyword, such as `FROM customers`. |
+| **Keyword** | A word with a fixed meaning in SQL, such as `SELECT` or `WHERE`. |
+| **Declarative (nonprocedural)** | Describing the result you want and leaving the steps to the system. |
+| **Procedural** | Spelling out the steps one by one, as in Python or Java. |
+| **DDL** | Data definition language: statements that create or change structures, such as `CREATE TABLE`. |
+| **DML** | Data manipulation language: statements that read or change rows — `SELECT`, `INSERT`, `UPDATE`, `DELETE`. |
+| **Transaction statement** | A statement that groups changes so they succeed or fail together (`BEGIN`, `COMMIT`, `ROLLBACK`). |
+| **Data dictionary (catalog)** | The database's own tables that describe its tables, columns and indexes. |
+| **Dialect** | One database product's variant of SQL, with its own extra functions and small differences. |
+| **ANSI / ISO standard** | The official definition of SQL published by the American National Standards Institute and the International Organization for Standardization. |
+| **Optimizer** | The part of the database that decides how to carry out a query efficiently. |
+| **Execution plan** | The list of steps the optimizer chose for a query. |
+| **Index** | An extra, sorted structure that lets the database find rows quickly without reading the whole table. |
+| **Parse** | To check that a statement follows SQL's grammar. |
+| **Literal** | A value written directly in a statement, such as `'Japan'` or `42`. |
+| **Identifier** | The name of a table, column or other database object. |
+| **SQLite** | A small database engine that runs inside a program; it is the one running in this page. |
 
 ```quiz
 [

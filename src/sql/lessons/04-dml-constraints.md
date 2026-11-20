@@ -4,6 +4,39 @@ A schema without data is an empty shell. This lesson covers the three data-chang
 
 All examples run against throwaway copies of the datasets, so feel free to experiment.
 
+## Before this lesson
+
+You should be able to read a `CREATE TABLE` statement and know what a data type, a primary key, a foreign key and a constraint are ([Data types and CREATE TABLE](#/lesson/sql/data-types-tables)).
+
+## In plain words
+
+A table starts empty. Three statements change what it contains: **`INSERT`** adds new rows, **`UPDATE`** changes values in existing rows, and **`DELETE`** removes rows. Together with `SELECT` (which only reads) they are often called **CRUD** — create, read, update, delete — the four things any application does with its data.
+
+An everyday picture: a paper address book. Writing in a new friend is an insert. Crossing out an old phone number and writing the new one is an update. Tearing out a page is a delete. The important difference is that a database has a strict librarian standing next to you: if you try to write a second entry with the same membership number, or refer to a person who is not in the book, the librarian refuses. Those refusals are the **constraints** from the previous lesson doing their job, and the second half of this lesson shows each kind of refusal.
+
+**Why it matters for a job.** Every application that saves anything runs these statements, and data engineers write them all day to load and correct data. The most feared mistake in the profession — changing or deleting every row of a table by forgetting one line — is made with these statements, so learning the safe habits now is worth a great deal.
+
+### One of each, line by line
+
+```sql-run dataset=bank
+INSERT INTO department (name) VALUES ('Compliance');
+
+UPDATE department
+SET name = 'Risk and Compliance'
+WHERE name = 'Compliance';
+
+SELECT * FROM department;
+```
+
+- `INSERT INTO department (name)` — add a row to the `department` table, supplying a value for the `name` column only.
+- `VALUES ('Compliance')` — the value to store. The `dept_id` column is not mentioned, so the database generates it.
+- `UPDATE department` — change rows of this table.
+- `SET name = 'Risk and Compliance'` — the new value for the `name` column.
+- `WHERE name = 'Compliance'` — **which rows** to change. Without this line, *every* department would be renamed.
+- The final `SELECT` shows the table afterwards: the three original departments plus the new one, already renamed.
+
+Every example in this lesson runs on a private copy of the data that is reloaded each time you press Run, so you can experiment freely — including with the statements that are meant to fail.
+
 ## INSERT
 
 The full form names the target columns and then supplies values in the same order:
@@ -322,6 +355,29 @@ On very large tables, do this in batches of a few thousand rows, or — better �
 - UPSERT: `ON CONFLICT` (SQLite/PostgreSQL), `ON DUPLICATE KEY UPDATE` (MySQL), `MERGE` (standard).
 - Rejected statements are constraints at work: duplicate keys, missing parents, invalid values, unparsable dates.
 - Check counts first, change inside a transaction, verify, then commit.
+
+## Glossary
+
+| Term | Meaning in one sentence |
+|---|---|
+| **`INSERT`** | The statement that adds new rows to a table. |
+| **`UPDATE`** | The statement that changes values in existing rows. |
+| **`DELETE`** | The statement that removes rows. |
+| **CRUD** | Create, read, update, delete — the four basic operations on stored data. |
+| **`WHERE` clause** | The part of a statement that says which rows it applies to. |
+| **`TRUNCATE`** | A fast way, in some databases, to remove every row of a table at once. |
+| **UPSERT** | "Update or insert": add a row, or update the existing one if its key is already present. |
+| **`ON CONFLICT`** | The SQLite and PostgreSQL wording for an upsert. |
+| **`RETURNING`** | A clause that makes a data-changing statement hand back the rows it affected. |
+| **Constraint violation** | The error raised when a statement would break a rule such as uniqueness. |
+| **Orphan row** | A row whose foreign key points to a parent row that does not exist. |
+| **Referential integrity** | The guarantee that every foreign key points to an existing row. |
+| **Staging table** | A temporary holding table where raw data lands before it is cleaned and loaded. |
+| **Idempotent** | Safe to run more than once: the second run changes nothing. |
+| **Reconciliation** | Checking, with counts and totals, that a load produced what was expected. |
+| **Soft delete** | Marking a row as deleted with a flag or date instead of physically removing it. |
+| **Transaction** | A group of statements that take effect together or not at all (covered in its own module). |
+| **Rollback** | Undoing the changes of an unfinished transaction. |
 
 ```quiz
 [
