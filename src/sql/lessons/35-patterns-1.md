@@ -217,7 +217,7 @@ WHERE rn IN ((n + 1) / 2, (n + 2) / 2);
 
 The mean is far above the median — the distribution is right-skewed. Add `PARTITION BY` to both window functions (and group the final query) for a median per group; that is the *Median Order Value by Country* problem.
 
-Other percentiles use the same numbering. The p90 by the nearest-rank method is the row at position `ceil(0.9 × n)`:
+Other percentiles use the same numbering. The p90 by the nearest-rank method is the row at position ⌈0.9 × n⌉ — written with integer arithmetic as `(9 * n + 9) / 10`, since this sandbox has no `ceil` function:
 
 ```sql-run dataset=mlops
 WITH numbered AS (
@@ -228,7 +228,7 @@ WITH numbered AS (
 )
 SELECT deployment_id, MAX(n) AS predictions,
        MAX(CASE WHEN rn = (n + 1) / 2 THEN latency_ms END)               AS p50_latency,
-       MAX(CASE WHEN rn = CAST(ceil(0.9 * n) AS INTEGER) THEN latency_ms END) AS p90_latency,
+       MAX(CASE WHEN rn = (9 * n + 9) / 10 THEN latency_ms END)            AS p90_latency,
        MAX(latency_ms) AS max_latency
 FROM numbered
 GROUP BY deployment_id

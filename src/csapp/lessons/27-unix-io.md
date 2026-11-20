@@ -141,25 +141,17 @@ ssize_t rio_writen(int fd, void *usrbuf, size_t n);   /* bytes transferred, -1 o
 `rio_readn` transfers up to `n` bytes from the current file position of `fd` to `usrbuf`; it can return a short count **only if it encounters EOF**. `rio_writen` **never returns a short count**. The core is a loop:
 
 ```c
-ssize_t rio_readn(int fd, void *usrbuf, size_t n) {
-    size_t nleft = n;
-    ssize_t nread;
-    char *bufp = usrbuf;
-
-    while (nleft > 0) {
-        if ((nread = read(fd, bufp, nleft)) < 0) {
-            if (errno == EINTR)        /* interrupted by a signal handler return */
-                nread = 0;             /* ... so call read() again */
-            else
-                return -1;             /* errno set by read() */
-        }
-        else if (nread == 0)
-            break;                     /* EOF */
-        nleft -= nread;
-        bufp += nread;
-    }
-    return (n - nleft);                /* return >= 0 */
+/* Sketch of the idea: keep calling read until n bytes have arrived or EOF is hit */
+remaining = n;
+while (remaining > 0) {
+    got = read(fd, p, remaining);
+    if (got < 0 && errno == EINTR)  continue;     /* interrupted by a signal handler: just retry */
+    if (got < 0)                    return -1;    /* a real error */
+    if (got == 0)                   break;        /* EOF */
+    remaining -= got;
+    p += got;
 }
+return n - remaining;                             /* bytes actually transferred */
 ```
 
 Note that each function **manually restarts** `read` or `write` if it is interrupted by the return from an application signal handler (`EINTR`), to be as portable as possible.

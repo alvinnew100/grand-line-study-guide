@@ -196,25 +196,22 @@ By default (`options = 0`), `waitpid` suspends the calling process until a child
 ### Example: reaping N children
 
 ```c
-#define N 2
-int main() {
-    int status, i;
-    pid_t pid;
+/* Parent creates N children; child i exits with status 100 + i */
+for (i = 0; i < N; i++)
+    if (Fork() == 0)
+        exit(100 + i);
 
-    for (i = 0; i < N; i++)                    /* Parent creates N children */
-        if ((pid = Fork()) == 0)
-            exit(100 + i);                     /* Child exits with a unique status */
-
-    while ((pid = waitpid(-1, &status, 0)) > 0) {   /* Parent reaps in no particular order */
-        if (WIFEXITED(status))
-            printf("child %d terminated normally with exit status=%d\n", pid, WEXITSTATUS(status));
-        else
-            printf("child %d terminated abnormally\n", pid);
-    }
-    if (errno != ECHILD)                       /* The only normal termination is no more children */
-        unix_error("waitpid error");
-    exit(0);
+/* Parent reaps them, in whatever order they finish */
+while ((pid = waitpid(-1, &status, 0)) > 0) {
+    if (WIFEXITED(status))
+        printf("child %d exited normally with status %d
+", pid, WEXITSTATUS(status));
+    else
+        printf("child %d terminated abnormally
+", pid);
 }
+if (errno != ECHILD)                 /* the loop should end only because no children remain */
+    unix_error("waitpid error");
 ```
 
 The children are reaped in **no particular order**: the order is a property of the specific system and run. This is **nondeterministic** behavior, which makes reasoning about concurrency hard. To reap in creation order, store the PIDs in an array and call `waitpid(pid[i], &status, 0)` in sequence.

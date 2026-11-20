@@ -22,7 +22,7 @@
   "sources": [
    "Bryant & O'Hallaron, Computer Systems: A Programmer's Perspective, 3rd ed. (CS:APP 3e)"
   ],
-  "words": 76298,
+  "words": 109948,
   "modules": 13,
   "lessons": 34,
   "problems": 26
@@ -251,7 +251,7 @@
    "SQLite documentation (window functions, WITH clause, EXPLAIN QUERY PLAN)",
    "PostgreSQL and MySQL reference manuals (dialect notes)"
   ],
-  "words": 95518,
+  "words": 95996,
   "modules": 19,
   "lessons": 38,
   "problems": 40

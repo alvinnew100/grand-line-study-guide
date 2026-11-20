@@ -206,7 +206,25 @@ print(struct.unpack("<i", bytes([0xff, 0xff, 0xff, 0x9c]))[0])
 print(struct.unpack(">i", bytes([0xff, 0xff, 0xff, 0x9c]))[0])
 ```
 
-## 9. Summary
+## 9. A mental model: the number wheel
+
+A useful picture for everything in this lesson is a **wheel** with $2^w$ positions, one per bit pattern, arranged in counting order: `000...0`, `000...1`, and so on, wrapping from `111...1` back to `000...0`. Adding 1 always moves one step clockwise, whatever the interpretation.
+
+- The **unsigned** reading labels the positions $0, 1, \dots, 2^w - 1$. The "seam", where the label jumps, lies between `111...1` ($UMax$) and `000...0`.
+- The **two's-complement** reading uses the *same wheel* but relabels the half starting at `100...0` with $-2^{w-1}, \dots, -1$. Its seam lies between `011...1` ($TMax$) and `100...0` ($TMin$).
+
+Now the conversion rules are visible at a glance. Casting never moves you on the wheel; it only swaps the labels, and the labels of the upper half differ by exactly $2^w$. Positions in the lower half (`0xxx`) carry the same label in both readings, which is why small nonnegative numbers are unaffected by casts. And a comparison such as `-1 < 0U` goes wrong because the unsigned labels place `111...1` at the *far end* of the wheel from `000...0`, not just before it.
+
+Try it with $w = 3$: the patterns `000`–`111` read 0, 1, 2, 3, 4, 5, 6, 7 unsigned and 0, 1, 2, 3, −4, −3, −2, −1 signed. Pattern `110` is 6 or −2, and $6 - (-2) = 8 = 2^3$. The same wheel will explain overflow in the next lesson: crossing a seam is exactly what overflow means.
+
+```python-run
+w = 3
+for u in range(1 << w):
+    t = u - (1 << w) if u >> (w - 1) else u
+    print(f"{u:03b}  unsigned={u}  signed={t:2}  difference={u - t}")
+```
+
+## 10. Summary
 
 - $B2U_w(\vec x) = \sum x_i 2^i$; $B2T_w$ gives the top bit weight $-2^{w-1}$.
 - Ranges: unsigned $[0, 2^w-1]$; two's complement $[-2^{w-1}, 2^{w-1}-1]$, asymmetric.

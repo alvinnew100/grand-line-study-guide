@@ -153,43 +153,61 @@ Division by zero returns NULL in SQLite and MySQL but raises an error in Postgre
 ### Mathematical functions
 
 ```sql-run dataset=bank
-SELECT abs(-25.76)        AS abs_val,
-       sign(-25.76)       AS sgn,
-       power(2, 10)       AS two_to_10,
-       sqrt(144)          AS root,
-       mod(22, 5)         AS modulo,
-       round(exp(1), 4)   AS e,
-       round(ln(10), 4)   AS ln10,
-       round(log10(1000), 1) AS log_1000;
+SELECT abs(-25.76)                         AS abs_val,
+       (-25.76 > 0) - (-25.76 < 0)         AS sign_of_value,
+       22 % 5                              AS modulo,
+       2 * 2 * 2 * 2 * 2 * 2 * 2 * 2 * 2 * 2 AS two_to_10,
+       1 << 10                             AS two_to_10_by_shift,
+       max(3, 7, 5)                        AS largest_of_three,
+       min(3, 7, 5)                        AS smallest_of_three,
+       round(22 / 7.0, 4)                  AS approx_pi;
 ```
 
-The book lists the same families for MySQL: `ACOS/ASIN/ATAN/COS/SIN/TAN`, `EXP`, `LN`, `SQRT`, `MOD`, `POW`. (SQLite's maths functions exist only when the library is compiled with them — it is in this sandbox and in recent Python builds. `sign` requires 3.35+.)
+Everything in that query is **core** SQLite: `abs`, `round`, the `%` modulo operator, the bit-shift operator `<<`, and the multi-argument forms of `max` / `min` (which pick the largest or smallest of their arguments on one row — MySQL and PostgreSQL call these `GREATEST` / `LEAST`). The expression `(x > 0) - (x < 0)` yields −1, 0 or 1: the sign of `x`.
+
+The book lists a much larger family for MySQL: `ACOS/ASIN/ATAN/COS/SIN/TAN`, `EXP`, `LN`, `SQRT`, `MOD`, `POW`, `CEIL`, `FLOOR`, `SIGN`, `TRUNCATE`.
+
+> [!NOTE]
+> **Math functions and this sandbox.** `ceil`, `floor`, `trunc`, `power`, `sqrt`, `exp`, `ln`, `log10`, `mod`, `pi` and the trigonometric functions exist in MySQL and PostgreSQL, and in SQLite builds compiled with math functions enabled (`SQLITE_ENABLE_MATH_FUNCTIONS` — the `sqlite3` shell and recent Python builds). The in-browser SQLite used by this guide is built **without** them, so calling them here gives *no such function*. The examples in this track therefore use core operators only, and name the function you would use elsewhere.
+
+| You want | MySQL / PostgreSQL | Core SQLite equivalent |
+|---|---|---|
+| Modulo | `MOD(a, b)` | `a % b` |
+| Truncate toward zero | `TRUNCATE(x, 0)` / `trunc(x)` | `CAST(x AS INTEGER)` |
+| Floor | `FLOOR(x)` | `CAST(x AS INTEGER) - (x < CAST(x AS INTEGER))` |
+| Ceiling | `CEIL(x)` | `CAST(x AS INTEGER) + (x > CAST(x AS INTEGER))` |
+| Sign | `SIGN(x)` | `(x > 0) - (x < 0)` |
+| Square, cube | `POWER(x, 2)` | `x * x`, `x * x * x` |
+| Power of two | `POWER(2, n)` | `1 << n` |
+| Square root, logarithms | `SQRT(x)`, `LN(x)` | not available — compute in the application, or use a full build |
 
 ### Controlling number precision
 
-Four functions limit precision: `ceil` (always up), `floor` (always down), `round` (to nearest), `trunc` (toward zero).
+Four operations limit precision: **ceiling** (always up), **floor** (always down), **round** (to nearest) and **truncate** (toward zero). MySQL and PostgreSQL have a function for each (`CEIL`, `FLOOR`, `ROUND`, `TRUNCATE`/`trunc`). Here `round` is built in and the other three are written with `CAST` and a comparison, as in the table above:
 
 ```sql-run dataset=bank
-SELECT ceil(72.445)     AS ceil_v,
-       floor(72.445)    AS floor_v,
-       round(72.445)    AS round_0,
-       round(72.445, 1) AS round_1,
-       round(72.445, 2) AS round_2,
-       trunc(72.999)    AS trunc_v,
-       floor(-72.5)     AS floor_neg,
-       trunc(-72.5)     AS trunc_neg;
+SELECT CAST(72.445 AS INTEGER) + (72.445 > CAST(72.445 AS INTEGER)) AS ceil_v,
+       CAST(72.445 AS INTEGER) - (72.445 < CAST(72.445 AS INTEGER)) AS floor_v,
+       round(72.445)             AS round_0,
+       round(72.445, 1)          AS round_1,
+       round(72.445, 2)          AS round_2,
+       CAST(72.999 AS INTEGER)   AS trunc_v,
+       CAST(-72.5 AS INTEGER) - (-72.5 < CAST(-72.5 AS INTEGER)) AS floor_neg,
+       CAST(-72.5 AS INTEGER)    AS trunc_neg;
 ```
+
+The last two columns show the difference that matters for negative numbers: floor goes toward negative infinity (−73), truncation toward zero (−72). `CAST(x AS INTEGER)` truncates; the `(x < CAST(...))` term is 1 exactly when truncation moved the value upward, so subtracting it produces the floor.
 
 `round(72.445, 2)` may surprise you by returning 72.44 or 72.45 depending on the engine: 72.445 cannot be represented exactly in binary floating point. `DECIMAL` columns in MySQL/PostgreSQL round exactly (half away from zero). MySQL's `TRUNCATE(x, d)` and PostgreSQL's `trunc(x, d)` take a digits argument; MySQL and PostgreSQL's `ROUND` also accept a **negative** precision to round to tens or hundreds (`ROUND(17456, -3)` = 17000) — in SQLite compute `round(x / 1000.0) * 1000`.
 
 ### Handling signed data
 
-The bank's `txn.amount` is always positive and `txn_type_cd` says whether it is a credit or a debit. `sign()` and `abs()` help when data is stored signed instead:
+The bank's `txn.amount` is always positive and `txn_type_cd` says whether it is a credit or a debit. A sign expression and `abs()` help when data is stored signed instead (elsewhere: `SIGN(x)`):
 
 ```sql-run dataset=bank
 SELECT account_id, avail_balance, pending_balance,
        pending_balance - avail_balance        AS diff,
-       sign(pending_balance - avail_balance)  AS direction,
+       (pending_balance > avail_balance) - (pending_balance < avail_balance) AS direction,
        abs(pending_balance - avail_balance)   AS magnitude
 FROM account
 WHERE pending_balance <> avail_balance
@@ -302,7 +320,7 @@ SELECT p.name,
        ROUND(p.price / 5.0) * 5                           AS sticker_price,
        CAST(p.price / 100 AS INTEGER) * 100               AS band_floor,
        ROUND(p.price / a.avg_price, 2)                    AS ratio_to_category_avg,
-       ROUND(ln(p.price), 3)                              AS log_price
+       ROUND(p.price * p.price, 2)                        AS price_squared
 FROM products p
 JOIN (SELECT category_id, AVG(price) AS avg_price FROM products GROUP BY category_id) a
   ON a.category_id = p.category_id
@@ -314,8 +332,8 @@ Points worth noticing:
 
 - **`100.0 *` first.** Writing the real constant at the front makes the whole expression real-valued. With integer columns, `(price - cost) / price * 100` would truncate to 0 before multiplying.
 - **Rounding to a multiple:** divide, round, multiply back — `ROUND(x / 5.0) * 5`. The same idiom gives nearest 0.25, nearest 1,000 and so on.
-- **Bucketing:** `CAST(x / 100 AS INTEGER) * 100` floors to the hundred below; for negative numbers use `floor()` instead, since CAST truncates toward zero.
-- **Log transforms** (`ln`) are a standard feature-engineering step for skewed quantities such as prices and counts.
+- **Bucketing:** `CAST(x / 100 AS INTEGER) * 100` floors to the hundred below; for negative numbers use a true floor (the `CAST … - (x < CAST …)` expression, or `FLOOR()` elsewhere), since CAST truncates toward zero.
+- **Powers** are written as repeated multiplication (`x * x`) in this sandbox; elsewhere use `POWER(x, 2)`. **Log transforms** (`LN(price)`), a standard feature-engineering step for skewed quantities, need MySQL/PostgreSQL or a SQLite build with math functions.
 
 ### Floating point: round at the end, compare with a tolerance
 
@@ -351,7 +369,7 @@ SELECT 0.1 + 0.2 = 0.3                    AS exact_equal,
   {"q": "What does instr('hello', 'z') return?", "options": ["-1", "0", "NULL", "5"], "answer": 1, "explain": "instr returns 0 when the substring is not found; positions are 1-based."},
   {"q": "How do you write a string literal containing an apostrophe portably?", "options": ["'didn\\'t'", "\"didn't\"", "'didn''t'", "`didn't`"], "answer": 2, "explain": "Doubling the single quote is standard SQL."},
   {"q": "Which expression extracts the last four characters of fed_id in SQLite?", "options": ["substr(fed_id, 4)", "substr(fed_id, -4)", "right4(fed_id)", "fed_id[-4:]"], "answer": 1, "explain": "A negative start position counts from the end."},
-  {"q": "floor(-72.5) and trunc(-72.5) return...", "options": ["-73 and -72", "-72 and -73", "-72 and -72", "-73 and -73"], "answer": 0, "explain": "floor goes toward negative infinity; trunc goes toward zero."},
+  {"q": "The floor of -72.5 and the truncation of -72.5 (CAST AS INTEGER) are...", "options": ["-73 and -72", "-72 and -73", "-72 and -72", "-73 and -73"], "answer": 0, "explain": "floor goes toward negative infinity; trunc goes toward zero."},
   {"q": "Which is the PostgreSQL equivalent of SQLite's group_concat(x, ', ')?", "options": ["GROUP_CONCAT(x SEPARATOR ', ')", "string_agg(x, ', ')", "concat_all(x)", "array_join(x)"], "answer": 1, "explain": "string_agg is PostgreSQL's (and standard-ish LISTAGG's cousin) string aggregate."}
 ]
 ```

@@ -326,7 +326,7 @@ SQLite's built-in set is small. Common gaps and their workarounds:
 
 | Need | PostgreSQL / MySQL | SQLite |
 |---|---|---|
-| Standard deviation | `STDDEV_SAMP(x)` | `sqrt((SUM(x*x) - SUM(x)*SUM(x)/COUNT(x)) / (COUNT(x) - 1))` |
+| Variance / standard deviation | `VAR_SAMP(x)`, `STDDEV_SAMP(x)` | variance: `(SUM(x*x) - SUM(x)*SUM(x)*1.0/COUNT(x)) / (COUNT(x) - 1)`; its square root needs a build with math functions |
 | Median / percentiles | `percentile_cont(0.5) WITHIN GROUP (ORDER BY x)` (PostgreSQL) | `ROW_NUMBER` + `COUNT(*) OVER` (see the patterns module) |
 | Conditional count | `COUNT(*) FILTER (WHERE c)` | same `FILTER` syntax (3.30+), or `SUM(CASE …)` |
 | Boolean all / any | `BOOL_AND(c)`, `BOOL_OR(c)` | `MIN(c)`, `MAX(c)` on 0/1 values |
@@ -336,14 +336,14 @@ SQLite's built-in set is small. Common gaps and their workarounds:
 SELECT deployment_id,
        COUNT(*) AS n,
        ROUND(AVG(latency_ms), 1) AS mean_latency,
-       ROUND(sqrt((SUM(latency_ms * latency_ms) - SUM(latency_ms) * SUM(latency_ms) * 1.0 / COUNT(*))
-                  / (COUNT(*) - 1)), 1) AS stddev_latency,
+       ROUND((SUM(latency_ms * latency_ms) - SUM(latency_ms) * SUM(latency_ms) * 1.0 / COUNT(*))
+             / (COUNT(*) - 1), 1) AS variance_latency,
        MIN(latency_ms < 200) AS all_under_200ms,
        MAX(latency_ms > 300) AS any_over_300ms
 FROM predictions
 GROUP BY deployment_id
 HAVING COUNT(*) >= 15
-ORDER BY stddev_latency DESC
+ORDER BY variance_latency DESC
 LIMIT 6;
 ```
 
