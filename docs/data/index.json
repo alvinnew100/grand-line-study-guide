@@ -170,6 +170,20 @@
   "problems": 60
  },
  {
+  "id": "interview-prep",
+  "title": "Cracking the Coding Interview",
+  "icon": "🎯",
+  "blurb": "The whole interview, start to finish: how hiring works, behavioural stories, Big O, a step-by-step method for technical questions, and original practice problems for every topic chapter.",
+  "color": "#c2410c",
+  "sources": [
+   "McDowell, Cracking the Coding Interview, 6th ed."
+  ],
+  "words": 0,
+  "modules": 7,
+  "lessons": 0,
+  "problems": 46
+ },
+ {
   "id": "sql",
   "title": "SQL from Zero to Interview",
   "icon": "🗃️",
@@ -260,10 +274,10 @@
    "The Go Programming Language Specification, go.dev/ref/spec",
    "Go documentation: Effective Go, the Go Memory Model, the Go blog and package docs, go.dev/doc and pkg.go.dev"
   ],
-  "words": 115417,
+  "words": 151449,
   "modules": 18,
   "lessons": 42,
-  "problems": 30
+  "problems": 61
  },
  {
   "id": "fastapi",
@@ -330,14 +344,17 @@
   "id": "graphql",
   "title": "GraphQL & API Design",
   "icon": "🕸️",
-  "blurb": "tmp",
+  "blurb": "APIs explained from zero, then GraphQL end to end: the query language, schema design, resolvers, clients and their caches, security, performance at scale, and how to choose between REST, GraphQL and gRPC in an interview. Every idea runs in the page through small hand-written models of a GraphQL engine, plus 27 judged problems.",
   "color": "#d6338a",
   "sources": [
-   "Porcello & Banks, Learning GraphQL (O'Reilly, 2018)"
+   "Porcello & Banks, Learning GraphQL (O'Reilly, 2018)",
+   "graphql.org/learn (official GraphQL documentation)",
+   "spec.graphql.org (GraphQL specification)",
+   "apollographql.com/docs (Apollo Server, Client and Federation documentation)"
   ],
-  "words": 0,
-  "modules": 1,
-  "lessons": 0,
+  "words": 39451,
+  "modules": 10,
+  "lessons": 23,
   "problems": 27
  },
  {
@@ -371,6 +388,39 @@
   "problems": 25
  },
  {
+  "id": "kubernetes",
+  "title": "Kubernetes",
+  "icon": "☸️",
+  "blurb": "Container orchestration from zero: the control plane and reconciliation loops, Pods, Deployments, Services, Ingress and the Gateway API, storage, configuration, StatefulSets, RBAC and security, autoscaling and scheduling, Helm and GitOps, troubleshooting, ML workloads and worked interview answers.",
+  "color": "#326ce5",
+  "sources": [
+   "Nigel Poulton, The Kubernetes Book, ch. 1-16 (topic map and fact checking; all wording and examples are original)",
+   "Official docs: kubernetes.io/docs (concepts, tasks and API reference), gateway-api.sigs.k8s.io",
+   "Project docs: helm.sh, kustomize.io, argo-cd.readthedocs.io, kserve.github.io, kubeflow.org"
+  ],
+  "words": 18809,
+  "modules": 21,
+  "lessons": 5,
+  "problems": 0
+ },
+ {
+  "id": "aws",
+  "title": "AWS for Engineers",
+  "icon": "☁️",
+  "blurb": "Amazon Web Services from zero: accounts and billing, EC2, S3, VPC networking, databases, IAM and security, monitoring, DNS and content delivery, load balancing, auto scaling, queues, serverless, containers, infrastructure as code, the Well-Architected pillars, AWS for ML and data, a worked project from one server to a multi-AZ production design, and Solutions Architect exam practice.",
+  "color": "#ff9900",
+  "sources": [
+   "AWS Certified Solutions Architect Official Study Guide: Associate Exam (Sybex), ch. 1-14",
+   "AWS documentation (docs.aws.amazon.com): EC2, EBS, S3, VPC, RDS, DynamoDB, IAM, Lambda, CloudWatch, Route 53, CloudFront, Elastic Load Balancing, Auto Scaling, SQS, SNS, Kinesis, CloudFormation user guides",
+   "AWS Well-Architected Framework (docs.aws.amazon.com/wellarchitected)",
+   "AWS Billing user guide: Free Tier (docs.aws.amazon.com/awsaccountbilling)"
+  ],
+  "words": 0,
+  "modules": 15,
+  "lessons": 0,
+  "problems": 33
+ },
+ {
   "id": "cicd",
   "title": "CI/CD & Continuous Delivery",
   "icon": "🚀",
@@ -401,6 +451,24 @@
   "modules": 12,
   "lessons": 30,
   "problems": 28
+ },
+ {
+  "id": "system-design",
+  "title": "System Design Interview",
+  "icon": "🏗️",
+  "blurb": "System design from zero to interview-ready: the building blocks, estimation, a four-step framework, every classic design from rate limiter to file sync, more modern designs, and 60 practice prompts.",
+  "color": "#0f766e",
+  "sources": [
+   "Alex Xu, System Design Interview: An Insider's Guide (2nd ed.), ch. 1-16 (topic guide; all wording original)",
+   "System Design Primer (github.com/donnemartin/system-design-primer)",
+   "DeCandia et al., Dynamo: Amazon's Highly Available Key-value Store (SOSP 2007)",
+   "Stripe engineering blog: rate limiters and idempotency (stripe.com/blog)",
+   "RFC 9309 (robots.txt), RFC 9562 (UUIDs)"
+  ],
+  "words": 69908,
+  "modules": 16,
+  "lessons": 20,
+  "problems": 23
  },
  {
   "id": "web-security",
