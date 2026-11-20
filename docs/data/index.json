@@ -125,17 +125,17 @@
   "id": "neet-heap-graphs",
   "title": "Patterns IV — Heaps, Backtracking & Graphs",
   "icon": "⚓",
-  "blurb": "Priority queues and the top-k / two-heap patterns, the backtracking template with pruning, and the full graph toolkit: DFS/BFS, topological sort, union-find, Dijkstra, Bellman-Ford, MSTs and Eulerian paths — with 35 judged NeetCode problems.",
+  "blurb": "Priority queues and the top-k / two-heap patterns, the backtracking template with pruning, and the full graph toolkit: DFS/BFS, topological sort, union-find, Dijkstra, Bellman-Ford, MSTs and Eulerian paths — with 58 judged NeetCode problems.",
   "color": "#2a7ab0",
   "sources": [
    "Goodrich, Tamassia & Goldwasser, Data Structures and Algorithms in Python, ch. 9 (Priority Queues)",
    "Goodrich, Tamassia & Goldwasser, Data Structures and Algorithms in Python, ch. 14 (Graph Algorithms)",
    "NeetCode 150 roadmap"
   ],
-  "words": 31707,
+  "words": 36421,
   "modules": 4,
   "lessons": 11,
-  "problems": 35
+  "problems": 58
  },
  {
   "id": "neet-dp",
@@ -147,10 +147,10 @@
    "Goodrich, Tamassia & Goldwasser, Data Structures and Algorithms in Python, ch. 13.3 (Dynamic Programming)",
    "NeetCode 150 roadmap — 1-D and 2-D Dynamic Programming"
   ],
-  "words": 25523,
+  "words": 31659,
   "modules": 3,
   "lessons": 11,
-  "problems": 39
+  "problems": 51
  },
  {
   "id": "neet-greedy-math",
@@ -166,7 +166,7 @@
   "words": 22712,
   "modules": 4,
   "lessons": 8,
-  "problems": 46
+  "problems": 60
  },
  {
   "id": "sql",
@@ -230,7 +230,7 @@
    "The Go Programming Language Specification, go.dev/ref/spec",
    "Go documentation: Effective Go, the Go Memory Model, the Go blog and package docs, go.dev/doc and pkg.go.dev"
   ],
-  "words": 0,
+  "words": 57693,
   "modules": 18,
   "lessons": 42,
   "problems": 30
@@ -320,9 +320,9 @@
    "Official docs: docs.docker.com (Dockerfile reference, Compose file reference, Engine, Build, Swarm)",
    "Official docs: kubernetes.io, prometheus.io, NVIDIA Container Toolkit, astral.sh/uv"
   ],
-  "words": 51064,
+  "words": 111749,
   "modules": 14,
-  "lessons": 16,
+  "lessons": 31,
   "problems": 25
  },
  {
@@ -339,7 +339,7 @@
   "words": 127245,
   "modules": 18,
   "lessons": 38,
-  "problems": 0
+  "problems": 22
  },
  {
   "id": "networking",
