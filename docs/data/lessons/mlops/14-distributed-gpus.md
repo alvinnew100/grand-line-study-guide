@@ -221,6 +221,96 @@ for ck in [0, 2, 0.5]:
 > scaling the learning rate and checking scaling efficiency. For models that do not fit: gradient
 > checkpointing, FSDP/ZeRO, LoRA. Always add checkpointing so you can use cheap spot capacity.
 
+## Kubernetes and cloud launchers for distributed jobs
+
+Writing DDP code is half the job; something must also start N workers, give them each other's addresses,
+restart failures and clean up. On Kubernetes the **Kubeflow Training Operator** does this:
+
+```yaml
+apiVersion: kubeflow.org/v1
+kind: PyTorchJob
+metadata: {name: churn-encoder-ddp}
+spec:
+  runPolicy: {backoffLimit: 3, cleanPodPolicy: Running}
+  pytorchReplicaSpecs:
+    Master:
+      replicas: 1
+      restartPolicy: OnFailure
+      template:
+        spec:
+          containers:
+            - name: pytorch
+              image: ghcr.io/acme/train@sha256:1c2d...
+              command: ["python", "-m", "encoder.train", "--config", "configs/ddp.yaml"]
+              resources: {limits: {nvidia.com/gpu: 1, memory: 32Gi}}
+              volumeMounts: [{name: shm, mountPath: /dev/shm}]
+          volumes: [{name: shm, emptyDir: {medium: Memory}}]
+    Worker:
+      replicas: 3
+      restartPolicy: OnFailure
+      template:
+        spec:
+          tolerations: [{key: nvidia.com/gpu, operator: Exists, effect: NoSchedule}]
+          containers:
+            - name: pytorch
+              image: ghcr.io/acme/train@sha256:1c2d...
+              command: ["python", "-m", "encoder.train", "--config", "configs/ddp.yaml"]
+              resources: {limits: {nvidia.com/gpu: 1, memory: 32Gi}}
+```
+
+The operator injects the environment variables PyTorch needs to form the process group. Two things to
+get right: **gang scheduling** (start all four pods or none — otherwise three pods sit on GPUs waiting
+for a fourth that cannot be scheduled; Kueue or Volcano provide this) and **`/dev/shm`** (DataLoader
+workers share memory; the container default of 64 MB causes cryptic "bus error" crashes).
+
+Managed equivalents: SageMaker (`instance_count=4` with a distribution setting), Vertex AI custom jobs
+with worker pools, Azure ML distributed jobs, and Ray Train on a Ray cluster.
+
+## Debugging slow or failing training: a field guide
+
+| Symptom | Likely cause | Check / fix |
+|---|---|---|
+| `CUDA out of memory` at start | batch too large, model too big | reduce batch, mixed precision, gradient checkpointing |
+| OOM after hours | memory leak: accumulating tensors with graph (`loss` instead of `loss.item()`), growing lists | profile memory; detach scalars |
+| GPU utilisation saw-tooth 0→100% | data loader starvation | more workers, pinned memory, pre-processed data, faster storage |
+| Utilisation high, throughput low | small batch, slow kernels, CPU↔GPU sync points (`.item()`, `.cpu()` in the loop) | larger batch, AMP, remove sync calls |
+| Loss becomes NaN | LR too high, FP16 overflow, bad data | lower LR, gradient clipping, check inputs, loss scaling |
+| Multi-GPU barely faster than one | communication or data bottleneck; tiny model | measure scaling efficiency; increase per-GPU batch |
+| Different result on resume | optimizer/scheduler/RNG state not restored | checkpoint all state |
+| Job dies silently | host OOM killer, spot preemption, node drain | `dmesg`, cluster events; checkpoint and auto-resume |
+
+```python-run
+# Where does a training step's time go? A simple profile tells you what to fix.
+profiles = {
+    "data-starved":   {"data loading": 310, "host->GPU copy": 15, "forward+backward": 95, "optimizer": 10, "logging": 20},
+    "after fixing":   {"data loading": 18,  "host->GPU copy": 6,  "forward+backward": 95, "optimizer": 10, "logging": 2},
+    "+ mixed precision": {"data loading": 18, "host->GPU copy": 6, "forward+backward": 52, "optimizer": 9, "logging": 2},
+}
+batch = 256
+for name, p in profiles.items():
+    total = sum(p.values())
+    gpu_busy = (p["forward+backward"] + p["optimizer"]) / total
+    worst = max(p, key=p.get)
+    print(f"{name:18s} step={total:4d} ms  throughput={batch / total * 1000:6.0f} samples/s  "
+          f"GPU busy={gpu_busy:4.0%}  biggest cost: {worst}")
+```
+
+The first fix (data loading) gives a 3.4× speedup without touching the model or buying hardware; only
+then does mixed precision matter. **Profile before you scale**: `torch.profiler`, `nvidia-smi dmon`,
+py-spy, or simply timing each phase of the loop.
+
+## Choosing hardware
+
+- **Tabular / classical ML**: CPUs with plenty of RAM; GPUs help XGBoost/LightGBM only on large data.
+- **Fine-tuning mid-size transformers, CV**: one or a few mid-range GPUs (T4/L4/A10 class) are often the
+  best price-performance.
+- **Large-model training/fine-tuning**: high-memory GPUs (A100/H100 class) with fast interconnect;
+  memory capacity, not just speed, is the constraint.
+- Always compare by **cost per training run** (time × price), not price per hour: a GPU that costs 3×
+  more but finishes 5× sooner is cheaper.
+- Storage matters: reading millions of small files from network storage can dominate; use sharded
+  formats (WebDataset, TFRecord, Parquet) and local NVMe caches.
+
 ## Summary
 
 - Know the GPU stack (driver on host, CUDA in image), memory math and `nvidia-smi`.

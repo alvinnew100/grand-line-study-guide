@@ -216,6 +216,99 @@ core logic in your own packages rather than platform-specific SDK calls).
 > it. Many teams go hybrid. Show you know the equivalents across AWS/GCP/Azure and the serverless
 > trade-off (scale-to-zero vs cold start).
 
+## Reference architecture: the churn system on one cloud
+
+To see how the pieces fit, here is the capstone system mapped onto AWS, with the Google Cloud and Azure
+equivalents alongside.
+
+```mermaid
+flowchart LR
+  SRC[(App DB and events)] --> ING[Ingestion: DMS or Kinesis]
+  ING --> S3[(Object storage: raw and curated)]
+  S3 --> WH[(Warehouse or Athena)]
+  WH --> PIPE[Pipeline orchestrator]
+  PIPE --> TJ[Managed training job on spot GPUs or CPUs]
+  TJ --> TRK[(Tracking and model registry)]
+  TRK --> CD[CI/CD with OIDC]
+  CD --> EP[Serving: managed endpoint or Kubernetes]
+  EP --> CAP[(Prediction capture to object storage)]
+  CAP --> MONJ[Scheduled monitoring job]
+  MONJ --> AL[Alerts and retraining trigger]
+  AL --> PIPE
+```
+
+| Role | AWS | Google Cloud | Azure |
+|---|---|---|---|
+| Raw/curated storage | S3 | GCS | ADLS Gen2 |
+| Query engine | Athena / Redshift | BigQuery | Synapse / Fabric |
+| Orchestrator | SageMaker Pipelines / MWAA | Vertex AI Pipelines / Composer | Azure ML pipelines / Data Factory |
+| Training | SageMaker training job (managed spot) | Vertex custom job (Spot VMs) | Azure ML job (low-priority VMs) |
+| Tracking + registry | SageMaker managed MLflow / Model Registry | Vertex Experiments / Model Registry | Azure ML (MLflow-native) |
+| Serving | SageMaker endpoint or EKS | Vertex endpoint, Cloud Run or GKE | Managed online endpoint or AKS |
+| Data capture | endpoint data capture → S3 | request/response logging → BigQuery | data collector → Blob |
+| Monitoring job | Model Monitor / scheduled processing job | Model Monitoring / scheduled job | Azure ML monitoring |
+| Alerts | CloudWatch alarms → SNS | Cloud Monitoring | Azure Monitor |
+| Identity for CI | IAM role via GitHub OIDC | Workload Identity Federation | Federated credentials |
+
+### A minimal IAM policy for the training job
+
+Least privilege in practice means the training role can read its inputs, write its outputs, and nothing
+else:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {"Sid": "ReadTrainingData", "Effect": "Allow", "Action": ["s3:GetObject", "s3:ListBucket"],
+     "Resource": ["arn:aws:s3:::acme-ml-data", "arn:aws:s3:::acme-ml-data/churn/*"]},
+    {"Sid": "WriteArtifacts", "Effect": "Allow", "Action": ["s3:PutObject"],
+     "Resource": ["arn:aws:s3:::acme-ml-artifacts/churn/*"]},
+    {"Sid": "PullImage", "Effect": "Allow",
+     "Action": ["ecr:GetDownloadUrlForLayer", "ecr:BatchGetImage", "ecr:GetAuthorizationToken"], "Resource": "*"},
+    {"Sid": "Logs", "Effect": "Allow", "Action": ["logs:CreateLogStream", "logs:PutLogEvents"], "Resource": "*"}
+  ]
+}
+```
+
+The serving role, by contrast, needs *read* access to model artifacts and no access to raw training
+data at all. Separate roles per stage limit the damage if any one component is compromised.
+
+## Migrating between levels of abstraction
+
+Teams rarely stay at the level where they started. Typical moves and what triggers them:
+
+| Move | Trigger | What makes it easy |
+|---|---|---|
+| Model API → self-hosted open model | cost at volume, latency, data-residency, need to fine-tune | an internal gateway abstraction (lesson 33) and an eval suite to verify parity |
+| Managed endpoint → own Kubernetes | need custom routing/batching, multi-model packing, lower unit cost | containerised model server, standard inference protocol |
+| Own Kubernetes → managed platform | small team drowning in ops | models in an open format, registry-centric workflow |
+| One cloud → another / multi-cloud | acquisition, negotiation leverage, GPU availability | Terraform, containers, MLflow, Parquet; thin cloud-specific layer |
+
+The portable core is always the same: **container images, open model and data formats, a registry with
+lineage, and pipeline logic written as plain Python functions** wrapped by thin platform-specific
+adapters.
+
+```python-run
+# Decision sketch: weighted scoring of platform options for a hypothetical team.
+criteria = {"time to first production model": 0.25, "ops burden": 0.25, "unit cost at our scale": 0.20,
+            "flexibility / custom serving": 0.15, "portability": 0.15}
+# scores 1 (bad) .. 5 (good)
+options = {
+    "Managed ML platform":        [5, 5, 3, 3, 2],
+    "Own Kubernetes + OSS stack": [2, 2, 4, 5, 5],
+    "Hybrid (managed train, own serve)": [4, 3, 4, 4, 4],
+}
+def rank(weights):
+    return sorted(((sum(w * s for w, s in zip(weights, sc)), name) for name, sc in options.items()), reverse=True)
+print("3-person team, first models:")
+for score, name in rank(list(criteria.values())): print(f"  {score:.2f}  {name}")
+print("platform team of 8, 60 models, cost pressure (reweighted):")
+for score, name in rank([0.10, 0.15, 0.30, 0.25, 0.20]): print(f"  {score:.2f}  {name}")
+```
+
+The ranking flips with the weights — which is the point. There is no universally right platform, only a
+right one for a team's size, model count and constraints, and the answer changes as those change.
+
 ## Summary
 
 - Clouds offer the same primitives under different names; ML platforms (SageMaker, Vertex AI, Azure ML)

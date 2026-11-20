@@ -214,14 +214,98 @@ bounded length, and extra space.
 | bucket / counting sort | $O(n + N)$ | integer keys in $[0, N-1]$ |
 | radix sort | $O(d(n + N))$ | $d$-digit keys, digits in $[0, N-1]$ |
 
-## 5. Pitfalls
+## 5. Bucket-sort for real numbers: expected linear time
+
+Bucket-sort as presented needs integer keys in a small range. The same idea handles **real numbers
+drawn uniformly at random** from an interval, say $[0, 1)$ — with buckets that represent
+*sub-intervals* instead of single key values.
+
+**Algorithm.** For $n$ keys, create $n$ buckets, bucket $i$ covering $[i/n, (i+1)/n)$. Put key $x$
+in bucket $\lfloor n x \rfloor$. Sort each bucket (insertion-sort is ideal: the buckets are tiny) and
+concatenate the buckets in order.
+
+**Correctness.** The mapping $x \mapsto \lfloor nx \rfloor$ is monotone: a smaller key never lands
+in a later bucket. So concatenating the individually sorted buckets yields a sorted sequence.
+
+**Analysis.** Let $n_i$ be the number of keys in bucket $i$. Distribution and concatenation cost
+$O(n)$; sorting bucket $i$ with insertion-sort costs $O(n_i^2)$. So the time is
+$O(n) + \sum_i O(n_i^2)$, and everything depends on $\sum_i n_i^2$.
+
+Under the uniformity assumption each key falls in bucket $i$ independently with probability
+$1/n$, so $n_i$ is binomial with mean 1 and variance $1 - 1/n$, and
+
+$$E[n_i^2] = \operatorname{Var}(n_i) + E[n_i]^2 = \left(1 - \tfrac1n\right) + 1 = 2 - \tfrac1n.$$
+
+Summing over the $n$ buckets, $E\!\left[\sum_i n_i^2\right] = 2n - 1$. The **expected** running time
+is therefore $O(n)$.
+
+The guarantee is only as good as the assumption. If the keys are clustered — all in $[0, 0.001)$,
+say — they pile into a few buckets and the cost degrades toward the $O(n^2)$ of insertion-sort on
+one bucket (or $O(n\log n)$ if each bucket is sorted with merge-sort instead). Notice the contrast
+with randomised quick-sort, whose $O(n \log n)$ expectation holds for **every** input because the
+randomness is in the algorithm, not assumed of the data.
+
+```python-run
+import random, time
+
+def bucket_sort_reals(values):
+    """Sort floats in [0, 1): expected O(n) when the values are uniformly distributed."""
+    n = len(values)
+    if n == 0: return [], 0
+    buckets = [[] for _ in range(n)]
+    for x in values:
+        buckets[int(n * x)].append(x)
+    out, work = [], 0
+    for b in buckets:
+        for k in range(1, len(b)):                 # insertion-sort inside the bucket
+            cur, j = b[k], k
+            while j > 0 and b[j - 1] > cur:
+                b[j] = b[j - 1]; j -= 1
+            b[j] = cur
+        work += len(b) ** 2                        # the quantity the analysis bounds
+        out.extend(b)
+    return out, work
+
+random.seed(5)
+for n in [1000, 10000, 100000]:
+    uniform = [random.random() for _ in range(n)]
+    out, work = bucket_sort_reals(uniform)
+    print(f"uniform   n={n:6d}: sorted={out == sorted(uniform)}  sum of n_i^2 = {work:8d}  (theory: about 2n = {2 * n})")
+n = 4000
+clustered = [random.random() ** 8 for _ in range(n)]        # heavily skewed toward 0
+out, work = bucket_sort_reals(clustered)
+print(f"clustered n={n:6d}: sorted={out == sorted(clustered)}  sum of n_i^2 = {work:8d}  (about {work // n} times n)")
+print("keys that landed in bucket 0 alone:", sum(int(n * x) == 0 for x in clustered), "of", n)
+```
+
+On uniform data the measured $\sum n_i^2$ sits right at $2n$, for every $n$ — linear time. On the
+skewed data the same code is still **correct**, but roughly a third of all keys land in the very first bucket, so
+the work is far above $2n$ — the quadratic cost of insertion-sorting one large bucket.
+
+### Choosing among the linear-time sorts
+
+| Situation | Method | Cost |
+|---|---|---|
+| integer keys in $[0, N-1]$ with $N = O(n)$ | counting / bucket-sort | $O(n + N)$ |
+| integers up to $n^c$, fixed-length strings, dates | LSD radix-sort (stable counting sort per digit) | $O(d(n + N))$ |
+| variable-length strings | MSD radix-sort | proportional to the characters actually examined |
+| reals known to be roughly uniform | interval bucket-sort | $O(n)$ expected |
+| anything else, or unknown distribution | a comparison sort | $O(n\log n)$ |
+
+A practical remark: linear-time sorts read and write memory in scattered patterns (one bucket per
+key value), so for moderate $n$ a well-tuned comparison sort is often just as fast. They pay off for
+very large $n$, small digit alphabets and keys that are cheap to decompose — which is why radix-sort
+is the method of choice for sorting hundreds of millions of fixed-width integers or records by
+integer key.
+
+## 6. Pitfalls
 
 - Radix-sort with an **unstable** per-digit sort gives wrong results.
 - Sorting most-significant digit first with LSD-style full passes.
 - Using bucket-sort when $N \gg n$ (the $O(N)$ term dominates time and memory).
 - Forgetting negative numbers / the empty input (`max([])` raises).
 
-## 6. Summary
+## 7. Summary
 
 - Decision-tree argument: $n!$ leaves ⇒ height ≥ $\log(n!)$ = $\Omega(n \log n)$ comparisons.
 - Bucket-sort: $O(n + N)$ for integer keys in $[0, N-1]$; stable if buckets are queues.

@@ -162,7 +162,7 @@ LEFT JOIN (SELECT customer_id, MAX(order_date) AS last_order
            FROM orders GROUP BY customer_id) t ON t.customer_id = c.customer_id;
 ```
 
-The first contains a `CORRELATED SCALAR SUBQUERY` that scans `orders` once per customer (80 scans here; with an index on `orders(customer_id, order_date)` each would become a cheap seek). The second scans `orders` once. Neither is always best — with the index and few outer rows, the correlated form wins — which is why you read the plan instead of following slogans.
+The first contains a `CORRELATED SCALAR SUBQUERY` that probes `orders` once per customer — 80 probes here. With no suitable index, SQLite must either scan `orders` each time or build a temporary automatic index first; with a real index on `orders(customer_id, order_date)` each probe is a cheap seek. The second reads `orders` once and aggregates it. Neither is always best — with the index and few outer rows, the correlated form wins — which is why you read the plan instead of following slogans.
 
 ### 6. OR conditions, NOT IN and friends
 

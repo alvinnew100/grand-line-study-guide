@@ -284,7 +284,119 @@ The runnable cell in section 3.2 above includes this function too; scroll up and
 > finds a node in $O(1)$, the list moves it to the front or evicts the back in $O(1)$. Python's
 > `collections.OrderedDict` is implemented exactly this way (`move_to_end`, `popitem(last=False)`).
 
-## 5. Pitfalls
+## 5. Dry run: the four reference updates
+
+Insert `X` between `A` and `B` in `header ⇄ A ⇄ B ⇄ trailer`, i.e. `_insert_between("X", A, B)`.
+
+| step | statement | forward chain | backward chain |
+|---|---|---|---|
+| 0 | (before) | A → B | B → A |
+| 1 | `newest = _Node("X", A, B)` | A → B; X → B | B → A; X → A |
+| 2 | `A._next = newest` | A → X → B | B → A; X → A |
+| 3 | `B._prev = newest` | A → X → B | B → X → A |
+
+Step 1 sets the two references **inside the new node**; steps 2 and 3 redirect the two neighbours.
+After step 2 alone the structure is inconsistent — a forward walk sees X, a backward walk does not.
+A bug that omits step 3 can therefore survive any test that only traverses forwards, and surface
+much later when something walks backwards or deletes from the other end. Deletion is the mirror
+image: `p._next = s` and `s._prev = p` unlink the node from both chains, after which nothing in the
+list references it.
+
+Because both neighbours are always real nodes (thanks to the sentinels), neither routine contains a
+single `if`. Compare the singly linked queue of the previous lesson, where enqueue and dequeue each
+needed a special case for the empty list.
+
+## 6. Worked application: an LRU cache from a positional list and a dictionary
+
+A **least-recently-used cache** holds at most `capacity` items; when a new item arrives and the
+cache is full, the item that has gone unused for the longest time is evicted. Both operations must
+be $O(1)$:
+
+- `get(key)` — return the value and mark the item as most recently used;
+- `put(key, value)` — insert or update, mark as most recently used, evict if over capacity.
+
+No single structure does this. A dictionary finds a key in $O(1)$ but has no notion of recency; a
+list ordered by recency supports $O(1)$ eviction from the back but takes $O(n)$ to *find* a key.
+Combine them: the dictionary maps each key to its **node** (its position) in a doubly linked list
+ordered from most to least recently used. The dictionary provides the lookup; the position provides
+$O(1)$ unlink-and-move-to-front — the operation that only a doubly linked list can do.
+
+```python-run
+class LRUCache:
+    class _Node:
+        __slots__ = "key", "value", "prev", "next"
+        def __init__(self, key=None, value=None):
+            self.key, self.value, self.prev, self.next = key, value, None, None
+
+    def __init__(self, capacity):
+        self._capacity = capacity
+        self._where = {}                               # key -> node (the item's position)
+        self._header, self._trailer = self._Node(), self._Node()
+        self._header.next, self._trailer.prev = self._trailer, self._header
+
+    def _unlink(self, node):
+        node.prev.next, node.next.prev = node.next, node.prev
+    def _add_first(self, node):
+        first = self._header.next
+        node.prev, node.next = self._header, first
+        self._header.next = first.prev = node
+
+    def get(self, key):
+        node = self._where.get(key)
+        if node is None:
+            return None
+        self._unlink(node); self._add_first(node)      # move to front: most recently used
+        return node.value
+
+    def put(self, key, value):
+        node = self._where.get(key)
+        if node is not None:
+            node.value = value
+            self._unlink(node)
+        else:
+            if len(self._where) == self._capacity:
+                oldest = self._trailer.prev            # least recently used sits at the back
+                self._unlink(oldest)
+                del self._where[oldest.key]            # the node remembers its key for this step
+            node = self._where[key] = self._Node(key, value)
+        self._add_first(node)
+
+    def order(self):
+        out, walk = [], self._header.next
+        while walk is not self._trailer:
+            out.append(walk.key); walk = walk.next
+        return out
+
+cache = LRUCache(3)
+for op, *args in [("put", "a", 1), ("put", "b", 2), ("put", "c", 3), ("get", "a"),
+                  ("put", "d", 4), ("get", "b"), ("put", "c", 30), ("put", "e", 5)]:
+    result = getattr(cache, op)(*args)
+    print(f"{op}{tuple(args)!s:12} -> {str(result):5}  recency order (most recent first): {cache.order()}")
+```
+
+### Reading the trace
+
+After `put a, b, c` the order is `c b a`. `get(a)` moves `a` to the front: `a c b`. `put(d)` finds
+the cache full and evicts the item at the back — `b`, the least recently used — giving `d a c`.
+`get(b)` now misses. Updating `c` moves it to the front, and inserting `e` evicts `a`.
+
+Every operation performs one dictionary lookup and a constant number of reference updates:
+**$O(1)$** (expected, because of the hash table), with $O(\text{capacity})$ space. Three design
+points generalise:
+
+1. **Positions are what make it work.** The dictionary stores a reference to the node itself, so no
+   search of the list is ever needed. An index into an array-based list would be useless — it would
+   shift every time another item moved.
+2. **Each node stores its key** as well as its value, so that eviction (which starts from the list)
+   can delete the matching dictionary entry.
+3. **Sentinels remove the edge cases** of an empty cache and of touching the first or last item.
+
+Python packages exactly this design as `collections.OrderedDict` (`move_to_end`,
+`popitem(last=False)`) and uses it inside `functools.lru_cache`. The same list-plus-map pattern,
+with a different eviction rule, gives FIFO caches, and it is how the "favourites" structures of the
+next lesson can find their items in $O(1)$.
+
+## 7. Pitfalls
 
 - Forgetting one of the four link updates in insert (two on the new node, two on neighbours).
 - Allowing a deleted position to be reused: always validate.
@@ -292,7 +404,7 @@ The runnable cell in section 3.2 above includes this function too; scroll up and
   same node, hence the custom `__eq__`.
 - Using an index-based mental model; positions do not shift when elements are inserted elsewhere.
 
-## 6. Summary
+## 8. Summary
 
 | Operation | Doubly linked list (positional) |
 |---|---|

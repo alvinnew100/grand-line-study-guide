@@ -234,6 +234,103 @@ Use them when they fit; they are shorter and express intent.
 - **Mixed result types** — errors in strict engines, surprising sorts in SQLite.
 - **CASE in WHERE on big tables** — hides columns from the optimizer.
 
+## Worked example: business rules as a CASE expression
+
+CASE is where business rules meet data, so practise turning a written policy into one. The bank's rule for a customer-facing account label:
+
+> Closed accounts show "Closed". Frozen accounts show "Contact branch". Otherwise, loans show "Loan"; deposit accounts show "Premier" at \$10,000 or more, "Standard" from \$1,000, and "Basic" below that. An account with no balance on file shows "Pending".
+
+Order the branches from the most specific override to the general case, and decide where NULL goes:
+
+```sql-run dataset=bank
+SELECT account_id, product_cd, status, avail_balance,
+       CASE
+         WHEN status = 'CLOSED'                THEN 'Closed'
+         WHEN status = 'FROZEN'                THEN 'Contact branch'
+         WHEN product_cd IN ('MRT', 'AUT', 'BUS', 'SBL') THEN 'Loan'
+         WHEN avail_balance IS NULL            THEN 'Pending'
+         WHEN avail_balance >= 10000           THEN 'Premier'
+         WHEN avail_balance >= 1000            THEN 'Standard'
+         ELSE 'Basic'
+       END AS label
+FROM account
+WHERE account_id IN (101, 104, 107, 108, 120, 131, 142, 171)
+ORDER BY account_id;
+```
+
+Three design decisions are visible in the order of the branches:
+
+1. **Status overrides everything**, so those tests come first; a closed loan is "Closed", not "Loan".
+2. **The NULL test precedes the numeric tests.** Without it, a NULL balance would fail both `>=` comparisons (UNKNOWN) and fall through to ELSE — quietly labelled "Basic". An explicit `IS NULL` branch makes missing data visible.
+3. **Thresholds descend**, so each branch may assume the earlier ones failed (`>= 1000` means "between 1,000 and 9,999.99").
+
+Then check the rule against the whole table — a CASE is code, and deserves a test:
+
+```sql-run dataset=bank
+SELECT CASE
+         WHEN status = 'CLOSED'                THEN 'Closed'
+         WHEN status = 'FROZEN'                THEN 'Contact branch'
+         WHEN product_cd IN ('MRT', 'AUT', 'BUS', 'SBL') THEN 'Loan'
+         WHEN avail_balance IS NULL            THEN 'Pending'
+         WHEN avail_balance >= 10000           THEN 'Premier'
+         WHEN avail_balance >= 1000            THEN 'Standard'
+         ELSE 'Basic'
+       END AS label,
+       COUNT(*) AS accounts,
+       MIN(avail_balance) AS min_balance,
+       MAX(avail_balance) AS max_balance
+FROM account
+GROUP BY label
+ORDER BY accounts DESC;
+```
+
+The min and max per label confirm the boundaries: no "Standard" account below 1,000 or at 10,000 and above. Grouping by the CASE result is the quickest way to audit it.
+
+## CASE and data types
+
+Every branch of a CASE should produce the same type, because the expression has *one* type. Mixing them is an error in PostgreSQL and a source of odd behaviour in SQLite:
+
+```sql-run dataset=bank
+SELECT account_id,
+       CASE WHEN avail_balance > 0 THEN avail_balance ELSE 'n/a' END AS mixed_types,
+       typeof(CASE WHEN avail_balance > 0 THEN avail_balance ELSE 'n/a' END) AS type_of_result,
+       CASE WHEN avail_balance > 0 THEN printf('%.2f', avail_balance) ELSE 'n/a' END AS consistent_text
+FROM account
+WHERE account_id IN (107, 108, 110, 112);
+```
+
+`mixed_types` is sometimes a number and sometimes text; sort or sum that column and the results are unpredictable. Convert explicitly so that all branches agree — text for display, or NULL (which fits any type) instead of a placeholder when the column will be used in further arithmetic.
+
+## Short-circuit evaluation
+
+CASE guarantees that branches are tested in order and that evaluation **stops at the first match**. You can rely on this to guard an expression that would otherwise fail:
+
+```sql-run dataset=bank
+SELECT account_id, avail_balance, pending_balance,
+       CASE
+         WHEN avail_balance = 0 THEN NULL
+         ELSE ROUND(100.0 * (pending_balance - avail_balance) / avail_balance, 2)
+       END AS pending_change_pct
+FROM account
+WHERE pending_balance <> avail_balance
+ORDER BY account_id
+LIMIT 8;
+```
+
+The division is only reached when the balance is non-zero. (By contrast, the order in which `AND`/`OR` operands inside a WHERE clause are evaluated is **not** guaranteed — the optimizer may reorder them — so `WHERE x <> 0 AND y / x > 2` is not a safe guard in every engine. CASE is.)
+
+## CASE across dialects
+
+| Feature | SQLite | MySQL | PostgreSQL |
+|---|---|---|---|
+| Searched and simple CASE | yes | yes | yes |
+| Shorthand | `iif(c, a, b)` | `IF(c, a, b)` | — (use CASE) |
+| Conditional aggregate | `SUM(CASE…)`, `FILTER (WHERE …)` | `SUM(CASE…)`, `SUM(cond)` | `SUM(CASE…)`, `FILTER (WHERE …)` |
+| Branch type checking | lenient | lenient (coerces) | strict |
+
+> [!INTERVIEW]
+> CASE questions usually arrive in disguise: "categorise customers into tiers", "swap the values M and F in one UPDATE" (`SET sex = CASE sex WHEN 'M' THEN 'F' ELSE 'M' END`), "count X and Y in separate columns". The follow-up is nearly always about a boundary value or a NULL — so state which branch catches each.
+
 ## Summary
 
 - CASE is SQL's standard conditional expression; it returns a value and can be used almost anywhere.

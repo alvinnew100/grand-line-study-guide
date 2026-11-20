@@ -238,6 +238,59 @@ The join version counts order rows, not customers.
 - **Empty scalar subquery** — yields NULL and an empty outer result.
 - **Join instead of IN** — can duplicate outer rows.
 
+## Worked example: one question, four subquery shapes
+
+To see how the shape of a subquery dictates the operator, answer related questions about the ML registry with each shape in turn.
+
+**Scalar** — *which runs took longer than the average finished run?* One number, compared with `>`:
+
+```sql-run dataset=mlops
+SELECT run_id, run_name,
+       ROUND((julianday(ended_at) - julianday(started_at)) * 24, 2) AS hours
+FROM runs
+WHERE status = 'FINISHED'
+  AND (julianday(ended_at) - julianday(started_at)) >
+      (SELECT AVG(julianday(ended_at) - julianday(started_at)) FROM runs WHERE status = 'FINISHED')
+ORDER BY hours DESC
+LIMIT 5;
+```
+
+**Multi-row, single column** — *which runs produced a registered model?* A list, tested with `IN`:
+
+```sql-run dataset=mlops
+SELECT run_id, run_name, model_type
+FROM runs
+WHERE run_id IN (SELECT run_id FROM models WHERE stage = 'Production');
+```
+
+**Multi-row with a negation** — *which finished runs were never registered?* `NOT IN` is safe here only because `models.run_id` is declared NOT NULL; say so, or use NOT EXISTS:
+
+```sql-run dataset=mlops
+SELECT COUNT(*) AS finished_but_unregistered
+FROM runs
+WHERE status = 'FINISHED'
+  AND run_id NOT IN (SELECT run_id FROM models);
+```
+
+**Multicolumn** — *for each experiment, the run with the longest duration.* A pair `(experiment_id, duration)` is matched against the per-experiment maxima:
+
+```sql-run dataset=mlops
+SELECT experiment_id, run_id, run_name,
+       ROUND((julianday(ended_at) - julianday(started_at)) * 24, 2) AS hours
+FROM runs
+WHERE status = 'FINISHED'
+  AND (experiment_id, julianday(ended_at) - julianday(started_at)) IN
+      (SELECT experiment_id, MAX(julianday(ended_at) - julianday(started_at))
+       FROM runs WHERE status = 'FINISHED'
+       GROUP BY experiment_id)
+ORDER BY experiment_id;
+```
+
+A useful way to debug any of these: **run the inner query alone first**. If it returns the list or number you expect, the bug is in the outer comparison; if not, you have found it without reading the whole statement.
+
+> [!INTERVIEW]
+> "Find employees earning more than the company average" (scalar), "customers who placed an order in 2024" (`IN` / `EXISTS`), "the highest-paid employee in each department" (multicolumn `IN` with a grouped subquery, or a window function) — these three cover most subquery questions at screening level. For each, name the subquery's shape before writing it.
+
 ## Summary
 
 - A subquery is a parenthesised query inside another statement; noncorrelated subqueries run once, independently.

@@ -315,10 +315,10 @@ HAVING SUM(status IN ('cancelled', 'returned')) = 0 AND COUNT(*) >= 5;
 ```
 
 ```sql-run dataset=shop
--- 3. "Always": products whose every sale was at full price
-SELECT product_id, COUNT(*) AS sales
+-- 3. "Always": products whose every sale had a discount of at most 10%
+SELECT product_id, COUNT(*) AS sales, MAX(discount) AS deepest_discount
 FROM order_items GROUP BY product_id
-HAVING MAX(discount) = 0;
+HAVING MAX(discount) <= 0.10;
 ```
 
 ```sql-run dataset=shop

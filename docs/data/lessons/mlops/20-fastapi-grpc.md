@@ -275,6 +275,148 @@ edge for clients, gRPC between internal services and model servers.
 > processes/replicas. Add: load the model once at startup, validate with pydantic, expose
 > liveness/readiness, return the model version, set timeouts, and batch requests.
 
+## Designing the prediction API contract
+
+The request and response schema is a public contract; changing it later is expensive. Decisions to make
+deliberately:
+
+- **Raw inputs or pre-computed features?** Prefer accepting *raw, business-level* fields
+  (`tenure_months`, `plan`) and computing derived features inside the service with the shared feature
+  code. Clients that compute features themselves will compute them differently (skew).
+- **Entity ID or full payload?** With an online feature store, the client sends `customer_id` and the
+  service looks up features: smaller requests and consistent features, but a runtime dependency. Many
+  APIs accept both: IDs for stored features plus request-time context.
+- **Batch shape.** `{"instances": [...]}` with a documented maximum; return results in the same order;
+  decide whether one bad instance fails the whole request (simple) or yields per-item errors (flexible).
+- **What comes back.** Scores *and* the decision threshold used, the model version, and a request ID.
+  Avoid returning only a label: consumers will want the probability later.
+- **Versioning.** Put a version in the path (`/v1/predict`). Additive changes (new optional field) stay
+  in v1; breaking changes get `/v2` and a deprecation period.
+- **Errors.** Use status codes consistently and a machine-readable error body.
+
+| Status | Meaning for a prediction API |
+|---|---|
+| 200 | prediction returned |
+| 400 / 422 | malformed or invalid input (client must fix; do not retry) |
+| 401 / 403 | missing or insufficient credentials |
+| 404 | unknown model or entity |
+| 413 | payload/batch too large |
+| 429 | rate limited or shedding load (retry with backoff; honour `Retry-After`) |
+| 500 | bug or inference failure |
+| 503 | not ready or dependency down (retry with backoff) |
+| 504 | timed out upstream |
+
+```python
+from fastapi import Request
+from fastapi.responses import JSONResponse
+
+class PredictionError(Exception):
+    def __init__(self, code: str, message: str, status: int = 500):
+        self.code, self.message, self.status = code, message, status
+
+@app.exception_handler(PredictionError)
+async def prediction_error_handler(request: Request, exc: PredictionError):
+    return JSONResponse(status_code=exc.status,
+                        content={"error": {"code": exc.code, "message": exc.message,
+                                           "request_id": request.headers.get("x-request-id")}})
+```
+
+## Timeouts, deadlines and load shedding in code
+
+```python
+import asyncio
+from fastapi import HTTPException
+
+MAX_IN_FLIGHT = 64
+_slots = asyncio.Semaphore(MAX_IN_FLIGHT)
+
+@app.post("/v1/predict", response_model=PredictResponse)
+async def predict(req: PredictRequest):
+    if _slots.locked():                                   # all slots busy: shed instead of queueing forever
+        raise HTTPException(429, "server busy", headers={"Retry-After": "1"})
+    async with _slots:
+        try:
+            feats = await asyncio.wait_for(feature_store.get(req.customer_ids), timeout=0.05)
+        except asyncio.TimeoutError:
+            feats = default_features(req.customer_ids)    # degrade: defaults the model was trained with
+            FALLBACKS.labels("feature_timeout").inc()
+        try:
+            proba = await asyncio.wait_for(run_in_threadpool(model.predict, feats), timeout=0.5)
+        except asyncio.TimeoutError:
+            raise HTTPException(504, "inference timed out")
+    return build_response(proba)
+```
+
+Why shed load? A server that accepts more work than it can finish makes *every* request slow and then
+times them all out — zero goodput. Rejecting the excess quickly keeps the accepted requests within the
+SLO.
+
+```python-run
+# Goodput with and without load shedding when demand exceeds capacity.
+def simulate(arrival_rps, capacity_rps, timeout_s, shed, seconds=60):
+    queue, served_in_time, rejected = 0.0, 0.0, 0.0
+    for _ in range(seconds):
+        queue += arrival_rps
+        if shed:                                  # bound the queue to what can be served before the timeout
+            limit = capacity_rps * timeout_s
+            if queue > limit:
+                rejected += queue - limit; queue = limit
+        wait = queue / capacity_rps               # time for a newly queued request to be served
+        done = min(queue, capacity_rps)
+        if wait <= timeout_s:
+            served_in_time += done
+        queue -= done
+    return served_in_time / seconds, rejected / seconds
+
+for arrival in (80, 100, 130, 200):
+    g0, _ = simulate(arrival, 100, 1.0, shed=False)
+    g1, r1 = simulate(arrival, 100, 1.0, shed=True)
+    print(f"arrivals {arrival:3d} rps, capacity 100: goodput without shedding {g0:5.1f} rps | with shedding {g1:5.1f} rps (rejecting {r1:4.1f} rps fast)")
+```
+
+Past capacity, the unshedded server's queue grows until every response is too late to be useful; the
+shedding server keeps serving its full capacity within the deadline.
+
+## Authentication, limits and other production middleware
+
+A model endpoint is an API like any other. Lubanovic's chapters on the web layer and on authentication
+apply directly: authenticate callers (API keys or OAuth2/JWT, usually enforced at the gateway/ingress),
+authorise by scope (which models may this client call?), rate-limit per client, cap request body size,
+enable CORS only where a browser calls you directly, and never log raw credentials or full payloads
+containing personal data.
+
+## gRPC server sketch
+
+```python
+# server.py - generated modules churn_pb2 / churn_pb2_grpc come from protoc
+import grpc
+from concurrent import futures
+import churn_pb2, churn_pb2_grpc
+
+class ChurnService(churn_pb2_grpc.ChurnServiceServicer):
+    def __init__(self, model, version): self.model, self.version = model, version
+    def Predict(self, request, context):
+        if len(request.instances) > 256:
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, "batch too large")
+        rows = [[i.tenure_months, i.monthly_charges, i.support_tickets_30d] for i in request.instances]
+        probs = self.model.predict(rows)
+        return churn_pb2.PredictResponse(
+            model_version=self.version,
+            predictions=[churn_pb2.Prediction(churn_probability=float(p), label=p >= 0.5) for p in probs])
+
+def serve(model, version):
+    server = grpc.server(futures.ThreadPoolExecutor(max_workers=8),
+                         options=[("grpc.max_receive_message_length", 16 * 1024 * 1024)])
+    churn_pb2_grpc.add_ChurnServiceServicer_to_server(ChurnService(model, version), server)
+    server.add_insecure_port("[::]:50051")
+    server.start(); server.wait_for_termination()
+```
+
+gRPC has its own status codes (`INVALID_ARGUMENT`, `UNAVAILABLE`, `DEADLINE_EXCEEDED`,
+`RESOURCE_EXHAUSTED`) and first-class **deadlines** that propagate across service hops: if the caller's
+deadline has passed, downstream services can stop working on the request — a property REST only gets by
+convention.
+
 ## Summary
 
 - FastAPI gives validation, docs and ASGI performance; structure the service around a lifespan-loaded

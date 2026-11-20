@@ -201,6 +201,107 @@ common base stage instead.
 > inspect with `docker history`/dive. Then name the *why*: faster CI, faster scale-out, smaller attack
 > surface.
 
+## Worked example: shrinking a naive image step by step
+
+Start from what many first ML Dockerfiles look like:
+
+```dockerfile
+# v0 - naive
+FROM python:3.11
+WORKDIR /app
+COPY . .
+RUN pip install -r requirements.txt
+CMD python -m uvicorn churn.serve.app:app --host 0.0.0.0
+```
+
+Problems: full base image; whole repository (including `.git`, data and notebooks) copied; dependencies
+reinstalled on every code change; pip cache kept; runs as root; shell-form `CMD`; unpinned everything.
+
+| Step | Change | Effect |
+|---|---|---|
+| v1 | add `.dockerignore` (`.git`, `data/`, `notebooks/`, `.venv`) | context from GBs to KBs; no data leak |
+| v2 | copy lockfile → install → copy source | code edits no longer reinstall dependencies |
+| v3 | `python:3.11-slim` base, `--no-cache-dir` | hundreds of MB smaller |
+| v4 | multi-stage: build in one stage, copy `/opt/venv` | compilers and headers gone |
+| v5 | CPU-only wheels for torch / drop unused extras (`.[serve]` only) | often the biggest single saving |
+| v6 | non-root user, exec-form entrypoint, labels, pinned base digest | secure, traceable, graceful shutdown |
+
+```python-run
+steps = [("v0 naive", 9400, 240), ("v1 .dockerignore", 7100, 235), ("v2 layer order", 7100, 12),
+         ("v3 slim base, no pip cache", 5600, 12), ("v4 multi-stage", 5100, 12),
+         ("v5 CPU wheels, serve extras only", 1450, 9), ("v6 hardening", 1450, 9)]
+print(f"{'step':34s} {'image MB':>9s} {'rebuild after code edit (s)':>28s}")
+for name, mb, rebuild in steps:
+    print(f"{name:34s} {mb:9d} {rebuild:28d}")
+first, last = steps[0], steps[-1]
+print(f"\nsize: {first[1]/last[1]:.1f}x smaller; inner-loop rebuild: {first[2]/last[2]:.0f}x faster")
+```
+
+(Numbers are representative of a PyTorch-based service; yours will differ.) The two changes with the
+largest payoff are usually **layer ordering** (developer speed) and **not shipping what you do not use**
+(size).
+
+## Health, startup and shutdown inside the container
+
+The Dockerfile sets up how the process behaves under an orchestrator:
+
+- **PID 1 and signals.** The exec-form `ENTRYPOINT` makes your server PID 1 so it receives SIGTERM.
+  If you need a wrapper script, end it with `exec "$@"` so the server *replaces* the shell; otherwise the
+  shell swallows the signal and the container is killed after the grace period (exit code 137),
+  dropping in-flight requests.
+
+```bash
+#!/usr/bin/env sh
+# docker-entrypoint.sh
+set -eu
+echo "starting churn-api git=${GIT_SHA:-unknown} model=${CHURN_MODEL_URI:-unset}"
+exec "$@"                      # hand over PID 1 to the server process
+```
+
+- **Zombie reaping.** If your process spawns children (data-loader workers, subprocess calls), run with
+  an init such as `tini` (`docker run --init`, or `ENTRYPOINT ["tini", "--", ...]`).
+- **Read-only root filesystem.** Write only to explicit volumes or `/tmp`; set caches
+  (`HF_HOME`, `MPLCONFIGDIR`, `XDG_CACHE_HOME`) to a writable path, or libraries will crash when they try
+  to write to the home directory of a non-root user.
+- **Logs to stdout/stderr**, unbuffered; never to files inside the container.
+
+## Supply-chain security in one page
+
+An image is a bundle of other people's software. Controls, in the order teams usually adopt them:
+
+1. **Lockfile with hashes** — the build fails if a package's content changes.
+2. **Pinned, minimal base** — fewer packages, fewer CVEs.
+3. **Vulnerability scanning in CI** (Trivy/Grype) with a policy: fail on fixable critical/high findings.
+4. **Scheduled rebuilds** to absorb base-image patches.
+5. **SBOM** (software bill of materials) generated at build time (`docker buildx build --sbom=true`,
+   Syft) so you can answer "which images contain library X?" during the next big vulnerability.
+6. **Signing and provenance** (cosign, SLSA attestations) and an admission policy that only runs signed
+   images from your registry.
+7. **Model artifacts are part of the supply chain**: pull weights only from trusted registries, pin
+   revisions, verify checksums, and prefer formats that cannot execute code on load.
+
+```bash
+trivy image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 ghcr.io/acme/churn-api:9f3c1e2
+syft ghcr.io/acme/churn-api:9f3c1e2 -o spdx-json > sbom.json
+cosign sign ghcr.io/acme/churn-api@sha256:77ab...
+```
+
+## Testing the image itself
+
+The image is an artifact and deserves tests beyond the code's unit tests:
+
+```bash
+# smoke test in CI: does the container start, become ready and answer?
+cid=$(docker run -d -p 8000:8000 -e CHURN_MODEL_URI=/models/fixture churn-api:$SHA)
+for i in $(seq 1 30); do curl -fsS localhost:8000/readyz && break || sleep 1; done
+curl -fsS -X POST localhost:8000/predict -H 'content-type: application/json' -d @tests/fixtures/request.json
+test "$(docker exec "$cid" id -u)" != "0"            # not running as root
+docker stop "$cid" && test "$(docker inspect "$cid" --format '{{.State.ExitCode}}')" = "0"   # graceful shutdown
+```
+
+The last line checks something easy to break and hard to notice: that the service exits cleanly on
+SIGTERM instead of being killed.
+
 ## Summary
 
 - Pick slim/runtime bases (not Alpine for ML); pin them.

@@ -214,6 +214,39 @@ Tools such as **dbt** are essentially view management systems: each "model" is a
 - **ORDER BY in a view** is not guaranteed to apply to queries on the view; sort in the outer query.
 - **Grain confusion:** document what one row of the view represents.
 
+## Worked example: a view layer for a dashboard
+
+Views are most valuable in layers, each one adding a single idea. Build a small reporting stack over the shop schema.
+
+```sql-run dataset=shop
+-- Layer 1: one row per order line with money computed once
+CREATE VIEW v_order_lines AS
+SELECT o.order_id, o.order_date, o.status, o.customer_id,
+       oi.product_id, oi.quantity,
+       oi.quantity * oi.unit_price * (1 - oi.discount) AS net_revenue
+FROM orders o
+JOIN order_items oi ON oi.order_id = o.order_id;
+
+-- Layer 2: delivered revenue per customer, built on layer 1
+CREATE VIEW v_customer_value AS
+SELECT customer_id, COUNT(DISTINCT order_id) AS delivered_orders, ROUND(SUM(net_revenue), 2) AS revenue
+FROM v_order_lines
+WHERE status = 'delivered'
+GROUP BY customer_id;
+
+-- The dashboard query is now trivial
+SELECT c.country, COUNT(*) AS buyers, ROUND(SUM(v.revenue), 2) AS revenue, ROUND(AVG(v.revenue), 2) AS avg_per_buyer
+FROM v_customer_value v
+JOIN customers c ON c.customer_id = v.customer_id
+GROUP BY c.country
+ORDER BY revenue DESC;
+```
+
+The definition of "net revenue" lives in exactly one place. If finance later decides that returned orders must be subtracted, one view changes and every report follows. Use `EXPLAIN QUERY PLAN` on the final query to confirm what the layering hides: the plan shows the base tables `orders`, `order_items` and `customers` — the views have been expanded away.
+
+> [!INTERVIEW]
+> Common view questions: *view versus table* (stored query versus stored data), *view versus materialized view* (computed on read versus stored and refreshed), *can you update a view* (only simple ones; rules vary by engine), and *do views improve performance* (not by themselves — they improve maintainability and security).
+
 ## Summary
 
 - A view is a named, stored query; it holds no data and is expanded into queries that use it.

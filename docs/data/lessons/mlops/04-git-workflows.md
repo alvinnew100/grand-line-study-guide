@@ -224,6 +224,104 @@ for days in [1, 2, 5, 10, 20]:
 Conflict probability rises steeply with branch lifetime — the quantitative case for trunk-based
 development with small PRs.
 
+## Worked workflow: one feature from branch to merge
+
+Seeing the commands in sequence makes the workflow concrete.
+
+```bash
+git switch main && git pull --ff-only                  # start from the latest main
+git switch -c feat/rolling-purchase-features           # short-lived branch
+
+# ... edit src/churn/features.py and tests/unit/test_features.py ...
+make lint test                                         # fast local feedback
+git add -p                                             # review each hunk while staging
+git commit -m "feat(features): add 7/30-day rolling purchase counts"
+
+# main moved while you worked: replay your commits on top of it
+git fetch origin
+git rebase origin/main                                 # resolve conflicts if any, then: git rebase --continue
+make test                                              # re-run after rebasing
+
+git push -u origin feat/rolling-purchase-features      # open a pull request
+# after review feedback:
+git commit --fixup <sha> && git rebase -i --autosquash origin/main
+git push --force-with-lease                            # safe force-push: refuses if the remote changed
+```
+
+Notes that trip people up:
+
+- **Rebase vs merge.** Rebasing your *private* branch onto `main` keeps history linear and the PR diff
+  clean. Never rebase commits that others have already built on. Many teams use **squash merge** for
+  PRs: one commit per PR on `main`, which makes `git revert` of a bad change trivial.
+- **`--force-with-lease`**, not `--force`: it aborts if someone else pushed to your branch.
+- **`git revert <sha>`** creates a new commit that undoes a change — the correct way to undo something
+  already on `main`. `git reset --hard` rewrites history and is only for local, unpushed work.
+
+### Resolving conflicts in ML repositories
+
+Typical conflict sources and how to avoid them:
+
+| File | Why it conflicts | Mitigation |
+|---|---|---|
+| `uv.lock` / `poetry.lock` | two branches change dependencies | do not hand-edit; take `main`'s version and re-run the lock command |
+| notebooks | JSON with outputs and execution counts | nbstripout, Jupytext, or `nbdime` merge driver |
+| `dvc.lock`, `*.dvc` | two branches retrain or change data | accept one side, then `dvc repro` to regenerate |
+| big config YAML | everyone edits the same file | split config into groups (Hydra), one file per concern |
+
+### Debugging with history
+
+- `git log -S "threshold = 0.42" -- src/` finds the commit that introduced or removed a string.
+- `git blame -L 120,140 src/churn/features.py` shows who last changed each line (and, via the PR, why).
+- **`git bisect`** binary-searches history for the commit that introduced a regression. It can be fully
+  automated with a script that exits non-zero when the bug is present:
+
+```bash
+git bisect start
+git bisect bad HEAD                 # current commit: evaluation metric regressed
+git bisect good v1.3.0              # last known good tag
+git bisect run python scripts/check_metric.py --min-auc 0.80    # trains on a small fixed sample
+git bisect reset
+```
+
+With 200 commits between good and bad, bisect needs about eight runs. This only works when training is
+deterministic enough (fixed data sample and seed) — another payoff of reproducibility.
+
+## Protecting `main`
+
+Repository settings turn conventions into guarantees:
+
+- **Branch protection / rulesets**: no direct pushes to `main`; pull request required; at least one
+  approving review; required status checks (CI) must pass; branch must be up to date before merging.
+- **CODEOWNERS**: automatically request review from the owning team for sensitive paths.
+
+```text
+# .github/CODEOWNERS
+/src/churn/features.py      @acme/ml-features
+/configs/serve.yaml         @acme/ml-platform
+/.github/workflows/         @acme/ml-platform
+/docs/model-card.md         @acme/ml-governance
+```
+
+- **Signed commits and tags** for releases where provenance matters.
+- **Tags and releases**: tag the commit that produced a production model or service release
+  (`git tag -a model-churn-v8 -m "run a1b2c3"`); the registry entry stores the SHA, the tag makes it
+  findable by humans.
+
+## Git LFS in practice
+
+When small binary assets genuinely belong with the code (test fixtures, a tiny reference model for CI),
+LFS is appropriate:
+
+```bash
+git lfs install
+git lfs track "tests/fixtures/*.parquet" "tests/fixtures/*.onnx"   # writes .gitattributes
+git add .gitattributes tests/fixtures/sample.parquet
+git commit -m "test: add small parquet fixture via LFS"
+```
+
+Keep fixtures tiny (kilobytes to a few megabytes). Anything larger, and anything that changes with every
+retrain, belongs in DVC or the model registry.
+
 ## Summary
 
 - The commit SHA is the root of ML reproducibility: log it with every run, image and model.

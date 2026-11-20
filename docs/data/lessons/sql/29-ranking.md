@@ -258,6 +258,38 @@ FROM account;
 - **Confusing the window's ORDER BY with the query's ORDER BY** — the first defines the computation, the second the output order.
 - **MySQL 5.7 and SQLite < 3.25** — no window functions.
 
+## Worked example: ranking questions, end to end
+
+Put the three ranking functions to work on one realistic request: *rank teams by the best accuracy they have achieved, show each team's top two runs, and flag runs in the top 10% of all runs.*
+
+```sql-run dataset=mlops
+WITH scored AS (
+  SELECT e.team, r.run_id, r.model_type, m.value AS accuracy
+  FROM runs r
+  JOIN experiments e ON e.experiment_id = r.experiment_id
+  JOIN metrics m     ON m.run_id = r.run_id AND m.metric_name = 'accuracy'
+  WHERE r.status = 'FINISHED'
+),
+ranked AS (
+  SELECT team, run_id, model_type, accuracy,
+         ROW_NUMBER() OVER (PARTITION BY team ORDER BY accuracy DESC, run_id) AS rn_in_team,
+         DENSE_RANK() OVER (ORDER BY accuracy DESC)                           AS overall_rank,
+         NTILE(10)    OVER (ORDER BY accuracy DESC)                           AS decile,
+         MAX(accuracy) OVER (PARTITION BY team)                               AS team_best
+  FROM scored
+)
+SELECT team, run_id, model_type, accuracy, overall_rank,
+       CASE WHEN decile = 1 THEN 'top 10%' ELSE '' END AS flag
+FROM ranked
+WHERE rn_in_team <= 2
+ORDER BY team_best DESC, team, rn_in_team;
+```
+
+Four windows over the same rows, each answering a different part of the request: `ROW_NUMBER` partitioned by team picks exactly two runs per team; `DENSE_RANK` with no partition gives a company-wide position; `NTILE(10)` assigns deciles; and `MAX(...) OVER (PARTITION BY team)` carries each team's best score onto every row so the final ORDER BY can sort *teams* by it. All of them are computed in the CTE and only then filtered — the compute-then-filter rhythm that every window query follows.
+
+> [!INTERVIEW]
+> The ranking trio is asked about directly — "difference between RANK and DENSE_RANK?" — and indirectly through "top N per group" and "Nth highest" problems. Whichever function you choose, say how ties behave and add a tie-breaker to the ORDER BY if exactly N rows are required.
+
 ## Summary
 
 - A window function computes a value per row over a set of related rows defined by `OVER (PARTITION BY … ORDER BY …)`, keeping every row.

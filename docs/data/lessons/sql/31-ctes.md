@@ -221,6 +221,57 @@ The practical advice: write CTEs for clarity first; if a query is slow, read the
 - **MySQL 5.7** — no CTE support.
 - **Deep chains hiding fan-outs** — check row counts at each stage.
 
+## Worked example: refactoring a query into CTEs
+
+A good way to learn CTEs is to refactor a query that works but resists reading. This one answers *which products are bought mostly by repeat customers?* in a single nested statement:
+
+```sql-run dataset=shop
+SELECT p.name, t.buyers, t.repeat_buyers, ROUND(100.0 * t.repeat_buyers / t.buyers, 1) AS repeat_pct
+FROM (SELECT oi.product_id,
+             COUNT(DISTINCT o.customer_id) AS buyers,
+             COUNT(DISTINCT CASE WHEN c.n_orders > 1 THEN o.customer_id END) AS repeat_buyers
+      FROM order_items oi
+      JOIN orders o ON o.order_id = oi.order_id
+      JOIN (SELECT customer_id, COUNT(*) AS n_orders FROM orders GROUP BY customer_id) c
+        ON c.customer_id = o.customer_id
+      GROUP BY oi.product_id) t
+JOIN products p ON p.product_id = t.product_id
+WHERE t.buyers >= 8
+ORDER BY repeat_pct DESC
+LIMIT 5;
+```
+
+The refactoring recipe: find the innermost subquery, give it a name that says what it contains, move it to the top; repeat outward.
+
+```sql-run dataset=shop
+WITH orders_per_customer AS (          -- one row per customer
+  SELECT customer_id, COUNT(*) AS n_orders
+  FROM orders
+  GROUP BY customer_id
+),
+product_buyers AS (                    -- one row per product
+  SELECT oi.product_id,
+         COUNT(DISTINCT o.customer_id) AS buyers,
+         COUNT(DISTINCT CASE WHEN c.n_orders > 1 THEN o.customer_id END) AS repeat_buyers
+  FROM order_items oi
+  JOIN orders o              ON o.order_id = oi.order_id
+  JOIN orders_per_customer c ON c.customer_id = o.customer_id
+  GROUP BY oi.product_id
+)
+SELECT p.name, b.buyers, b.repeat_buyers,
+       ROUND(100.0 * b.repeat_buyers / b.buyers, 1) AS repeat_pct
+FROM product_buyers b
+JOIN products p ON p.product_id = b.product_id
+WHERE b.buyers >= 8
+ORDER BY repeat_pct DESC
+LIMIT 5;
+```
+
+Same rows, same plan in most engines — but each step now states its **grain** in a comment and can be checked alone. Verify that a refactoring changed nothing by comparing the two versions with `EXCEPT` in both directions; an empty result both ways means the outputs are identical.
+
+> [!INTERVIEW]
+> In a live SQL interview, writing CTEs top-down *is* your thinking aloud: name a step, say its grain, move on. Interviewers can follow and correct you early. Be ready for the follow-up "is a CTE faster than a subquery?" — generally no; it is a readability tool, and whether it is inlined or materialized depends on the engine.
+
 ## Summary
 
 - A CTE is a named result set defined with `WITH name AS (SELECT …)` and visible to one statement.

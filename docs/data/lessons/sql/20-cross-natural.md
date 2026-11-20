@@ -180,6 +180,75 @@ And a natural join that works today can break tomorrow: add an `updated_at` colu
 - **Filtering the fact table in WHERE** after the left join — removes the zero rows you just created; put fact filters in ON or in the pre-aggregation.
 - **Function on the join column** (`date(t.txn_date) = days.day`) prevents index use; for large tables join on a range (`t.txn_date >= day AND t.txn_date < next_day`).
 
+## Worked example: a complete activity grid for a retention chart
+
+The scaffold technique is easiest to appreciate on a table that is *mostly* gaps. The `logins` table records one row per customer per day with a login. A heat-map of activity needs one cell for **every** customer and **every** day — including the days nobody logged in.
+
+**Step 1 — the two dimensions.** The customers of interest and a calendar of days, generated without any calendar table:
+
+```sql-run dataset=shop
+WITH digits(d) AS (VALUES (0),(1),(2),(3),(4),(5),(6),(7),(8),(9)),
+     days AS (SELECT date('2024-03-01', '+' || (a.d + 10 * b.d) || ' days') AS day
+              FROM digits a CROSS JOIN digits b
+              WHERE a.d + 10 * b.d < 14),
+     people AS (SELECT DISTINCT customer_id FROM logins WHERE customer_id <= 21)
+SELECT (SELECT COUNT(*) FROM days) AS days,
+       (SELECT COUNT(*) FROM people) AS customers,
+       (SELECT COUNT(*) FROM days CROSS JOIN people) AS grid_cells;
+```
+
+The grid has exactly days × customers cells — predictable and complete, which is the point.
+
+**Step 2 — attach the facts and summarise.** Left-join the logins to the grid; a missing match means "did not log in":
+
+```sql-run dataset=shop
+WITH digits(d) AS (VALUES (0),(1),(2),(3),(4),(5),(6),(7),(8),(9)),
+     days AS (SELECT date('2024-03-01', '+' || (a.d + 10 * b.d) || ' days') AS day
+              FROM digits a CROSS JOIN digits b
+              WHERE a.d + 10 * b.d < 14),
+     people AS (SELECT DISTINCT customer_id FROM logins WHERE customer_id <= 21)
+SELECT p.customer_id,
+       group_concat(CASE WHEN l.customer_id IS NULL THEN '.' ELSE '#' END, '') AS first_two_weeks,
+       COUNT(l.login_date) AS active_days,
+       COUNT(*) - COUNT(l.login_date) AS inactive_days
+FROM people p
+CROSS JOIN days d
+LEFT JOIN logins l ON l.customer_id = p.customer_id AND l.login_date = d.day
+GROUP BY p.customer_id
+ORDER BY p.customer_id;
+```
+
+Each customer gets a 14-character strip (`#` = logged in, `.` = absent). Without the scaffold you could count active days, but **inactive days would be invisible** — there are no rows to count. (The strip relies on rows reaching `group_concat` in day order, which holds here because `days` is generated in order; SQLite 3.44+ lets you make it explicit with `group_concat(… ORDER BY d.day)`.)
+
+**Step 3 — daily totals, including empty days.** The same grid answers the per-day question:
+
+```sql-run dataset=shop
+WITH RECURSIVE days(day) AS (
+  SELECT '2024-03-01' UNION ALL SELECT date(day, '+1 day') FROM days WHERE day < '2024-03-10'
+)
+SELECT d.day, COUNT(l.customer_id) AS customers_logged_in
+FROM days d
+LEFT JOIN logins l ON l.login_date = d.day
+GROUP BY d.day
+ORDER BY d.day;
+```
+
+This version generates the calendar with a recursive CTE — shorter than the digits trick, and the form you will usually write today.
+
+## Row generators compared
+
+| Technique | Works in | Notes |
+|---|---|---|
+| Cross-joined digit tables | everything, including MySQL 5.x | the book's method; verbose but universal |
+| Recursive CTE | SQLite, PostgreSQL, MySQL 8+, SQL Server | compact; mind recursion limits for very long series |
+| `generate_series(a, b, step)` | PostgreSQL, DuckDB (some SQLite builds) | simplest; also generates timestamps |
+| Permanent calendar / numbers table | everything | fastest; can carry holidays, fiscal periods, week numbers |
+
+For production reporting, a calendar table is the usual choice: it is generated once, indexed, and enriched with business attributes (is_holiday, fiscal_quarter) that no function can compute.
+
+> [!INTERVIEW]
+> "Report daily sales for the last 30 days, including days with no sales" is a standard question that separates people who know GROUP BY from people who know its limits. The expected answer: generate the 30 dates, LEFT JOIN sales onto them, `COALESCE(SUM(amount), 0)`.
+
 ## Summary
 
 - `CROSS JOIN` returns every combination; use it deliberately to generate rows.

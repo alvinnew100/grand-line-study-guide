@@ -211,6 +211,103 @@ flowchart LR
 > instances with checkpointing; track everything; confirm the top few with multiple seeds; evaluate once
 > on the test set. Mention that random search beats grid search in high dimensions.
 
+## Designing a search space
+
+The search space is the most consequential HPO decision; a perfect optimiser cannot fix ranges that
+exclude the optimum or waste budget on irrelevant dimensions.
+
+| Hyperparameter kind | Examples | How to search |
+|---|---|---|
+| Scale parameters spanning decades | learning rate, weight decay, regularisation | log-uniform |
+| Capacity | depth, leaves, hidden units, layers | integers, often log-scaled or powers of two |
+| Probabilities / fractions | dropout, subsample, colsample | uniform on a sensible interval |
+| Choices | optimiser, activation, model family | categorical |
+| Conditional | momentum only if optimiser = SGD | define-by-run branches |
+
+Guidelines:
+
+1. **Start wide, then narrow.** A first coarse sweep finds the region; a second sweep zooms in. If the
+   best trials sit on the edge of a range, the range is wrong — extend it.
+2. **Tune the few that matter.** For gradient-boosted trees: learning rate with number of trees (use
+   early stopping to set the latter), tree complexity (leaves/depth), regularisation, subsampling. For
+   neural nets: learning rate first, then batch size, weight decay, warmup.
+3. **Fix what you can reason about.** Do not tune the random seed; do not tune things that barely matter.
+4. **Use domain knowledge as priors.** Seed the study with known-good configurations
+   (`study.enqueue_trial({...})`).
+
+```python
+def objective(trial):
+    family = trial.suggest_categorical("model", ["gbm", "logreg"])
+    if family == "gbm":                                   # conditional space: define-by-run
+        params = {"learning_rate": trial.suggest_float("gbm_lr", 1e-3, 0.3, log=True),
+                  "max_leaf_nodes": trial.suggest_int("gbm_leaves", 8, 128, log=True)}
+        model = HistGradientBoostingClassifier(early_stopping=True, max_iter=2000, **params)
+    else:
+        model = LogisticRegression(C=trial.suggest_float("lr_C", 1e-4, 1e2, log=True), max_iter=2000)
+    return cross_val_score(model, X, y, cv=cv, scoring="average_precision").mean()
+```
+
+## How many trials? Thinking in probabilities
+
+For random search there is a neat rule: if you want at least one trial in the best 5% of the search
+space with probability 95%, you need $n$ such that $1 - 0.95^n \ge 0.95$, i.e. about 59 trials —
+regardless of the number of dimensions.
+
+```python-run
+import math
+print("trials needed for P(at least one trial in the top q of the space) >= conf")
+for q in (0.10, 0.05, 0.01):
+    for conf in (0.90, 0.95, 0.99):
+        n = math.ceil(math.log(1 - conf) / math.log(1 - q))
+        print(f"  top {q:4.0%}, confidence {conf:.0%}: {n:4d} trials")
+```
+
+That gives a principled budget for a first random sweep (around 60 trials), after which a smarter
+sampler or a narrowed space is a better use of compute than hundreds more random points.
+
+## Reading the results
+
+Do not just take `study.best_params`. Inspect:
+
+- **Optimisation history**: is the best value still improving, or flat for the last half? Flat means you
+  can stop.
+- **Parameter importance** (fANOVA in Optuna): which hyperparameters explain score variance? Drop the
+  rest from the next sweep.
+- **Slice / parallel-coordinate plots**: is the optimum inside the range or pinned at a boundary?
+- **Sensitivity around the best point**: prefer a configuration in a *flat, wide* good region over a
+  marginally better one on a cliff — it will be more robust to data changes at the next retrain.
+- **Top-k agreement**: if the top ten trials have similar scores and very different hyperparameters, the
+  model is insensitive and further tuning is wasted effort.
+
+```python-run
+import numpy as np
+rng = np.random.default_rng(3)
+# Simulated study: score depends strongly on log10(lr), weakly on leaves, not at all on subsample.
+n = 200
+log_lr = rng.uniform(-3, -0.5, n); leaves = rng.integers(8, 129, n); sub = rng.uniform(0.5, 1.0, n)
+score = 0.74 - 0.03 * (log_lr + 1.3) ** 2 - 0.000002 * (leaves - 48) ** 2 + rng.normal(0, 0.003, n)
+
+def importance(x, y, bins=8):                     # variance explained by binning one parameter
+    edges = np.quantile(x, np.linspace(0, 1, bins + 1)); idx = np.clip(np.searchsorted(edges, x, side="right") - 1, 0, bins - 1)
+    means = np.array([y[idx == b].mean() for b in range(bins)]); counts = np.bincount(idx, minlength=bins)
+    return float((counts * (means - y.mean()) ** 2).sum() / ((y - y.mean()) ** 2).sum())
+for name, x in (("learning_rate (log)", log_lr), ("max_leaf_nodes", leaves.astype(float)), ("subsample", sub)):
+    print(f"{name:20s} importance ~ {importance(x, score):.2f}")
+best = np.argsort(score)[-10:]
+print(f"top-10 trials: lr in [{10**log_lr[best].min():.3f}, {10**log_lr[best].max():.3f}], "
+      f"leaves in [{leaves[best].min()}, {leaves[best].max()}], subsample in [{sub[best].min():.2f}, {sub[best].max():.2f}]")
+```
+
+The learning rate explains most of the variance; subsample explains none, and the top trials span its
+whole range — remove it from the next search and spend the budget where it matters.
+
+## HPO and continuous training
+
+For scheduled retrains, a common policy is: **fixed hyperparameters by default; a small warm-started
+re-tune when the promotion gate fails or drift is large; a full study quarterly or after feature
+changes.** Record with each production model which study produced its hyperparameters, so the lineage
+includes the tuning decision.
+
 ## Summary
 
 - Tune on validation data (or CV), never on the test set; respect time and group structure.

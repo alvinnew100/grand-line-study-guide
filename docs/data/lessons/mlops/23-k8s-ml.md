@@ -247,6 +247,114 @@ replica never idles, so it changes nothing.
 > 5 minutes). CPU utilisation is relative to requests. For GPU inference, scale on concurrency/queue
 > metrics (custom metrics or KEDA). Mention the pod → node autoscaling chain and cold-start time.
 
+## Worked example: sizing and autoscaling a GPU LLM endpoint
+
+*One 24 GB GPU per replica runs a 7B model with vLLM. A load test shows each replica sustains about 12
+concurrent generations within the TTFT/TPOT SLO; beyond that, requests queue. Peak demand is around 60
+concurrent generations; nights are near zero.*
+
+1. **Scaling metric**: concurrency (running + waiting requests per replica), exported by the server and
+   exposed to the HPA through the Prometheus Adapter or KEDA. CPU utilisation would be useless here —
+   the pod's CPU is nearly idle while the GPU is saturated.
+2. **Target**: 8 concurrent per replica (about 65% of the measured limit of 12).
+3. **Bounds**: `minReplicas: 2` in business hours (cold start is ~4 minutes: node provisioning + 10 GB
+   image + weights load), `maxReplicas: 9`.
+4. **Behaviour**: scale up aggressively, scale down slowly (10-minute stabilisation), because each wrong
+   scale-down costs a 4-minute recovery.
+5. **Schedule**: a cron-based scaler raises the floor before the morning ramp and lowers it at night.
+
+```yaml
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata: {name: llm}
+spec:
+  scaleTargetRef: {name: llm}
+  minReplicaCount: 1
+  maxReplicaCount: 9
+  cooldownPeriod: 600
+  triggers:
+    - type: prometheus
+      metadata:
+        serverAddress: http://prometheus.monitoring:9090
+        query: sum(vllm:num_requests_running{app="llm"}) + sum(vllm:num_requests_waiting{app="llm"})
+        threshold: "8"                       # target per replica
+    - type: cron                             # keep at least 2 warm during business hours
+      metadata: {timezone: Europe/Berlin, start: "0 7 * * 1-5", end: "0 19 * * 1-5", desiredReplicas: "2"}
+```
+
+```python-run
+import math
+def simulate(load, target=8, limit=12, min_r=1, max_r=9, startup_steps=4, down_window=10):
+    """load[t] = concurrent demand. New replicas take `startup_steps` to become ready."""
+    ready, pending, recs, overload_steps = min_r, [], [], 0
+    for t, demand in enumerate(load):
+        ready += sum(1 for due in pending if due == t); pending = [d for d in pending if d > t]
+        desired = max(min_r, min(max_r, math.ceil(demand / target)))
+        recs.append(desired); stable = max(recs[-down_window:])
+        total = ready + len(pending)
+        if desired > total:
+            pending += [t + startup_steps] * (desired - total)        # scale up immediately
+        elif stable < ready:
+            ready = stable                                             # scale down after the window
+        if demand > ready * limit: overload_steps += 1
+    return overload_steps
+morning = [2] * 5 + [10, 25, 45, 60, 60, 60, 55, 50] + [40] * 10
+print("steps in overload during a fast morning ramp (each step ~ 1 minute):")
+for min_r in (1, 2, 4):
+    print(f"  minReplicas={min_r}: {simulate(morning, min_r=min_r)} minutes of overload")
+```
+
+With slow-starting replicas, reactive scaling alone cannot follow a steep ramp; a higher floor (or a
+scheduled pre-scale) trades idle GPU cost for fewer minutes of degraded service. That trade-off, with
+your real numbers, is the heart of GPU autoscaling design.
+
+### Reducing cold start for large models
+
+| Component of cold start | Typical | Mitigation |
+|---|---|---|
+| Node provisioning | 1–3 min | warm node pool, overprovisioning pause pods, Karpenter fast provisioning |
+| Image pull (5–15 GB) | 1–5 min | smaller images, pre-pulled images on nodes, lazy-pulling snapshotters, registry in-region |
+| Weights download | 1–10 min | weights on a node-local or shared volume, object-store streaming, baked into the image for moderate sizes |
+| Model load to GPU + warm-up | 0.5–3 min | faster formats (safetensors), memory-mapped loading, avoid recompilation |
+
+## Running many models: multi-model serving
+
+A platform with hundreds of small models cannot afford one Deployment (and one idle replica) per model.
+Options:
+
+- **Multi-model servers**: Triton and others load many models in one process and share the GPU; KServe
+  **ModelMesh** routes requests and loads/unloads models on demand with an LRU policy.
+- **Scale to zero per model** with Knative/KEDA, accepting cold starts for rarely used ones.
+- **Shared base, many adapters**: for LLMs, serve one base model and attach per-tenant LoRA adapters at
+  request time.
+
+The trade-offs are isolation (a noisy model affects its neighbours), blast radius of a crash, and
+per-model observability — label metrics with the model name, within cardinality limits.
+
+## KServe request and response, concretely
+
+The Open Inference Protocol (V2) request for a tabular model:
+
+```json
+POST /v2/models/churn/infer
+{
+  "inputs": [
+    {"name": "features", "shape": [2, 4], "datatype": "FP32",
+     "data": [12, 59.9, 1, 0,   3, 95.0, 4, 1]}
+  ]
+}
+```
+
+```json
+{
+  "model_name": "churn", "model_version": "8",
+  "outputs": [{"name": "proba", "shape": [2, 1], "datatype": "FP32", "data": [0.12, 0.81]}]
+}
+```
+
+Because Triton, MLServer, TorchServe and KServe runtimes share this protocol, a client written against
+it does not change when you swap the serving runtime behind the `InferenceService`.
+
 ## Summary
 
 - HPA scales replicas with a proportional formula plus tolerance and stabilisation; VPA right-sizes

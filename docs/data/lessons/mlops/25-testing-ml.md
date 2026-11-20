@@ -249,6 +249,132 @@ failures mean something.
 > slices; behavioural invariance/directional tests; latency/size); integration (pipeline on sample data,
 > API contract, offline/online parity); then online validation via shadow/canary.
 
+## Fixtures: small, deterministic, shared
+
+Most ML test pain comes from data. A few well-designed pytest fixtures remove it:
+
+```python
+# tests/conftest.py
+import numpy as np, pandas as pd, pytest
+
+@pytest.fixture(scope="session")
+def tiny_customers() -> pd.DataFrame:
+    """300 synthetic rows with the production schema and a learnable signal. Deterministic."""
+    rng = np.random.default_rng(0)
+    n = 300
+    df = pd.DataFrame({
+        "customer_id": np.arange(n),
+        "tenure_months": rng.integers(0, 72, n),
+        "monthly_charges": rng.uniform(20, 120, n).round(2),
+        "plan": rng.choice(["basic", "pro", "premium"], n),
+        "support_tickets_30d": rng.poisson(1.0, n),
+        "last_login_days": np.where(rng.random(n) < 0.05, np.nan, rng.integers(0, 60, n)),
+    })
+    logit = -1.0 - 0.04 * df.tenure_months + 0.5 * df.support_tickets_30d
+    df["churned"] = (rng.random(n) < 1 / (1 + np.exp(-logit))).astype(int)
+    return df
+
+@pytest.fixture(scope="session")
+def tiny_model(tiny_customers):
+    from churn.train import make_pipeline
+    from churn.features import RAW_INPUTS
+    return make_pipeline({"max_iter": 30}, seed=0).fit(tiny_customers[RAW_INPUTS], tiny_customers["churned"])
+
+@pytest.fixture
+def tiny_model_uri(tmp_path, tiny_model):
+    import mlflow
+    path = tmp_path / "model"
+    mlflow.sklearn.save_model(tiny_model, str(path), pyfunc_predict_fn="predict_proba")
+    return str(path)
+```
+
+Design rules: **synthetic or anonymised** (no production PII in the repository), **small** (the whole
+suite should run in seconds), **seeded** (identical on every machine), with **the production schema**
+(validated by the same pandera model as real data, so schema changes break tests immediately), and
+containing **a real signal** so "can the model learn?" tests are meaningful. `scope="session"` trains the
+tiny model once per test run.
+
+## Testing the tests: mutation thinking
+
+A test suite is only as good as the bugs it catches. A cheap way to evaluate it: deliberately inject
+realistic bugs and see whether anything fails.
+
+```python-run
+import numpy as np
+rng = np.random.default_rng(0)
+
+def features_correct(tenure, tickets):
+    t = np.maximum(tenure, 1)
+    return np.column_stack([tenure / 72, tickets / t])
+
+MUTANTS = {
+    "divide by raw tenure (div by zero)": lambda tenure, tickets: np.column_stack([tenure / 72, tickets / tenure]),
+    "swapped columns":                    lambda tenure, tickets: np.column_stack([tickets / np.maximum(tenure, 1), tenure / 72]),
+    "wrong normaliser (months vs years)": lambda tenure, tickets: np.column_stack([tenure / 6, tickets / np.maximum(tenure, 1)]),
+    "integer division":                   lambda tenure, tickets: np.column_stack([tenure // 72, tickets / np.maximum(tenure, 1)]),
+}
+
+def weak_suite(f):                         # only checks the shape
+    out = f(np.array([12, 24]), np.array([1, 2]))
+    assert out.shape == (2, 2)
+
+def strong_suite(f):
+    with np.errstate(divide="ignore", invalid="ignore"):
+        out = f(np.array([0, 12, 72]), np.array([3, 6, 0]))
+    assert out.shape == (3, 2)
+    assert np.isfinite(out).all()                                   # zero tenure must not blow up
+    np.testing.assert_allclose(out[1], [12 / 72, 6 / 12])           # known-answer test fixes column order and scale
+    assert 0 <= out[:, 0].min() and out[:, 0].max() <= 1            # range contract
+
+for suite in (weak_suite, strong_suite):
+    suite(features_correct)                                         # both pass on the correct code
+    killed = 0
+    for name, mutant in MUTANTS.items():
+        try:
+            suite(mutant)
+        except AssertionError:
+            killed += 1
+    print(f"{suite.__name__:13s} catches {killed}/{len(MUTANTS)} injected bugs")
+```
+
+The weak suite has 100% line coverage of the feature function and catches nothing. **Coverage measures
+what was executed, not what was verified.** Known-answer tests on hand-computed examples, plus range and
+finiteness contracts, are what kill real feature bugs. (Tools such as `mutmut` automate mutation
+testing.)
+
+## What to test where: a decision table
+
+| Risk | Cheapest effective test | Runs |
+|---|---|---|
+| Feature computed wrong | unit test with hand-computed expected values and edge cases | every commit |
+| Schema of pipeline output changed | pandera/contract test on fixture output | every commit |
+| Upstream data broken | expectation suite on the real batch | in the pipeline, before training |
+| Train/test contamination | split-integrity assertions | in the pipeline |
+| Model cannot learn (wiring bug) | overfit-a-batch / tiny-data smoke test | every commit |
+| New model worse than current | evaluation gate vs champion with slices | training pipeline |
+| Model violates domain logic | directional/invariance tests | training pipeline, PR sample |
+| Serving differs from training | offline/online parity test | CI integration + shadow traffic |
+| API contract broken | TestClient / schema-based fuzzing | every commit |
+| Too slow / too big | latency and size budgets on reference hardware | CI nightly, pre-release |
+| Works offline, fails with real traffic | shadow and canary | release |
+| Degrades over time | monitoring and alerting | continuously |
+
+Read the table as a sequence of nets with decreasing mesh size: each catches what the previous one
+cannot, and the further right a bug travels the more it costs to catch.
+
+## Testing non-deterministic and LLM components
+
+Some components cannot be asserted exactly. Techniques:
+
+- **Seed and pin** what you can; mark what you cannot as statistical tests with tolerances and enough
+  samples to make flakiness negligible.
+- **Record and replay** external calls (LLM APIs, feature services) in unit tests so they are fast,
+  free and deterministic; run a small live suite on a schedule.
+- **Assert properties, not strings**: valid JSON matching a schema, contains a citation, within a length
+  budget, passes a groundedness check — the evaluation methods of module 12 are tests of this kind.
+- **Golden files with review**: store an expected output; when it changes, the diff is reviewed by a
+  human rather than auto-accepted.
+
 ## Summary
 
 - Test code, data and models — each with different techniques.

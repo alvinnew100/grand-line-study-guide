@@ -243,6 +243,48 @@ The book closes the chapter with a summary worth repeating. Subqueries:
 - **Trying to correlate a derived table** in FROM — not allowed without LATERAL.
 - **`MAX(date)` per group returning ties** — add a tie-breaker or use ROW_NUMBER.
 
+## Correlated subquery, join or window? Choosing a form
+
+The same question can usually be written three ways. Take *each account's balance compared with the average balance of its product*.
+
+```sql-run dataset=bank
+-- 1. Correlated scalar subquery: the average is looked up per row
+SELECT a.account_id, a.product_cd, a.avail_balance,
+       ROUND((SELECT AVG(a2.avail_balance) FROM account a2 WHERE a2.product_cd = a.product_cd), 2) AS product_avg
+FROM account a
+WHERE a.cust_id <= 3;
+```
+
+```sql-run dataset=bank
+-- 2. Join to a derived table: every average is computed once
+SELECT a.account_id, a.product_cd, a.avail_balance, ROUND(p.avg_bal, 2) AS product_avg
+FROM account a
+JOIN (SELECT product_cd, AVG(avail_balance) AS avg_bal FROM account GROUP BY product_cd) p
+  ON p.product_cd = a.product_cd
+WHERE a.cust_id <= 3;
+```
+
+```sql-run dataset=bank
+-- 3. Window function: no second reference to the table at all
+SELECT account_id, product_cd, avail_balance, product_avg
+FROM (SELECT account_id, cust_id, product_cd, avail_balance,
+             ROUND(AVG(avail_balance) OVER (PARTITION BY product_cd), 2) AS product_avg
+      FROM account)
+WHERE cust_id <= 3;
+```
+
+All three return the same rows. Rules of thumb for choosing:
+
+| Situation | Prefer |
+|---|---|
+| A yes/no test against another table | `EXISTS` / `NOT EXISTS` |
+| One looked-up value for a handful of outer rows, with an index on the correlation column | correlated scalar subquery |
+| The same per-group statistic needed for many rows | derived table join, or a window function |
+| Statistic over the *same* table as the outer query | window function |
+| Need to keep outer rows that have no match | correlated subquery in SELECT, or LEFT JOIN |
+
+Note the subtle point in version 3: the filter `cust_id <= 3` had to move to an **outer** query. Had it been inside, the average would have been computed over those three customers' accounts only — windows see the rows that survive WHERE.
+
 ## Summary
 
 - Correlated subqueries reference the outer row and are logically evaluated per row.

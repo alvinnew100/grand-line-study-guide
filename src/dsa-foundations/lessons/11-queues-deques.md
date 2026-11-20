@@ -242,14 +242,136 @@ print("rotated:", list(D))
 - **Sliding windows**: a deque of indices gives the maximum of every window of size $k$ in $O(n)$.
 - **Buffers** between producer and consumer threads (`queue.Queue` wraps a deque with locks).
 
-## 6. Pitfalls
+## 6. Worked dry run: a circular queue of capacity 5
+
+Index arithmetic is easiest to trust after tracing it once. Take a fixed-capacity circular queue
+with $N = 5$, starting with `front = 0`, `size = 0`. Each row shows the array after the operation
+(`.` is an empty cell) and the cell that the *next* enqueue would use,
+`avail = (front + size) % 5`.
+
+| operation | returns | cells 0–4 | front | size | avail |
+|---|---|---|---|---|---|
+| enqueue(A) | | A . . . . | 0 | 1 | 1 |
+| enqueue(B) | | A B . . . | 0 | 2 | 2 |
+| enqueue(C) | | A B C . . | 0 | 3 | 3 |
+| dequeue() | A | . B C . . | 1 | 2 | 3 |
+| dequeue() | B | . . C . . | 2 | 1 | 3 |
+| enqueue(D) | | . . C D . | 2 | 2 | 4 |
+| enqueue(E) | | . . C D E | 2 | 3 | 0 |
+| enqueue(F) | | F . C D E | 2 | 4 | 1 |
+| enqueue(G) | | F G C D E | 2 | 5 | 2 (= front: full) |
+| dequeue() | C | F G . D E | 3 | 4 | 2 |
+
+Points to notice. After `enqueue(E)`, `avail` wraps to $(2 + 3) \bmod 5 = 0$, so F is stored
+**before** C in the array while being **after** it in the queue: array order and queue order are
+different things, which is exactly why resizing must copy "from front, wrapping" rather than slice.
+When the queue is full, `avail` equals `front` — the same relation that holds when it is empty —
+which is why we track `size` instead of comparing indices. The cell below replays the trace.
+
+```python-run
+N = 5
+data, front, size = [None] * N, 0, 0
+def show(op, ret=""):
+    cells = " ".join("." if x is None else x for x in data)
+    print(f"{op:12s} {str(ret):3s} | {cells} | front={front} size={size} avail={(front + size) % N}")
+def enqueue(x):
+    global size
+    assert size < N, "queue is full"
+    data[(front + size) % N] = x
+    size += 1
+    show(f"enqueue({x})")
+def dequeue():
+    global front, size
+    x, data[front] = data[front], None
+    front = (front + 1) % N
+    size -= 1
+    show("dequeue()", x)
+for step in ["A", "B", "C", None, None, "D", "E", "F", "G", None]:
+    dequeue() if step is None else enqueue(step)
+print("queue order:", [data[(front + k) % N] for k in range(size)])
+```
+
+## 7. Worked applications: level-by-level search and a sliding window
+
+**Breadth-first search.** A queue processes items in the order they were discovered, which makes it
+the engine of any "nearest first" exploration. Finding the fewest moves through a grid maze is the
+standard example: every cell that is $d$ steps away is dequeued before any cell $d + 1$ steps away.
+
+```python-run
+from collections import deque
+maze = ["S.#.....",
+        ".##.###.",
+        "....#...",
+        ".##.#.#.",
+        "...#..#E"]
+def shortest_path_length(maze):
+    R, C = len(maze), len(maze[0])
+    start = next((r, c) for r in range(R) for c in range(C) if maze[r][c] == "S")
+    dist = {start: 0}
+    Q = deque([start])
+    while Q:
+        r, c = Q.popleft()                        # FIFO: closest unexplored cell first
+        if maze[r][c] == "E":
+            return dist[(r, c)]
+        for nr, nc in ((r + 1, c), (r - 1, c), (r, c + 1), (r, c - 1)):
+            if 0 <= nr < R and 0 <= nc < C and maze[nr][nc] != "#" and (nr, nc) not in dist:
+                dist[(nr, nc)] = dist[(r, c)] + 1     # mark when ENQUEUED, not when dequeued
+                Q.append((nr, nc))
+    return -1
+print("fewest moves from S to E:", shortest_path_length(maze))
+```
+
+Each cell enters and leaves the queue at most once, so the search is $O(RC)$. Replace the deque by a
+stack and the same code performs a depth-first search — which still finds *a* path, but not
+necessarily a shortest one. Swap `popleft()` for `list.pop(0)` and it still works but each dequeue
+becomes $O(n)$.
+
+**Sliding-window maximum with a deque.** Given a sequence and a window width $k$, report the maximum
+of every window of $k$ consecutive values. Recomputing each maximum costs $O(nk)$. A deque of
+*indices* does it in $O(n)$, using both ends:
+
+- keep the deque's values **decreasing** from front to back: before appending a new index, pop from
+  the **back** every index whose value is $\le$ the new value — those elements can never be a
+  maximum again, since the newcomer is at least as large and stays in the window longer;
+- pop from the **front** when the front index has slid out of the window;
+- the front is always the index of the current window's maximum.
+
+```python-run
+from collections import deque
+def sliding_max(values, k):
+    D, out = deque(), []                  # D holds indices; their values are decreasing
+    for i, x in enumerate(values):
+        while D and values[D[-1]] <= x:   # delete_last: dominated candidates
+            D.pop()
+        D.append(i)                       # add_last
+        if D[0] <= i - k:                 # delete_first: fell out of the window
+            D.popleft()
+        if i >= k - 1:
+            out.append(values[D[0]])      # first: the maximum
+    return out
+vals = [1, 3, -1, -3, 5, 3, 6, 7]
+print(sliding_max(vals, 3))
+print(sliding_max(vals, 3) == [max(vals[i:i + 3]) for i in range(len(vals) - 2)])
+```
+
+**Dry run** ($k = 3$): after reading 1, 3, −1 the deque holds the indices of `[3, −1]` (1 was popped
+when 3 arrived) → maximum 3. Reading −3 appends it: `[3, −1, −3]` → 3. Reading 5 pops all three:
+`[5]` → 5. Reading 3: `[5, 3]` → 5. Reading 6 pops both: `[6]` → 6. Reading 7: `[7]` → 7. Output
+`[3, 3, 5, 5, 6, 7]`.
+
+**Why $O(n)$:** each index is appended exactly once and removed at most once, so the total number of
+deque operations is at most $2n$, even though a single step may pop many elements — the same
+amortised accounting as the dynamic array. This algorithm needs **all four** deque operations, which
+is why neither a stack nor a queue suffices.
+
+## 8. Pitfalls
 
 - `list.pop(0)` in a BFS loop: quadratic. Use `collections.deque.popleft`.
 - Resizing a circular buffer with a plain slice copy: the wrapped elements end up out of order.
 - Computing `avail` with the *new* length while copying from the old array.
 - Off-by-one in `last`: it is `(f + size - 1) % N`, not `(f + size) % N`.
 
-## 7. Summary
+## 9. Summary
 
 - Queue = FIFO; circular arrays make enqueue/dequeue $O(1)$ amortised with $O(n)$ space.
 - Index arithmetic modulo the capacity is the whole trick: `avail = (f + size) % N`,

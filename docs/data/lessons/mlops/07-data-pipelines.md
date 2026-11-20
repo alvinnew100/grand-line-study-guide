@@ -195,6 +195,87 @@ an agreed schema, semantics, freshness SLA and owner, enforced by checks in CI a
 evolution (DDIA ch. 4) should be *backward compatible* — add optional fields, never silently repurpose a
 column — and formats like Avro/Protobuf with a schema registry make this explicit.
 
+## Worked example: designing the data flow for a churn model
+
+Apply the concepts to a concrete case. The product database (Postgres) holds `customers` and
+`subscriptions`; the app emits click events; support tickets live in a SaaS tool.
+
+```mermaid
+flowchart LR
+  PG[(Postgres OLTP)] -->|CDC Debezium| K[(Kafka)]
+  APP[App events] --> K
+  K -->|sink connector| BR[(Bronze: raw events, append only)]
+  SAAS[Support tool API] -->|daily extract| BR
+  BR -->|dbt or Spark: dedupe, types, conform ids| SI[(Silver: clean entities and events)]
+  SI -->|daily aggregation by customer and date| GO[(Gold: customer_features dt=...)]
+  GO --> TRAIN[Training set builder: point in time join with labels]
+  GO --> SCORE[Nightly batch scoring]
+```
+
+Decisions and their reasons:
+
+1. **CDC instead of nightly dumps** of Postgres: no heavy analytical queries on the production database,
+   and every *change* is captured — a nightly snapshot would miss a subscription that was paused and
+   resumed the same day.
+2. **Bronze is immutable and complete.** When someone later asks for "number of plan changes in the last
+   90 days", the history exists to compute it.
+3. **Silver deduplicates.** At-least-once delivery from Kafka means duplicates; dedupe on the event ID.
+4. **Gold is partitioned by date and overwritten per partition**, so the daily job is idempotent and a
+   bug fix can be backfilled one partition at a time.
+5. **Batch, not streaming, for features**: the model is scored nightly; nothing needs sub-daily
+   freshness. Streaming would add cost and operational burden for no benefit.
+
+### The daily job as idempotent SQL
+
+```sql
+-- gold.customer_features, one partition per day; :ds is the logical date supplied by the orchestrator
+DELETE FROM gold.customer_features WHERE dt = :ds;          -- make the rerun safe
+
+INSERT INTO gold.customer_features
+SELECT
+    c.customer_id,
+    :ds                                                         AS dt,
+    DATE_PART('day', :ds::timestamp - c.signup_ts) / 30.0       AS tenure_months,
+    COUNT(e.event_id) FILTER (WHERE e.event_ts >= :ds::date - 30)  AS events_30d,
+    COUNT(t.ticket_id) FILTER (WHERE t.created_ts >= :ds::date - 30) AS support_tickets_30d
+FROM silver.customers c
+LEFT JOIN silver.events  e ON e.customer_id = c.customer_id AND e.event_ts  < :ds::date + 1
+LEFT JOIN silver.tickets t ON t.customer_id = c.customer_id AND t.created_ts < :ds::date + 1
+WHERE c.signup_ts < :ds::date + 1                              -- only customers that existed on that day
+GROUP BY c.customer_id, c.signup_ts;
+```
+
+Three details make this production-grade: it is parameterised by the **logical date** (never `now()`),
+every source is filtered to data **known as of that date** (no leakage from the future during
+backfills), and delete-then-insert makes it **idempotent**. (As written, joining two fact tables to the
+same customer multiplies rows; a real implementation pre-aggregates each fact in a CTE before joining —
+exactly the kind of fan-out bug a row-count test catches.)
+
+### Late and out-of-order data in batch
+
+Batch pipelines face the same event-time problem as streams: yesterday's partition may be incomplete at
+02:00 because mobile events are still arriving. Options, in increasing sophistication:
+
+- **Wait**: schedule the job later (trade freshness for completeness).
+- **Reprocess a trailing window**: every night recompute the last three days of partitions; late data is
+  picked up automatically because partitions are overwritten.
+- **Watermark-based completeness checks**: only publish a partition when event volume reaches an
+  expected fraction of the trailing average, else alert.
+
+### Data quality checks at each hop
+
+| Hop | Check | Catches |
+|---|---|---|
+| Source → Bronze | row count vs source, schema registry compatibility | dropped messages, breaking schema changes |
+| Bronze → Silver | uniqueness of event IDs, not-null keys, referential integrity | duplicates, orphan records |
+| Silver → Gold | row count = number of active customers, value ranges, null rates | join fan-out, broken aggregations |
+| Gold → Model | distribution drift vs training reference, freshness | silent upstream semantic changes |
+
+> [!TIP]
+> Freshness is a data-quality dimension of its own. Record `max(event_ts)` per partition and alert when a
+> table is staler than its SLA — a pipeline that silently stops is otherwise invisible until predictions
+> go wrong.
+
 ## Summary
 
 - OLTP stores serve the app; OLAP warehouses and lakehouses (columnar Parquet) serve analytics and ML.

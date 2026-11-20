@@ -202,6 +202,96 @@ Order matters: committing to a three-year reservation *before* right-sizing lock
 > cheaper hardware, cascade/routing), less work (caching, batch precompute), unit price (spot for
 > stateless overflow, commitments for baseline). Close with guardrails: budgets, alerts, cost dashboards.
 
+## Worked example: a cost review of the churn system
+
+Numbers make the levers tangible. A month of spend for the capstone system before optimisation
+(illustrative prices):
+
+| Item | Detail | Monthly |
+|---|---|---|
+| Serving | 6 × 4-vCPU replicas on-demand, 24/7, average CPU 14% | \$830 |
+| Dev/staging endpoints | 3 replicas each, 24/7 | \$830 |
+| Training | weekly retrain on a GPU instance, on-demand, 3 h; plus a 200-trial HPO sweep monthly | \$410 |
+| Notebooks | 4 GPU notebooks left running | \$2,300 |
+| Storage | 6 TB raw + every checkpoint ever, standard tier | \$190 |
+| Logging/metrics | full request payload logging, high-cardinality metrics | \$520 |
+| **Total** | | **\$5,080** |
+
+Walking the checklist in order:
+
+```python-run
+items = {"serving": 830, "dev/staging": 830, "training+HPO": 410, "notebooks": 2300, "storage": 190, "logging": 520}
+actions = [
+    ("auto-stop idle notebooks (used ~25% of the time)",      "notebooks",    0.75),
+    ("scale dev/staging to zero outside working hours (~70%)", "dev/staging",  0.70),
+    ("right-size serving: HPA at 60% CPU, min 3 replicas",     "serving",      0.50),
+    ("training + HPO on spot with checkpoints; ASHA pruning",  "training+HPO", 0.70),
+    ("sample payload logs 10%, drop high-cardinality labels",  "logging",      0.60),
+    ("lifecycle rules: old raw to infrequent access, keep last 5 checkpoints", "storage", 0.45),
+]
+total0 = sum(items.values()); cur = dict(items)
+print(f"{'action':70s} {'saves':>8s} {'new total':>10s}")
+for desc, key, cut in actions:
+    saved = cur[key] * cut; cur[key] -= saved
+    print(f"{desc:70s} {saved:8.0f} {sum(cur.values()):10.0f}")
+print(f"\nmonthly cost: ${total0:,.0f} -> ${sum(cur.values()):,.0f}  ({1 - sum(cur.values())/total0:.0%} lower)")
+print("biggest remaining item:", max(cur, key=cur.get))
+```
+
+Two observations generalise. First, **the largest saving was not an ML optimisation at all** — it was
+turning off idle notebooks. Waste hunting beats clever engineering in most first cost reviews. Second,
+after the easy wins, serving becomes the largest remaining item, and further reduction needs the
+harder levers: a cheaper model, batching, caching, or moving to batch scoring.
+
+## Is the model worth what it costs?
+
+Cost optimisation is one side of a ratio; the other is value. A simple unit-economics check for any
+model in production:
+
+$$\text{net value per month} = (\text{value per correct action} \times \text{actions}) - (\text{cost of errors}) - (\text{inference} + \text{training} + \text{people})$$
+
+For the churn model: suppose targeted offers retain 180 extra customers a month at \$40 margin each
+(\$7,200), offers wasted on customers who would have stayed cost \$1,500, and the system costs \$1,700
+to run plus a quarter of an engineer. The model clears its costs — and a "better" model that adds 2% of
+retained customers (\$144/month) does not justify a GPU endpoint that adds \$1,000/month. Knowing the
+value of a metric point is what lets you say no to expensive accuracy.
+
+## Guardrails that prevent the next surprise
+
+```yaml
+# Budget alert (AWS Budgets via CloudFormation, abridged)
+Resources:
+  MlMonthlyBudget:
+    Type: AWS::Budgets::Budget
+    Properties:
+      Budget:
+        BudgetName: ml-churn-monthly
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BudgetLimit: {Amount: 3000, Unit: USD}
+        CostFilters: {TagKeyValue: ["user:project$churn"]}
+      NotificationsWithSubscribers:
+        - Notification: {NotificationType: ACTUAL, ComparisonOperator: GREATER_THAN, Threshold: 80}
+          Subscribers: [{SubscriptionType: EMAIL, Address: ml-leads@acme.example}]
+        - Notification: {NotificationType: FORECASTED, ComparisonOperator: GREATER_THAN, Threshold: 100}
+          Subscribers: [{SubscriptionType: EMAIL, Address: ml-leads@acme.example}]
+```
+
+Complement budgets with **preventive** controls: maximum runtime on training jobs, quotas on GPU
+instance types per team, mandatory tags enforced by policy (untagged resources cannot be created),
+idle-shutdown on notebooks, TTL labels on dev namespaces, and a per-key spending limit on LLM gateways.
+Alerts tell you after the money is spent; limits stop it being spent.
+
+### Cost anti-patterns
+
+- **GPU by default**: serving a tree model or a small transformer on GPUs when CPUs meet the SLO.
+- **Over-provisioning for a peak that happens twice a year** instead of autoscaling or queueing.
+- **Per-team clusters** each with their own idle headroom, instead of a shared pool with quotas.
+- **Re-processing all history nightly** instead of incremental partitions.
+- **Logging everything forever** at full fidelity.
+- **Optimising the cheap thing**: weeks spent shaving training time while inference is 90% of the bill.
+- **Commitments made on last quarter's unoptimised usage.**
+
 ## Summary
 
 - Cost = work ÷ (throughput × utilisation) × unit price: four levers.

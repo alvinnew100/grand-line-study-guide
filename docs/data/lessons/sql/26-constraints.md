@@ -207,6 +207,41 @@ Beyond protection, constraints tell humans and tools how the data fits together:
 - **Trying `ALTER TABLE … ADD CONSTRAINT` in SQLite.**
 - **Unnamed constraints** — hard to drop, cryptic errors.
 
+## Worked example: testing a table's constraints
+
+A schema's constraints are claims about the data; a short test script proves them. Here is one for the shop's `orders` and `order_items`, where each of the first three statements *should* fail — each error message names the rule that fired.
+
+```sql-run dataset=shop
+PRAGMA foreign_keys = ON;
+-- 1. status outside the allowed list (CHECK)
+INSERT INTO orders (customer_id, order_date, status) VALUES (1, '2024-12-20', 'lost');
+```
+
+```sql-run dataset=shop
+PRAGMA foreign_keys = ON;
+-- 2. order for a customer that does not exist (FOREIGN KEY)
+INSERT INTO orders (customer_id, order_date, status) VALUES (9999, '2024-12-20', 'pending');
+```
+
+```sql-run dataset=shop
+-- 3. two customers with the same email (UNIQUE)
+INSERT INTO customers (first_name, last_name, email, country, signup_date)
+SELECT 'Copy', 'Cat', email, 'USA', '2024-12-20' FROM customers WHERE email IS NOT NULL LIMIT 1;
+```
+
+And one that should succeed, to prove the constraints are not simply rejecting everything — including the default for `shipping_fee`:
+
+```sql-run dataset=shop
+PRAGMA foreign_keys = ON;
+INSERT INTO orders (customer_id, order_date, status) VALUES (1, '2024-12-20', 'pending')
+RETURNING order_id, customer_id, status, shipping_fee;
+```
+
+Writing these negative tests when you design a table is cheap, and it documents the intended rules far better than a comment.
+
+> [!INTERVIEW]
+> Typical constraint questions: *primary key versus unique key* (a table has one primary key, it cannot contain NULLs; unique constraints can be many and usually allow NULLs); *what does ON DELETE CASCADE do and when is it dangerous*; *how would you enforce "an order must have at least one item"* (not expressible as a simple constraint — it needs a deferred check, a trigger, or application logic, which is a good thing to admit).
+
 ## Summary
 
 - Constraints — primary key, foreign key, unique, check, not null — define valid data and are enforced for every writer.

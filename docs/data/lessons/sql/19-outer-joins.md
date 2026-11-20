@@ -253,6 +253,67 @@ Same two tables, same condition; choosing which side is preserved changes the qu
 - **Anti-join on a nullable column** — test the right table's primary key.
 - **Aggregating two unrelated child tables** off one parent with two left joins multiplies rows (orders × logins); aggregate each child separately first.
 
+## Worked example: a report that must not lose rows
+
+Outer joins matter most in reports where *absence* is information. Build one: *for every branch, the number of employees, the number of accounts opened there, and the number of transactions executed there in December 2024 — showing zeros.*
+
+A first attempt joins everything to `branch`:
+
+```sql-run dataset=bank
+SELECT b.name,
+       COUNT(DISTINCT e.emp_id)     AS employees,
+       COUNT(DISTINCT a.account_id) AS accounts,
+       COUNT(DISTINCT t.txn_id)     AS december_txns
+FROM branch b
+LEFT JOIN employee e ON e.assigned_branch_id = b.branch_id
+LEFT JOIN account a  ON a.open_branch_id = b.branch_id
+LEFT JOIN txn t      ON t.execution_branch_id = b.branch_id
+                    AND t.txn_date >= '2024-12-01' AND t.txn_date < '2025-01-01'
+GROUP BY b.branch_id, b.name;
+```
+
+It gives the right numbers, but only thanks to `COUNT(DISTINCT …)`: three independent child tables joined to one parent produce employees × accounts × transactions rows per branch. On real data that intermediate result can be billions of rows, and any `SUM` over it would be wrong. The date filter sits in the **ON** clause so that a branch with no December transactions still appears.
+
+The robust version aggregates each child separately and left-joins the three small summaries:
+
+```sql-run dataset=bank
+SELECT b.name,
+       COALESCE(e.n, 0) AS employees,
+       COALESCE(a.n, 0) AS accounts,
+       COALESCE(a.balance, 0) AS total_balance,
+       COALESCE(t.n, 0) AS december_txns
+FROM branch b
+LEFT JOIN (SELECT assigned_branch_id AS branch_id, COUNT(*) AS n
+           FROM employee GROUP BY assigned_branch_id) e ON e.branch_id = b.branch_id
+LEFT JOIN (SELECT open_branch_id AS branch_id, COUNT(*) AS n, ROUND(SUM(avail_balance), 2) AS balance
+           FROM account GROUP BY open_branch_id) a ON a.branch_id = b.branch_id
+LEFT JOIN (SELECT execution_branch_id AS branch_id, COUNT(*) AS n
+           FROM txn
+           WHERE txn_date >= '2024-12-01' AND txn_date < '2025-01-01'
+           GROUP BY execution_branch_id) t ON t.branch_id = b.branch_id
+ORDER BY b.branch_id;
+```
+
+Every join is now one-to-one, a `SUM` is safe, and COALESCE turns "no summary row" into zero. This *aggregate-then-left-join* shape is the standard way to build any multi-measure report.
+
+## Outer joins in interviews
+
+Recognise these phrasings as outer-join signals: "**all** customers, including those with no orders", "show zero when…", "**even if** there is no matching…", "which X have **no** Y". The usual follow-ups:
+
+- *Where does the filter go?* Right-table conditions in ON; left-table conditions in WHERE.
+- *COUNT what?* A right-table column, never `*`.
+- *Find the unmatched rows* — `LEFT JOIN … WHERE right.key IS NULL`.
+
+```sql-run dataset=mlops
+-- Experiments and how many of their runs reached the model registry (zeros included)
+SELECT e.name, COUNT(DISTINCT r.run_id) AS runs, COUNT(m.model_id) AS registered_models
+FROM experiments e
+LEFT JOIN runs r   ON r.experiment_id = e.experiment_id
+LEFT JOIN models m ON m.run_id = r.run_id
+GROUP BY e.experiment_id, e.name
+ORDER BY registered_models DESC;
+```
+
 ## Summary
 
 - A left outer join keeps every left row and NULL-pads missing right columns; a right join is its mirror; a full join keeps both sides.

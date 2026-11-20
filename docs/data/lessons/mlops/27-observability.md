@@ -279,6 +279,54 @@ exact step.
 > low-cardinality labels, structured logs with request and trace IDs, a prediction log for joining
 > labels, traces for latency breakdown, and burn-rate alerts.
 
+## Dashboard design: from "wall of graphs" to answers
+
+A dashboard should answer a question in the order an on-call engineer asks it:
+
+1. **Is something wrong right now?** — SLO status, error-budget burn, request rate vs normal.
+2. **Is it us or a dependency?** — latency by stage (from traces or per-stage histograms), dependency
+   error rates.
+3. **Did we change something?** — deployment and model-version annotations on every time axis.
+4. **Is it the model?** — score distribution, missing-feature rate, fallback rate, drift score.
+5. **Who is affected?** — breakdown by a few bounded dimensions (region, client, model version).
+
+Useful PromQL for those panels:
+
+```promql
+# traffic compared with the same time last week (ratio near 1 is normal)
+sum(rate(predict_requests_total[5m])) / sum(rate(predict_requests_total[5m] offset 7d))
+
+# latency SLI: share of requests faster than 100 ms
+sum(rate(predict_latency_seconds_bucket{le="0.1"}[5m])) / sum(rate(predict_latency_seconds_count[5m]))
+
+# which model versions are serving, and how much
+sum by (model_version) (rate(predict_requests_total[5m]))
+
+# share of predictions above the decision threshold (bucket boundary at 0.5)
+1 - sum(rate(prediction_score_bucket{le="0.5"}[1h])) / sum(rate(prediction_score_count[1h]))
+```
+
+**Recording rules** precompute expensive expressions so dashboards and alerts stay fast and consistent:
+
+```yaml
+groups:
+  - name: churn-api-recording
+    rules:
+      - record: job:predict_error_ratio:rate5m
+        expr: sum(rate(predict_requests_total{status="error"}[5m])) / sum(rate(predict_requests_total[5m]))
+      - record: job:predict_latency_seconds:p95_5m
+        expr: histogram_quantile(0.95, sum by (le) (rate(predict_latency_seconds_bucket[5m])))
+```
+
+### Sampling: what to keep when you cannot keep everything
+
+At scale you cannot store every trace and every payload. Reasonable defaults: keep **all metrics**
+(cheap, aggregated); keep **all prediction-log records** if volume allows, else a uniform random sample
+plus *all* errors and low-confidence predictions; use **tail-based trace sampling** — decide after the
+request finishes, keeping every slow or failed trace and a small percentage of normal ones. Uniform
+sampling keeps statistics unbiased; biased sampling (errors only) is for debugging and must not be used
+to compute rates.
+
 ## Summary
 
 - Observability lets you explain failures from emitted data; judge it by MTTD, MTTR and CFR.

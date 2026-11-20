@@ -280,6 +280,144 @@ explicit.
 > with automated metrics analysis and automatic rollback, human approval gate for production. Mention
 > OIDC, build once/promote, and GitOps.
 
+## Reusable workflows and composite actions
+
+As the number of model repositories grows, copy-pasted workflows drift. GitHub offers two reuse
+mechanisms:
+
+- **Reusable workflows** (`on: workflow_call`): a whole workflow called from another, with typed inputs
+  and secrets. Ideal for a platform team's standard "build, scan and push an ML image" pipeline.
+- **Composite actions**: a bundle of steps packaged as one action (for example "set up Python + uv +
+  restore cache").
+
+```yaml
+# .github/workflows/_build-image.yml   (in a shared repo: acme/ml-workflows)
+on:
+  workflow_call:
+    inputs:
+      image-name: {required: true, type: string}
+      context: {required: false, type: string, default: "."}
+    outputs:
+      digest: {value: "${{ jobs.build.outputs.digest }}"}
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions: {contents: read, packages: write}
+    outputs: {digest: "${{ steps.push.outputs.digest }}"}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with: {registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}"}
+      - id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ inputs.context }}
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/${{ inputs.image-name }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+```
+
+```yaml
+# in a model repository
+jobs:
+  image:
+    uses: acme/ml-workflows/.github/workflows/_build-image.yml@v3     # pinned version of the shared workflow
+    with: {image-name: churn-api}
+  deploy-staging:
+    needs: image
+    runs-on: ubuntu-latest
+    steps:
+      - run: ./scripts/deploy.sh staging "${{ needs.image.outputs.digest }}"
+```
+
+The platform team improves the shared workflow once (adds scanning, SBOMs, signing) and every model
+repository inherits it on the next version bump.
+
+## Passing data between steps and jobs
+
+| Need | Mechanism |
+|---|---|
+| Value from one step to a later step | `echo "run_id=abc" >> "$GITHUB_OUTPUT"` then `${{ steps.<id>.outputs.run_id }}` |
+| Value between jobs | job `outputs:` + `needs.<job>.outputs.<name>` |
+| Files between jobs | `actions/upload-artifact` / `download-artifact` |
+| Environment variable for later steps | `echo "KEY=value" >> "$GITHUB_ENV"` |
+| Human-readable report | append Markdown to `$GITHUB_STEP_SUMMARY` |
+| Speed up installs | `actions/cache` keyed on the lockfile hash |
+
+```yaml
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/uv
+          key: uv-${{ runner.os }}-${{ hashFiles('uv.lock') }}       # new lockfile -> new cache
+          restore-keys: uv-${{ runner.os }}-
+```
+
+## A model-quality gate in the pull request
+
+CI for ML should show reviewers the **effect on the model**, not just green ticks. A PR job can train on
+a fixed sample, compare with the metrics on `main`, fail on regression, and post the table:
+
+```yaml
+  model-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11", cache: pip}
+      - run: pip install -e ".[dev,train]"
+      - run: dvc pull data/sample.parquet && python -m churn.train --params params.ci.yaml
+      - name: Compare with main
+        run: |
+          git show origin/main:metrics.ci.json > base.json
+          python scripts/compare_metrics.py base.json metrics.json --max-drop 0.01 >> "$GITHUB_STEP_SUMMARY"
+```
+
+```python-run
+import json
+def compare(base, cand, max_drop=0.01, higher_is_better=("pr_auc", "roc_auc")):
+    rows, failed = [], False
+    for k in sorted(set(base) | set(cand)):
+        b, c = base.get(k), cand.get(k)
+        if b is None or c is None:
+            rows.append((k, b, c, "new/removed")); continue
+        delta = c - b
+        bad = any(k.startswith(m) for m in higher_is_better) and delta < -max_drop
+        failed |= bad
+        rows.append((k, b, c, "REGRESSION" if bad else "ok"))
+    return rows, failed
+
+base = {"pr_auc": 0.712, "roc_auc": 0.861, "pr_auc__plan=basic": 0.701, "pr_auc__plan=premium": 0.655, "latency_ms_p95": 18.0}
+cand = {"pr_auc": 0.724, "roc_auc": 0.866, "pr_auc__plan=basic": 0.719, "pr_auc__plan=premium": 0.631, "latency_ms_p95": 19.5}
+rows, failed = compare(base, cand)
+print("| metric | main | PR | status |\n|---|---|---|---|")
+for k, b, c, s in rows:
+    print(f"| {k} | {b} | {c} | {s} |")
+print("\nexit code:", 1 if failed else 0, "(non-zero blocks the merge)")
+```
+
+The candidate improves overall but regresses the premium slice by more than the allowed margin — the PR
+is blocked, with the evidence in the summary. Keep this job fast (a fixed small sample, minutes) and
+deterministic (fixed seed); the full evaluation belongs to the training pipeline.
+
+## Debugging and operating workflows
+
+- **Re-run with debug logging** (enable step debug logging on the re-run) and read the raw logs.
+- **Reproduce locally**: because the workflow calls `make` targets and scripts, the same commands run on
+  your machine; `act` can emulate runners for quick iterations.
+- **Flaky tests**: quarantine and fix; never "just re-run until green" on the default branch.
+- **Runner choice**: hosted runners are clean and ephemeral; self-hosted runners give GPUs and network
+  access to private systems but must be isolated and ephemeral for untrusted code (never attach them to
+  public repositories).
+- **Cost and speed**: path filters, concurrency cancellation, caching, and splitting the suite across a
+  matrix keep the PR feedback loop under ten minutes — the threshold beyond which people stop waiting for
+  CI before context-switching.
+- **Scheduled workflows** run on the default branch and can be delayed under load; do not rely on exact
+  timing, and note that schedules are disabled automatically in repositories with no activity for a long
+  period.
+
 ## Summary
 
 - CI validates every change; CD ships validated artifacts; CT retrains and re-validates models.

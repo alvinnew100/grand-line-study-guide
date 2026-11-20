@@ -200,6 +200,92 @@ If any field differs between two runs, you know where to look when results diffe
 > multi-worker data loading order) — enable deterministic algorithms and compare; quantify seed variance
 > to decide whether the difference even matters.
 
+## Reproducible data splits
+
+A model comparison is only fair if both models saw the same rows in train and test. `train_test_split`
+with a fixed seed is reproducible *only while the dataset is unchanged*: add one row and every
+assignment can shift, silently moving examples between train and test. The robust alternative is to
+derive the split from a **stable hash of an entity ID**:
+
+```python-run
+import hashlib
+
+def split_of(entity_id: str, test_pct: int = 20, salt: str = "churn-split-v1") -> str:
+    h = int(hashlib.sha256(f"{salt}:{entity_id}".encode()).hexdigest(), 16)
+    return "test" if h % 100 < test_pct else "train"
+
+ids_day1 = [f"cust-{i}" for i in range(10_000)]
+ids_day2 = ids_day1 + [f"cust-{i}" for i in range(10_000, 12_000)]      # 2,000 new customers arrive
+s1 = {i: split_of(i) for i in ids_day1}
+s2 = {i: split_of(i) for i in ids_day2}
+moved = sum(s1[i] != s2[i] for i in ids_day1)
+print(f"test share day 1: {sum(v == 'test' for v in s1.values()) / len(s1):.3f}")
+print(f"test share day 2: {sum(v == 'test' for v in s2.values()) / len(s2):.3f}")
+print(f"customers that changed split after the data grew: {moved}")
+```
+
+Properties: deterministic across machines and languages, stable as data grows, and all rows of one
+entity land on the same side (no entity leakage). The **salt** lets you define a new, independent split
+deliberately (`v2`) without accidental reuse. For time-dependent problems, split by time instead and
+record the cutoff timestamps in the run.
+
+## Determinism in practice: what to expect
+
+| Setting | Typical reproducibility |
+|---|---|
+| scikit-learn / XGBoost / LightGBM on CPU, fixed seed, same library versions, single thread | bit-identical |
+| Same, multi-threaded | usually identical; some algorithms differ in the last bits |
+| Same code, different library minor version | may differ (changed defaults, numerics) |
+| PyTorch on one GPU with deterministic algorithms enabled | bit-identical on the same hardware and software stack |
+| PyTorch default settings (cuDNN autotune, non-deterministic kernels) | statistically equivalent, not identical |
+| Different GPU model or driver/CUDA version | not guaranteed identical |
+| Distributed data-parallel training | sensitive to worker count and reduction order |
+
+Decide which level you actually need. For most business models, "metrics within the seed-variance band"
+is the right target, and a CI test asserting exactly that is cheap:
+
+```python
+def test_training_is_statistically_reproducible(tiny_data):
+    a = train_and_eval(tiny_data, seed=0)
+    b = train_and_eval(tiny_data, seed=0)
+    assert a["pr_auc"] == pytest.approx(b["pr_auc"], abs=1e-9)      # same seed -> same result (CPU model)
+    c = train_and_eval(tiny_data, seed=1)
+    assert abs(a["pr_auc"] - c["pr_auc"]) < 0.03                    # different seed -> within expected band
+```
+
+## A worked example: reproducing a production model after an incident
+
+*Scenario*: a regulator asks why customer X was declined by model version 31 four months ago. You must
+re-create the model's behaviour.
+
+1. **Registry → run.** Version 31 points at run `a1b2c3`.
+2. **Run → code.** Tag `git_sha=9f3c1e2`, `git_dirty=false`. Check out that commit.
+3. **Run → data.** Logged dataset digest and `dvc.lock` at that commit identify the exact training
+   files; `dvc checkout` restores them from the remote (which has retention configured so they still
+   exist).
+4. **Run → environment.** The run's `requirements.txt` and the tag `image_digest=sha256:77ab...`
+   identify the training image; pull it by digest.
+5. **Run → config and seed.** `config/resolved_config.json` artifact.
+6. **Prediction log → input.** The stored request for customer X gives the exact feature vector the
+   model received (not today's recomputed features, which may differ).
+7. **Verify.** Load the registered artifact, score the logged feature vector, and compare with the
+   logged prediction. Optionally retrain inside the pinned image and confirm metrics match.
+
+Every step depends on something recorded at training or serving time. The exercise is worth running as a
+**fire drill** once a quarter: pick a random production model and try to rebuild it. The gaps you find
+are your reproducibility debt.
+
+### What breaks reproducibility over long horizons
+
+- **Artifact retention**: lifecycle rules that delete old data partitions or images. Pin retention for
+  anything referenced by a registered model.
+- **Yanked or vanished packages** on public indexes: mirror wheels in a private index or keep the built
+  image.
+- **Base image tags that moved**: reference digests.
+- **External services** in the pipeline (a geocoding API, an embedding endpoint) whose behaviour
+  changed: snapshot their outputs as data.
+- **Hardware retirement**: document that bit-exactness is scoped to a hardware/software stack.
+
 ## Summary
 
 - Reproducibility requires controlling code, data, config, environment and randomness.

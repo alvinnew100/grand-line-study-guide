@@ -300,6 +300,113 @@ sequenceDiagram
 > pin the Python version and base image digest, record the lock hash with each run, and capture
 > non-Python deps (CUDA, cuDNN, system libs) in the container image.
 
+## Dependency groups for ML projects
+
+ML projects have unusually different needs per context. Split dependencies so each environment installs
+only what it uses:
+
+```toml
+[project]
+dependencies = ["numpy>=1.26", "pandas>=2.2", "scikit-learn>=1.5,<1.6", "pydantic>=2.7"]   # needed everywhere
+
+[project.optional-dependencies]
+train = ["mlflow>=2.14", "optuna>=3.6", "pandera>=0.20", "dvc[s3]>=3.50"]
+serve = ["fastapi>=0.111", "uvicorn[standard]>=0.30", "prometheus-client>=0.20", "mlflow-skinny>=2.14"]
+dev   = ["pytest>=8", "pytest-cov", "hypothesis", "ruff", "mypy", "pre-commit"]
+```
+
+The serving image installs `.[serve]` only: no Optuna, no DVC, and `mlflow-skinny` instead of full
+MLflow. Smaller images, fewer CVEs, faster cold starts. The cost is discipline: the **versions of shared
+libraries (scikit-learn, NumPy) must be identical** in the training and serving environments, or a
+pickled model may fail to load or behave differently. Generate both lockfiles from the same constraints,
+or use a single lock with groups (`uv sync --extra serve --frozen`).
+
+> [!WARNING]
+> A pickle is tied to the library version that wrote it. scikit-learn warns (`InconsistentVersionWarning`)
+> when unpickling across versions and makes no guarantee that it works. Record the training environment
+> with the model (MLflow does this) and build the serving image from it — or export to a
+> version-independent format such as ONNX.
+
+## Versioning the package
+
+A package version tells consumers what changed. Common schemes:
+
+- **Semantic versioning** for libraries: `MAJOR.MINOR.PATCH`.
+- **Version from Git tags** so there is one source of truth: tools such as `hatch-vcs` or
+  `setuptools-scm` derive `1.4.0` from the tag `v1.4.0` and something like `1.4.1.dev3+g9f3c1e2` for
+  untagged commits — every build is traceable to a commit.
+
+```toml
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+[project]
+dynamic = ["version"]
+[tool.hatch.version]
+source = "vcs"
+```
+
+Expose it at runtime (`importlib.metadata.version("churn")`) and include it in logs and the `/readyz`
+response: *code version* and *model version* are different things and you need both to debug.
+
+## Entry points and a thin CLI
+
+Make every pipeline step runnable as a command with arguments — that is what orchestrators, CI and
+humans call.
+
+```python
+# src/churn/cli.py
+import argparse
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="churn")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    t = sub.add_parser("train");  t.add_argument("--params", default="params.yaml")
+    s = sub.add_parser("score");  s.add_argument("--date", required=True); s.add_argument("--model-uri", default="models:/churn@champion")
+    v = sub.add_parser("validate"); v.add_argument("--path", required=True)
+    args = parser.parse_args(argv)
+    if args.cmd == "train":
+        from churn.train import run; run(args.params)
+    elif args.cmd == "score":
+        from churn.score import run; run(args.date, args.model_uri)
+    elif args.cmd == "validate":
+        from churn.data import load; load(args.path)
+    return 0                                   # exceptions propagate -> non-zero exit code
+```
+
+```toml
+[project.scripts]
+churn = "churn.cli:main"
+```
+
+Now `churn train --params params.yaml` works identically on a laptop, in Docker and in an Airflow task.
+Imports inside the branches keep `churn score` from importing training-only dependencies.
+
+## A realistic `make ci` and why it mirrors CI
+
+```makefile
+ci: lint test build            ## everything CI runs, in the same order
+
+build:                         ## build wheel and verify it installs in a clean environment
+	python -m build
+	python -m venv .venv-check && .venv-check/bin/pip install dist/*.whl && .venv-check/bin/churn --help
+	rm -rf .venv-check
+```
+
+If `make ci` passes locally, CI should pass — and when CI is defined as "run `make ci`", the pipeline
+YAML stays small and vendor-neutral. The clean-environment install catches the classic packaging bug:
+it works from the source tree but the wheel is missing a module or a data file.
+
+### Troubleshooting checklist
+
+| Symptom | Likely cause |
+|---|---|
+| `ModuleNotFoundError` in Docker but not locally | package not installed (relying on the working directory); missing `src/` layout config |
+| Works locally, fails in CI | unpinned dependency resolved to a newer version; missing system library |
+| `pip` resolves for minutes or fails | conflicting ranges; resolve once into a lockfile |
+| Pre-commit passes locally, fails in CI | hook versions differ; run `pre-commit autoupdate` and commit the config |
+| Model fails to unpickle in serving | library version mismatch between training and serving environments |
+
 ## Summary
 
 - Turn notebook code into an installable package using the `src/` layout and `pyproject.toml`.

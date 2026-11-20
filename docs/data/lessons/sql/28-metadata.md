@@ -234,6 +234,32 @@ WHERE m.stage = 'Production';
 - **Generated SQL with unquoted or untrusted names** — injection and breakage on odd names.
 - **Stale statistics** in catalog row-count estimates (`information_schema.tables.table_rows` is approximate for InnoDB) — use `COUNT(*)` when you need the truth.
 
+## Worked example: a data dictionary generated from the catalog
+
+Documentation that is typed by hand goes stale; documentation that is *queried* cannot. Generate a compact data dictionary for the `mlops` schema straight from metadata — table, column, type, and the role each column plays.
+
+```sql-run dataset=mlops
+SELECT m.name AS table_name,
+       p.name AS column_name,
+       p.type AS declared_type,
+       CASE WHEN p.pk > 0 THEN 'PK' ELSE '' END
+         || CASE WHEN fk."from" IS NOT NULL THEN ' FK -> ' || fk."table" || '.' || fk."to" ELSE '' END
+         || CASE WHEN p."notnull" = 1 THEN ' NOT NULL' ELSE '' END AS role
+FROM sqlite_master m
+JOIN pragma_table_info(m.name) p
+LEFT JOIN pragma_foreign_key_list(m.name) fk ON fk."from" = p.name
+WHERE m.type = 'table'
+ORDER BY m.name, p.cid
+LIMIT 24;
+```
+
+Three catalog sources combined with ordinary joins: the list of tables, each table's columns, and — through a LEFT JOIN, since most columns are not foreign keys — the foreign-key targets. The same query pointed at a different database documents that database; nothing is hard-coded.
+
+The equivalent in an `information_schema` database joins `columns` to `key_column_usage` and `referential_constraints`. The idea is identical: **the schema is data, so describe it with a query.**
+
+> [!INTERVIEW]
+> Metadata questions are usually practical: "How would you find all tables containing a column named `customer_id`?" (`information_schema.columns WHERE column_name = 'customer_id'`), "How do you list the indexes on a table?", "How do you find tables without a primary key?" Knowing that the catalog is queryable — and roughly which view to look in — is what is being tested.
+
 ## Summary
 
 - Metadata describes tables, columns, constraints, indexes and views, and lives in a queryable catalog.
