@@ -91,16 +91,17 @@ int main() {
 ```
 
 ```python-run
-# Python exposes the same mechanism. Here a process sends SIGINT... to itself.
-import signal, os
+# Python exposes the same mechanism. Here a process sends SIGINT to itself.
+import signal
 caught = []
 def handler(signum, frame):
     caught.append(signum)
 try:
-    signal.signal(signal.SIGINT, handler)       # install the handler
-    os.kill(os.getpid(), signal.SIGINT)         # send; received on return to user code
+    old = signal.signal(signal.SIGINT, handler)   # install the handler (returns the previous one)
+    signal.raise_signal(signal.SIGINT)            # send the signal to this process
+    signal.signal(signal.SIGINT, old)             # restore the previous action
     print("caught:", caught, "| SIGINT is number", int(signal.SIGINT))
-except (AttributeError, ValueError, OSError) as e:
+except Exception as e:
     print("signals are not available in this sandbox:", e)
 ```
 
