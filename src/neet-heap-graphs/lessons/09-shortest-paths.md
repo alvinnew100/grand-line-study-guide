@@ -1,5 +1,25 @@
 # Shortest paths: Dijkstra and Bellman-Ford
 
+## In plain words
+
+A navigation app does not look for the route with the fewest turns; it looks for the route with the
+smallest total travel time. Every road segment has a cost (minutes, kilometres, money), and the goal
+is the cheapest total. This lesson covers the two standard methods for that job. **Dijkstra's
+algorithm** (pronounced "DYKE-struh") spreads outward from the start like water flowing through
+pipes: the nearest places get wet first, then the next nearest. **Bellman-Ford** is the slower but
+more tolerant method: it rechecks every road again and again until no improvement is possible, which
+lets it cope with unusual situations such as "costs" that are negative (a road that pays you).
+
+Why it matters for a job: maps, network routing (how data crosses the internet), logistics, game
+AI pathfinding, and pricing problems such as the cheapest flight itinerary.
+
+**Before this lesson:** read *Binary heaps and Python's heapq* (min-heap, tuples in a heap, lazy
+deletion), *Graphs and how to store them* (weighted adjacency lists) and *DFS and BFS on grids and
+adjacency lists* (BFS and why it finds the fewest-edges path).
+
+Words used below: the **weight** of an edge is its cost; the **source** is the starting vertex;
+**infinity** (`float("inf")` in Python, written ∞) is used as the "not reached yet" distance.
+
 ## From hops to weights
 
 BFS finds the path with the **fewest edges**. Real maps are not that simple: one road is 2 km, another
@@ -307,7 +327,7 @@ Bellman-Ford invariant is tailor-made for this: **run exactly `k + 1` rounds.**
 
 There is one trap. In the plain loop above, an improvement made early in a round can be used by a
 later edge **in the same round**, so one round may extend paths by several edges. That is harmless
-when you only want final distances (it just converges faster), but it breaks the "at most $i$ edges"
+when you only want final distances (it only converges faster), but it breaks the "at most $i$ edges"
 guarantee. To enforce the hop limit strictly, read from the previous round's table and write to a copy:
 
 ```python-run
@@ -388,6 +408,24 @@ flowchart TD
 - **Bellman-Ford** relaxes all edges $n - 1$ times; after round $i$ it knows the best paths with at
   most $i$ edges. Handles negative edges, detects negative cycles, and solves hop-limited problems.
   $O(nm)$.
+
+## Glossary
+
+| term | meaning |
+|---|---|
+| **Weighted graph** | a graph whose edges carry numbers (costs). |
+| **Path length** | the sum of the weights on a path. |
+| **Distance** | the smallest path length between two vertices. |
+| **Source** | the vertex from which distances are measured. |
+| **Single-source shortest paths** | distances from one source to every other vertex. |
+| **Relaxation** | the update `dist[v] = min(dist[v], dist[u] + w)` for an edge u → v of weight w. |
+| **Tentative distance** | the best distance found so far, not yet proven final. |
+| **Dijkstra's algorithm** | repeatedly finalise the closest unfinished vertex; needs non-negative weights. |
+| **Stale entry** | an outdated heap entry for a vertex that has since been improved or finalised. |
+| **Bellman-Ford** | relax every edge n − 1 times; works with negative weights. |
+| **Negative cycle** | a cycle whose weights sum to less than zero, making 'shortest' meaningless. |
+| **Hop** | one edge of a path; 'k stops' means k + 1 hops. |
+| **Bottleneck (minimax) path** | a path whose cost is its largest single edge, to be made as small as possible. |
 
 ```quiz
 [

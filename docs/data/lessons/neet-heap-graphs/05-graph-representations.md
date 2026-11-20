@@ -1,5 +1,23 @@
 # Graphs and how to store them
 
+## In plain words
+
+A **graph** is a picture made of dots and lines: the dots are things, and a line between two dots
+says "these two are related". A metro map is a graph — stations are the dots, track segments are the
+lines. So is a friendship network (people and friendships) and so is the web (pages and links). Note
+that this meaning of "graph" has nothing to do with bar charts or plots.
+
+Why it matters for a job: maps and navigation, social networks, recommendation systems, package
+managers (which library depends on which), network routing and build systems are all graph problems.
+Graph questions are also among the most frequent in technical interviews.
+
+**Before this lesson** you should know Python lists, dictionaries and sets (track *Python*), nested
+lists such as a table `grid[r][c]`, and Big-O notation (track *DSA Foundations*). No earlier graph
+knowledge is assumed.
+
+Two symbols appear throughout the graph lessons: $n$ is the number of dots and $m$ the number of
+lines. $|V|$ and $|E|$ mean the same two numbers ("size of the set V", "size of the set E").
+
 ## Why graphs?
 
 Arrays model sequences. Trees model hierarchies. **Graphs** model *relationships* — anything where
@@ -93,7 +111,7 @@ operations cheap.
 
 ### 1. Edge list
 
-Just a list of pairs (or triples with a weight).
+A plain list of pairs (or triples with a weight).
 
 ```python
 edges = [(0, 1), (0, 2), (1, 2), (1, 3)]
@@ -325,6 +343,25 @@ print("comprehension  ->", right)
 - Many graphs are implicit — grids, word/state graphs, object graphs — with neighbours computed on
   demand.
 - Always start by naming the vertices, the edges, and the graph question being asked.
+
+## Glossary
+
+| term | meaning |
+|---|---|
+| **Graph** | a set of vertices together with a set of edges joining pairs of them. |
+| **Vertex (node)** | one of the 'dots' — a thing being modelled. |
+| **Edge** | one of the 'lines' — a relationship between two vertices. |
+| **Directed / undirected** | an edge that goes one way only / an edge that works both ways. |
+| **Weighted** | each edge carries a number such as a distance or a cost. |
+| **Adjacent / neighbour** | two vertices joined by an edge. |
+| **Degree (in-degree, out-degree)** | the number of edges at a vertex (arriving, leaving). |
+| **Path / cycle** | a walk along edges from vertex to vertex / a path that returns to its start. |
+| **Connected component** | a group of vertices all reachable from one another, with no edges leaving the group. |
+| **Tree / forest** | a connected graph with no cycle / a graph with no cycle. |
+| **DAG** | directed acyclic graph: directed edges and no directed cycle. |
+| **Sparse / dense** | few edges compared with the maximum possible / close to the maximum. |
+| **Edge list, adjacency list, adjacency map, adjacency matrix** | four ways to store a graph: a list of pairs; per-vertex neighbour lists; per-vertex neighbour dictionaries; an n × n table. |
+| **Implicit graph** | a graph whose edges are computed when needed instead of being stored (a grid, a word puzzle). |
 
 ```quiz
 [

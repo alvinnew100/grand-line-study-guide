@@ -1,5 +1,30 @@
 # The backtracking template and state-space trees
 
+## In plain words
+
+**Backtracking** is an organised way of trying every possibility without missing one and without
+trying the same one twice. Imagine choosing an outfit by trying on every combination of three shirts
+and two pairs of trousers: you put on shirt 1, then try each pair of trousers with it; then you
+*take shirt 1 off again* (that step is the "backtrack") and repeat with shirt 2. You never get lost
+because you always undo your most recent choice before making a different one.
+
+Why it matters for a job: configuration generators, test-case generators, puzzle and game solvers,
+scheduling tools and query planners all enumerate possibilities this way, and "generate all ..."
+questions appear constantly in interviews.
+
+**Before this lesson** you should know:
+
+- how to write and call a Python function, and what a list is (track *Python*);
+- **recursion** — a function that calls itself on a smaller version of the problem, with a **base
+  case** that stops the calls (track *DSA Foundations*);
+- what a **tree** is in computer science: a branching diagram drawn upside-down, starting from one
+  **root** at the top, where every item (a **node**) may have **children** below it and a node with
+  no children is a **leaf**.
+
+Words used below: a **subset** is any selection of items from a collection (possibly none or all);
+a **permutation** is an ordering of the items; a **combination** is a selection where order does not
+matter.
+
 ## What backtracking is
 
 Some problems don't ask for *one* number — they ask you to **enumerate**: all subsets, all
@@ -116,7 +141,7 @@ print(subsets([1, 2, 3]))
 
 There is a second way to draw the same search that turns out to be more reusable. Instead of asking
 "do I take element `i`?", ask **"which element do I add next?"** — any element with an index ≥ `start`.
-Now *every node* of the tree (not just the leaves) is a subset.
+Now *every node* of the tree (not only the leaves) is a subset.
 
 ```mermaid
 graph TD
@@ -379,6 +404,23 @@ Eight calls, eight subsets — one per node of the second tree diagram.
 - `start` index ⇒ combinations/subsets (order irrelevant); `used` set ⇒ permutations (order matters).
 - Record a **copy** of the path.
 - Complexity ≈ nodes × work per node: $2^n$, $n!$, $k^n$ — expect small inputs.
+
+## Glossary
+
+| term | meaning |
+|---|---|
+| **Backtracking** | building a solution one decision at a time and undoing the latest decision to try alternatives. |
+| **Recursion / base case** | a function calling itself / the condition under which it stops doing so. |
+| **Partial solution (state)** | the decisions made so far, usually stored in a list called `path`. |
+| **State-space tree** | the imaginary tree whose nodes are all partial solutions and whose branches are decisions. |
+| **Leaf** | a node of that tree with no further decisions: a complete solution or a dead end. |
+| **Choose / explore / un-choose** | the three steps inside the loop: add a decision, recurse, remove it again. |
+| **Subset / power set** | any selection of the items / the collection of all subsets ($2^n$ of them). |
+| **Combination** | a selection of k items where order does not matter. |
+| **Permutation** | an arrangement of the items in a particular order ($n!$ of them). |
+| **Cartesian product** | all ways of picking one option from each of several independent menus. |
+| **Factorial ($n!$)** | the product of all whole numbers from 1 up to $n$. |
+| **Reference vs. copy** | two names for the *same* list versus an independent duplicate of it. |
 
 ```quiz
 [

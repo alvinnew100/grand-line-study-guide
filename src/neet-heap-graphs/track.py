@@ -6,7 +6,7 @@ TRACK = dict(
     group="Data Structures & Algorithms",
     blurb="Priority queues and the top-k / two-heap patterns, the backtracking template with pruning, "
           "and the full graph toolkit: DFS/BFS, topological sort, union-find, Dijkstra, Bellman-Ford, MSTs "
-          "and Eulerian paths — with 35 judged NeetCode problems.",
+          "and Eulerian paths — with 58 judged NeetCode problems.",
     sources=[
         "Goodrich, Tamassia & Goldwasser, Data Structures and Algorithms in Python, ch. 9 (Priority Queues)",
         "Goodrich, Tamassia & Goldwasser, Data Structures and Algorithms in Python, ch. 14 (Graph Algorithms)",
@@ -25,6 +25,8 @@ TRACK = dict(
                 "kth-largest-element-in-a-stream", "last-stone-weight", "k-closest-points-to-origin",
                 "kth-largest-element-in-an-array", "task-scheduler", "design-twitter",
                 "find-median-from-data-stream",
+                "top-k-frequent-words", "reorganize-string", "single-threaded-cpu", "ipo",
+                "seat-reservation-manager",
             ],
         ),
         dict(
@@ -38,6 +40,8 @@ TRACK = dict(
             problems=[
                 "subsets", "combination-sum", "combination-sum-ii", "permutations", "subsets-ii",
                 "word-search", "palindrome-partitioning", "letter-combinations-of-a-phone-number", "n-queens",
+                "combinations", "permutations-ii", "restore-ip-addresses", "word-break-ii",
+                "matchsticks-to-square", "sudoku-solver",
             ],
         ),
         dict(
@@ -55,6 +59,8 @@ TRACK = dict(
                 "pacific-atlantic-water-flow", "surrounded-regions", "course-schedule", "course-schedule-ii",
                 "graph-valid-tree", "number-of-connected-components-in-an-undirected-graph",
                 "redundant-connection", "word-ladder",
+                "island-perimeter", "flood-fill", "shortest-path-in-binary-matrix", "01-matrix",
+                "open-the-lock", "find-eventual-safe-states", "is-graph-bipartite", "minimum-height-trees",
             ],
         ),
         dict(
@@ -69,6 +75,9 @@ TRACK = dict(
             problems=[
                 "network-delay-time", "reconstruct-itinerary", "min-cost-to-connect-all-points",
                 "swim-in-rising-water", "alien-dictionary", "cheapest-flights-within-k-stops",
+                "path-with-minimum-effort", "path-with-maximum-probability",
+                "find-the-city-with-the-smallest-number-of-neighbors-at-a-threshold-distance",
+                "number-of-ways-to-arrive-at-destination",
             ],
         ),
     ],

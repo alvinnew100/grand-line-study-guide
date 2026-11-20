@@ -1,5 +1,25 @@
 # Minimum spanning trees: Prim and Kruskal
 
+## In plain words
+
+A village wants every house connected to the electricity network. A cable can be laid between certain
+pairs of houses, each at a known price. Which cables should be laid so that every house is connected
+— directly or through other houses — for the lowest total price? The answer is called a **minimum
+spanning tree**: "spanning" because it reaches every house, "tree" because it never contains a
+wasteful loop, "minimum" because nothing cheaper exists.
+
+Why it matters for a job: designing computer, road, pipe and power networks; grouping similar data
+points (clustering) in data science; and approximating hard routing problems. It is also the classic
+example of a **greedy** algorithm — always taking the cheapest available option — being provably
+correct, a favourite interview discussion.
+
+**Before this lesson:** read *Union-find (disjoint sets)* (used by Kruskal's algorithm),
+*Shortest paths: Dijkstra and Bellman-Ford* (Prim's algorithm is nearly identical to Dijkstra's) and
+*Binary heaps and Python's heapq*.
+
+Words used below: a graph is **connected** when every vertex can be reached from every other; a
+**tree** is a connected graph with no cycle; the **weight** of an edge is its cost.
+
 ## The problem
 
 You must wire up a set of buildings so that every building can reach every other — directly or through
@@ -185,7 +205,7 @@ print(min_cost_connect_points([[3, 12], [-2, 5], [-4, 1]]))                 # 18
 ```
 
 $n$ rounds × $O(n)$ work = **$O(n^2)$** time and $O(n)$ space — optimal for a complete graph, since
-just reading all the edge weights takes $\Theta(n^2)$.
+reading all the edge weights alone takes $\Theta(n^2)$.
 
 ## Kruskal's algorithm
 
@@ -358,6 +378,23 @@ print(swim_union_find([[0, 1, 2, 3, 4], [24, 23, 22, 21, 5], [12, 13, 14, 15, 16
 - **Kruskal:** sort edges; add each one that joins two different components (union-find).
   $O(m \log m)$.
 - Prim differs from Dijkstra only in the key: edge weight vs. distance from the source.
+
+## Glossary
+
+| term | meaning |
+|---|---|
+| **Spanning tree** | a set of edges that connects all vertices and contains no cycle. |
+| **Minimum spanning tree (MST)** | a spanning tree with the smallest possible total weight. |
+| **Cut** | a division of the vertices into two non-empty groups. |
+| **Crossing edge** | an edge with one end in each group of a cut. |
+| **Cut property** | the cheapest edge crossing any cut belongs to some MST. |
+| **Cycle property** | the most expensive edge on any cycle is not needed by some MST. |
+| **Greedy algorithm** | one that repeatedly takes the best-looking option and never reconsiders. |
+| **Exchange argument** | a proof technique: swap one edge of a solution for another without making it worse. |
+| **Prim's algorithm** | grow one tree, always adding the cheapest edge that leaves it. |
+| **Kruskal's algorithm** | consider edges from cheapest to dearest, adding each one that joins two separate groups. |
+| **Complete graph** | a graph with an edge between every pair of vertices. |
+| **Manhattan distance** | the sum of the horizontal and vertical differences: distance when you can only move along a grid. |
 
 ```quiz
 [

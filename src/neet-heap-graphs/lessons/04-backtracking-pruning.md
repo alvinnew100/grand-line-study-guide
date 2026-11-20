@@ -1,5 +1,25 @@
 # Duplicates, pruning and constraint search
 
+## In plain words
+
+The previous lesson showed how to try every possibility. This one is about being smart while doing
+it: not writing the same answer down twice, and not walking down a corridor you can already see is a
+dead end. Think of solving a maze on paper — the moment a path hits a wall you stop following it;
+you do not walk the rest of the way "to make sure". Cutting off hopeless branches early is called
+**pruning** (the gardening word for cutting branches off a tree), and it is what turns a search that
+would take years into one that takes milliseconds.
+
+Why it matters for a job: every real search problem — timetabling, packing, routing, puzzle solving,
+even a database choosing how to run your query — is too big to explore fully and depends on pruning.
+
+**Before this lesson:** read *The backtracking template and state-space trees* — you need the
+choose / explore / un-choose loop, the `start` index for combinations and the `used` array for
+permutations. Sorting a list (`sorted(nums)`) and Python sets are also used.
+
+Words used below: a **constraint** is a rule a solution must obey ("no two queens attack each
+other"); a **duplicate** is the same answer produced more than once; a **grid** is a table of cells
+addressed by row and column.
+
 The previous lesson gave you the choose–explore–un-choose template and the basic tree shapes. Real
 problems add three complications:
 
@@ -346,7 +366,7 @@ Both explore decisions recursively. The difference is in what the sub-problems l
 
 *Palindrome Partitioning* (list all) is backtracking; *Palindrome Partitioning II* (minimum cuts) is
 DP over the same structure. *Combination Sum* (list all) is backtracking; *Coin Change* (fewest coins)
-is DP. If you notice your backtracking state is just `(index, remaining)` and you only need a number,
+is DP. If you notice your backtracking state is only `(index, remaining)` and you only need a number,
 add memoisation and you have a DP.
 
 ## Debugging checklist
@@ -369,6 +389,23 @@ add memoisation and you have a DP.
   way out.
 - **Constraint search:** structure the choices so a constraint holds automatically (one queen per
   row), and maintain the remaining constraints incrementally in sets for $O(1)$ checks.
+
+## Glossary
+
+| term | meaning |
+|---|---|
+| **Pruning** | abandoning a branch of the search as soon as it provably cannot lead to a solution. |
+| **Constraint** | a rule every valid solution must satisfy. |
+| **Feasibility check** | a test that a partial solution does not already break a constraint. |
+| **Bound** | a limit showing that even the best completion of a partial solution cannot succeed. |
+| **Sibling** | another choice at the same level of the tree (same parent). |
+| **Skip-duplicates rule** | after sorting, skip a value equal to the previous one at the same level (`j > start`). |
+| **Multiset** | a collection in which values may repeat and the number of repeats matters. |
+| **Flood fill vs. path search** | visiting each cell once for good, versus marking cells only while they are on the current path. |
+| **Diagonal keys** | `r - c` and `r + c`, numbers shared by all cells on the same diagonal. |
+| **Constraint satisfaction problem** | a problem of assigning values so that all constraints hold (N-Queens, Sudoku). |
+| **Symmetry** | two branches that are mirror images or relabelings of each other, so only one needs exploring. |
+| **Memoisation** | remembering the result of a sub-problem so it is computed only once. |
 
 ```quiz
 [

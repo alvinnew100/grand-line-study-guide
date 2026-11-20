@@ -1,5 +1,30 @@
 # Binary heaps and Python's heapq
 
+## In plain words
+
+A **heap** is a way of arranging a pile of items so that the smallest one is always sitting on top,
+ready to be picked up, even while new items keep arriving. Picture a hospital emergency room: patients
+are not treated in the order they walk in, but in order of urgency. Whenever a doctor is free, the
+most urgent patient goes next — and new patients can arrive at any moment. A heap is the data
+structure that runs that waiting room efficiently.
+
+Why it matters for a job: task schedulers, route planners (such as the map app on your phone),
+"top 10" dashboards and streaming analytics all use heaps underneath, and "use a heap" is one of the
+most common answers in coding interviews.
+
+**Before this lesson** you should be comfortable with:
+
+- Python lists — indexing, `append`, `pop` (track *DSA Foundations*);
+- Big-O notation, the shorthand for how running time grows with input size: $O(1)$ means "constant,
+  does not grow", $O(n)$ means "proportional to the number of items $n$", $O(\log n)$ means "grows
+  by one step each time $n$ doubles" (track *DSA Foundations*);
+- what a binary tree is — a structure where each item (a *node*) has up to two children
+  (track *Patterns III — Linked Lists & Trees*).
+
+Words used below: a **key** is the value used to compare items (the "urgency"); a **priority** is the
+same thing seen from the user's side; the **root** of a tree is its top node; a **leaf** is a node
+with no children.
+
 ## Why a new data structure?
 
 A surprising number of problems boil down to the same request, made over and over: *"give me the
@@ -35,7 +60,7 @@ $O(n^2)$ overall. (Fun fact from the textbook: sorting with an unsorted-list pri
 selection sort, and with a sorted-list priority queue it *is* insertion sort.)
 
 The **binary heap** strikes a balance: both operations in $O(\log n)$, so $n$ adds and $n$ removals
-cost $O(n \log n)$. It does this by keeping the data only *partially* ordered — just enough order to
+cost $O(n \log n)$. It does this by keeping the data only *partially* ordered — only as much order as is needed to
 find the minimum instantly, and no more.
 
 ## The heap: two properties
@@ -92,7 +117,7 @@ The heap above becomes:
 |---|---|---|---|---|---|---|---|---|---|
 | key | 2 | 5 | 3 | 9 | 6 | 8 | 4 | 10 | 12 |
 
-The "last position" of the tree is simply the end of the list, so adding a node is `append` and
+The "last position" of the tree is the end of the list, so adding a node is `append` and
 removing the last node is `pop()` — both $O(1)$ amortised. No node objects, no child pointers, and the
 data sits contiguously in memory.
 
@@ -129,7 +154,7 @@ graph LR
 
 ## Removal: down-heap bubbling (sift down)
 
-The minimum is at the root, but you can't just delete the root — that would leave a hole. Instead:
+The minimum is at the root, but deleting the root directly is not an option — that would leave a hole. Instead:
 
 1. **Preserve the shape**: move the *last* item into the root and shrink the list by one.
 2. **Restore the order**: while the item is larger than its **smaller** child, swap with that child.
@@ -335,7 +360,7 @@ Textbook priority queues sometimes offer `update(item, new_key)` or `remove(item
 priority queue, implemented by tracking each item's index in the array (a "locator"). `heapq` has no
 such operation. The practical workaround is **lazy deletion**:
 
-- to "update" an item, just push a new entry with the new priority;
+- to "update" an item, push a new entry with the new priority;
 - when you pop an entry, check whether it is stale (already processed, or its priority no longer
   matches the current one) and skip it if so.
 
@@ -365,7 +390,7 @@ $O(m \log m)$ for $m$ pushes. You will use this trick in Dijkstra's algorithm la
    After any such edit you must call `heapify` again.
 3. **Forgetting negation** in the max-heap trick.
 4. **Tuple tie crashes** when payloads aren't comparable.
-5. **Using a heap when you need a sorted order of everything.** Just sort.
+5. **Using a heap when you need a sorted order of everything.** Sort the list once instead.
 6. **Using `sorted()` inside a loop** when a heap would maintain the order incrementally.
 
 ## Summary
@@ -378,6 +403,24 @@ $O(m \log m)$ for $m$ pushes. You will use this trick in Dijkstra's algorithm la
 - Bottom-up heapify builds a heap in $O(n)$.
 - In Python: `heapq` functions on a list, min-heap only; negate for a max-heap; push tuples with a
   tie-breaker; use lazy deletion instead of decrease-key.
+
+## Glossary
+
+| term | meaning |
+|---|---|
+| **Priority queue** | a collection where you can add items and remove the smallest (or largest) one; the *idea*, independent of how it is built. |
+| **Abstract data type (ADT)** | a description of what operations a structure offers, without saying how they are implemented. |
+| **Key / priority** | the value by which items are compared. |
+| **Heap (binary heap)** | a complete binary tree in which every parent is ≤ its children (min-heap); the usual way to build a priority queue. |
+| **Min-heap / max-heap** | a heap with the smallest / largest key at the root. |
+| **Complete binary tree** | a binary tree with every level full except possibly the last, which is filled from the left. |
+| **Heap-order property** | the rule 'each node's key is at least its parent's key'. |
+| **Root / leaf / height** | the top node / a node without children / the number of levels below the root. |
+| **Sift up (up-heap bubbling)** | repeatedly swapping a new item with its parent until order is restored. |
+| **Sift down (down-heap bubbling)** | repeatedly swapping an item with its smaller child until order is restored. |
+| **Heapify** | turning an arbitrary list into a heap, in $O(n)$ time. |
+| **Lazy deletion** | leaving outdated entries in the heap and skipping them when they are popped. |
+| **Amortised** | averaged over a long sequence of operations. |
 
 ```quiz
 [

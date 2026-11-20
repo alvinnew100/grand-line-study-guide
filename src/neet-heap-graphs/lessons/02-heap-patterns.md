@@ -1,5 +1,25 @@
 # Heap patterns: top-k, merging, scheduling and two heaps
 
+## In plain words
+
+Knowing how a heap works is like knowing how a screwdriver works; this lesson is about recognising
+the screws. Almost every interview question that needs a heap is one of five recurring situations —
+for example "keep the best 10 out of a million" or "always know the middle value". Think of a talent
+show that only ever keeps its current top 3 contestants on stage: when a newcomer performs, the judges
+compare them with the *weakest* of the three, and one of the two leaves. That one small habit
+(always compare with the weakest of the best) is the "top-k" pattern, and each of the other four
+patterns is a similarly small habit.
+
+Why it matters for a job: leaderboards, "trending now" lists, merging sorted log files, job
+schedulers and live statistics (median response time) are all direct applications.
+
+**Before this lesson:** read *Binary heaps and Python's heapq* (the previous lesson) — you need
+`heappush`, `heappop`, `heapify`, the negation trick for a max-heap, and tuples as heap entries.
+
+Words used below: a **stream** is data that arrives one item at a time and may never end, so you
+cannot store or sort all of it; **greedy** means "always take the choice that looks best right now";
+the **median** of a set of numbers is the middle one when they are sorted.
+
 The previous lesson explained *how* a heap works. This one is about recognising *when* to reach for
 one. Nearly every heap interview problem is an instance of one of five patterns:
 
@@ -50,7 +70,7 @@ $O(n \log n)$ in total. Re-sorting a list every round would be $O(n^2 \log n)$.
 
 This is the pattern with a counter-intuitive twist, so let's take it slowly.
 
-**Goal:** the `k` largest of `n` values (or just the k-th largest).
+**Goal:** the `k` largest of `n` values (or only the k-th largest).
 
 **Naive heap idea:** max-heap of all `n` values, pop `k` times: $O(n + k \log n)$ time, $O(n)$ memory.
 That's fine when everything fits in memory, but it can't handle a stream, and the heap is as large as
@@ -159,7 +179,7 @@ print(quickselect_kth_largest([3, 2, 3, 1, 2, 4, 5, 5, 6], 4))   # 4
 
 ## Pattern 3 — K-way merge
 
-You have `k` sorted sequences and want their elements in global order (all of them, or just the
+You have `k` sorted sequences and want their elements in global order (all of them, or only the
 first few). Keep **one candidate per sequence** in a heap:
 
 1. Push the head of each sequence, tagged with which sequence it came from.
@@ -335,6 +355,21 @@ Each `addNum` does at most three pushes and two pops: $O(\log n)$. `findMedian` 
 - Scheduling → heap of ready items + waiting room keyed by release time.
 - Median → max-heap for the lower half, min-heap for the upper half, kept balanced.
 
+## Glossary
+
+| term | meaning |
+|---|---|
+| **Top-k** | the k best items (largest, smallest, closest, most frequent ...) out of n. |
+| **Bounded heap** | a heap that is never allowed to grow beyond k items. |
+| **Stream** | input that arrives one item at a time, too large or too endless to store completely. |
+| **K-way merge** | combining k already-sorted sequences into one sorted sequence. |
+| **Greedy algorithm** | an algorithm that repeatedly makes the locally best choice. |
+| **Cooldown** | a waiting period before the same kind of task may run again. |
+| **Median** | the middle value of a sorted collection (or the average of the two middle values). |
+| **Two-heap pattern** | a max-heap for the lower half and a min-heap for the upper half, kept the same size. |
+| **Invariant** | a condition that is true before and after every operation. |
+| **Quickselect** | a selection algorithm that partitions like quicksort but continues in one part only; average $O(n)$. |
+
 ```quiz
 [
   {"q": "To report the 5 LARGEST values of a huge stream using O(5) memory, which structure do you maintain?",
@@ -348,7 +383,7 @@ Each `addNum` does at most three pushes and two pops: $O(\log n)$. `findMedian` 
    "explain": "The heap holds one cursor per list (at most k entries); each of the N outputs costs one pop and at most one push."},
   {"q": "In the two-heap median structure, which heap holds the smaller half and of what type is it?",
    "options": ["A min-heap", "A max-heap", "Either works", "A sorted list"], "answer": 1,
-   "explain": "You need the LARGEST of the smaller half (the value just below the middle), so the lower half is a max-heap."},
+   "explain": "You need the LARGEST of the smaller half (the value directly below the middle), so the lower half is a max-heap."},
   {"q": "tasks = AAAB, cooldown n = 2. What is the minimum total time?",
    "options": ["4", "6", "7", "9"], "answer": 2,
    "explain": "A B idle A idle idle A: (maxf - 1) * (n + 1) + cnt = 2 * 3 + 1 = 7."},

@@ -1,5 +1,24 @@
 # DFS and BFS on grids and adjacency lists
 
+## In plain words
+
+To **traverse** a graph means to visit everything that can be reached from a starting point, in an
+organised way. There are two classic ways to explore, and both are things you already do:
+
+- **Depth-first search (DFS)** is how you explore a maze: follow one corridor as far as it goes; when
+  you are stuck, walk back to the last junction and take the next corridor.
+- **Breadth-first search (BFS)** is how a rumour spreads: first your friends hear it, then their
+  friends, then *their* friends — in rings, one step farther out each time.
+
+Why it matters for a job: "is A connected to B?", "what is the fewest number of clicks/hops/moves?",
+"which accounts belong to the same person?" are everyday engineering questions, and almost every
+other graph algorithm is one of these two searches with a little extra bookkeeping.
+
+**Before this lesson:** read *Graphs and how to store them* (vertices, edges, adjacency lists, grids
+as graphs). You also need two containers (track *DSA Foundations*): a **stack**, where the
+last item put in is the first taken out (a pile of plates), and a **queue**, where the first item put
+in is the first taken out (a line at a shop). Recursion is used for the first DFS examples.
+
 ## Traversal: the one skill everything else builds on
 
 A **traversal** is a systematic procedure that visits every vertex reachable from a starting point,
@@ -182,7 +201,7 @@ Storing the distance alongside each queue entry — `q.append((v, d + 1))` — i
 > Use `collections.deque` and `popleft()`. `list.pop(0)` shifts every remaining element and silently
 > turns an $O(n)$ BFS into $O(n^2)$.
 
-### Recovering the path, not just its length
+### Recovering the path, not only its length
 
 Remember, for each vertex, who discovered it; then walk the `parent` pointers backwards from the target.
 
@@ -448,7 +467,7 @@ print(ladder_length("hit", "cog", ["hot", "dot", "dog", "lot", "log", "cog"]))  
 flowchart TD
     Q[Graph traversal needed] --> A{Shortest path in steps, or spreading over time?}
     A -->|yes| BFS[BFS, multi-source if several starts]
-    A -->|no| B{Just reachability, components, region size?}
+    A -->|no| B{Only reachability, components, region size?}
     B -->|yes| EITHER[Either. Use an explicit stack or queue for big inputs]
     B -->|no| C{Cycle detection, topological order, path enumeration?}
     C -->|yes| DFS[DFS]
@@ -477,6 +496,24 @@ graph). On a wide, shallow graph DFS is leaner; on a long, narrow one BFS is.
 - One traversal = one connected component; loop over all vertices to count components / fill regions.
 - Multi-source BFS: seed the queue with every source to get nearest-source distances in one pass.
 - If a search from the sources is expensive, try searching from the targets.
+
+## Glossary
+
+| term | meaning |
+|---|---|
+| **Traversal** | a systematic visit of every vertex reachable from a start. |
+| **Depth-first search (DFS)** | go as far as possible along one path, then step back and try another. |
+| **Breadth-first search (BFS)** | visit all vertices one step away, then two steps away, and so on. |
+| **Visited set** | the record of vertices already seen, which prevents going round in circles. |
+| **Stack / queue** | last-in-first-out container / first-in-first-out container. |
+| **Frontier** | the vertices discovered but not yet expanded. |
+| **Level** | all vertices at the same number of steps from the start. |
+| **Unweighted shortest path** | the path with the fewest edges. |
+| **Connected component** | one 'island' of mutually reachable vertices. |
+| **Flood fill** | a traversal that spreads over a region of a grid. |
+| **Multi-source BFS** | a BFS started from several vertices at once. |
+| **Recursion limit** | the maximum depth of nested function calls Python allows (1000 by default). |
+| **Back edge** | an edge found during DFS that leads to an already visited ancestor; evidence of a cycle. |
 
 ```quiz
 [

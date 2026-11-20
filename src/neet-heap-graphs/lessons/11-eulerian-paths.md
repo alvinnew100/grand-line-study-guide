@@ -1,5 +1,25 @@
 # Eulerian paths and Hierholzer's algorithm
 
+## In plain words
+
+Can you draw a shape without lifting your pen and without going over any line twice? That children's
+puzzle is exactly the topic of this lesson. In graph terms: is there a walk that travels along
+**every edge exactly once**? Such a walk is called an **Eulerian path**, after the mathematician
+Leonhard Euler (pronounced "OY-ler"). A street sweeper who must clean every street once, or a
+traveller who must use every one of their plane tickets once, is looking for one.
+
+Why it matters for a job: route planning for deliveries, snow ploughs and inspection robots;
+reassembling DNA from fragments in bioinformatics; and reconstructing a sequence of events from
+pairwise "came from / went to" records. In interviews it appears as *Reconstruct Itinerary*.
+
+**Before this lesson:** read *Graphs and how to store them* (directed edges, in-degree and
+out-degree), *DFS and BFS on grids and adjacency lists* (depth-first search with a stack) and *Cycle
+detection and topological sort* (recording vertices in post-order).
+
+Words used below: a **walk** is any route along edges, where vertices may repeat; the **degree** of
+a vertex is how many edges touch it; **lexicographic order** is dictionary order — compare the first
+position where two sequences differ.
+
 ## A puzzle from 1736
 
 The city of Königsberg had seven bridges connecting two river banks and two islands. The townspeople
@@ -95,7 +115,7 @@ statement guarantees that a valid itinerary exists.)
 
 ## Why the obvious greedy fails
 
-Suppose you simply start at JFK and keep taking any unused ticket.
+Suppose you start at JFK and keep taking any unused ticket.
 
 ```mermaid
 graph LR
@@ -367,6 +387,22 @@ lesson 7, with **edges** marked as used instead of vertices:
 - For the lexicographically smallest route, always take the smallest available destination
   (reverse-sorted adjacency lists + `pop()`).
 - *Reconstruct Itinerary* is Hierholzer from `"JFK"`.
+
+## Glossary
+
+| term | meaning |
+|---|---|
+| **Walk** | a route along edges; vertices and (in general) edges may repeat. |
+| **Eulerian path (trail)** | a walk that uses every edge exactly once. |
+| **Eulerian circuit** | an Eulerian path that ends where it began. |
+| **Hamiltonian path** | a path that visits every *vertex* exactly once — a much harder problem. |
+| **Degree / in-degree / out-degree** | number of edges at a vertex / arriving / leaving. |
+| **Balanced vertex** | a vertex whose in-degree equals its out-degree. |
+| **Hierholzer's algorithm** | walk until stuck, record the stuck vertex, step back; reverse the record at the end. |
+| **Post-order** | recording a vertex only after all its outgoing edges have been used. |
+| **Splicing** | inserting a side loop into the main route at the vertex where it branches off. |
+| **Lexicographic order** | dictionary order. |
+| **NP-complete** | a class of problems for which no fast (polynomial-time) algorithm is known. |
 
 ```quiz
 [

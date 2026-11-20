@@ -1,5 +1,25 @@
 # Cycle detection and topological sort
 
+## In plain words
+
+Getting dressed has rules: socks before shoes, shirt before jacket. A **topological order** is any
+order of doing things that respects all such "this before that" rules. Sometimes the rules contradict
+each other — "A before B, B before C, C before A" — and then no order exists. A contradiction of that
+kind is a **cycle**: following the rules leads you round in a circle back to where you began. This
+lesson teaches how to detect a cycle and, when there is none, how to produce a valid order.
+
+Why it matters for a job: build tools decide what to compile first, package managers decide what to
+install first, spreadsheets decide which cell to recalculate first, and workflow systems (data
+pipelines, CI/CD) decide which task to run first. All of them use exactly the algorithms below — and
+all of them must report an error when dependencies are circular.
+
+**Before this lesson:** read *Graphs and how to store them* (directed edges, in-degree, adjacency
+lists) and *DFS and BFS on grids and adjacency lists* (recursive DFS, BFS with a queue, the visited
+set).
+
+Words used below: a **dependency** is a "must come first" relationship; **acyclic** means "has no
+cycle"; **DAG** is short for *directed acyclic graph*.
+
 ## Two questions that are really one
 
 - *Can I finish all my courses, given the prerequisite rules?*
@@ -22,8 +42,8 @@ then the two standard topological sort algorithms: **Kahn's algorithm** (BFS on 
 ### Method 1: DFS with a parent
 
 During a DFS of an undirected graph, every edge you examine leads either to an unvisited vertex (a
-*discovery* edge) or to a visited one. A visited neighbour is a cycle... **unless it is simply the
-vertex you just came from**, because each undirected edge appears in both adjacency lists.
+*discovery* edge) or to a visited one. A visited neighbour is a cycle... **unless it is the
+vertex you arrived from**, because each undirected edge appears in both adjacency lists.
 
 ```python-run
 def has_cycle_undirected(n, edges):
@@ -83,7 +103,7 @@ graph LR
 ```
 
 DFS from A goes A → B → D, backtracks, then A → C and sees that D is already visited. Is that a cycle?
-**No** — there are simply two different routes to D (a "diamond"). A plain visited flag cannot tell
+**No** — there are two different routes to D (a "diamond"). A plain visited flag cannot tell
 the difference between
 
 - an edge to a vertex that is **still on the current DFS path** (a genuine cycle), and
@@ -328,12 +348,28 @@ print(repr(alien_order(["abc", "ab"])))                   # '' (prefix violation
 ## Summary
 
 - Undirected cycle: DFS finds a visited neighbour other than the parent; or union-find finds an edge
-  inside one set; or simply count edges.
+  inside one set; or count the edges.
 - Directed cycle: three-colour DFS finds an edge to a **gray** vertex (back edge).
 - A topological order exists iff the graph is a DAG.
 - **Kahn:** in-degrees + queue; output shorter than `n` ⇒ cycle.
 - **DFS:** append on finish, reverse.
 - Both run in $O(n + m)$.
+
+## Glossary
+
+| term | meaning |
+|---|---|
+| **Cycle** | a path that starts and ends at the same vertex. |
+| **Directed acyclic graph (DAG)** | a graph with one-way edges and no directed cycle. |
+| **Dependency** | a requirement that one item comes before another. |
+| **Topological order** | an ordering of all vertices in which every edge points from earlier to later. |
+| **In-degree** | the number of edges arriving at a vertex — its count of unmet prerequisites. |
+| **Kahn's algorithm** | repeatedly output a vertex with in-degree 0 and remove its outgoing edges. |
+| **White / gray / black** | DFS states: not yet seen / currently being explored / completely finished. |
+| **Back edge** | an edge to a gray vertex (an ancestor on the current path); it proves a cycle. |
+| **Post-order** | recording a vertex after everything reachable from it has been processed. |
+| **Diamond** | two different routes leading to the same vertex; not a cycle. |
+| **Parent (in DFS)** | the vertex from which the current vertex was reached. |
 
 ```quiz
 [
@@ -359,7 +395,7 @@ print(repr(alien_order(["abc", "ab"])))                   # '' (prefix violation
    "options": ["w < r", "r < t", "t < f", "w < f"], "answer": 2,
    "explain": "Only the first differing position matters: index 2, where t (earlier word) precedes f."},
   {"q": "An undirected DFS reaches a neighbour that is already visited. When is this NOT evidence of a cycle?",
-   "options": ["When the neighbour is the vertex we just came from", "When the neighbour has degree 1", "When the graph is connected", "Never: it is always a cycle"], "answer": 0,
+   "options": ["When the neighbour is the vertex we arrived from", "When the neighbour has degree 1", "When the graph is connected", "Never: it is always a cycle"], "answer": 0,
    "explain": "Each undirected edge appears in both adjacency lists, so the parent always shows up as a visited neighbour."}
 ]
 ```

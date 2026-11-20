@@ -1,5 +1,25 @@
 # Union-find (disjoint sets)
 
+## In plain words
+
+**Union-find** keeps track of which things belong to the same group while groups keep merging.
+Imagine a party where strangers gradually discover they belong to the same extended family. Each
+family picks one **representative**. To check whether two guests are related, ask each "who is your
+family's representative?" — the same name means the same family. When two families discover a
+connection, one representative agrees to report to the other, and the two families become one.
+
+Why it matters for a job: detecting which computers are on the same network, merging duplicate
+customer accounts, grouping pixels into regions in image processing, and building the cheapest
+network that connects every site (next module) all rely on this structure. It is short to write and
+extremely fast, which makes it a favourite in interviews.
+
+**Before this lesson:** read *Graphs and how to store them* (edges, connected components, cycles) and
+*DFS and BFS on grids and adjacency lists* (counting components by traversal — union-find is the
+alternative). Python lists and `while` loops are all the code you need.
+
+Words used below: two sets are **disjoint** when they share no element; **amortised** time means the
+average cost per operation over a long sequence of operations.
+
 ## The problem union-find solves
 
 Imagine edges arriving one at a time — friendships being formed, cables being laid, land cells
@@ -382,7 +402,7 @@ flowchart TD
 | which edge closes a cycle | ✔ natural | awkward |
 | shortest path / actual path | ✘ | ✔ BFS |
 | directed graphs (cycles, order) | ✘ (union-find ignores direction) | ✔ |
-| edge deletions | ✘ | ✔ (just re-run) |
+| edge deletions | ✘ | ✔ (run it again) |
 | needs adjacency list | no — works straight from the edge list | yes |
 
 > [!INTERVIEW]
@@ -409,6 +429,23 @@ flowchart TD
   search; together they give $O(\alpha(n))$ ≈ constant amortised time.
 - By-products: component count, cycle detection (union returns `False`), component sizes.
 - It is the engine of **Kruskal's** minimum-spanning-tree algorithm (lesson 10).
+
+## Glossary
+
+| term | meaning |
+|---|---|
+| **Disjoint sets** | groups that have no element in common. |
+| **Union-find / disjoint-set union (DSU)** | the data structure that maintains such groups under merging. |
+| **Representative (root)** | the one element that stands for its whole group. |
+| **find(x)** | returns the representative of x's group. |
+| **union(a, b)** | merges the groups containing a and b. |
+| **Parent array** | `parent[i]` is the element that i points to; a root points to itself. |
+| **Union by rank / by size** | attaching the shorter / smaller tree under the other one to keep trees shallow. |
+| **Rank** | an upper bound on the height of a tree in the forest. |
+| **Path compression** | re-pointing elements closer to the root while performing a find. |
+| **Dynamic connectivity** | answering 'are these connected?' while new connections keep being added. |
+| **Inverse Ackermann function α(n)** | an extremely slowly growing function; at most 4 for any realistic n. |
+| **Amortised time** | average cost per operation across a whole sequence. |
 
 ```quiz
 [
