@@ -693,10 +693,11 @@
       tracks: [["fastapi", "FastAPI & Backend"], ["docker", "Docker & Containers"], ["cicd", "CI/CD"], ["web-security", "Web Application Security"], ["thinking", "Open-Ended Engineering Questions"]] },
     { title: "Machine learning and AI", why: "For ML, MLOps and AI engineering roles. Do this after Python, SQL and the backend stage.",
       tracks: [["ml", "Machine Learning"], ["mlops", "MLOps"], ["ai-eng", "AI Engineering"], ["llm-practice", "LLMs Hands-On"]] },
-    { title: "Web development", why: "For full-stack or frontend roles. Skip it if you are aiming only at backend, ML or AI roles.",
-      tracks: [["html-css", "HTML & CSS"], ["javascript", "JavaScript"], ["typescript", "TypeScript"], ["react", "React with Firebase"], ["js-testing", "JavaScript Testing"],
-        ["nodejs", "Node.js"], ["graphql", "GraphQL"], ["django", "Django"], ["nginx", "NGINX"]] },
-    { title: "Extras", why: "Useful, not interview-critical. Pick them up when you have slack.", tracks: [["go", "Go"], ["vim", "Practical Vim"]] },
+    { title: "JavaScript backend and APIs", why: "Widely asked for in backend and full-stack job descriptions: the JavaScript language, TypeScript, Node.js services, GraphQL APIs and testing.",
+      tracks: [["javascript", "JavaScript"], ["typescript", "TypeScript"], ["nodejs", "Node.js"], ["graphql", "GraphQL & API Design"], ["js-testing", "JavaScript Testing"]] },
+    { title: "Web front end and frameworks", why: "What users see and the frameworks around it: pages, React with Firebase, Django, and the web server in front.",
+      tracks: [["html-css", "HTML & CSS"], ["react", "React with Firebase"], ["django", "Django"], ["nginx", "NGINX"]] },
+    { title: "More languages and tools", why: "Go is common in backend and infrastructure roles; Vim makes you faster on servers.", tracks: [["go", "Go"], ["vim", "Practical Vim"]] },
   ];
   function nextTrack() {
     for (const st of PATH) for (const [id] of st.tracks) { const t = DATA.tracks[id]; if (t && trackProgress(t).pct < 100) return id; }
@@ -719,7 +720,7 @@
       return `<section class="stage"><h2><span class="stage-n">Stage ${i + 1}</span> ${esc(st.title)}</h2><p class="muted">${esc(st.why)}</p><div class="stage-grid">${cards}</div></section>`;
     }).join("");
     setPage(`<div class="page"><div class="crumbs"><a href="#/">Home</a></div><h1 class="page-title">Roadmap</h1>
-      <p class="muted">Follow the stages top to bottom and the numbered tracks left to right. Stages 1 and 2 matter most; you can run Stage 2 problems alongside the later stages, a few each day.</p>
+      <p class="muted">Follow the stages top to bottom and the numbered tracks left to right. Every stage is asked about in real job descriptions, so none is filler. Start with Stage 1, keep Stage 2 problems going every day, and choose the order of the later stages by the jobs you are applying for.</p>
       ${stages}${Ghibli.figure("laputa", "roadmap", "wide")}</div>`);
   }
 
