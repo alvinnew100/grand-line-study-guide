@@ -216,7 +216,7 @@
   "words": 115849,
   "modules": 13,
   "lessons": 30,
-  "problems": 6
+  "problems": 13
  },
  {
   "id": "mongodb",
@@ -324,7 +324,7 @@
   "words": 0,
   "modules": 15,
   "lessons": 0,
-  "problems": 17
+  "problems": 25
  },
  {
   "id": "graphql",
@@ -338,7 +338,7 @@
   "words": 0,
   "modules": 1,
   "lessons": 0,
-  "problems": 9
+  "problems": 17
  },
  {
   "id": "django",
@@ -566,7 +566,7 @@
    "react.dev (official React documentation)",
    "firebase.google.com/docs (official Firebase documentation)"
   ],
-  "words": 0,
+  "words": 105592,
   "modules": 10,
   "lessons": 29,
   "problems": 30
