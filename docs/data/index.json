@@ -216,7 +216,7 @@
   "words": 115849,
   "modules": 13,
   "lessons": 30,
-  "problems": 13
+  "problems": 20
  },
  {
   "id": "mongodb",
@@ -230,7 +230,7 @@
    "PyMongo and Motor documentation (pymongo.readthedocs.io, motor.readthedocs.io)",
    "MongoDB Atlas Vector Search documentation (mongodb.com/docs/atlas/atlas-vector-search)"
   ],
-  "words": 0,
+  "words": 107898,
   "modules": 12,
   "lessons": 28,
   "problems": 25
@@ -324,7 +324,7 @@
   "words": 0,
   "modules": 15,
   "lessons": 0,
-  "problems": 25
+  "problems": 33
  },
  {
   "id": "graphql",
