@@ -32,13 +32,14 @@ Each contributor has **two** repositories: a private clone on their own machine,
 
 ```mermaid
 flowchart LR
-  O[(Official repository<br/>maintainer writes)]
-  F[(Contributor's public copy)]
-  L[Contributor's laptop]
-  O -- 1. clone / fetch --> L
-  L -- 2. push topic branch --> F
-  F -. 3. please pull .-> M[Maintainer]
-  M -- 4. fetch, review, merge --> O
+  O[("Official repository<br/>maintainer writes")]
+  F[("Contributor public copy")]
+  L["Contributor laptop"]
+  M["Maintainer"]
+  O -->|"step 1 - clone or fetch"| L
+  L -->|"step 2 - push topic branch"| F
+  F -.->|"step 3 - please pull"| M
+  M -->|"step 4 - fetch, review, merge"| O
 ```
 
 1. The contributor clones the official repository.
@@ -54,13 +55,13 @@ For enormous projects (the Linux kernel is the standard example), a second layer
 
 ```mermaid
 flowchart BT
-  D1[Developers] --> L1[Lieutenant: networking]
-  D2[Developers] --> L2[Lieutenant: file systems]
-  L1 --> BD[Dictator]
+  D1["Developers"] --> L1["Lieutenant - networking"]
+  D2["Developers"] --> L2["Lieutenant - file systems"]
+  L1 --> BD["Dictator"]
   L2 --> BD
-  BD --> R[(Reference repository)]
-  R -. everyone rebases on .-> D1
-  R -. .-> D2
+  BD --> R[("Reference repository")]
+  R -.->|"everyone rebases on"| D1
+  R -.->|"everyone rebases on"| D2
 ```
 
 Few projects need this, but it shows what "distributed" permits: review responsibility can be delegated in layers.
@@ -169,8 +170,8 @@ $ git log --oneline --graph --all
 ```mermaid
 gitGraph
    commit id: "a03f5d1"
-   branch origin-main
-   checkout origin-main
+   branch server
+   checkout server
    commit id: "7c1e9f4 Tomas"
    checkout main
    commit id: "2b8d6a3 Mira"
@@ -192,12 +193,12 @@ To git.example.com:greenhouse/orchard.git
 ```mermaid
 gitGraph
    commit id: "a03f5d1"
-   branch origin-main
-   checkout origin-main
+   branch server
+   checkout server
    commit id: "7c1e9f4 Tomas"
    checkout main
    commit id: "2b8d6a3 Mira"
-   merge origin-main id: "d5f0a18 merge"
+   merge server id: "d5f0a18 merge"
 ```
 
 Had Mira preferred a straight history, `git pull --rebase` would have replayed her one unpushed commit on top of Tomas's instead (allowed by the golden rule, because her commit was not yet shared).
@@ -209,11 +210,11 @@ sequenceDiagram
   participant M as Mira
   participant S as Shared repository
   participant T as Tomas
-  T->>S: push (accepted)
-  M->>S: push (rejected: fetch first)
+  T->>S: push accepted
+  M->>S: push rejected - fetch first
   M->>S: fetch
-  Note over M: merge origin/main, run tests
-  M->>S: push (accepted)
+  Note over M: merge origin main and run tests
+  M->>S: push accepted
   T->>S: fetch
   Note over T: merge or fast-forward
 ```

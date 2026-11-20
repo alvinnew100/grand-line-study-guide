@@ -60,15 +60,16 @@ Everything after "push the branch" is identical. The lesson follows the fork cas
 
 ```mermaid
 flowchart LR
-  U[(upstream: greenhouse/orchard<br/>official - you cannot push)]
-  F[(origin: mira-okafor/orchard<br/>your fork)]
-  L[Your laptop]
-  U -- 1. Fork on the website --> F
-  F -- 2. git clone --> L
-  L -- 3. push topic branch --> F
-  F -. 4. open pull request .-> U
-  U -- 6. fetch upstream to stay current --> L
-  U -. 5. review, then merge .-> U
+  U[("upstream - greenhouse orchard<br/>official, you cannot push")]
+  F[("origin - your fork<br/>mira-okafor orchard")]
+  L["Your laptop"]
+  R["Reviewers and maintainer"]
+  U -->|"step 1 - fork on the website"| F
+  F -->|"step 2 - git clone"| L
+  L -->|"step 3 - push topic branch"| F
+  F -.->|"step 4 - open pull request"| U
+  R -.->|"step 5 - review, then merge"| U
+  U -->|"step 6 - fetch upstream to stay current"| L
 ```
 
 ## The flow, step by step
@@ -233,8 +234,8 @@ gitGraph
    commit id: "c9a4e02 upstream"
    branch fix-empty-rows
    checkout fix-empty-rows
-   commit id: "1f6b3d9 (replayed)"
-   commit id: "8a2c4e0 (replayed)"
+   commit id: "1f6b3d9 replayed"
+   commit id: "8a2c4e0 replayed"
 ```
 
 > [!WARNING]
@@ -279,13 +280,13 @@ The whole exchange as a timeline:
 ```mermaid
 sequenceDiagram
   participant C as Contributor
-  participant F as Fork (origin)
+  participant F as Fork origin
   participant U as Upstream
   participant R as Reviewer
   C->>F: push fix-empty-rows
-  C->>U: open pull request (base main, head fork branch)
+  C->>U: open pull request - base main and head fork branch
   R->>U: review comments
-  C->>F: push more commits (PR updates)
+  C->>F: push more commits - PR updates
   R->>U: approve
   U->>U: merge into main
   C->>U: fetch upstream, fast-forward main
