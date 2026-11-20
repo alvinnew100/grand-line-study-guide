@@ -680,8 +680,8 @@
 
   // ---------------------------------------------------------------- roadmap (recommended study flow)
   const PATH = [
-    { title: "Start here", why: "The tools every later track assumes: a first programming language, the terminal, and version control.",
-      tracks: [["python", "Python Mastery"], ["linux-cli", "The Linux Command Line"], ["git", "Git"]] },
+    { title: "Start here", why: "The tools every later track assumes: a first programming language, the terminal, a terminal editor, and version control.",
+      tracks: [["python", "Python Mastery"], ["linux-cli", "The Linux Command Line"], ["vim", "Practical Vim"], ["git", "Git"]] },
     { title: "Interview coding", why: "The largest part of most interview loops. Learn the theory once, then drill the patterns in order.",
       tracks: [["dsa-foundations", "DSA Foundations"], ["neet-arrays", "Arrays, Hashing & Two Pointers"], ["neet-window-stack", "Sliding Window, Stack & Binary Search"],
         ["neet-linked-trees", "Linked Lists, Trees & Tries"], ["neet-heap-graphs", "Heaps, Backtracking & Graphs"], ["neet-dp", "Dynamic Programming"], ["neet-greedy-math", "Greedy, Intervals, Math & Bits"]] },
@@ -689,15 +689,14 @@
       tracks: [["csapp", "Computer Systems"], ["os", "Operating Systems"], ["networking", "Computer Networking"]] },
     { title: "Data", why: "SQL is tested directly; the rest is the vocabulary of every system design conversation.",
       tracks: [["sql", "SQL"], ["databases", "Databases & Data-Intensive Systems"], ["redis", "Redis"], ["mongodb", "MongoDB"]] },
-    { title: "Building and shipping software", why: "How real services are written, packaged, secured and released, plus the open-ended questions about it.",
-      tracks: [["fastapi", "FastAPI & Backend"], ["docker", "Docker & Containers"], ["cicd", "CI/CD"], ["web-security", "Web Application Security"], ["thinking", "Open-Ended Engineering Questions"]] },
+    { title: "Building and shipping software", why: "How backend services are written in Python and Go, packaged, secured and released, plus the open-ended questions about it.",
+      tracks: [["fastapi", "FastAPI & Backend"], ["go", "Go"], ["docker", "Docker & Containers"], ["cicd", "CI/CD"], ["web-security", "Web Application Security"], ["thinking", "Open-Ended Engineering Questions"]] },
     { title: "Machine learning and AI", why: "For ML, MLOps and AI engineering roles. Do this after Python, SQL and the backend stage.",
       tracks: [["ml", "Machine Learning"], ["mlops", "MLOps"], ["ai-eng", "AI Engineering"], ["llm-practice", "LLMs Hands-On"]] },
     { title: "JavaScript backend and APIs", why: "Widely asked for in backend and full-stack job descriptions: the JavaScript language, TypeScript, Node.js services, GraphQL APIs and testing.",
       tracks: [["javascript", "JavaScript"], ["typescript", "TypeScript"], ["nodejs", "Node.js"], ["graphql", "GraphQL & API Design"], ["js-testing", "JavaScript Testing"]] },
     { title: "Web front end and frameworks", why: "What users see and the frameworks around it: pages, React with Firebase, Django, and the web server in front.",
       tracks: [["html-css", "HTML & CSS"], ["react", "React with Firebase"], ["django", "Django"], ["nginx", "NGINX"]] },
-    { title: "More languages and tools", why: "Go is common in backend and infrastructure roles; Vim makes you faster on servers.", tracks: [["go", "Go"], ["vim", "Practical Vim"]] },
   ];
   function nextTrack() {
     for (const st of PATH) for (const [id] of st.tracks) { const t = DATA.tracks[id]; if (t && trackProgress(t).pct < 100) return id; }
