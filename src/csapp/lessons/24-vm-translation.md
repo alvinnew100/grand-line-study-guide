@@ -101,6 +101,16 @@ for name, trace in (("working set 6 ", focused), ("working set 60", scattered)):
     print(name, "-> faults with 8 frames:", faults(trace, 8), "of", len(trace))
 ```
 
+<!-- walkthrough:python-run -->
+**Reading this Python line by line**
+
+- `from collections import OrderedDict` loads a dictionary that remembers the order of its entries; `import random` loads the random-number tools.
+- `def faults(trace, frames):` counts page faults. `trace` is the list of page numbers a program touches, and `frames` is how many pages fit in memory.
+- `resident` holds the pages currently in memory, oldest use first; `count` is the number of faults.
+- For each page: if it is already present, `move_to_end` marks it as most recently used. Otherwise a fault is counted; if memory is full, `popitem(last=False)` removes the least recently used page; then the new page is added.
+- `random.seed(11)` makes the random choices repeatable. Two traces of 5,000 accesses are built, one choosing among 6 pages and one among 60.
+- With 8 frames the first trace faults 6 times and the second several thousand times.
+
 With eight frames, the first workload faults six times in total; the second faults on most references. Same machine, same code, very different locality.
 
 ## 3. Job two: simplifying memory management

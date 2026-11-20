@@ -47,6 +47,15 @@ for name, t in levels:
     print(f"{name:28} {t * 1e9:>14,.0f} ns   on a human scale: {human(t / 1e-9)}")
 ```
 
+<!-- walkthrough:python-run -->
+**Reading this Python line by line**
+
+- `levels = [...]` creates a list of pairs. Each pair holds a name and a time in seconds; `1e-9` means 1 × 10⁻⁹, one billionth of a second.
+- `def human(seconds):` defines a function called `human` with one input. The indented lines beneath it are its body.
+- Inside it, the `for` loop tries units from largest to smallest; the first one that fits is used, and `return` hands back text such as `2.5 hours`. The `f"..."` form builds text with values inserted where the braces are.
+- The final `for name, t in levels:` loop takes each pair in turn. `t / 1e-9` rescales the time so that one nanosecond becomes one second, and `print` shows the line.
+- Output: one line per storage level, from 1 second for the nearest cache up to months and years for disks and distant servers.
+
 If fetching a number from the nearest cache is like glancing at a note on your desk, then fetching it from a spinning disk is like waiting three months for a letter.
 
 ### Caches: keeping the useful stuff close

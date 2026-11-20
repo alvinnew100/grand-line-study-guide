@@ -80,6 +80,16 @@ for name, (latency, issue, capacity) in units.items():
 print("\ndivision: latency 3 to 30+ cycles and NOT pipelined, so both bounds are equally bad")
 ```
 
+<!-- walkthrough:python-run -->
+**Reading this Python line by line**
+
+- `units = {...}` is a lookup table. For each operation it stores three numbers: latency in cycles, issue time, and how many hardware units can perform it.
+- `LOAD_UNITS = 2` records that two units can read from memory.
+- The first `print` writes the column headings; `:18` and `:>15` set column widths.
+- In the loop, `for name, (latency, issue, capacity) in units.items():` takes each operation and unpacks its three numbers.
+- `throughput = max(issue / capacity, 1 / LOAD_UNITS)` is the best achievable cycles per element: limited either by the units for that operation or by the load units, whichever is worse.
+- The last column, `latency / throughput`, is how much faster the loop could run if its operations did not have to wait for one another: 10 times for double multiplication.
+
 Read the last column as the prize on offer. A loop multiplying doubles that sits at its latency bound of 5 cycles per element could, in principle, run ten times faster.
 
 ## 3. Why the tidy loop is stuck at the latency bound
@@ -94,6 +104,15 @@ double fold(const double *v, long n) {
     return acc;
 }
 ```
+
+<!-- walkthrough:c -->
+**Reading this C line by line**
+
+- `double fold(const double *v, long n)` defines a function returning a `double` (a number with a fractional part). `v` is the address of the first element of an array, `const` promises the function will not change the array, and `n` is the number of elements.
+- `double acc = IDENT;` creates the running result. `IDENT` stands for the starting value that leaves the operation unchanged: 0 when adding, 1 when multiplying.
+- `for (long i = 0; i < n; i++)` repeats the next line with `i` going from 0 to `n − 1`.
+- `acc = acc OP v[i];` combines the running result with element `i`. `OP` stands for either `+` or `*`. Notice that each round needs the `acc` produced by the round before; that dependence is what the lesson is about.
+- `return acc;` hands back the final result.
 
 Each iteration performs four primitive operations: load `v[i]`, combine it with `acc`, increment `i`, compare and branch. To see which of them limits speed, draw a **data-flow graph**: a diagram showing which operations consume the results of which others. Then look only at values that are carried *from one iteration to the next*. There are two:
 

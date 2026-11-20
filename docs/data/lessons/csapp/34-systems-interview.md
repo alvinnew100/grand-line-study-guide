@@ -1,10 +1,20 @@
 # Systems interview essentials
 
+> **Before this lesson:** This lesson is a review of the whole track. It makes most sense after you have worked through the earlier modules; each section names the lesson to return to if a topic feels unfamiliar. Start from [From source text to a running program](#/lesson/csapp/tour-hello) if you are new.
+
+## In plain words
+
+A systems interview checks whether you understand what happens beneath the code you write: how numbers are stored, how memory is organised, how programs start, share a machine, and talk to each other. Think of it as the theory part of a driving test. You are not asked to build an engine, but you are expected to know why the car behaves as it does on a wet road. This lesson gathers the questions that come up most often and gives a compact, accurate answer to each, with a pointer back to the lesson that explains it in full.
+
+Why this matters at work: the same knowledge that answers interview questions is what lets you diagnose real incidents, such as a service that slows down under load, a crash with no obvious cause, or a program that uses far more memory than expected. Use this lesson as a checklist: any answer you could not give confidently in your own words marks a topic worth revisiting.
+
+## Why look closer
+
 Systems questions in interviews are rarely about trivia. They test whether you carry an accurate mental model of the machine: where data lives, what an operation really costs, and what the kernel does on your behalf. This lesson pulls the whole track together into the handful of topics that come up again and again, each with the short answer, the reasoning behind it, the follow-ups an interviewer is likely to ask, and the traps candidates fall into. Treat it as a revision sheet and as a set of answers to practise saying aloud.
 
 ## 1. Stack vs. heap
 
-**The short answer.** Both are regions of a process's virtual address space. The **stack** holds function call frames: return addresses, saved registers and local variables. It is managed automatically by the compiler with last-in, first-out discipline, and allocation is just a change to the stack pointer. The **heap** holds dynamically allocated objects whose lifetime is controlled by the program (`malloc`/`free`, `new`/`delete`, or a garbage collector). It is managed by an allocator library on top of memory obtained from the kernel.
+**The short answer.** Both are regions of a process's virtual address space. The **stack** holds function call frames: return addresses, saved registers and local variables. It is managed automatically by the compiler with last-in, first-out discipline, and allocation is a change to the stack pointer. The **heap** holds dynamically allocated objects whose lifetime is controlled by the program (`malloc`/`free`, `new`/`delete`, or a garbage collector). It is managed by an allocator library on top of memory obtained from the kernel.
 
 | | Stack | Heap |
 |---|---|---|
@@ -39,6 +49,14 @@ layout = [
 for addr, name, note in layout:
     print(f"{addr:16} {name:32} {note}")
 ```
+
+<!-- walkthrough:python-run -->
+**Reading this Python line by line**
+
+- `layout = [...]` is a list of tuples. Each tuple has three pieces of text: roughly where a region sits, what it is called, and a note about it.
+- The entries are in order from the lowest addresses to the highest: program code, global data, the heap, shared libraries, the stack and finally the kernel.
+- The loop that follows the list prints one line per region, with the three pieces lined up in columns.
+- The output is a table you can use as a mental picture of any running program's memory.
 
 ## 2. Cache lines and locality
 
@@ -122,7 +140,7 @@ sequenceDiagram
 
 ## 5. System calls
 
-**The short answer.** A system call is how a user program asks the kernel to do something it is not allowed to do itself: read a file, create a process, map memory, send a packet. User code cannot simply call a kernel function, because the kernel runs at a higher privilege level in protected memory. Instead the program executes a special trap instruction that switches the processor to kernel mode at a fixed entry point.
+**The short answer.** A system call is how a user program asks the kernel to do something it is not allowed to do itself: read a file, create a process, map memory, send a packet. User code cannot call a kernel function, because the kernel runs at a higher privilege level in protected memory. Instead the program executes a special trap instruction that switches the processor to kernel mode at a fixed entry point.
 
 **The mechanics on Linux x86-64.**
 
@@ -199,7 +217,7 @@ graph TD
 
 **What is a segmentation fault?** The second case above: touching an address outside every mapped region (null or wild pointer, running off the stack) or violating permissions (writing to code or read-only data).
 
-**How does `malloc` work?** It manages a pool of memory from the kernel, keeps a small header on each block with its size and status, finds a free block of sufficient size (often using free lists segregated by size), splits off any large remainder, and returns a pointer just past the header. `free` uses the header to find the size, marks the block free and merges it with free neighbours.
+**How does `malloc` work?** It manages a pool of memory from the kernel, keeps a small header on each block with its size and status, finds a free block of sufficient size (often using free lists segregated by size), splits off any large remainder, and returns a pointer past the header. `free` uses the header to find the size, marks the block free and merges it with free neighbours.
 
 **Two's complement and overflow.** Signed integers give the top bit a negative weight; the same adder serves signed and unsigned arithmetic. Signed overflow occurs when two operands of the same sign produce a result of the other sign; in C it is undefined behavior, while unsigned arithmetic wraps. Mixing signed and unsigned in a comparison converts the signed operand to unsigned, with surprising results for negative values.
 
@@ -227,6 +245,23 @@ graph TD
 
 > [!TIP]
 > Practise by explaining each of the six main topics above to someone else in two minutes, without notes. If you can draw the address-space picture, the three file tables, the cache address split and the fork-exec-wait sequence from memory, you are in good shape.
+
+## Glossary
+
+- **Virtual address space**: the range of memory addresses a program sees as its own.
+- **Stack / heap**: memory for function calls, managed automatically / memory requested by the program while it runs.
+- **Process / thread**: a running program with its own memory / a flow of control that shares memory with others in the same process.
+- **Context switch**: pausing one process or thread and resuming another.
+- **System call**: a request from a program to the operating system's kernel.
+- **Page fault**: the event that occurs when a program touches memory that is not currently loaded.
+- **Cache locality**: arranging data access so that the processor's caches are used well.
+- **Endianness**: the byte order used to store multi-byte values.
+- **Two's complement**: the standard representation of signed integers.
+- **Race condition**: a bug that depends on the timing of concurrent activities.
+- **Deadlock**: a state in which activities wait for each other forever.
+- **Mutex / semaphore**: a lock allowing one holder at a time / a counter used to coordinate threads.
+- **Socket**: an endpoint of a network connection.
+- **Linking**: combining separately compiled pieces into one program.
 
 ## Check yourself
 

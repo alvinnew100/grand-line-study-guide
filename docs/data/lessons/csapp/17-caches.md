@@ -1,5 +1,15 @@
 # Cache memories
 
+> **Before this lesson:** You need the memory hierarchy and locality from [Storage technologies and locality](#/lesson/csapp/storage-locality), and splitting a number into bit fields from [Bits, bytes, words and bit-level operations](#/lesson/csapp/bits-bytes).
+
+## In plain words
+
+Main memory is large but, compared with the processor, slow. A **cache** is a small, very fast memory placed between the two that keeps copies of recently used data. Picture a coat check with a row of numbered hooks by the door and a large store room at the back. Coats that are collected often are kept on the hooks; when a coat is requested, the attendant looks at the hooks first. If it is there, that is a **hit** and takes a moment. If it is not, that is a **miss**: the attendant walks to the store room, and usually has to move some other coat off a hook to make space. The rule that decides which hook a given coat may use is the heart of how a cache is organised.
+
+Why this matters at work: caches decide the real speed of most programs, and the same design appears far beyond hardware, in web browsers, databases and content delivery networks. Being able to work out by hand whether a series of memory accesses hits or misses is the foundation for writing fast code, and it is a staple of exams and interviews.
+
+## Why look closer
+
 Early computers had a three-level hierarchy: registers, main memory, disk. As the gap between CPU and memory speed grew, designers inserted a small SRAM **cache memory** (L1) between the register file and main memory, then a larger L2, then an L3. This lesson explains precisely how a cache is organized, how it decides whether an address is a hit, what happens on a miss, and how the design parameters trade off. By the end you should be able to simulate a cache by hand, which is exactly what the two coding problems for this module ask you to automate.
 
 ## 1. Generic cache organization
@@ -46,6 +56,15 @@ for a in (0x7ffe4c3a1238, 0x7ffe4c3a1240, 0x601040):
     print(f"addr {a:#x}: tag={t:#x} set={i} offset={o}")
 ```
 
+<!-- walkthrough:python-run -->
+**Reading this Python line by line**
+
+- `def split(addr, s, b, m=64):` defines a function that cuts an address into the three fields a cache uses. `s` is the number of set-index bits and `b` the number of block-offset bits.
+- `off = addr & ((1 << b) - 1)` keeps the lowest `b` bits. `(1 << b) - 1` is a row of `b` ones, used as a mask.
+- `idx = (addr >> b) & ((1 << s) - 1)` shifts the offset bits away, then keeps the next `s` bits: the set index.
+- `tag = addr >> (s + b)` is everything that remains above those two fields.
+- The loop applies this to three addresses with `s = 6` and `b = 6`, the sizes for a 32 KB, 8-way cache with 64-byte blocks. The first two addresses differ by 8 bytes yet fall in different blocks, so they show different set numbers.
+
 ## 2. Direct-mapped caches (E = 1)
 
 With exactly one line per set, a cache is **direct-mapped**. Lookup is simple: select the set, compare one tag, check the valid bit.
@@ -82,6 +101,15 @@ float dotprod(float x[8], float y[8]) {
     return sum;
 }
 ```
+
+<!-- walkthrough:c -->
+**Reading this C line by line**
+
+- `float dotprod(float x[8], float y[8])` defines a function that takes two arrays of eight `float`s (4-byte numbers with a fractional part) and returns a `float`.
+- `float sum = 0.0;` creates the running total.
+- `for (int i = 0; i < 8; i++)` repeats the next line for `i` from 0 to 7.
+- `sum += x[i] * y[i];` multiplies the matching elements of the two arrays and adds the product to the total. Each round therefore reads one element of `x` and then one of `y`, alternating between the two arrays. That alternation is what causes trouble in the discussion that follows.
+- `return sum;` hands back the result.
 
 Good spatial locality, so we expect few misses. But suppose a block holds 16 bytes (4 floats), the cache has 2 sets (32 bytes total), `x` starts at address 0 and `y` immediately after at address 32. Then `x[i]` and `y[i]` **always map to the same set**. The reference to `x[0]` loads `x[0..3]`; the reference to `y[0]` evicts it to load `y[0..3]`; `x[1]` misses and evicts `y`; and so on. Every single reference misses. The cache is **thrashing**: repeatedly loading and evicting the same sets of blocks.
 
@@ -226,6 +254,23 @@ Qualitative trade-offs:
 - Fully associative: one set; used for small caches like TLBs.
 - Writes: write-through vs. write-back (dirty bit); write-allocate vs. no-write-allocate.
 - Average access time = hit time + miss rate × miss penalty; small changes in miss rate matter a lot.
+
+## Glossary
+
+- **Cache**: a small, fast memory holding copies of recently used data from a slower memory.
+- **Block**: the fixed-size chunk of data a cache stores and fetches as a unit.
+- **Set**: a group of places in the cache in which a particular block is allowed to be stored.
+- **Line**: one place in a set, holding a block together with its tag and valid bit.
+- **Tag**: the part of the address stored with a block to identify which block it is.
+- **Valid bit**: a bit saying whether a line currently holds real data.
+- **Hit / miss**: the requested data is / is not found in the cache.
+- **Eviction**: removing a block from the cache to make room for another.
+- **Direct-mapped**: a cache with exactly one line per set.
+- **Set associative**: a cache with several lines per set.
+- **Fully associative**: a cache with a single set, so a block may go in any line.
+- **Replacement policy**: the rule for choosing which block to evict, such as least recently used.
+- **Conflict miss**: a miss caused by blocks competing for the same set although the cache has free space elsewhere.
+- **Write-back / write-through**: updating the slower memory later, when a block is evicted / immediately on every write.
 
 ## Check yourself
 

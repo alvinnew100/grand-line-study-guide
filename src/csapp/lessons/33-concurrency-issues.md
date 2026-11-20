@@ -35,6 +35,16 @@ void *worker(void *arg) {
 }
 ```
 
+<!-- walkthrough:c -->
+**Reading this C line by line**
+
+- `long total = 0;` is a global variable shared by all threads.
+- `pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;` creates a lock, also called a mutex, in its unlocked state.
+- `void *worker(void *arg)` is the function each thread runs. `range_t *r = arg;` treats the input as the address of a small structure holding the thread's own range of numbers.
+- `for (long i = r->lo; i < r->hi; i++)` goes through that range. `r->lo` means "the field `lo` of the structure that `r` points to".
+- `pthread_mutex_lock(&lock);` waits until the lock is free and takes it. `&lock` is the address of the lock. `total += i;` then updates the shared total safely, and `pthread_mutex_unlock(&lock);` releases the lock so another thread may proceed.
+- The result is always correct. The cost is two lock operations for every single addition.
+
 This is correct, and disastrous. Locking and unlocking are far more expensive than an addition, so even one thread runs many times slower than a plain loop. Worse, adding threads makes it *slower still*: the cores spend their time fighting over the lock and passing the cache line holding `total` back and forth. The lesson is blunt: **synchronisation is expensive; avoid it wherever you can, and where you cannot, do as much useful work as possible per lock acquisition.**
 
 **Design B: each thread adds into its own slot of a shared array.**
@@ -98,6 +108,17 @@ except RuntimeError:                    # no thread support in this sandbox: run
         worker(k, lo, hi)
 print("design C result:", sum(partial), "| expected:", n * (n - 1) // 2)
 ```
+
+<!-- walkthrough:python-run -->
+**Reading this Python line by line**
+
+- `import threading` loads Python's thread support.
+- `def plan(n, t):` divides the numbers 0 to `n − 1` into `t` ranges of nearly equal size and returns them as a list of (start, end) pairs.
+- The three `print` lines count, for each design, how many lock operations and how many writes to shared memory occur with a million numbers and four threads.
+- `partial = [0] * t` creates a list of four zeros, one slot per thread.
+- `def worker(k, lo, hi):` adds up its range in the local variable `s` and stores the result once, in its own slot.
+- `threading.Thread(target=worker, args=(...))` creates a thread, `start()` begins it, and `join()` waits for it to finish. If threads cannot be created, the `except` branch runs the same work one range after another.
+- The last line adds the four partial results and compares the total with the known answer.
 
 ### Measuring a parallel program
 

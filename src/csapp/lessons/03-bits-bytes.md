@@ -60,6 +60,16 @@ for n in (11, 20, 30):
     print(f"2^{n} = {2 ** n:#x}")
 ```
 
+<!-- walkthrough:python-run -->
+**Reading this Python line by line**
+
+- `def to_hex_by_groups(bits):` defines a function whose input, `bits`, is text such as `"1100101101"`.
+- `bits.replace(" ", "")` removes any spaces. `bits.zfill(n)` pads with zeros on the left until the text is `n` characters long; the expression inside rounds the length up to a multiple of 4.
+- `[bits[i:i + 4] for i in range(0, len(bits), 4)]` cuts the text into pieces of four characters. `bits[i:i + 4]` means "characters `i` up to but not including `i + 4`".
+- `int(g, 2)` reads a piece as a base-2 number (0 to 15), and that number is used as a position in the text `"0123456789ABCDEF"` to pick the matching hex digit.
+- The `while n:` loop further down converts decimal to hex by repeated division: `divmod(n, 16)` gives the quotient and the remainder together.
+- Output: the grouped bits with `0x32D`, then the other conversions worked in the text above.
+
 ## 3. Words and the sizes of data
 
 Every machine has a **word size**: the natural size of a pointer. Since an address must fit in a word, the word size sets the largest possible virtual address space. A machine with *w*-bit words can address $2^w$ bytes. For 32 bits that is 4 gigabytes, a limit that became a real obstacle in the 2000s. For 64 bits it is 16 exabytes, more than anyone can install. Most machines are now 64-bit, and they can still run programs compiled for 32 bits.
@@ -112,6 +122,15 @@ void show_bytes(const void *obj, size_t len) {
     printf("\n");
 }
 ```
+
+<!-- walkthrough:c -->
+**Reading this C line by line**
+
+- `void show_bytes(const void *obj, size_t len)` defines a function that returns nothing (`void`). Its first input is a pointer, that is, a memory address, to data of any type (`void *`); `const` promises the function will not change that data. Its second input is a count of bytes; `size_t` is the type C uses for sizes.
+- `const unsigned char *p = obj;` makes a second pointer to the same address, but one that views memory as individual bytes (`unsigned char` is C's name for a byte holding 0 to 255).
+- `for (size_t i = 0; i < len; i++)` repeats the next statement with `i` equal to 0, 1, 2, and so on while `i` is less than `len`. `i++` adds one to `i` after each round.
+- `printf(" %.2x", p[i]);` prints byte number `i`. `p[i]` means "the byte `i` positions after address `p`". `%.2x` asks for hexadecimal with at least two digits.
+- `printf("\n");` ends the line. Called on a 4-byte integer holding `0x1A2B3C4D` on a little-endian machine, the function prints ` 4d 3c 2b 1a`.
 
 That function prints the bytes of any object in increasing address order. The same experiment in Python:
 

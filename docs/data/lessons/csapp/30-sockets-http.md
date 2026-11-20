@@ -50,6 +50,15 @@ struct sockaddr {                /* the generic type the API is declared with */
 };
 ```
 
+<!-- walkthrough:c -->
+**Reading this C line by line**
+
+- `struct sockaddr_in { ... };` defines the structure that names an Internet endpoint. Each line inside is one field: a type followed by a name.
+- `uint16_t sin_family;` is a 16-bit number identifying the kind of address; for IPv4 it holds the constant `AF_INET`.
+- `uint16_t sin_port;` is the port, and `struct in_addr sin_addr;` is the 32-bit IP address. Both are stored in network (big-endian) byte order.
+- `unsigned char sin_zero[8];` is eight unused bytes that pad the structure to a fixed size.
+- `struct sockaddr` is the generic shape the socket functions are declared with: a family field followed by 14 bytes whose meaning depends on the family. Programs fill in the specific structure and pass its address as if it were the generic one.
+
 The sockets API predates `void *` in C, so its designers declared functions to take a pointer to a generic `struct sockaddr` and required callers to cast their protocol-specific structure to it. That is why real code is full of `(struct sockaddr *)&addr` and why many codebases define a short alias for the type. The first field, the family, tells the kernel how to interpret the rest. IPv6 has its own larger `sockaddr_in6`, and `struct sockaddr_storage` is guaranteed big enough to hold any of them.
 
 ## 3. The five core calls
@@ -202,6 +211,17 @@ except Exception as exc:
     print("sockets unavailable in this sandbox:", type(exc).__name__)
     print("expected: a short first read, the upper-cased echo, then b'' for end-of-file")
 ```
+
+<!-- walkthrough:python-run -->
+**Reading this Python line by line**
+
+- `import socket` loads Python's interface to the operating system's sockets.
+- `def read_exactly(sock, n):` keeps reading until `n` bytes have arrived. `sock.recv(n - got)` asks for the bytes still missing and may return fewer. An empty result, tested by `if not part`, means the other side has closed.
+- In `demo`, `socket.socketpair()` creates two sockets that are already connected to each other, so no network is needed.
+- `client.sendall(message[:9])` sends only the first 9 bytes. `server.recv(100)` asks for up to 100 and receives those 9: a short read.
+- The rest is sent, `read_exactly` collects it, and the server replies with `.upper()`, the text in capitals.
+- After `client.close()`, the server's `recv` returns `b''`, an empty result. That is how end-of-file appears on a connection.
+- The `try / except` at the end prints an explanation instead of failing where sockets are not permitted.
 
 ## 6. The web: HTTP in practice
 

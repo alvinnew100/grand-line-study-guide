@@ -1,5 +1,15 @@
 # Procedures and the run-time stack
 
+> **Before this lesson:** You need registers, `mov`, `push` and `pop` from [x86-64 basics: registers, operands, mov](#/lesson/csapp/asm-basics), and jumps and conditions from [Arithmetic, condition codes and control flow](#/lesson/csapp/asm-control).
+
+## In plain words
+
+A **function** (also called a procedure) is a named piece of code that other code can use by "calling" it. When a call happens, the computer has to remember where to come back to, hand over the inputs, and give the function some private working space. All of that is done with a region of memory called the **stack**. Think of a stack of trays in a canteen: you add to the top and remove from the top. Each call places a new tray holding its notes on the pile; when the function finishes, its tray is removed and the one below, belonging to the caller, is on top again. That is how a function can call another, which calls another, and everything still unwinds in the right order.
+
+Why this matters at work: when a program crashes, the report you receive, called a stack trace, is a listing of those trays. Debuggers, profilers and many security attacks are all about the stack. Knowing how calls work lets you read a trace with confidence and understand why very deep recursion fails.
+
+## Why look closer
+
 Procedures (functions, methods, subroutines, handlers) are the key abstraction in software: they package code that implements some functionality behind a named interface with arguments and an optional return value. Supporting them at the machine level requires three mechanisms whenever procedure P calls procedure Q and Q later returns:
 
 1. **Passing control.** The PC must jump to Q's first instruction, and later back to the instruction in P right after the call.
@@ -45,7 +55,7 @@ Key facts:
 | `call *Operand` | Indirect call, target from register or memory |
 | `ret` | Pop an address from the stack and set PC to it |
 
-(objdump writes them `callq`/`retq`; the `q` just emphasizes x86-64.) Example trace from the book's `multstore` → `mult2` call:
+(objdump writes them `callq`/`retq`; the `q` emphasizes x86-64.) Example trace from the book's `multstore` → `mult2` call:
 
 ```
 400563: e8 d8 ff ff ff     callq 400540 <mult2>   # in main/multstore
@@ -82,6 +92,14 @@ void proc(long a1, long *a1p, int a2, int *a2p,
 }
 ```
 
+<!-- walkthrough:c -->
+**Reading this C line by line**
+
+- `void proc(long a1, long *a1p, int a2, int *a2p, short a3, short *a3p, char a4, char *a4p)` defines a function with eight inputs that returns nothing (`void`). They come in pairs: a number of some size (`long` is 8 bytes, `int` 4, `short` 2, `char` 1) and a pointer, that is, the address of a variable of that same size.
+- `*a1p += a1;` reads the value stored at address `a1p`, adds `a1`, and stores the sum back at that address. The star means "the thing this address points to"; `+=` means "add to".
+- The next three lines do the same for the other three pairs.
+- The function is chosen because it has more than six inputs. The first six travel in registers; the seventh and eighth must be placed on the stack by the caller, which is what the lesson examines next.
+
 ```
 # a1 %rdi (8 bytes), a1p %rsi, a2 %edx (4), a2p %rcx, a3 %r8w (2), a3p %r9,
 # a4 at 8(%rsp) (1 byte), a4p at 16(%rsp)
@@ -95,7 +113,7 @@ proc:
     ret
 ```
 
-Note the instruction suffixes follow the C types: `addq` for `long`, `addl` for `int`, `addw` for `short`, `addb` for `char`. Arguments 7 and 8 sit at `8(%rsp)` and `16(%rsp)`, just above the return address.
+Note the instruction suffixes follow the C types: `addq` for `long`, `addl` for `int`, `addw` for `short`, `addb` for `char`. Arguments 7 and 8 sit at `8(%rsp)` and `16(%rsp)`, immediately above the return address.
 
 ## 4. Local storage on the stack
 
@@ -174,7 +192,7 @@ P:
 
 ## 6. Recursive procedures
 
-Because each call gets its own frame and registers follow the conventions, recursion needs no special support: a recursive call is just a call.
+Because each call gets its own frame and registers follow the conventions, recursion needs no special support: a recursive call is a call.
 
 ```c
 long rfact(long n) {
@@ -219,6 +237,16 @@ print(rfact(4, "main's"))
 print("\n".join(trace))
 ```
 
+<!-- walkthrough:python-run -->
+**Reading this Python line by line**
+
+- `stack, trace = [], []` creates two empty lists: one models the machine's stack, the other records what happened.
+- `def rfact(n, rbx_of_caller):` defines a function that computes the factorial of `n` (4 × 3 × 2 × 1 for 4) by calling itself.
+- `stack.append(...)` adds an entry to the end of the list, modelling the return address and the saved register that a real call places on the stack.
+- `result = 1 if n <= 1 else rbx * rfact(n - 1, rbx)` is the calculation: for 1 the answer is 1; otherwise it is `n` times the factorial of `n - 1`, which requires another call, and so another stack entry.
+- `stack.pop()` removes the entry again when the call finishes.
+- `print(rfact(4, "main's"))` shows 24. The recorded trace shows the depth growing to 4 and then shrinking, last in, first out.
+
 > [!WARNING]
 > Each recursive call consumes stack space (here 16 bytes; often much more). The default Linux main-thread stack is typically 8 MB, so very deep recursion causes a **stack overflow**, which shows up as a segmentation fault when the stack hits its guard region.
 
@@ -259,13 +287,28 @@ sequenceDiagram
 - Locals go on the stack if their address is taken, if they are aggregates, or if registers run out.
 - Recursion works for free because each activation has private state.
 
+## Glossary
+
+- **Procedure (function)**: a named block of code that can be called from elsewhere and returns when done.
+- **Caller / callee**: the code that makes a call / the function being called.
+- **Stack**: the region of memory holding the working data of functions that are in progress.
+- **Stack frame**: the portion of the stack belonging to one call of one function.
+- **Stack pointer (`%rsp`)**: the register that marks the top of the stack.
+- **`call` / `ret`**: the instructions that start a function and return from it.
+- **Return address**: the location of the instruction to continue with after a function finishes.
+- **Calling convention**: the agreed rules for where arguments and results are placed.
+- **Argument registers**: the six registers used, in order, for the first six arguments: `%rdi`, `%rsi`, `%rdx`, `%rcx`, `%r8`, `%r9`.
+- **Caller-saved / callee-saved**: registers a called function may overwrite freely / registers it must restore before returning.
+- **Local variable**: a variable that exists only while its function is running.
+- **Recursion**: a function calling itself.
+
 ## Check yourself
 
 ```quiz
 [
   {"q": "What does call do on x86-64?", "options": ["Jumps, then pushes the address of the call", "Pushes the address of the following instruction, then jumps", "Saves all registers", "Allocates a stack frame for locals"], "answer": 1,
    "explain": "call pushes the return address (the next instruction) and sets the PC to the target."},
-  {"q": "Where is the 7th integer argument passed?", "options": ["%r10", "%rax", "On the stack, just above the return address when the callee starts", "%xmm0"], "answer": 2,
+  {"q": "Where is the 7th integer argument passed?", "options": ["%r10", "%rax", "On the stack, immediately above the return address when the callee starts", "%xmm0"], "answer": 2,
    "explain": "Only six integer arguments go in registers; the 7th is at 8(%rsp) on entry to the callee."},
   {"q": "Which register is callee-saved?", "options": ["%rax", "%rdi", "%rbx", "%r10"], "answer": 2,
    "explain": "Callee-saved: %rbx, %rbp, %r12-%r15."},

@@ -120,6 +120,15 @@ print(f"movl $0xCCCCCCCC, %eax -> {write(rax, 0xCCCCCCCC, 4):#018x}   <- upper 3
 print(f"movq $-1, %rax    ->  rax = {write(rax, -1, 8):#018x}")
 ```
 
+<!-- walkthrough:python-run -->
+**Reading this Python line by line**
+
+- `MASK64 = (1 << 64) - 1` is a number made of 64 one-bits; ANDing with it keeps a value within 64 bits.
+- `def write(reg, value, size):` models writing `size` bytes into a 64-bit register whose old contents are `reg`. The text in triple quotes is a description for readers.
+- For `size == 8` the new value replaces everything. For `size == 4` only the low 32 bits of the value are kept and the upper half becomes zero, which is the special rule on x86-64.
+- For sizes 1 and 2, `keep` is a mask with ones everywhere except the low byte or two. `reg & keep` preserves the old upper bits, and `|` merges in the new low bits.
+- The `print` lines apply each kind of write to the same starting value. `:#018x` formats a number as hexadecimal with a `0x` prefix and 16 digits, so the unchanged and zeroed parts are easy to compare.
+
 ## 4. Operand forms
 
 Most instructions take one or more **operands** naming the source values to use and the destination for the result. There are three kinds.
@@ -192,6 +201,16 @@ movb  $-17, (%rsp)         # immediate -> memory       *rsp = -17
 movq  %rax, -12(%rbp)      # register  -> memory       *(rbp - 12) = rax
 ```
 
+<!-- walkthrough:asm -->
+**Reading this assembly line by line**
+
+- Every line has the same shape: an instruction name, a source, a comma, a destination. Text after `#` is a comment.
+- `movl $0x4050, %eax`: `mov` copies; the suffix `l` says 4 bytes. `$0x4050` is a constant (the `$` marks a constant) and `%eax` is a register (the `%` marks a register). So the constant is copied into the register.
+- `movw %bp, %sp`: suffix `w`, 2 bytes, copied from one register to another.
+- `movb (%rdi,%rcx), %al`: suffix `b`, 1 byte. Parentheses mean "the memory at this address"; the address is the sum of the two registers inside. The byte found there is copied into `%al`.
+- `movb $-17, (%rsp)`: a constant is stored into memory at the address held in `%rsp`.
+- `movq %rax, -12(%rbp)`: suffix `q`, 8 bytes. A number in front of the parentheses is added to the address, so the register's value is stored 12 bytes below the address in `%rbp`.
+
 A subtlety about constants: `movq` can take only a 32-bit immediate, which it sign-extends to 64 bits. To load a full 64-bit constant, the compiler uses `movabsq`, whose destination must be a register.
 
 ### Moving a small value into a bigger destination
@@ -230,6 +249,15 @@ long replace(long *slot, long fresh) {
     return old;
 }
 ```
+
+<!-- walkthrough:c -->
+**Reading this C line by line**
+
+- `long replace(long *slot, long fresh)` defines a function that returns a `long` (an 8-byte whole number). Its first input, `slot`, is a pointer: the address of a `long` stored somewhere else. Its second input is an ordinary number.
+- `long old = *slot;` The star means "the value stored at that address". The line reads that value and keeps it in a new variable named `old`.
+- `*slot = fresh;` With the star on the left-hand side, the line stores a new value at that address, replacing what was there.
+- `return old;` hands back the value that used to be there.
+- The assembly shown next does those three steps with one instruction each.
 
 compiles to
 

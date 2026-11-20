@@ -56,6 +56,14 @@ int open(const char *path, int flags, mode_t mode);   /* descriptor, or -1 */
 int close(int fd);                                    /* 0, or -1 */
 ```
 
+<!-- walkthrough:c -->
+**Reading this C line by line**
+
+- `#include <fcntl.h>` and `#include <unistd.h>` name the files in which these functions are declared.
+- `int open(const char *path, int flags, mode_t mode);` is the signature of `open`. `const char *path` is text giving the file's name, `flags` says how the file will be used, and `mode` gives the permissions for a newly created file. The returned `int` is the file descriptor, or −1 if the call failed.
+- `int close(int fd);` takes a descriptor and releases it. It returns 0 on success and −1 on failure.
+- The comments between `/*` and `*/` summarise those return values.
+
 The `flags` argument says how you intend to use the file. Exactly one of these access modes is required:
 
 | Flag | Access |
@@ -101,6 +109,17 @@ try:
 except Exception as exc:
     print("raw descriptors unavailable in this sandbox:", type(exc).__name__)
 ```
+
+<!-- walkthrough:python-run -->
+**Reading this Python line by line**
+
+- `import os, tempfile` loads the module that wraps the operating system's calls and one for making temporary files.
+- `def demo():` puts the experiment in a function so that any failure can be caught at the end.
+- `with tempfile.TemporaryDirectory() as d:` creates a scratch folder that is deleted automatically when the indented block finishes.
+- `a = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)` opens a file for writing, creating it if needed. The `|` combines the option flags, and `0o644` is the permission setting written in base 8. The result is a descriptor number.
+- `b = os.open(path, os.O_RDONLY)` opens the same file again for reading and receives the next free number.
+- After `os.close(a)`, a third `open` receives the number that was released. The last lines compute permissions after the umask is applied.
+- `try: ... except Exception` at the bottom runs the demo and prints a short notice instead of failing where raw descriptors are not available.
 
 ## 4. Reading and writing
 

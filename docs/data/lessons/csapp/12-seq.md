@@ -198,6 +198,16 @@ R, M, PC = run(program)
 print("halted at", hex(PC), "| %rax =", R[0], "| %rsp =", hex(R[RSP]), "| return address stored:", {hex(k): hex(v) for k, v in M.items()})
 ```
 
+<!-- walkthrough:python-run -->
+**Reading this Python line by line**
+
+- `RSP, NONE = 4, 0xF` gives names to two register numbers: 4 is the stack pointer, and `0xF` means "no register".
+- `def run(program, steps=20):` defines the simulator. `program` is a dictionary from an address to an instruction written as a tuple, such as `("irmovq", 3, 2)`.
+- `R = {i: 0 for i in range(15)}` creates the fifteen registers, all zero. `M` is the data memory, `CC` the condition codes and `PC` the program counter.
+- Inside the `for` loop each pass executes one instruction. `op, *args = program[PC]` fetches the instruction at the current address and separates its name from its operands. The `length` lookup gives its size in bytes, and `valP = PC + length` is the address of the next instruction in sequence.
+- The six commented blocks then follow the stage tables exactly: decode reads `valA` and `valB` from `R`; execute computes `valE`; memory reads or writes `M`; write back updates `R`; PC update chooses the next address.
+- Each pass prints one line of signal values. For the sample program the final line reports `%rax = 6`, the sum 3 + 2 + 1.
+
 ## 3. From stage tables to hardware
 
 Every row of the tables corresponds to a physical piece of the processor.

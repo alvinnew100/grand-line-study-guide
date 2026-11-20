@@ -34,6 +34,16 @@ void  free(void *p);                     /* p must come from the calls above, ex
 void *sbrk(intptr_t incr);               /* move the program break; returns the old break */
 ```
 
+<!-- walkthrough:c -->
+**Reading this C line by line**
+
+- These lines are signatures: they say how to call each function. `#include <stdlib.h>` names the file that declares them.
+- `void *malloc(size_t size);` takes a number of bytes and returns `void *`, the address of a block at least that large, or the special value `NULL` if none is available. `size_t` is C's type for sizes.
+- `void *calloc(size_t n, size_t size);` asks for room for `n` items of `size` bytes each and fills it with zeros.
+- `void *realloc(void *p, size_t size);` changes the size of a block obtained earlier; the block may move, so the returned address replaces the old one.
+- `void free(void *p);` gives a block back. It returns nothing (`void`), so it cannot tell you that you made a mistake.
+- `void *sbrk(intptr_t incr);` is the lower-level call an allocator uses to obtain more heap from the operating system.
+
 `malloc` returns memory aligned for any data type: on 64-bit Linux that means a multiple of 16 bytes. It does not clear the block. `free` returns nothing and has no way of reporting a bad argument, so passing it a pointer it did not hand out, or the same pointer twice, is undefined behaviour. Allocators obtain raw heap space from the kernel with `sbrk` or with `mmap`.
 
 Why not declare big arrays? Because a fixed bound is either wasteful or, eventually, too small. Code that hard-wires a maximum input size becomes a maintenance burden and, worse, an invitation to buffer overflows.
@@ -74,6 +84,16 @@ print(f"free bytes in total: {free_total}, largest single free block: {largest}"
 for request in (16, 32, 48):
     print(f"request for {request:2} bytes ->", "fits" if request <= largest else "FAILS despite enough total space")
 ```
+
+<!-- walkthrough:python-run -->
+**Reading this Python line by line**
+
+- `heap = [...]` models the heap as a list of pairs: a label and a size in bytes. Blocks labelled `"free"` are available.
+- `sum(size for tag, size in heap if tag == "free")` adds up the sizes of the free blocks. Read it as "the sum of `size`, over every pair in `heap`, keeping only those whose tag is free".
+- `max(...)` with the same condition finds the largest single free block.
+- `" | ".join(...)` builds one line of text showing the layout.
+- The `for request in (16, 32, 48)` loop tests three request sizes against the largest free block.
+- Output: 48 bytes are free in total, but the largest piece is 16, so the 32-byte and 48-byte requests fail.
 
 Every practical allocator has to settle five questions: how to keep track of free blocks, which free block to choose, what to do with the leftover part of a chosen block, when to merge neighbouring free blocks, and how to get more memory when nothing fits. The rest of the design discussion walks through them.
 

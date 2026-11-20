@@ -37,6 +37,16 @@ print("concurrent:", service)
 print("client 'a' waits", round(done["a"] / service["a"]), "times longer than necessary")
 ```
 
+<!-- walkthrough:python-run -->
+**Reading this Python line by line**
+
+- `service = {...}` is a dictionary from a client's name to the number of seconds of work that client needs.
+- `clock, done = 0.0, {}` starts a clock at zero and an empty table of finishing times.
+- `for name, need in service.items():` takes the clients in order. `clock += need` advances the clock by that client's work, and `done[name] = clock` records when the client finished. This models a server that handles one client at a time.
+- The first `print` shows those finishing times, rounded to one decimal place.
+- The second shows the ideal concurrent case, in which each client finishes after only its own work.
+- The last line divides the two times for client `a`: 40.2 seconds against 0.2, about 200 times longer than necessary.
+
 The three building blocks, in the order we will meet them:
 
 | Approach | Who schedules the flows | Address space | Typical cost |
@@ -63,6 +73,16 @@ for (;;) {
     close(cfd);                          /* parent: MUST drop its copy */
 }
 ```
+
+<!-- walkthrough:c -->
+**Reading this C line by line**
+
+- `int lfd = make_listener(port);` obtains a listening descriptor from a helper function and stores it in `lfd`.
+- `signal(SIGCHLD, reap_children);` asks that the function `reap_children` be run whenever a child process finishes.
+- `for (;;) { ... }` is C's way of writing a loop that repeats forever.
+- `int cfd = accept(lfd, NULL, NULL);` waits for a client and returns a new descriptor for talking to it. `NULL` means "I do not need the client's address".
+- `if (fork() == 0) { ... }` creates a child process. `fork` returns 0 in the child, so the lines in braces run only there: the child closes the listening descriptor, serves the client, closes the connection and ends with `exit(0)`.
+- `close(cfd);` after the braces runs in the parent, which must give up its own copy of the connection before going back to `accept`.
 
 Three housekeeping rules turn that sketch into a correct server.
 

@@ -1,5 +1,15 @@
 # From source text to a running program
 
+> **Before this lesson:** Nothing. This is the first lesson of the track. It helps to have typed a command into a terminal once and to have seen a few lines of code in any language, but neither is required.
+
+## In plain words
+
+A computer program begins life as ordinary text that a person types, and ends as a long list of numbers that the machine's main chip, the **processor**, can act on. This lesson follows one tiny program on that journey. Think of a recipe written in English that must be used by a cook who reads only a very terse shorthand. Someone has to translate the recipe (that translator is a program called the **compiler**), the translated sheet has to be carried into the kitchen (the program is copied from the disk, the long-term storage, into **memory**, the working storage), and then the cook follows it one step at a time.
+
+Why this matters at work: nearly every confusing problem in software (a program that is slow for no visible reason, a number that comes out wrong, a build that fails at the last step) is explained by something on this journey. Having the whole path in your head tells you where to look, and it is the map for every later lesson in this track.
+
+## Why look closer
+
 Every programmer has typed some version of this program:
 
 ```c
@@ -11,6 +21,16 @@ int main()
     return 0;
 }
 ```
+
+<!-- walkthrough:c -->
+**Reading this C line by line**
+
+- `#include <stdio.h>` asks for the declarations of the standard input/output functions to be pasted in before translation. Without it the compiler would not know what `printf` is.
+- `int main()` starts the definition of a function named `main`. Every C program begins running at `main`. The word `int` in front says the function hands back a whole number when it finishes.
+- `{` and `}` mark where the body of the function begins and ends.
+- `printf("hello, world\n");` calls the library function `printf`, which writes text to the screen. The text is in double quotes. `\n` is not two characters to be printed; it is the notation for one "new line" character. The semicolon ends the statement.
+- `return 0;` ends `main` and hands the number 0 back to whoever started the program. By convention 0 means "finished without problems".
+- Output: the single line `hello, world`.
 
 It looks trivial, but to make those twelve characters appear on your screen, nearly every major part of a computer system has to cooperate: the compiler toolchain, the linker, the operating system's loader, the processor, main memory, the disk, the display, and several layers of abstraction the operating system builds on top of the hardware. CS:APP opens by following `hello` through its whole life, and so will we. Treat this lesson as a map: every heading below becomes a full module later in the track.
 
@@ -32,6 +52,16 @@ print("as little-endian u32:", struct.unpack("<I", raw)[0])
 print("as big-endian u32  :", struct.unpack(">I", raw)[0])
 print("as little-endian float:", struct.unpack("<f", raw)[0])
 ```
+
+<!-- walkthrough:python-run -->
+**Reading this Python line by line**
+
+- A line beginning with `#` is a comment: a note for the reader that Python ignores.
+- `import struct` makes a standard helper module available; `struct` converts between raw bytes and numbers.
+- `raw = bytes([0x68, 0x65, 0x6c, 0x6c])` builds a sequence of four bytes and names it `raw`. `0x` introduces a hexadecimal number.
+- `raw.decode("ascii")` reads those bytes as letters using the ASCII table, giving `hell`.
+- `struct.unpack("<I", raw)[0]` reads the same four bytes as one unsigned 32-bit whole number, lowest byte first (`<`). With `>` the highest byte comes first, and the number is different. With `<f` they are read as a number with a fractional part.
+- The four printed results differ although the bytes never changed. That is the point of the demo: meaning comes from how bytes are interpreted.
 
 This is why so many bugs live at the boundaries between representations: you wrote the bytes as one thing and read them back as another.
 
@@ -214,6 +244,22 @@ Each line ends with byte 10, and the file is nothing but small integers. The com
 - The processor repeatedly fetches the instruction at the PC, executes a simple load, store, operate or jump, and updates the PC.
 - Running even `hello` involves lots of copying between disk, memory, registers and devices, which motivates caching.
 - The OS mediates all hardware access through files, virtual memory and processes.
+
+## Glossary
+
+- **Source file**: the text file a programmer writes, such as `hello.c`.
+- **Bit / byte**: a single 0 or 1 / a group of eight bits.
+- **ASCII**: a standard table that gives each letter, digit and punctuation mark a number from 0 to 127.
+- **Compiler**: the program that translates source code into instructions for the processor.
+- **Preprocessor, assembler, linker**: the other tools in the translation chain: one prepares the text, one produces machine code, one joins the pieces.
+- **Object file**: the machine-code output of translating one source file, not yet a complete program.
+- **Executable**: a complete program file that the operating system can run.
+- **Processor (CPU)**: the chip that carries out instructions.
+- **Main memory**: fast working storage that holds a program while it runs.
+- **Register**: one of a handful of very small, very fast storage slots inside the processor.
+- **Program counter**: the register that holds the location of the next instruction.
+- **Bus**: the wiring that carries data between the parts of a computer.
+- **Shell**: the program that reads the commands you type and runs other programs.
 
 ## Check yourself
 

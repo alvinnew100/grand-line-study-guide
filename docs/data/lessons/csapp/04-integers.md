@@ -1,5 +1,15 @@
 # Unsigned and two's-complement integers
 
+> **Before this lesson:** You need bits, bytes, hexadecimal and the bit operators from [Bits, bytes, words and bit-level operations](#/lesson/csapp/bits-bytes).
+
+## In plain words
+
+Computers store whole numbers in a fixed number of bits, and that has consequences ordinary arithmetic does not prepare you for. Picture a car's mileage counter with six wheels: after 999,999 it rolls over to 000,000. A computer's number has the same limit. There is also the question of negative numbers. A row of bits has no minus sign, so machines use a convention called **two's complement**, in which the highest bit counts as a large negative amount. The same row of bits can therefore be read in two ways: as an **unsigned** number (zero or positive only) or as a **signed** number (possibly negative).
+
+Why this matters at work: mixing the two readings is a classic source of bugs and security holes, for example a length that should be small and positive being read as a gigantic value. Knowing the exact ranges and what happens during conversions lets you spot these mistakes in code review, and questions about them are routine in interviews.
+
+## Why look closer
+
 A $w$-bit pattern can be read as an integer in two standard ways: **unsigned** (only nonnegative values) or **two's complement** (the universal encoding for signed values on modern machines). The same bits, two meanings, and C converts between them silently. Many famous bugs, including security holes in real operating systems, come from exactly that silence. This lesson builds the precise mathematical model of both encodings, then studies conversion, extension and truncation.
 
 ## 1. Notation
@@ -60,6 +70,14 @@ for w in (8, 16, 32, 64):
     print(f"w={w}: TMin={-(1 << (w-1))}, TMax={(1 << (w-1)) - 1}, UMax={(1 << w) - 1}")
 ```
 
+<!-- walkthrough:python-run -->
+**Reading this Python line by line**
+
+- `def B2U(bits):` defines a function that takes text such as `"1011"`. `int(bits, 2)` reads it as an ordinary base-2 number, giving 11. That is the unsigned reading.
+- `def B2T(bits):` gives the two's-complement reading. `w = len(bits)` is the number of bits.
+- `int(bits[0])` is the first character, the sign bit, as 0 or 1. `<< w` multiplies it by 2 to the power `w`. Subtracting that from the unsigned value leaves it unchanged when the sign bit is 0, and lowers it by 2ʷ when the sign bit is 1. For `"1011"`: 11 − 16 = −5.
+- The `for b in (...)` loop prints each 4-bit pattern with both readings side by side. Patterns starting with 0 give the same number twice; patterns starting with 1 differ by 16.
+
 Important properties:
 
 - **Asymmetry.** $|TMin| = |TMax| + 1$: there is one more negative number than positive, because 0 takes one of the nonnegative patterns. This makes $-TMin = TMin$ in $w$-bit arithmetic, a perennial source of bugs (`abs(INT_MIN)` is negative!).
@@ -67,7 +85,7 @@ Important properties:
 - In C, `<limits.h>` defines `INT_MIN`, `INT_MAX`, `UINT_MAX`, and so on. The C standard historically did not *require* two's complement, but virtually every machine uses it, and C23 finally made it mandatory. Java requires it.
 
 > [!NOTE]
-> **Why two's complement?** Because the hardware for addition is the same as for unsigned! Adding the bit patterns as if they were unsigned and dropping the carry out gives the correct two's-complement sum. Older alternatives, **ones' complement** (top bit weight $-(2^{w-1}-1)$) and **sign-magnitude** (top bit just flips the sign), both have two representations of zero (+0 and −0) and need separate adder logic. Sign-magnitude survives today in floating point.
+> **Why two's complement?** Because the hardware for addition is the same as for unsigned! Adding the bit patterns as if they were unsigned and dropping the carry out gives the correct two's-complement sum. Older alternatives, **ones' complement** (top bit weight $-(2^{w-1}-1)$) and **sign-magnitude** (top bit flips the sign), both have two representations of zero (+0 and −0) and need separate adder logic. Sign-magnitude survives today in floating point.
 
 <div class="widget" data-widget="bits"></div>
 
@@ -175,6 +193,15 @@ float sum_elements(float a[], unsigned length) {
 }
 ```
 
+<!-- walkthrough:c -->
+**Reading this C line by line**
+
+- `float sum_elements(float a[], unsigned length)` defines a function that returns a `float` (a number with a fractional part). It receives an array `a` and a count `length` whose type is `unsigned`, meaning it can never be negative.
+- `float result = 0;` creates the running total.
+- `for (int i = 0; i <= length - 1; i++)` is meant to visit positions 0 up to `length - 1`. Here is the trap: when `length` is 0, the subtraction is done in unsigned arithmetic, where 0 − 1 wraps round to the largest possible value, about four billion. The test `i <= length - 1` is then true for every `i`.
+- `result += a[i];` adds element `i` to the total. With the wrapped bound, the loop runs far past the end of the array and reads memory that does not belong to it.
+- The repair is to write the test as `i < length`, which involves no subtraction.
+
 With `length = 0`, `length - 1` is computed with unsigned arithmetic and becomes $UMax$. Every `i` satisfies the test (the comparison is unsigned), so the loop runs off the array and crashes. Fix: `i < length`.
 
 **`strlen` subtraction.**
@@ -213,7 +240,7 @@ A useful picture for everything in this lesson is a **wheel** with $2^w$ positio
 - The **unsigned** reading labels the positions $0, 1, \dots, 2^w - 1$. The "seam", where the label jumps, lies between `111...1` ($UMax$) and `000...0`.
 - The **two's-complement** reading uses the *same wheel* but relabels the half starting at `100...0` with $-2^{w-1}, \dots, -1$. Its seam lies between `011...1` ($TMax$) and `100...0` ($TMin$).
 
-Now the conversion rules are visible at a glance. Casting never moves you on the wheel; it only swaps the labels, and the labels of the upper half differ by exactly $2^w$. Positions in the lower half (`0xxx`) carry the same label in both readings, which is why small nonnegative numbers are unaffected by casts. And a comparison such as `-1 < 0U` goes wrong because the unsigned labels place `111...1` at the *far end* of the wheel from `000...0`, not just before it.
+Now the conversion rules are visible at a glance. Casting never moves you on the wheel; it only swaps the labels, and the labels of the upper half differ by exactly $2^w$. Positions in the lower half (`0xxx`) carry the same label in both readings, which is why small nonnegative numbers are unaffected by casts. And a comparison such as `-1 < 0U` goes wrong because the unsigned labels place `111...1` at the *far end* of the wheel from `000...0`, not immediately before it.
 
 Try it with $w = 3$: the patterns `000`–`111` read 0, 1, 2, 3, 4, 5, 6, 7 unsigned and 0, 1, 2, 3, −4, −3, −2, −1 signed. Pattern `110` is 6 or −2, and $6 - (-2) = 8 = 2^3$. The same wheel will explain overflow in the next lesson: crossing a seam is exactly what overflow means.
 
@@ -231,6 +258,20 @@ for u in range(1 << w):
 - Casting between signed and unsigned keeps the bits: $T2U_w(x) = x + 2^w$ for $x<0$.
 - Mixed signed/unsigned expressions are evaluated as unsigned, which breaks comparisons.
 - Widen with zero extension (unsigned) or sign extension (signed); narrow by truncating high bits.
+
+## Glossary
+
+- **Unsigned integer**: a whole number stored so that it can only be zero or positive.
+- **Signed integer**: a whole number stored so that it can be negative, zero or positive.
+- **Two's complement**: the standard way of storing signed integers, in which the top bit carries a negative weight.
+- **Sign bit**: the highest bit of a signed integer; 1 means the number is negative.
+- **Word size *w***: the number of bits used to store the number.
+- **UMax / TMax / TMin**: the largest unsigned value / the largest signed value / the most negative signed value for a given width.
+- **Cast**: an instruction in C to treat a value as a different type.
+- **Implicit conversion**: a type change the compiler performs without being asked, for example when signed and unsigned values meet in one expression.
+- **Sign extension**: widening a signed number by copying its sign bit into the new upper bits.
+- **Zero extension**: widening an unsigned number by adding zeros on the left.
+- **Truncation**: narrowing a number by dropping its upper bits.
 
 ## Check yourself
 

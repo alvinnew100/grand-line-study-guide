@@ -32,6 +32,15 @@ for rate in (0.00, 0.01, 0.03, 0.10, 0.25, 1.00):
 print("3% vs 1% misses:", round(average_cycles(0.03) / average_cycles(0.01), 2), "times slower")
 ```
 
+<!-- walkthrough:python-run -->
+**Reading this Python line by line**
+
+- `def average_cycles(miss_rate, hit_time=4, penalty=200):` defines a function. The first input is the fraction of accesses that miss; the other two have default values of 4 and 200 cycles.
+- `return hit_time + miss_rate * penalty` is the average cost of one access: every access pays the hit time, and the fraction that miss pay the penalty as well.
+- The `for rate in (...)` loop tries six miss rates. `{rate:5.0%}` prints the fraction as a percentage.
+- The last line divides the cost at 3% misses by the cost at 1% misses.
+- Output: 4 cycles with no misses, 6 at 1%, 10 at 3%, up to 204 when everything misses. A change of two percentage points makes memory access 1.67 times slower.
+
 ### The design trade-offs behind those numbers
 
 Every cache parameter is a compromise, which is why real machines have several levels with different characteristics.
@@ -76,6 +85,15 @@ long by_rows(void) {                     long by_cols(void) {
     return s;                                return s;
 }                                        }
 ```
+
+<!-- walkthrough:c -->
+**Reading this C line by line**
+
+- `#define N 2048` tells the preprocessor to replace the name `N` with 2048 everywhere.
+- `long grid[N][N];` declares a table of 2048 rows and 2048 columns of 8-byte whole numbers, about 32 megabytes.
+- Two functions are shown side by side. In `by_rows`, the outer loop `for (int i ...)` picks a row and the inner loop `for (int j ...)` walks along it. `s += grid[i][j];` adds the element in row `i`, column `j` to the total.
+- In `by_cols` the two loops are swapped: the outer loop picks a column and the inner loop moves down it.
+- Both visit every element exactly once and return the same total. They differ only in the order of visiting, which is the subject of the paragraph that follows.
 
 C stores `grid` row after row. `by_rows` therefore visits memory with stride 1 and misses once per eight elements. `by_cols` moves down a column, so consecutive accesses are a whole row, 16 KB, apart. If the array is larger than the cache, every access lands in a block that is no longer cached: a miss rate of 100%, eight times worse.
 

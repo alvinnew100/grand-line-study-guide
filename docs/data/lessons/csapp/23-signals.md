@@ -87,6 +87,15 @@ blocked = False; maybe_deliver()
 print("3 signals sent, handler ran", handled, "times")
 ```
 
+<!-- walkthrough:python-run -->
+**Reading this Python line by line**
+
+- `pending = set()` creates an empty set; a set can hold each item only once, which is what models "one pending bit per signal type".
+- `handled = 0` counts how many times the handler has run, and `blocked = False` records whether the signal is currently held back.
+- `def send(sig):` models sending. It prints whether the signal was already pending, then adds it to the set; adding an item that is already present changes nothing, so a repeat is lost.
+- `def maybe_deliver():` models delivery. If the signal is pending and not blocked it is removed from the set, the counter goes up, and `blocked` becomes `True` because a signal type is held back while its own handler runs.
+- The script then sends three signals, the second and third arriving while the handler is busy. The final line reports that the handler ran twice for three signals.
+
 ## 3. Sending signals
 
 ### Process groups
@@ -105,6 +114,12 @@ Shells use groups to implement **jobs**. Each command line (which may be a pipel
 #include <signal.h>
 int kill(pid_t pid, int sig);
 ```
+
+<!-- walkthrough:c -->
+**Reading this C line by line**
+
+- `#include <signal.h>` brings in the declarations for signals.
+- `int kill(pid_t pid, int sig);` is the signature of the function that sends a signal. Despite its name it sends any signal, not only fatal ones. `pid` says which process (or group) is to receive it, `sig` is the signal's number, and the returned `int` is 0 on success and −1 on failure.
 
 If `pid` is positive, the signal goes to that process; if zero, to every process in the caller's group; if negative, to every process in group `|pid|`.
 

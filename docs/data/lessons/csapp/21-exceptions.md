@@ -54,6 +54,15 @@ for number, ctx in ((14, {}), (128, {"rax": 1}), (0, {}), (32, {})):
     print(f"exception {number:3} -> {handler.__name__:13} -> {handler(ctx)}")
 ```
 
+<!-- walkthrough:python-run -->
+**Reading this Python line by line**
+
+- The four `def` lines define four small functions, one per kind of event. Each takes one input, `ctx`, and returns text describing what the kernel would do.
+- `exception_table = {0: divide_error, 14: page_fault, ...}` is a dictionary from an exception number to the function that handles it. The functions themselves are stored, not called.
+- `for number, ctx in (...)` goes through four sample events, each a number with a small dictionary of register values.
+- `handler = exception_table[number]` looks up the function for that number, and `handler(ctx)` calls it.
+- Output: one line per event with the number, the handler's name and the action. A table lookup followed by an indirect call is the same mechanism the processor uses.
+
 ### How it differs from a function call
 
 An exception resembles a procedure call, with some important differences:
@@ -160,6 +169,16 @@ _start:
         syscall
 ```
 
+<!-- walkthrough:asm -->
+**Reading this assembly line by line**
+
+- `.section .rodata` and `.text` are instructions to the assembler: the lines after them go in the read-only data area and the code area respectively.
+- `msg: .ascii "exceptional\n"` stores the twelve bytes of the message and names their address `msg`.
+- `.globl _start` and `_start:` mark the place where the program begins.
+- `movq $1, %rax` puts 1 in `%rax`: the number of the `write` system call. `movq $1, %rdi` is its first argument, descriptor 1, the screen.
+- `leaq msg(%rip), %rsi` puts the address of the message in `%rsi`, and `movq $12, %rdx` puts its length in `%rdx`.
+- `syscall` hands control to the kernel, which writes the bytes. The last three lines request system call 60, `_exit`, with status 0, which ends the program.
+
 Python's `os` module provides thin wrappers over the same calls, so we can exercise the mechanism directly.
 
 ```python-run
@@ -187,6 +206,14 @@ if (pid < 0) {
     exit(1);
 }
 ```
+
+<!-- walkthrough:c -->
+**Reading this C line by line**
+
+- `pid_t pid = fork();` calls the system function `fork` and stores what it returns in a variable named `pid`. `pid_t` is the type used for process numbers.
+- `if (pid < 0) { ... }` checks for failure: system functions conventionally return a negative value when they could not do what was asked.
+- `fprintf(stderr, "fork failed: %s\n", strerror(errno));` prints a message on the error output. `errno` holds a number saying why the call failed, `strerror` converts it to readable text, and `%s` marks where that text is inserted.
+- `exit(1);` ends the program, reporting status 1 to signal that something went wrong.
 
 Because that pattern bloats code, many projects define a thin wrapper per call that performs the check and terminates with a message on failure, so the main logic stays readable. For teaching code that is ideal; for production code you usually want to handle specific errors rather than exit.
 

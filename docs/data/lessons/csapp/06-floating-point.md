@@ -1,5 +1,15 @@
 # IEEE-754 floating point
 
+> **Before this lesson:** You need binary numbers and bit fields from [Bits, bytes, words and bit-level operations](#/lesson/csapp/bits-bytes) and fixed-width integers from [Unsigned and two’s-complement integers](#/lesson/csapp/integers). Scientific notation from school (such as 6.02 × 10²³) is the only mathematics used.
+
+## In plain words
+
+Computers also need numbers with a fractional part, such as 3.14 or 0.001, and very large ones such as the distance to a star. They store these in **floating point**, which is scientific notation in base 2: a sign, some significant digits, and a power of two saying where the point goes. Because the number of digits is fixed, most values cannot be stored exactly. A pocket calculator shows the same effect in base 10: one third appears as 0.3333333, and multiplying that by three gives 0.9999999, not 1. In binary, even the innocent-looking 0.1 has no exact form, so tiny errors appear in everyday sums.
+
+Why this matters at work: this is why 0.1 + 0.2 is not exactly 0.3 in almost every programming language, why money should not be kept in floating-point variables, and why long calculations can drift. Understanding the format tells you when results can be trusted and how to compare them safely. It is one of the most common "why does my program print that?" questions.
+
+## Why look closer
+
 A floating-point representation encodes rational numbers of the form $V = x \times 2^y$. It lets a program work with very large numbers ($1.8 \times 10^{308}$), numbers very close to zero ($4.9 \times 10^{-324}$ as a `double`), and everything in between, approximately. Before 1985 every manufacturer had its own format, with its own rounding quirks. **IEEE Standard 754**, driven largely by William Kahan, fixed that, and today virtually every computer implements it. This lesson explains how the format works, why it is designed the way it is, how rounding works, and which mathematical laws it breaks.
 
 ## 1. Fractional binary numbers
@@ -8,9 +18,9 @@ Decimal notation $d_m \dots d_1 d_0 . d_{-1} d_{-2} \dots d_{-n}$ means $\sum d_
 
 $$b = \sum_{i=-n}^{m} 2^i \, b_i$$
 
-So $101.11_2 = 4 + 0 + 1 + \tfrac12 + \tfrac14 = 5\tfrac34$. Shifting the binary point left divides by 2; shifting right multiplies by 2. A number of the form $0.11\dots1_2$ is just below 1, written $1.0 - \epsilon$.
+So $101.11_2 = 4 + 0 + 1 + \tfrac12 + \tfrac14 = 5\tfrac34$. Shifting the binary point left divides by 2; shifting right multiplies by 2. A number of the form $0.11\dots1_2$ is below 1, written $1.0 - \epsilon$.
 
-**The catch:** only numbers of the form $x \times 2^y$ can be represented exactly. $1/5$ in binary is $0.0011\,0011\,0011\dots_2$, repeating forever, just as $1/3$ repeats in decimal. So `0.1` in a program is always an approximation.
+**The catch:** only numbers of the form $x \times 2^y$ can be represented exactly. $1/5$ in binary is $0.0011\,0011\,0011\dots_2$, repeating forever, in the same way as $1/3$ repeats in decimal. So `0.1` in a program is always an approximation.
 
 ```python-run
 from fractions import Fraction
@@ -18,6 +28,14 @@ print(Fraction(0.1))                 # the exact value stored for 0.1 (a double)
 print(f"{0.1:.25f}")
 print(0.1 + 0.2 == 0.3, 0.1 + 0.2)
 ```
+
+<!-- walkthrough:python-run -->
+**Reading this Python line by line**
+
+- `from fractions import Fraction` loads a tool that represents numbers as exact fractions.
+- `print(Fraction(0.1))` shows the exact value the computer stored when you wrote `0.1`. It is a fraction whose bottom part is a power of two, very close to one tenth but not equal to it.
+- `print(f"{0.1:.25f}")` prints the same stored value with 25 digits after the point, so the small error becomes visible around the 18th digit.
+- `print(0.1 + 0.2 == 0.3, 0.1 + 0.2)` tests whether the sum equals 0.3. It prints `False` and `0.30000000000000004`, because the tiny errors in the three stored values do not cancel.
 
 > [!NOTE]
 > The book's Patriot-missile aside: during the 1991 Gulf War, a Patriot battery counted time in tenths of a second and converted ticks to seconds by multiplying by 0.1 truncated to 23 bits after the binary point. The per-tick error is about $9.5 \times 10^{-8}$ s; after roughly 100 hours (3.6 million ticks) it accumulated to about 0.34 s, enough for a Scud traveling ~2,000 m/s to be ~690 m from where the system predicted (Practice Problem 2.46 has you derive these numbers). An incoming Scud was not intercepted, and 28 soldiers were killed.
@@ -220,6 +238,21 @@ So `(int) 1e10` gives −2147483648 on x86-64.
 - Default rounding is round-to-nearest-even; it avoids statistical bias.
 - Float operations = exact result then round. Commutative and monotonic, but not associative or distributive.
 - Float→int truncates toward zero; out-of-range conversions are undefined in C (TMin on x86).
+
+## Glossary
+
+- **Floating point**: a way of storing numbers as significant digits together with a power of two.
+- **IEEE 754**: the international standard that defines the floating-point formats nearly all computers use.
+- **Sign, exponent, fraction**: the three bit fields of a floating-point number.
+- **Significand (mantissa)**: the significant digits of the number.
+- **Bias**: a fixed amount added to the exponent so that it can be stored as an unsigned field.
+- **Normalized value**: the usual form, in which the significand has an implied leading 1.
+- **Denormalized value**: the special form for numbers extremely close to zero, with an implied leading 0.
+- **Infinity / NaN**: special values for results that are too large / not a number, such as zero divided by zero.
+- **Single / double precision**: the 32-bit / 64-bit formats, called `float` and `double` in C.
+- **Rounding**: choosing the nearest value that can be stored when the exact result cannot.
+- **Round-to-even**: the default rounding rule, which sends exact ties to the neighbour whose last digit is even.
+- **Associativity**: the property that grouping does not change a result; floating-point addition lacks it.
 
 ## Check yourself
 

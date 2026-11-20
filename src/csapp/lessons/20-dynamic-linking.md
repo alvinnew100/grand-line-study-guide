@@ -51,6 +51,15 @@ for s in segments:
     print(f"     alignment rule holds: {ok}; zero-filled bytes beyond the file contents (.bss): {bss}")
 ```
 
+<!-- walkthrough:python-run -->
+**Reading this Python line by line**
+
+- `segments = [...]` is a list of two records made with `dict(...)`. Each has a name, permissions, an offset in the file, an address in memory, a size in the file, a size in memory and an alignment.
+- `for s in segments:` takes each record in turn; `s["vaddr"]` reads one field.
+- `ok = s["vaddr"] % s["align"] == s["off"] % s["align"]` checks the alignment rule. `%` gives the remainder after division.
+- `bss = s["memsz"] - s["filesz"]` is how many bytes exist in memory but not in the file.
+- The output shows each segment's byte range in the file and in memory. For the data segment the difference is `0x38`, which is 56 bytes of zero-filled space.
+
 ## 2. Loading: from file to running process
 
 When you run `./prog`, the shell forks a child, and the child calls `execve`. That invokes the kernel's **loader**, which replaces the process's memory image with one built from the file and then jumps to the entry point. The process of bringing the program into memory and starting it is called **loading**.
@@ -98,6 +107,15 @@ int factor = 3;                       #include <stdio.h>
 int scale(int x) { return x * factor; }   int scale(int);
                                       int main(void) { printf("%d\n", scale(14)); return 0; }
 ```
+
+<!-- walkthrough:c -->
+**Reading this C line by line**
+
+- Two files are shown side by side. On the left, `scale.c`: `int factor = 3;` creates a global whole number, and `int scale(int x) { return x * factor; }` defines a function that multiplies its input by it.
+- On the right, `app.c`: `#include <stdio.h>` brings in the declaration of `printf`.
+- `int scale(int);` announces that a function named `scale` exists somewhere, without defining it.
+- `int main(void) { printf("%d\n", scale(14)); return 0; }` calls `scale` with 14 and prints the result. `%d` is the placeholder for a whole number. The program prints 42.
+- `scale.c` will be built as a shared library, so `app` must find `scale` when it starts, not when it is built.
 
 ```
 gcc -shared -fpic -o libscale.so scale.c
@@ -180,6 +198,13 @@ Code reaches a global *indirectly*: it loads the pointer from the GOT entry, fou
     movq  factor@GOTPCREL(%rip), %rax    # rax = address of factor, fetched from the GOT
     movl  (%rax), %eax                   # eax = value of factor
 ```
+
+<!-- walkthrough:asm -->
+**Reading this assembly line by line**
+
+- `movq factor@GOTPCREL(%rip), %rax` reads 8 bytes from the global offset table. `%rip` is the address of the current instruction, and `factor@GOTPCREL` stands for the fixed distance from here to the table entry belonging to `factor`. What is loaded is the *address* of `factor`.
+- `movl (%rax), %eax` uses that address: parentheses mean "the memory at this address". The 4-byte value of `factor` is loaded into `%eax`.
+- Two steps are needed, first the address and then the value, because the code does not know where the library holding `factor` was placed until the program is running.
 
 The code contains no absolute addresses, so it is identical in every process and can be shared. The GOT lives in the *data* segment, of which each process has its own private copy, so each process can hold its own addresses there.
 

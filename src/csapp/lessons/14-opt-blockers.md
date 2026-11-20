@@ -45,6 +45,14 @@ void bump_double(long *total, long *step) {
 }
 ```
 
+<!-- walkthrough:c -->
+**Reading this C line by line**
+
+- `void bump_twice(long *total, long *step)` defines a function that returns nothing. Both inputs are pointers, that is, addresses of `long` whole numbers kept elsewhere.
+- `*total += *step;` The star means "the value at this address". The line reads the value at `step`, adds it to the value at `total`, and stores the sum back at `total`. The function does this twice.
+- `bump_double` does what looks like the same job in one statement: `2 * *step` is two times the value at `step` (the first star is multiplication, the second is "value at").
+- If the two addresses are different, both functions add twice the step to the total. The text below shows what changes when both inputs are the same address.
+
 The second is cheaper: three memory references (read `*step`, read `*total`, write `*total`) against six. Why does the compiler not rewrite the first into the second?
 
 Because they are not equivalent. Consider a call in which both arguments are the *same address*, with the value 5 stored there:
@@ -79,6 +87,15 @@ for label, total, step in (("separate locations", 0, 1), ("ALIASED: same locatio
     bump_double(b, total, step)
     print(f"{label:24} bump_twice -> {a[total]:3}   bump_double -> {b[total]:3}   same? {a[total] == b[total]}")
 ```
+
+<!-- walkthrough:python-run -->
+**Reading this Python line by line**
+
+- `def bump_twice(mem, total, step):` models the C function. `mem` is a list standing for memory, and `total` and `step` are positions in it, standing for the two pointers.
+- `mem[total] += mem[step]` reads the item at position `step` and adds it to the item at position `total`.
+- The `for` loop runs two experiments. In the first the positions are 0 and 1 (separate). In the second both are 0 (aliased).
+- `a, b = [5, 5], [5, 5]` creates two fresh copies of memory, one for each function, each holding two fives.
+- The printed line shows the outcomes: 15 and 15 when separate, 20 and 15 when aliased. The two functions are therefore not interchangeable, which is exactly why the compiler may not swap one for the other.
 
 ### Blocker two: function calls
 
@@ -279,6 +296,16 @@ Look at what the loop body in version 3 does to memory. In assembly, with `%rbx`
     cmpq    %rax, %rdx
     jne     .Lloop
 ```
+
+<!-- walkthrough:asm -->
+**Reading this assembly line by line**
+
+- `.Lloop:` is a label, a name for this position in the code so that a jump can come back to it.
+- `vmovsd (%rbx), %xmm0` loads a floating-point number from memory at the address in `%rbx` (where `result` points) into the register `%xmm0`.
+- `vmulsd (%rdx), %xmm0, %xmm0` multiplies `%xmm0` by the number in memory at the address in `%rdx` (the current array element) and puts the product in `%xmm0`.
+- `vmovsd %xmm0, (%rbx)` stores the product back to memory at `result`.
+- `addq $8, %rdx` adds 8 to `%rdx`, moving it on to the next element, since each element is 8 bytes.
+- `cmpq %rax, %rdx` compares that address with the end address held in `%rax`, and `jne .Lloop` jumps back to the label if they are not equal. When they are equal the loop is over.
 
 On every iteration the running product is loaded from memory, updated, and stored back, only to be loaded again at the top of the next iteration. The value written is exactly the value that will be read. That round trip is pure waste, and it also lengthens the chain of dependent operations from one iteration to the next: each multiplication must wait for the previous store and reload.
 

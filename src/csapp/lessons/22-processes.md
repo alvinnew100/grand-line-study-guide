@@ -22,6 +22,14 @@ pid_t getpid(void);     /* my PID */
 pid_t getppid(void);    /* PID of the process that created me */
 ```
 
+<!-- walkthrough:c -->
+**Reading this C line by line**
+
+- `#include <unistd.h>` brings in the declarations of standard Unix functions.
+- `pid_t getpid(void);` is a declaration, not a definition: it tells you the function is named `getpid`, takes no inputs (`void`), and returns a value of type `pid_t`, a whole number used for process IDs.
+- `pid_t getppid(void);` has the same shape and returns the ID of the parent process.
+- Lines of this kind appear throughout the systems lessons. They are the "signature" of a system function: its name, what you pass in and what you get back.
+
 From the programmer's standpoint a process is always in one of three states:
 
 - **Running.** It is either executing on a CPU or waiting in line for the scheduler to give it one.
@@ -88,6 +96,15 @@ print("child  sees counter =", child_memory["counter"])
 print("parent sees counter =", parent_memory["counter"])
 print("possible terminal outputs: child line then parent line, OR parent line then child line")
 ```
+
+<!-- walkthrough:python-run -->
+**Reading this Python line by line**
+
+- `import copy` loads a module that can duplicate data.
+- `parent_memory = {"counter": 10}` models the parent's memory as a dictionary with one variable.
+- `child_memory = copy.deepcopy(parent_memory)` makes a completely separate duplicate, which is what `fork` gives the child.
+- `child_memory["counter"] += 5` changes the child's copy only. `parent_memory["counter"] -= 5` changes the parent's copy only.
+- The output shows 15 for the child and 5 for the parent. The last line is a reminder that on a real system the two lines could appear in either order.
 
 ### Process graphs
 

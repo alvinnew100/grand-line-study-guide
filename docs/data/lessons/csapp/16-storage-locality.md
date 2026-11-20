@@ -115,6 +115,16 @@ capacity = 512 * 1000 * 50_000 * 2 * 4       # bytes/sector * sectors/track * tr
 print(f"4 platters, 50,000 tracks, 1,000 sectors/track: {capacity / 1e9:.1f} GB = {capacity / 2**30:.1f} GiB")
 ```
 
+<!-- walkthrough:python-run -->
+**Reading this Python line by line**
+
+- `def disk_access_ms(rpm, avg_seek_ms, sectors_per_track):` defines a function with three inputs: rotation speed in revolutions per minute, average seek time in milliseconds, and the number of sectors on a track.
+- `rev = 60_000 / rpm` is the time for one full turn in milliseconds (a minute has 60,000 of them). Underscores in numbers are only for readability.
+- `rotation = rev / 2` is the average wait, half a turn. `transfer = rev / sectors_per_track` is the time for one sector to pass under the head.
+- `return` hands back the three parts and their sum together.
+- `seek, rot, xfer, total = disk_access_ms(10_000, 4, 800)` calls the function and gives names to the four results.
+- The `print` lines show 4 + 3 + 0.0075 ≈ 7.0075 ms, then that positioning is 99.9% of it, and the comparison with memory.
+
 Three conclusions are worth remembering:
 
 - Access time is dominated by seek and rotation. The time to reach the *first* byte is long; the remaining bytes of the sector are nearly free.
@@ -215,6 +225,15 @@ long sum_vec(const int v[], int n) {
     return sum;
 }
 ```
+
+<!-- walkthrough:c -->
+**Reading this C line by line**
+
+- `long sum_vec(const int v[], int n)` defines a function that returns a whole number. `v` is an array of `int`s that the function promises not to change, and `n` is how many elements it has.
+- `long sum = 0;` creates the running total.
+- `for (int i = 0; i < n; i++)` repeats the next line with `i` equal to 0, 1, 2, up to `n − 1`.
+- `sum += v[i];` adds element number `i` to the total. Elements are stored next to each other in memory, so successive rounds read neighbouring locations.
+- `return sum;` hands back the total.
 
 - `sum` and `i` are referenced on every iteration: excellent temporal locality. (Being scalars, they have no spatial locality to speak of, and the compiler will keep them in registers anyway.)
 - The elements of `v` are read one after another in the order they are stored. Each is visited once, so there is no temporal locality, but the spatial locality is excellent.

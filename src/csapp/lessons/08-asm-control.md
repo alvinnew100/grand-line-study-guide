@@ -25,6 +25,13 @@ leaq 16(%rdi), %rax            # rax = rdi + 16
 leaq (%rdi,%rsi,4), %rax       # rax = rdi + 4*rsi
 ```
 
+<!-- walkthrough:asm -->
+**Reading this assembly line by line**
+
+- `leaq 16(%rdi), %rax`: the operand `16(%rdi)` would normally mean "the memory located 16 bytes past the address in `%rdi`". With `leaq` no memory is read. The address itself, the number `%rdi + 16`, is placed in `%rax`.
+- `leaq (%rdi,%rsi,4), %rax`: inside the parentheses are a base register, an index register and a multiplier. The address expression is base + index × 4, so `%rax` receives `%rdi + 4 * %rsi`.
+- In both lines the instruction is being used as a calculator: an addition, optionally with a multiplication by 1, 2, 4 or 8, done in one step.
+
 Its honest use is taking addresses, as in `&a[i]` or `&p->field`. Its popular use is compact arithmetic. The addressing form can add two registers, scale one of them by 1, 2, 4 or 8 and add a constant, all in one instruction, and it can deposit the result in a register different from either input, which ordinary two-operand instructions cannot.
 
 ```c
@@ -32,6 +39,13 @@ long blend(long a, long b, long c) {
     return a + 4 * b + 12 * c;
 }
 ```
+
+<!-- walkthrough:c -->
+**Reading this C line by line**
+
+- `long blend(long a, long b, long c)` defines a function with three whole-number inputs that returns a whole number.
+- `return a + 4 * b + 12 * c;` computes the expression and hands back the result. As in ordinary arithmetic, multiplication is done before addition.
+- The assembly beneath shows how a compiler computes this with three `leaq` instructions and no multiply instruction. The inputs arrive in the registers `%rdi`, `%rsi` and `%rdx`, in that order, and the answer is left in `%rax`.
 
 ```asm
 blend:
@@ -57,6 +71,15 @@ print("leaq result:", rax, "| direct:", a + 4 * b + 12 * c)
 for k, (base, scale) in {3: (1, 2), 5: (1, 4), 9: (1, 8)}.items():
     print(f"x*{k} = leaq (x,x,{scale})  ->  {lea(base=6, index=6, scale=scale)} for x = 6")
 ```
+
+<!-- walkthrough:python-run -->
+**Reading this Python line by line**
+
+- `def lea(disp=0, base=0, index=0, scale=1):` defines a function with four named inputs, each with a default value used when the caller leaves it out.
+- `assert scale in (1, 2, 4, 8)` stops the program with an error if the multiplier is not one the processor allows.
+- `return disp + base + index * scale` is the address formula.
+- The three calls that follow repeat the three assembly instructions with `a, b, c = 7, 10, 3`: first `a + 4b` = 47, then `3c` = 9, then 47 + 4 × 9 = 83.
+- The `print` shows 83 twice: once from the `leaq` steps and once from computing `a + 4*b + 12*c` directly, confirming they agree.
 
 ### The ordinary operations
 

@@ -1,10 +1,20 @@
 # Integer arithmetic and overflow
 
+> **Before this lesson:** You need unsigned and two's-complement numbers, with their ranges, from [Unsigned and two’s-complement integers](#/lesson/csapp/integers), and shifts from [Bits, bytes, words and bit-level operations](#/lesson/csapp/bits-bytes).
+
+## In plain words
+
+When you add or multiply numbers on paper, the answer can be as long as it needs to be. Inside a computer the answer must fit in the same fixed number of bits as the inputs, and whatever does not fit is thrown away. That event is called **overflow**. A clock is the everyday model: 9 o'clock plus 5 hours is 2 o'clock, not 14, because the dial only goes to 12. Computer arithmetic works the same way with a much bigger dial. The results are entirely predictable once you know the rule, and this lesson gives the rule for addition, negation, multiplication and division by powers of two.
+
+Why this matters at work: overflow has caused real disasters, from crashed rockets to money calculated wrongly, and it is behind many security flaws in which a size calculation wraps round to a small number. Being able to say exactly when an operation overflows, and how to test for it safely, is a practical skill and a frequent interview subject.
+
+## Why look closer
+
 Many beginners are surprised that adding two positive numbers can produce a negative one, or that `x < y` and `x - y < 0` can disagree. These are not bugs in the computer: they follow from the fact that computer arithmetic works on **finite** bit vectors. Integer arithmetic on $w$ bits is really **modular arithmetic**, and once you see it that way, every "weird" result becomes predictable. This lesson derives the rules for addition, negation, multiplication and division by powers of two, for both unsigned and two's-complement numbers.
 
 ## 1. Unsigned addition
 
-Two $w$-bit unsigned numbers $0 \le x, y < 2^w$ have a true sum in $[0, 2^{w+1}-2]$, which may need $w+1$ bits. C (and the hardware) simply **discards the carry out**, i.e., keeps the sum modulo $2^w$:
+Two $w$-bit unsigned numbers $0 \le x, y < 2^w$ have a true sum in $[0, 2^{w+1}-2]$, which may need $w+1$ bits. C (and the hardware) **discards the carry out**, i.e., keeps the sum modulo $2^w$:
 
 $$x +^u_w y = \begin{cases} x + y, & x + y < 2^w \quad\text{(normal)}\\ x + y - 2^w, & 2^w \le x + y < 2^{w+1} \quad\text{(overflow)}\end{cases}$$
 
@@ -19,6 +29,14 @@ int uadd_ok(unsigned x, unsigned y) {
     return sum >= x;
 }
 ```
+
+<!-- walkthrough:c -->
+**Reading this C line by line**
+
+- The text between `/*` and `*/` is a comment for the reader.
+- `int uadd_ok(unsigned x, unsigned y)` defines a function taking two non-negative whole numbers and returning an `int` used as a yes/no answer (1 for yes, 0 for no).
+- `unsigned sum = x + y;` adds them. If the true sum is too large for the type, the stored value has wrapped round and is smaller than expected.
+- `return sum >= x;` compares. If no wrap happened, adding `y` cannot have made the result smaller than `x`, so the comparison is true and gives 1. If a wrap happened, the result is smaller than `x`, the comparison is false, and the function gives 0.
 
 **Unsigned negation.** Every element has an additive inverse modulo $2^w$: $-^u_w x$ is $0$ if $x=0$, else $2^w - x$.
 
@@ -71,6 +89,15 @@ for x, y in [(-8, -5), (-8, -8), (-8, 5), (2, 5), (5, 5)]:
     print(f"{x:3} + {y:3} ->", tadd(x, y, 4))
 print("INT_MAX + 1 =", tadd(2**31 - 1, 1, 32))
 ```
+
+<!-- walkthrough:python-run -->
+**Reading this Python line by line**
+
+- `def tadd(x, y, w):` models adding two signed numbers that are stored in `w` bits.
+- `(x + y) & ((1 << w) - 1)` adds exactly, then keeps only the lowest `w` bits. `(1 << w) - 1` is a row of `w` ones, used as a mask.
+- `if s >> (w - 1):` checks the top bit of the result. If it is 1 the pattern stands for a negative number, so `s -= 1 << w` subtracts 2ʷ to get its signed value.
+- The `if / elif / else` chain names the outcome: two non-negative inputs with a negative result is positive overflow; two negative inputs with a non-negative result is negative overflow; anything else is fine.
+- The loop tries several pairs with `w = 4`, where the range is −8 to 7. For instance 5 + 5 prints −6 with "positive overflow".
 
 ## 3. Two's-complement negation
 
@@ -189,6 +216,19 @@ print("1:", check(lambda x, y: (x < y) == (wrap(-x) > wrap(-y))))
 print("2:", check(lambda x, y: wrap(wrap((x + y) << 4) + y - x) == wrap(17*y + 15*x)))
 print("3:", check(lambda x, y: wrap(~x + ~y + 1) == wrap(~(x + y))))
 ```
+
+## Glossary
+
+- **Overflow**: what happens when a result needs more bits than are available and the extra bits are lost.
+- **Modular arithmetic**: arithmetic that wraps round at a fixed value, like hours on a clock.
+- **Unsigned addition**: addition of non-negative numbers in which a result too large wraps round to a small one.
+- **Two's-complement addition**: addition of signed numbers; it can overflow in the positive or the negative direction.
+- **Positive / negative overflow**: a sum of two positive numbers appearing negative / a sum of two negative numbers appearing non-negative.
+- **Additive inverse**: the value that gives zero when added to a number; the machine's version of negation.
+- **Truncation**: keeping only the low bits of a result.
+- **Arithmetic right shift**: a shift to the right that copies the sign bit, used to divide signed numbers by powers of two.
+- **Bias**: a small amount added before a shift so that division of a negative number rounds toward zero.
+- **Undefined behaviour**: a situation for which the C language makes no promise about what the program does.
 
 ## Check yourself
 

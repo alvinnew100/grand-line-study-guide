@@ -1,5 +1,15 @@
 # Synchronization with semaphores
 
+> **Before this lesson:** You need threads and what they share from [Three ways to build concurrent servers](#/lesson/csapp/concurrency-models). The idea that one line of C can become several machine instructions comes from [x86-64 basics: registers, operands, mov](#/lesson/csapp/asm-basics).
+
+## In plain words
+
+A **thread** is one line of execution within a program, and a program may have several working in overlapping time on the same data. When two of them change the same piece of data at once, the result can be wrong. Imagine two people editing the same line of a shared shopping list at the same moment: each reads "3 apples", each adds one, and each writes "4 apples", although five were intended. One update has been lost. The cure is a rule that only one person may edit at a time. A **semaphore** is a simple device for enforcing rules of that kind. It behaves like a bowl holding a fixed number of tokens: you must take a token before you proceed, and you wait if the bowl is empty.
+
+Why this matters at work: lost updates and similar faults appear only occasionally and are very hard to reproduce, so they are costly when they reach customers. Semaphores and their close relative the mutex are the standard tools for preventing them, and they also coordinate producers and consumers of work in every server and data pipeline. Synchronisation is among the most frequently examined interview topics.
+
+## Why look closer
+
 Shared variables are what make threads convenient, and also what makes them dangerous. Two threads that update the same variable without coordination can silently produce wrong answers, and the bug may appear once in a thousand runs. This lesson dissects the classic example (a shared counter that comes out too small), introduces a visual tool for reasoning about interleavings (the progress graph), and then presents the semaphore, Dijkstra's simple and general synchronization primitive. With semaphores we build mutual exclusion, a bounded buffer for producers and consumers, a readers-writers lock, and finally a server that uses a pool of pre-created threads.
 
 ## 1. A program that counts badly
@@ -17,7 +27,17 @@ void *worker(void *vargp) {
 }
 ```
 
-With a million iterations per thread you would expect 2,000,000. On a multi-core machine the program typically prints something smaller, and a different number on each run: 1,445,085 one time, 1,915,220 the next. Nothing crashes. The answer is simply wrong.
+<!-- walkthrough:c -->
+**Reading this C line by line**
+
+- `volatile long cnt = 0;` creates a global counter that every thread can see. `volatile` tells the compiler to read and write it in memory each time, not to keep a private copy in a register.
+- `void *worker(void *vargp)` defines the function each thread runs. Thread functions take one address of any type (`void *`) and return one.
+- `long n = *(long *)vargp;` treats that address as the address of a `long` and reads the number stored there: how many times to count.
+- `for (long i = 0; i < n; i++) cnt++;` adds one to the shared counter `n` times. `cnt++` looks like a single action, but the machine performs three: read the counter, add one, write it back.
+- `return NULL;` ends the thread with no result.
+- When two threads run this at once, their three-step sequences can interleave, and some additions are lost.
+
+With a million iterations per thread you would expect 2,000,000. On a multi-core machine the program typically prints something smaller, and a different number on each run: 1,445,085 one time, 1,915,220 the next. Nothing crashes. The answer is wrong.
 
 ### Why: one C statement, three machine steps
 
@@ -67,6 +87,15 @@ for pos in combinations(range(6), 3):               # positions taken by thread 
 print(bad, "of 20 interleavings lose an update")
 ```
 
+<!-- walkthrough:python-run -->
+**Reading this Python line by line**
+
+- `def run(schedule):` replays a given ordering of steps. `cnt` is the shared counter and `reg` holds each thread's private register.
+- `for thread, step in schedule:` takes the steps in order. `"L"` (load) copies the counter into that thread's register. `"U"` (update) adds one to the register. `"S"` (store) copies the register back to the counter.
+- `return cnt` gives the final value of the counter.
+- `safe = [...]` is an ordering in which thread 1 completes all three of its steps before thread 2 begins. The result is 2, as intended.
+- The orderings tried after it mix the two threads' steps. Whenever both threads load before either stores, the result is 1: one increment has been lost.
+
 Only the two fully sequential orders give 2. The coding problem `csapp-race-outcomes` generalizes this: for several iterations per thread, which final values are possible?
 
 ## 2. Progress graphs
@@ -78,7 +107,7 @@ A **progress graph** turns the execution of $n$ concurrent threads into a path t
 - Executing one instruction of thread 1 is a step **right**; one instruction of thread 2 is a step **up**. Two instructions never execute at exactly the same instant in this model, so there are no diagonal steps, and programs never run backward, so no steps left or down.
 - A complete execution is a **trajectory**: a monotone staircase path from the origin to the top-right corner.
 
-Now mark the instructions that manipulate the shared variable. For thread $i$, the sequence $(L_i, U_i, S_i)$ is its **critical section** with respect to `cnt`: a stretch of code that must not be interleaved with the other thread's critical section. The states in which *both* threads are inside their critical sections form a rectangle in the middle of the graph called the **unsafe region**. (Its border is not part of it: a state where one thread has just finished $S$ is fine.)
+Now mark the instructions that manipulate the shared variable. For thread $i$, the sequence $(L_i, U_i, S_i)$ is its **critical section** with respect to `cnt`: a stretch of code that must not be interleaved with the other thread's critical section. The states in which *both* threads are inside their critical sections form a rectangle in the middle of the graph called the **unsafe region**. (Its border is not part of it: a state where one thread has finished $S$ is fine.)
 
 ```
  Thread 2
@@ -126,7 +155,7 @@ for (long i = 0; i < n; i++) {
 
 A semaphore used this way always has the value 0 or 1, so it is called a **binary semaphore**. A binary semaphore whose purpose is mutual exclusion is a **mutex**; performing P on it is *locking* the mutex, and performing V is *unlocking* it. A thread that has locked a mutex but not yet unlocked it is *holding* the mutex. A semaphore used as a counter for a set of available resources is a **counting semaphore**.
 
-Why does this work? Look at the progress graph again and label each state with the value `mutex` would have there. Initially it is 1. Any state reached after exactly one thread has done its P has value 0. A state inside the old unsafe region would require *both* threads to have completed P without an intervening V: the value would be −1. The semaphore invariant says that cannot happen. So the P and V operations surround the unsafe region with a **forbidden region** of states that no trajectory can enter. Whatever the scheduler does, a thread arriving at P while the other is inside simply waits.
+Why does this work? Look at the progress graph again and label each state with the value `mutex` would have there. Initially it is 1. Any state reached after exactly one thread has done its P has value 0. A state inside the old unsafe region would require *both* threads to have completed P without an intervening V: the value would be −1. The semaphore invariant says that cannot happen. So the P and V operations surround the unsafe region with a **forbidden region** of states that no trajectory can enter. Whatever the scheduler does, a thread arriving at P while the other is inside waits.
 
 With the P/V pair in place, the counting program prints the right answer every time.
 
@@ -260,7 +289,7 @@ reader:                           writer:
     V(mutex)
 ```
 
-Only the **first** reader to enter locks `w`, and only the **last** reader to leave unlocks it. In between, further readers come and go freely, while a writer blocks in `P(w)`. A writer simply holds `w` for the duration of its update, which keeps out both other writers and the first reader (and therefore all readers).
+Only the **first** reader to enter locks `w`, and only the **last** reader to leave unlocks it. In between, further readers come and go freely, while a writer blocks in `P(w)`. A writer holds `w` for the duration of its update, which keeps out both other writers and the first reader (and therefore all readers).
 
 The price: **starvation**. A thread starves if it blocks indefinitely and never makes progress. In this solution a steady stream of readers keeps `readcnt` above zero forever, and a writer may wait without bound. Writer-priority solutions can starve readers instead. Fair solutions exist but are more intricate; many libraries provide ready-made reader-writer locks with documented fairness policies.
 
@@ -289,7 +318,7 @@ If all workers are busy and the buffer fills, the main thread blocks in `insert`
 A small extra illustrates one more technique. Suppose the service routine keeps a global byte counter that all workers update. It needs a mutex, and the mutex must be initialized **exactly once**, no matter which worker runs first. One could initialize it in the main thread, but a self-contained module can use `pthread_once`, which runs a given initialization function the first time any thread calls it and does nothing afterwards. That keeps the module usable without a separate setup call.
 
 > [!NOTE]
-> **Event-driven programs with threads.** I/O multiplexing is not the only way to write an event-driven program. The prethreaded server is event-driven too: the main thread is a state machine with states "waiting for a connection request" and "waiting for a free buffer slot", and each worker alternates between "waiting for an available item" and serving a client. Events are simply the things that P operations wait for.
+> **Event-driven programs with threads.** I/O multiplexing is not the only way to write an event-driven program. The prethreaded server is event-driven too: the main thread is a state machine with states "waiting for a connection request" and "waiting for a free buffer slot", and each worker alternates between "waiting for an available item" and serving a client. Events are the things that P operations wait for.
 
 ## 7. Common pitfalls
 
@@ -318,6 +347,23 @@ A small extra illustrates one more technique. Suppose the service routine keeps 
 - **Producer-consumer**: `mutex`, `slots` (init $n$) and `items` (init 0); take the counting semaphore first.
 - **Readers-writers**: first reader locks `w`, last reader unlocks it; watch for starvation.
 - **Prethreaded server**: accept in one thread, hand descriptors to a worker pool through a bounded buffer.
+
+## Glossary
+
+- **Thread**: a flow of control inside a process that shares the process's memory with other threads.
+- **Shared variable**: a variable that more than one thread reads or writes.
+- **Critical section**: a stretch of code that touches shared data and must not be run by two threads at once.
+- **Race condition**: a bug in which the result depends on the timing of threads.
+- **Atomic**: happening as one indivisible step, with no chance of interruption partway.
+- **Mutual exclusion**: the guarantee that at most one thread is inside a critical section at a time.
+- **Semaphore**: a counter that never goes below zero, with two operations: wait until it is positive then decrease it (P), and increase it (V).
+- **Mutex**: a semaphore or lock used purely for mutual exclusion; it is either held or free.
+- **Progress graph**: a diagram showing all the ways the steps of two threads can interleave.
+- **Producer-consumer problem**: coordinating threads that add items to a shared buffer with threads that remove them.
+- **Bounded buffer**: a queue with a fixed capacity shared between producers and consumers.
+- **Readers-writers problem**: allowing many threads to read shared data together while giving writers exclusive access.
+- **Starvation**: a thread waiting indefinitely because others are always served first.
+- **Thread pool**: a fixed group of worker threads, created in advance, that take tasks from a queue.
 
 ## Check yourself
 

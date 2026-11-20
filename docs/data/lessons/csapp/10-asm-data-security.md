@@ -1,5 +1,15 @@
 # Arrays, structs, alignment and buffer overflows
 
+> **Before this lesson:** You need the stack, return addresses and stack frames from [Procedures and the run-time stack](#/lesson/csapp/asm-procedures), and memory operands of the form `D(base,index,scale)` from [x86-64 basics: registers, operands, mov](#/lesson/csapp/asm-basics).
+
+## In plain words
+
+Programs group data in two basic ways. An **array** is a row of items of the same kind, like a street of identical houses numbered 0, 1, 2 and so on. A **struct** is a bundle of different items kept together, like a form with fields for name, age and address. In memory both are nothing more than bytes placed side by side, and the machine finds an item by adding a distance to a starting address. Nothing in the hardware stops a program from writing past the end of an array into whatever lies next to it. That mistake is a **buffer overflow**: like writing a long name on a form and continuing over the boxes that follow.
+
+Why this matters at work: buffer overflows have been one of the most serious kinds of security weakness for decades, and understanding them is basic professional knowledge. This lesson explains how the problem arises and the defences that compilers and operating systems use. It also explains why the same data can take more memory than you expect, because of padding between fields.
+
+## Why look closer
+
 C aggregates (arrays, structures and unions) turn into nothing more than address arithmetic at the machine level. This lesson shows how the compiler lays them out and accesses them, why it inserts padding, and then uses that knowledge to understand the most notorious class of security bugs: **buffer overflows**, plus the defences modern systems deploy against them. We close with a brief look at how floating-point code differs.
 
 ## 1. Arrays
@@ -69,6 +79,16 @@ struct rec {
     int *p;     // offset 16
 };              // total size 24
 ```
+
+<!-- walkthrough:c -->
+**Reading this C line by line**
+
+- `struct rec { ... };` defines a new type named `struct rec` that bundles several fields. Text after `//` is a comment.
+- `int i;` is a 4-byte whole number placed at the very start, 0 bytes in.
+- `int j;` follows directly, 4 bytes in.
+- `int a[2];` is an array of two `int`s, 8 bytes in all, starting 8 bytes in.
+- `int *p;` is a pointer (an address), which takes 8 bytes on a 64-bit machine. It starts 16 bytes in, giving a total size of 24 bytes.
+- The compiler turns every use of a field into "start address plus that field's distance". For a pointer `r` to such a struct, `r->j` becomes "the 4 bytes at address `r + 4`".
 
 With `r` in `%rdi`, the statement `r->j = r->i;` becomes
 
@@ -151,6 +171,16 @@ print(layout(["ptr", "short", "double", "char", "float", "char", "long", "int"])
 print(layout(["ptr", "double", "long", "float", "int", "short", "char", "char"]))
 ```
 
+<!-- walkthrough:python-run -->
+**Reading this Python line by line**
+
+- `SIZES = {...}` is a dictionary, a lookup table from a type name to its size in bytes.
+- `def layout(fields):` takes a list of type names and works out where the compiler would place each one.
+- `off` is the next free position, `maxa` the largest size seen so far, `offsets` the answers.
+- `off = (off + k - 1) // k * k` rounds `off` up to the next multiple of the field's size `k`. `//` is division that discards the remainder. This rounding is the alignment rule, and the bytes skipped are padding.
+- After the field is placed, `off += k` moves past it.
+- `size = (off + maxa - 1) // maxa * maxa` rounds the total up to a multiple of the largest field, which is why a struct can end with unused bytes.
+
 > [!TIP]
 > Some SSE instructions require 16-byte alignment, which is why `malloc` returns 16-byte-aligned blocks on x86-64 and why the ABI requires `%rsp` to be a multiple of 16 at every `call`.
 
@@ -179,7 +209,7 @@ void echo() {
 }
 ```
 
-Compiled, `echo` allocates 24 bytes (`subq $24, %rsp`) with `buf` at the top of that space; the return address sits just above, at `%rsp + 24`:
+Compiled, `echo` allocates 24 bytes (`subq $24, %rsp`) with `buf` at the top of that space; the return address sits immediately above, at `%rsp + 24`:
 
 | Characters typed | Effect |
 |---|---|
@@ -212,7 +242,7 @@ Modern Linux/gcc systems layer three defences:
 echo:
     subq    $24, %rsp
     movq    %fs:40, %rax        # load canary from read-only, segmented memory
-    movq    %rax, 8(%rsp)       # store it on the stack just above buf
+    movq    %rax, 8(%rsp)       # store it on the stack immediately above buf
     xorl    %eax, %eax          # clear the register
     movq    %rsp, %rdi
     call    gets
@@ -240,7 +270,7 @@ Functions that allocate a variable amount of stack space (for example a local ar
 
 ## 7. Floating-point code in brief
 
-Floating point on x86-64 uses the **AVX2** (and earlier SSE) media registers: 16 registers `%ymm0`–`%ymm15` (256 bits), whose low 128 bits are named `%xmm0`–`%xmm15`. Scalar code uses just the low 32 or 64 bits.
+Floating point on x86-64 uses the **AVX2** (and earlier SSE) media registers: 16 registers `%ymm0`–`%ymm15` (256 bits), whose low 128 bits are named `%xmm0`–`%xmm15`. Scalar code uses only the low 32 or 64 bits.
 
 | Instruction | Effect |
 |---|---|
@@ -265,6 +295,22 @@ Calling conventions: up to 8 floating-point arguments in `%xmm0`–`%xmm7`, retu
 - K-byte primitives are aligned to multiples of K; structs get internal and trailing padding.
 - C lacks bounds checks; stack buffer overflows can overwrite return addresses. Defences: ASLR, canaries, NX, safe APIs.
 - Floating-point code uses XMM registers; arguments in `%xmm0–7`; all caller-saved.
+
+## Glossary
+
+- **Array**: a sequence of items of one type stored one after another.
+- **Index**: an item's position number in an array, starting from 0.
+- **Pointer arithmetic**: adding a number to a pointer, which moves it by that many items, not bytes.
+- **Struct**: a group of named fields, possibly of different types, stored together.
+- **Offset**: the distance in bytes from the start of a struct or array to one of its parts.
+- **Alignment**: the rule that a value of a given size must be placed at an address that is a multiple of that size.
+- **Padding**: unused bytes the compiler inserts to satisfy alignment.
+- **Union**: a type whose fields all share the same storage, so only one is meaningful at a time.
+- **Buffer**: a block of memory set aside to hold data, often input.
+- **Buffer overflow**: writing more data into a buffer than it can hold, so neighbouring memory is changed.
+- **Stack canary**: a secret value placed on the stack that is checked before a function returns, to detect overwriting.
+- **ASLR**: address-space layout randomisation: loading parts of a program at different addresses on each run.
+- **Non-executable stack**: a protection that forbids running instructions located in the stack region.
 
 ## Check yourself
 

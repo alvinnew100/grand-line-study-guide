@@ -104,6 +104,16 @@ int total(void);
 int main(void) { return total() + samples[0]; }
 ```
 
+<!-- walkthrough:c -->
+**Reading this C line by line**
+
+- The first half is the file `stats.c`. `int samples[3] = {4, 8, 15};` creates a global array of three whole numbers, visible to other files.
+- `static int calls;` creates a counter. At this position the word `static` means "usable only inside this file".
+- `int total(void)` defines a function with no inputs that returns a whole number.
+- `static int cache = -1;` Inside a function, `static` has a different meaning: the variable keeps its value from one call to the next, instead of being created afresh each time.
+- `calls++;` adds one to the counter. `if (cache < 0) cache = ...;` computes the sum only on the first call and stores it; `return cache;` hands it back.
+- The second half is `app.c`. `extern int samples[];` says "an array with this name exists in some other file". `int total(void);` announces the function without defining it. `main` uses both, so the linker has to connect the two files.
+
 ```python-run
 # What the symbol tables of the two object files contain (as a tool like readelf would report).
 stats_o = [
@@ -125,6 +135,15 @@ undefined = {s for s, _, _, sect in app_o if sect == "UNDEF"}
 defined = {s for s, _, bind, sect in stats_o if bind == "GLOBAL" and sect != "UNDEF"}
 print("app.o's undefined symbols all satisfied by stats.o:", undefined <= defined)
 ```
+
+<!-- walkthrough:python-run -->
+**Reading this Python line by line**
+
+- `stats_o = [...]` is a list of tuples. Each tuple describes one symbol: its name, its kind (data object or function), whether it is visible to other files, and the section it lives in.
+- `app_o` is the same for the other file; its last two entries have the section `UNDEF`, meaning "used here, defined somewhere else".
+- The first loop prints both tables. `{sym:9}` pads each name to 9 characters so the columns line up.
+- `undefined = {...}` builds the set of names `app.o` still needs. `defined = {...}` builds the set of global names `stats.o` provides.
+- `undefined <= defined` asks whether every needed name is provided. It prints `True`, which is what the linker must establish before it can build the program.
 
 ## 4. Symbol resolution
 

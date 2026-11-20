@@ -67,6 +67,16 @@ used = sum(e - s for s, e, *_ in areas)
 print(f"mapped: {used / 2**20:.1f} MiB out of a {2**47 / 2**40:.0f} TiB user address space")
 ```
 
+<!-- walkthrough:python-run -->
+**Reading this Python line by line**
+
+- `import bisect` loads a module for searching sorted lists quickly.
+- `areas = [...]` lists five areas as tuples: start address, end address, permissions and a description.
+- `starts = [a[0] for a in areas]` collects the start addresses into a list of their own.
+- `def find_area(addr):` finds the area holding an address. `bisect.bisect_right(starts, addr) - 1` gives the position of the last area that starts at or below `addr`. The `if` then checks that the address is also below that area's end. If not, the function returns `None`, meaning "no area".
+- The loop tests four addresses; the third lies in a gap and is reported as being in no area, which on a real system would be a segmentation fault.
+- The last lines add up the sizes: about 2.5 MiB is mapped out of a 128 TiB address space.
+
 ## 2. What the kernel does on a page fault
 
 Suppose the MMU, while translating virtual address *A*, finds no valid mapping and raises a fault. Control jumps to the kernel's page-fault handler, which asks three questions in order.
@@ -214,6 +224,14 @@ Programs can create areas themselves.
 void *mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset);
 int   munmap(void *addr, size_t length);
 ```
+
+<!-- walkthrough:c -->
+**Reading this C line by line**
+
+- `#include <sys/mman.h>` brings in the declarations for memory mapping.
+- `void *mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset);` is the signature of the mapping function. It returns `void *`, an address of no particular type: the start of the new area. The six inputs are a preferred address (usually none), the length in bytes, the permissions, the options, the descriptor of the file to map, and the position in that file to begin at.
+- `int munmap(void *addr, size_t length);` removes a mapping; it returns 0 on success.
+- The paragraphs that follow explain each input in turn.
 
 The call asks the kernel for a new area of `length` bytes, preferably starting at `addr` (pass `NULL` to let the kernel choose, which is nearly always right), backed by `length` bytes of the object open on descriptor `fd` beginning at `offset`. On failure it returns `MAP_FAILED`, which is not the same value as `NULL`.
 

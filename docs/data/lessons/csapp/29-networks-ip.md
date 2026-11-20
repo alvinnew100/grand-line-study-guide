@@ -98,6 +98,16 @@ for src, dst, net in hops:
 print("The inner packet never changed:", f["payload"] is pkt)
 ```
 
+<!-- walkthrough:python-run -->
+**Reading this Python line by line**
+
+- `def packet(src_ip, dst_ip, data):` builds a dictionary standing for an internet packet: two addresses and the data.
+- `def frame(src_mac, dst_mac, pkt):` builds a dictionary standing for a local-network frame, with the whole packet as its payload. One dictionary inside another is the model of encapsulation.
+- `pkt = packet("10.1.0.7", "172.20.5.9", b"x" * 300)` creates one packet with 300 bytes of data; `b"x" * 300` is the byte `x` repeated 300 times.
+- `hops = [...]` lists the three networks crossed, each with the hardware addresses at its two ends.
+- The loop wraps the *same* packet in a new frame for each hop and prints both layers.
+- Output: the frame addresses change on every line while the packet addresses and the 300 bytes stay the same. The last line confirms the inner packet is the identical object.
+
 Real internets add many complications this sketch ignores: networks disagree about the largest frame they can carry (so packets may need to be fragmented), routers must somehow learn their tables, and topology changes while packets are in flight. Encapsulation is nevertheless the idea that makes the whole thing possible.
 
 ## 4. The global IP Internet
@@ -132,6 +142,14 @@ struct in_addr {
     uint32_t s_addr;   /* always stored big-endian */
 };
 ```
+
+<!-- walkthrough:c -->
+**Reading this C line by line**
+
+- `struct in_addr { ... };` defines a structure type named `struct in_addr`.
+- `uint32_t s_addr;` is its only field: an unsigned whole number of exactly 32 bits, which is the size of an IPv4 address.
+- The comment records the rule that matters most: the number is kept in big-endian byte order, whatever the machine's own order.
+- A structure with a single field looks odd. It exists for historical reasons, and you will see it as a part of larger socket address structures.
 
 Here is the catch. Hosts on the Internet disagree about byte order: x86 and most ARM configurations are little-endian, some other architectures are big-endian. If each machine put multi-byte integers on the wire in its native order, a little-endian sender and a big-endian receiver would read different numbers from the same four bytes. TCP/IP settles the matter by decree: any integer carried in a packet header travels in **network byte order**, which is **big-endian**, most significant byte first. The address inside `struct in_addr` and the 16-bit port number in a socket address are both kept in network order *even while they sit in your program's memory*.
 

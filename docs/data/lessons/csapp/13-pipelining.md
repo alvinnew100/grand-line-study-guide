@@ -1,5 +1,15 @@
 # Pipelining, hazards and forwarding
 
+> **Before this lesson:** You need the six stages and the signal names of the one-instruction-at-a-time design from [SEQ: a sequential Y86-64 processor](#/lesson/csapp/seq), and the instruction set from [The Y86-64 ISA and logic design](#/lesson/csapp/y86-isa).
+
+## In plain words
+
+The processor of the previous lesson finishes one instruction completely before beginning the next. **Pipelining** speeds this up without making any single step faster. Think of a self-service car wash with three bays: soap, rinse, dry. If only one car is allowed in the building at a time, two bays always stand idle. If a new car enters the soap bay as soon as the previous one moves to rinse, three cars are being worked on at once and a clean car leaves three times as often. Processors do the same with instructions. The difficulty is that neighbouring instructions are not independent, as cars are: one may need a result the one in front has not finished producing. Those conflicts are called **hazards**.
+
+Why this matters at work: every modern processor is pipelined, and the cost of a wrongly guessed branch, which you can measure in real programs, comes directly from this design. Understanding it explains why some code that looks equivalent runs faster, and it is standard material for hardware-related and performance-related interviews.
+
+## Why look closer
+
 SEQ executes one instruction per (very long) clock cycle. **Pipelining** divides the work into stages separated by registers so that several instructions are processed at once, each in a different stage, like cars in a car wash or trays in a cafeteria line. Throughput rises dramatically. But instructions are not independent: one may need a result that an earlier, still-in-flight instruction has not yet written, and the processor does not know which instruction follows a branch until the branch executes. Solving these **hazards** (with stalling, forwarding and branch prediction) is the heart of processor design.
 
 ## 1. General principles of pipelining
@@ -20,6 +30,14 @@ print("3 equal stages", pipeline([100, 100, 100]))
 print("nonuniform    ", pipeline([50, 150, 100]))     # limited by the slowest stage
 print("6 stages      ", pipeline([50] * 6))
 ```
+
+<!-- walkthrough:python-run -->
+**Reading this Python line by line**
+
+- `def pipeline(stage_delays_ps, reg_ps=20):` defines a function. Its first input is a list with the time each stage takes, in picoseconds (trillionths of a second). The second, with a default of 20, is the extra time each pipeline register adds.
+- `cycle = max(stage_delays_ps) + reg_ps` is the clock period: the clock must be slow enough for the slowest stage plus one register.
+- `return dict(...)` hands back three results with names: the cycle time; the throughput in billions of instructions per second, which is `1000 / cycle` when the cycle is in picoseconds; and the latency, the cycle time multiplied by the number of stages.
+- The four `print` calls compare designs. One 300 ps stage gives a 320 ps cycle. Three equal stages give 120 ps, so throughput rises about 2.7 times. Unequal stages are held back by the slowest. Six stages go faster again, but the 20 ps register cost is now a large share of each cycle.
 
 Two limitations appear immediately:
 
@@ -48,7 +66,7 @@ graph LR
 | Register | Sits between | Holds |
 |---|---|---|
 | **F** | (before fetch) | predicted PC |
-| **D** | fetch and decode | the just-fetched instruction: icode, ifun, rA, rB, valC, valP |
+| **D** | fetch and decode | the newly fetched instruction: icode, ifun, rA, rB, valC, valP |
 | **E** | decode and execute | decoded instruction and the register values read |
 | **M** | execute and memory | ALU result, branch condition and target info |
 | **W** | memory and write back | results to be written to the register file, and the return address for `ret` |
@@ -61,9 +79,9 @@ Each instruction takes five cycles to pass through, but a new instruction starts
 
 To issue an instruction every cycle, fetch must know the next PC *immediately*, before the current instruction has executed.
 
-- For most instructions the next PC is simply `valP`. For `call` and `jmp` (unconditional) it is `valC`. These are always correct.
+- For most instructions the next PC is `valP`. For `call` and `jmp` (unconditional) it is `valC`. These are always correct.
 - For a **conditional jump** the outcome is not known until the execute stage. PIPE **predicts**: it uses the **always taken** strategy, i.e. predicts PC = `valC`. The book cites studies showing always-taken succeeds about 60% of the time, versus about 40% for never-taken. (**Backward taken, forward not taken**, BTFNT, reaches about 65%, because loops close with backward branches.)
-- For **`ret`** the target is on the stack and essentially unpredictable (for this simple design), so PIPE just stops fetching new instructions until the `ret` reaches write back.
+- For **`ret`** the target is on the stack and essentially unpredictable (for this simple design), so PIPE stops fetching new instructions until the `ret` reaches write back.
 
 Modern processors use far more sophisticated branch predictors with history tables, plus a **return stack** that predicts return addresses by mimicking calls and returns; they achieve well over 90% accuracy.
 
@@ -86,12 +104,12 @@ Hold the dependent instruction in decode and inject **bubbles** (dynamically gen
 
 ### Solution 2: forwarding (bypassing)
 
-The value is usually *already computed* somewhere in the pipeline; it just has not been written yet. **Forwarding** passes it directly from a later stage back to decode. PIPE has five forwarding sources, each paired with the destination register ID it will be written to:
+The value is usually *already computed* somewhere in the pipeline; it has not been written yet. **Forwarding** passes it directly from a later stage back to decode. PIPE has five forwarding sources, each paired with the destination register ID it will be written to:
 
 | Source signal | Destination ID | Meaning |
 |---|---|---|
-| `e_valE` | `e_dstE` | ALU output just computed in execute |
-| `m_valM` | `M_dstM` | value just read from data memory |
+| `e_valE` | `e_dstE` | ALU output computed in execute |
+| `m_valM` | `M_dstM` | value read from data memory |
 | `M_valE` | `M_dstE` | ALU result held in the M register |
 | `W_valM` | `W_dstM` | memory value pending in write back |
 | `W_valE` | `W_dstE` | ALU result pending in write back |
@@ -203,6 +221,23 @@ Real processors add: **multicycle instructions** (multiply, divide, floating poi
 - Control hazards → 3 bubbles for `ret`, 2 cancelled instructions for a misprediction.
 - Exceptions ride along as status codes and are recognized at write back.
 - CPI = 1 + lp + mp + rp ≈ 1.27 with the book's workload numbers.
+
+## Glossary
+
+- **Pipelining**: dividing instruction execution into stages so several instructions are in progress at once.
+- **Stage**: one step of the pipeline; here fetch, decode, execute, memory and write back.
+- **Pipeline register**: a memory element between two stages that holds an instruction's partial results.
+- **Throughput**: the number of instructions completed per unit of time.
+- **Latency**: the time one instruction takes from start to finish.
+- **Hazard**: a situation in which overlapping instructions would give a wrong result if nothing were done.
+- **Data hazard**: an instruction needs a value that an earlier, unfinished instruction has yet to produce.
+- **Control hazard**: the processor does not yet know which instruction comes next, as after a conditional jump.
+- **Stalling**: holding an instruction back for a cycle or more until what it needs is ready.
+- **Bubble**: an empty slot inserted into the pipeline; it does nothing.
+- **Forwarding (bypassing)**: sending a result straight to a later instruction that needs it, without waiting for it to be stored.
+- **Load/use hazard**: the case in which a value read from memory is needed by the very next instruction, which forwarding alone cannot fix.
+- **Branch prediction**: guessing the outcome of a conditional jump so that work can continue.
+- **Misprediction penalty**: the cycles wasted when that guess turns out wrong.
 
 ## Check yourself
 

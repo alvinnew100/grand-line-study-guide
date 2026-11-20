@@ -22,6 +22,14 @@ int stat(const char *path, struct stat *buf);     /* by name */
 int fstat(int fd, struct stat *buf);              /* by open descriptor */
 ```
 
+<!-- walkthrough:c -->
+**Reading this C line by line**
+
+- `#include <sys/stat.h>` names the file that declares these functions and the `struct stat` type.
+- `int stat(const char *path, struct stat *buf);` asks about the file whose name is the text `path`. The second input is the address of a structure you provide; the function fills it in with the file's details. The returned `int` is 0 on success and −1 on failure.
+- `int fstat(int fd, struct stat *buf);` does the same for a file that is already open, identified by its descriptor.
+- Handing a function the address of a structure for it to fill in is a common C idiom, since a C function can return only one value.
+
 The structure has more than a dozen fields. The ones application code most often needs:
 
 | Field | Meaning |
@@ -49,6 +57,16 @@ with tempfile.TemporaryDirectory() as d:
               f"perms={stat.filemode(info.st_mode)} readable={os.access(p, os.R_OK)}")
     print("modified", round(time.time() - os.stat(path).st_mtime, 2), "seconds ago")
 ```
+
+<!-- walkthrough:python-run -->
+**Reading this Python line by line**
+
+- `import os, stat, tempfile, time` loads four standard modules.
+- `with tempfile.TemporaryDirectory() as d:` creates a scratch folder that is removed automatically afterwards.
+- `with open(path, "w") as f: f.write("twelve bytes")` creates a file and writes 12 characters into it; the file is closed when the block ends.
+- `for p in (path, d):` examines first the file and then the folder. `info = os.stat(p)` fetches the metadata.
+- `stat.S_ISDIR(info.st_mode)` and `stat.S_ISREG(...)` test the type; the chained `if ... else` picks the right word. `stat.filemode` turns the permission bits into the familiar text form such as `-rw-r--r--`.
+- Output: one line for the file (regular file, size 12) and one for the folder (directory), then how long ago the file was changed.
 
 ## 2. Reading a directory
 
