@@ -1,4 +1,4 @@
-# Castle in the Sky
+# Sky Castle
 
 A fan-made, Studio Ghibli themed study site (not affiliated with Studio Ghibli). Film stills are the official free images from https://www.ghibli.jp/works/; see the Credits page on the site.
 
