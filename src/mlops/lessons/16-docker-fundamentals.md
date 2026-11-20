@@ -216,6 +216,103 @@ Even when the layer must rebuild, pip reuses downloaded wheels. In CI, export/im
 > changes constantly; installing dependencies in an earlier layer means code edits reuse the expensive
 > install layer. Follow up with `.dockerignore` and BuildKit cache mounts.
 
+## Worked example: reading a build log
+
+Build output tells you exactly what the cache did. A second build after editing only `app/main.py`:
+
+```text
+$ docker build -t churn-api:dev .
+ => [internal] load build context                                   0.1s
+ => => transferring context: 4.21kB                                 0.0s
+ => CACHED [2/5] WORKDIR /code                                      0.0s
+ => CACHED [3/5] COPY ./requirements.txt /code/requirements.txt     0.0s
+ => CACHED [4/5] RUN pip install --no-cache-dir -r requirements.txt 0.0s
+ => [5/5] COPY ./app /code/app                                      0.1s
+ => exporting to image                                              0.2s
+```
+
+- `transferring context: 4.21kB` — the `.dockerignore` is doing its job. If this line says 2.3 GB, your
+  dataset or `.git` directory is being sent to the builder on every build.
+- `CACHED` on steps 2–4: the dependency layer was reused. Only the final `COPY` re-ran.
+- If step 4 is *not* cached after a code-only change, something before it changed: a `COPY . .` placed
+  too early, a timestamp or build argument baked into an early layer, or a file in the context that
+  changes on every build.
+
+Useful diagnostics:
+
+```bash
+docker build --progress=plain --no-cache -t churn-api:dev .   # full, uncached output for debugging
+docker history churn-api:dev                                   # layer sizes, newest first
+docker image inspect churn-api:dev --format '{{json .Config}}' | jq '{Cmd, Entrypoint, Env, User, ExposedPorts}'
+docker run --rm -it --entrypoint sh churn-api:dev             # look around inside the image
+```
+
+### Things that silently bust the cache
+
+| Cause | Why | Fix |
+|---|---|---|
+| `ARG BUILD_DATE` / `ARG GIT_SHA` used early | an `ARG` value change invalidates the layers that use it and everything after | declare and use such args in the **last** layers |
+| `COPY . .` before installing dependencies | any file change invalidates the install | copy the lockfile first |
+| No `.dockerignore` | `.git`, logs, caches change constantly | ignore them |
+| `ADD https://...` | remote content is re-checked | download in a `RUN` with a pinned checksum |
+| Base image tag moved (`python:3.11-slim` rebuilt upstream) | new base digest invalidates everything | pin by digest; rebuild deliberately |
+
+And the opposite problem — the cache hiding staleness: `RUN apt-get update && apt-get install -y curl`
+stays cached for months, so the image keeps old, vulnerable packages. Rebuild on a schedule with
+`--pull --no-cache` (or pin and bump base images through an automated dependency bot) so security
+patches arrive.
+
+## Container lifecycle and resource limits
+
+A container is running, paused, or exited with a code. For ML services the exit codes are worth knowing:
+
+| Exit code | Meaning | Usual cause |
+|---|---|---|
+| 0 | success | job finished |
+| 1 | application error | unhandled exception |
+| 137 | killed by SIGKILL (128 + 9) | out of memory, or stop timeout exceeded |
+| 139 | segmentation fault | native library crash, incompatible binary wheels |
+| 143 | terminated by SIGTERM (128 + 15) | graceful stop |
+
+```bash
+docker run --rm --memory=2g --cpus=2 churn-api:dev            # cgroup limits
+docker stats                                                    # live usage per container
+docker inspect <container> --format '{{.State.OOMKilled}} {{.State.ExitCode}}'
+```
+
+Memory limits are enforced by the kernel: a model that needs 3 GB in a 2 GB container is killed with
+137 and no Python traceback — the log simply stops. When a container "dies silently while loading the
+model", check `OOMKilled` first. Note that the Python process inside does not automatically know its
+limit; libraries that size thread pools or caches from the *host's* CPU count and memory can
+oversubscribe a small container, so set `OMP_NUM_THREADS` and similar variables to match the CPU limit.
+
+```python-run
+# Thread oversubscription in a CPU-limited container: more threads than cores makes things slower.
+def relative_latency(threads, cpu_limit, per_thread_overhead=0.04):
+    effective = min(threads, cpu_limit)                      # cannot use more CPU than the cgroup allows
+    contention = 1 + per_thread_overhead * max(0, threads - cpu_limit) ** 1.2   # context switching, cache thrash
+    return contention / effective
+base = relative_latency(1, 2)
+print("container limited to 2 CPUs on a 64-core host")
+for t in (1, 2, 4, 16, 64):
+    print(f"  OMP_NUM_THREADS={t:2d} -> relative latency {relative_latency(t, 2) / base:4.2f}x")
+```
+
+Defaulting to 64 threads (the host's core count) inside a 2-CPU container is slower than using 2 —
+a frequent cause of mysterious tail latency in containerised inference.
+
+## Image naming and registry hygiene
+
+A full image reference is `registry/namespace/repository:tag@digest`, for example
+`ghcr.io/acme/churn-api:9f3c1e2@sha256:77ab...`. Practices that keep a registry healthy:
+
+- **Immutable tags** (ECR and others can enforce this): a tag, once pushed, cannot be overwritten.
+- **One tag per commit SHA**, plus optional moving convenience tags (`:main`) that are never deployed.
+- **Retention policies**: keep the last N images and anything referenced by a running deployment; expire
+  untagged layers.
+- **Scan on push** and block deployment of images with critical vulnerabilities.
+- **Pull-through caches / mirrors** for public base images to avoid rate limits and outages.
+
 ## Summary
 
 - Containers are isolated processes sharing the host kernel (namespaces, cgroups, union filesystems) —

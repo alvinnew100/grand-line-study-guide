@@ -276,7 +276,142 @@ print(has_cycle(build([1, 2, 3])), has_cycle(c))
 | access $k$-th | $O(k)$ | $O(k)$ |
 | rotate | – | $O(1)$ |
 
-## 6. Pitfalls
+## 6. Operating in the middle of a singly linked list
+
+Stacks and queues only touch the ends. The same node structure supports general sequence operations,
+and working through them shows exactly where singly linked lists are strong and where they are weak.
+
+- **Search / access by index:** walk from the head — $O(k)$ to reach position $k$, $O(n)$ worst case.
+- **Insert after a known node `p`:** create the node with `next = p.next`, then set `p.next` to it.
+  $O(1)$ — two assignments, **in that order** (reversing them loses the rest of the list).
+- **Delete the node after `p`:** `p.next = p.next.next`. $O(1)$.
+- **Delete a node `p` itself, or insert before it:** needs `p`'s *predecessor*, which a singly
+  linked node does not know — an $O(n)$ walk from the head.
+
+So "$O(1)$ insertion and deletion" in a singly linked list always means *after a node you already
+hold*. The standard trick for uniform code is a **dummy header node** in front of the first real
+node: then every real node has a predecessor, and inserting at the front is just "insert after the
+header".
+
+```python-run
+class Node:
+    __slots__ = "element", "next"
+    def __init__(self, element, next=None):
+        self.element, self.next = element, next
+
+class SinglyLinkedList:
+    def __init__(self, items=()):
+        self._header = Node(None)                # dummy node: never holds data
+        self._size = 0
+        tail = self._header
+        for x in items:
+            tail.next = Node(x); tail = tail.next; self._size += 1
+
+    def __iter__(self):
+        walk = self._header.next
+        while walk is not None:
+            yield walk.element
+            walk = walk.next
+
+    def _node_before(self, k):
+        """Return the node just before index k (the header when k == 0): O(k)."""
+        walk = self._header
+        for _ in range(k):
+            walk = walk.next
+        return walk
+
+    def insert(self, k, e):
+        p = self._node_before(k)
+        p.next = Node(e, p.next)                 # new node points onward FIRST, then p points to it
+        self._size += 1
+
+    def delete(self, k):
+        p = self._node_before(k)
+        target = p.next
+        p.next = target.next                     # bypass the node
+        self._size -= 1
+        return target.element
+
+    def remove_all(self, value):
+        """Delete every node holding value in one pass: O(n)."""
+        p = self._header
+        while p.next is not None:
+            if p.next.element == value:
+                p.next = p.next.next             # stay at p: the new p.next is unexamined
+                self._size -= 1
+            else:
+                p = p.next
+
+L = SinglyLinkedList("LAX MSP ATL BOS".split())
+L.insert(0, "SFO"); L.insert(3, "ORD"); L.insert(6, "JFK")
+print(list(L))
+print("deleted:", L.delete(0), L.delete(2), "->", list(L))
+M = SinglyLinkedList([3, 1, 3, 3, 2, 3]); M.remove_all(3)
+print(list(M), M._size)
+```
+
+### Dry run: `insert(3, "ORD")` into SFO → LAX → MSP → ATL → BOS
+
+1. `_node_before(3)` walks header → SFO → LAX → MSP and returns the MSP node (3 hops).
+2. `Node("ORD", p.next)` creates ORD pointing at ATL. The list is still intact: MSP → ATL.
+3. `p.next = ...` re-points MSP at ORD: SFO → LAX → MSP → ORD → ATL → BOS.
+
+If steps 2 and 3 were swapped — `p.next = Node("ORD")` and only then trying to attach the rest — the
+only reference to ATL would already be gone, and ATL and BOS would be unreachable (and garbage
+collected). **Link the new node to the list before linking the list to the new node.**
+
+`remove_all` illustrates the other classic subtlety: after deleting `p.next`, do **not** advance
+`p`, because the node that slid into `p.next` has not been examined yet (consecutive matches such as
+the `3, 3` above would otherwise be skipped).
+
+## 7. Worked application: the Josephus problem
+
+A circular list models any process that goes "round and round". In the *Josephus problem* (the
+children's game "hot potato"), $n$ people stand in a circle; counting off repeatedly, every $k$-th
+person is eliminated until one remains. With the `CircularQueue` idea this is just *rotate $k - 1$
+times, then dequeue*:
+
+```python-run
+class CircularList:
+    class _Node:
+        __slots__ = "element", "next"
+        def __init__(self, element, next=None): self.element, self.next = element, next
+    def __init__(self, items):
+        self._tail, self._size = None, 0
+        for x in items:
+            node = self._Node(x)
+            if self._tail is None: node.next = node
+            else: node.next, self._tail.next = self._tail.next, node
+            self._tail = node; self._size += 1
+    def rotate(self):
+        self._tail = self._tail.next                 # O(1): the front becomes the back
+    def dequeue(self):
+        head = self._tail.next
+        if self._size == 1: self._tail = None
+        else: self._tail.next = head.next            # bypass the old head
+        self._size -= 1
+        return head.element
+
+def josephus(n, k):
+    circle, order = CircularList(range(1, n + 1)), []
+    while circle._size > 0:
+        for _ in range(k - 1):
+            circle.rotate()                          # k - 1 people survive this count
+        order.append(circle.dequeue())               # the k-th is eliminated
+    return order
+
+order = josephus(7, 3)
+print("elimination order:", order, " survivor:", order[-1])
+print("survivor for n = 41, k = 3:", josephus(41, 3)[-1])
+```
+
+For $n = 7$, $k = 3$: count 1, 2, **3** (out), 4, 5, **6** (out), 7, 1, **2** (out), … giving the
+order 3, 6, 2, 7, 5, 1 and survivor 4. Each elimination costs $k - 1$ rotations plus one dequeue,
+all $O(1)$, so the simulation runs in $O(nk)$ time with no node ever allocated or copied — on an
+array-based list each removal from the middle would shift elements instead. Round-robin scheduling
+is the same loop with "run for a time slice" in place of "count".
+
+## 8. Pitfalls
 
 - Forgetting to update `tail` when the list becomes empty or when inserting into an empty list.
 - Losing the rest of the list by overwriting `head._next` before saving it.
@@ -285,7 +420,7 @@ print(has_cycle(build([1, 2, 3])), has_cycle(c))
 - Assuming linked lists are always faster for insertion: finding the position is $O(n)$, and node
   objects have poor cache locality.
 
-## 7. Summary
+## 9. Summary
 
 - Singly linked lists give $O(1)$ worst-case insert at both ends and removal at the head, ideal for
   stacks (top = head) and queues (front = head, back = tail).

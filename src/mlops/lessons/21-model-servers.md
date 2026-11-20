@@ -246,6 +246,40 @@ module 12 goes deeper for LLMs.
 > disk); cache repeat requests; apply model-level optimisation (quantization, TensorRT); shed load beyond
 > capacity. Frame it with p95/p99 and goodput rather than averages.
 
+## Capacity planning: a worked example
+
+*Requirement: 600 requests/s at peak, p95 under 150 ms, one model on GPUs. How many replicas?*
+
+1. **Measure** one replica under load with your real batching settings. Suppose a load test finds the
+   p95 stays under 150 ms up to 220 rps, and breaks beyond that.
+2. **Apply headroom**: plan to run at about 65% of that knee to absorb bursts and the loss of a replica —
+   roughly 140 rps per replica.
+3. **Replicas for peak**: 600 / 140 ≈ 4.3 → 5.
+4. **Failure tolerance (N+1)**: with 5 replicas, losing one leaves 4 × 220 = 880 rps of raw capacity —
+   still above peak. Fine. Across three zones, check that losing a whole zone is survivable.
+5. **Scale-up time**: if a new GPU replica takes 4 minutes to serve, the autoscaler must trigger well
+   before saturation: set the target at the 65% point, and set `minReplicas` to cover the fastest
+   expected ramp.
+6. **Cost check**: 5 GPUs at peak, fewer off-peak via autoscaling; compare with a smaller/quantized model
+   on fewer GPUs.
+
+```python-run
+import math
+def plan(peak_rps, knee_rps, headroom=0.65, zones=3):
+    per_replica = knee_rps * headroom
+    n = math.ceil(peak_rps / per_replica)
+    n_minus_one_ok = (n - 1) * knee_rps >= peak_rps
+    per_zone = math.ceil(n / zones)
+    zone_loss_ok = (n - per_zone) * knee_rps >= peak_rps
+    return n, per_replica, n_minus_one_ok, zone_loss_ok
+for peak in (150, 600, 2400):
+    n, per, ok1, okz = plan(peak, 220)
+    print(f"peak {peak:5d} rps -> {n:2d} replicas at ~{per:.0f} rps each | survives 1 replica loss: {ok1} | survives zone loss: {okz}")
+```
+
+The method — find the knee by load testing, apply headroom, check failure scenarios — matters more than
+the particular numbers. Never size from the *average* latency or the *average* traffic.
+
 ## Summary
 
 - Model servers (Triton, TorchServe, BentoML, Ray Serve, vLLM/TGI) provide batching, concurrency,

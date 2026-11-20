@@ -203,14 +203,109 @@ letters = ''.join(c for c in document if c.isalpha())
 > so each concatenation allocates and copies; `join` computes the total length once and copies each
 > part exactly once: $O(n)$ overall.
 
-## 5. Pitfalls
+## 5. Worked example: what a copy really copies
+
+The referential-array model predicts the behaviour of every copying operation in Python. Follow one
+small structure through four operations and check each prediction by running the cell.
+
+```python-run
+import copy
+row_a, row_b = [1, 2], [3, 4]
+table = [row_a, row_b]            # a list whose two cells reference two other lists
+
+alias   = table                   # no new list at all: a second name for the same object
+shallow = list(table)             # new outer array; its cells reference the SAME row objects
+sliced  = table[:]                # slicing also builds a new outer array of the same references
+deep    = copy.deepcopy(table)    # new outer array AND new copies of the rows
+
+print("same outer object?   alias:", alias is table, " shallow:", shallow is table, " deep:", deep is table)
+print("same first row?      shallow:", shallow[0] is table[0], " sliced:", sliced[0] is table[0],
+      " deep:", deep[0] is table[0])
+
+table[0].append(99)               # mutate a ROW through the original
+table.append([5, 6])              # mutate the OUTER list through the original
+print("table  :", table)
+print("alias  :", alias)          # sees both changes: it is the same list
+print("shallow:", shallow)        # sees the row mutation, not the appended row
+print("deep   :", deep)           # sees neither
+```
+
+| Operation | New outer array? | New element objects? | Cost |
+|---|---|---|---|
+| `alias = table` | no | no | $O(1)$ |
+| `list(table)`, `table[:]`, `table.copy()` | yes | no (references are copied) | $O(n)$ |
+| `copy.deepcopy(table)` | yes | yes, recursively | proportional to the total size of everything reachable |
+
+**Dry run in terms of cells.** `table` is an array of two cells holding the addresses of `row_a` and
+`row_b`. A shallow copy allocates a *new* two-cell array and copies those two addresses into it —
+it never looks inside the rows. So appending to `table[0]` changes an object that both arrays
+reference (the shallow copy "sees" it), while appending to `table` itself changes only the original
+outer array. A deep copy follows every reference and rebuilds the whole structure.
+
+The same reasoning explains two classic surprises:
+
+- **Mutable default arguments.** `def f(x, acc=[])` creates the default list **once**, when the
+  function is defined; every call that omits `acc` gets a reference to that same list.
+- **Augmented assignment.** For a list, `a += b` calls `extend` and mutates the object in place
+  (every alias sees it), whereas `a = a + b` builds a **new** list and rebinds only the name `a`.
+
+```python-run
+def remember(x, seen=[]):         # one shared default list for all calls
+    seen.append(x)
+    return seen
+print(remember(1), remember(2))   # both calls return the SAME list object
+
+a = [1, 2]; alias = a
+a += [3]                          # in-place extend: alias sees it
+print(alias)
+a = a + [4]                       # new list: alias does not
+print(alias, a)
+```
+
+## 6. How much memory does a sequence use?
+
+Three numbers describe a CPython list on a 64-bit machine: a fixed **header** (56 bytes — type
+pointer, reference count, length, a pointer to the cell array and its allocated capacity), **8 bytes
+per cell** for the references, and the size of the **element objects** themselves, which live
+elsewhere. A tuple has a smaller header and, being immutable, never over-allocates. A string of
+ASCII text stores one byte per character directly.
+
+```python-run
+import sys
+n = 1000
+nums = list(range(n))
+print("empty list:", sys.getsizeof([]), "bytes;  empty tuple:", sys.getsizeof(()), "bytes")
+print("list of 1000 refs :", sys.getsizeof(nums), "bytes  ->", (sys.getsizeof(nums) - sys.getsizeof([])) / n, "bytes per cell")
+print("tuple of 1000 refs:", sys.getsizeof(tuple(nums)), "bytes")
+print("one int object    :", sys.getsizeof(12345), "bytes (not counted in the list's own size)")
+print("str of 1000 ASCII chars:", sys.getsizeof("a" * n), "bytes ->", (sys.getsizeof("a" * n) - sys.getsizeof("")) / n, "byte per char")
+print("str of 1000 Greek chars:", sys.getsizeof("α" * n), "bytes (2 bytes per char: wider compact array)")
+grown = []
+for i in range(n): grown.append(i)
+print("same 1000 items built by append:", sys.getsizeof(grown), "bytes (spare capacity for future appends)")
+```
+
+(These figures are for a 64-bit CPython. The in-browser interpreter is a 32-bit WebAssembly build, so there you will see 4-byte references and smaller headers; the structure of the argument is unchanged.)
+
+Three lessons from the output. (1) `sys.getsizeof(a_list)` reports the header plus the cell array
+only — a list of a million small integers costs about 8 MB for the cells **plus** roughly 28 bytes
+for each distinct integer object. (2) A list built by repeated `append` is larger than one built in
+a single step from an iterable of known length, because it carries spare capacity — the subject of
+the next lesson. (3) A string's cells are 1, 2 or 4 bytes wide depending on the widest character it
+contains, but uniform within one string, which keeps indexing $O(1)$.
+
+When memory matters — millions of numbers — these overheads are the reason to reach for
+`array.array` or NumPy: 8 bytes (or fewer) per number, stored contiguously, with no per-element
+object at all.
+
+## 7. Pitfalls
 
 - `[[0] * cols] * rows` creates `rows` references to one row. (See the 2-D arrays lesson.)
 - `x in list` inside a loop: hidden $O(n)$.
 - `list.insert(0, x)` / `list.pop(0)` in a loop: use `collections.deque` instead.
 - Shallow copies share mutable elements.
 
-## 6. Summary
+## 8. Summary
 
 - Arrays give $O(1)$ indexing via address arithmetic; contiguity is the price and the benefit.
 - Python lists and tuples are **referential** arrays; strings and `array.array` are **compact**.

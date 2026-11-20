@@ -8,7 +8,7 @@ const ready = (async () => {
   py = await loadPyodide();
   const src = await (await fetch("harness.py", { cache: "no-cache" })).text();
   py.FS.writeFile("/home/pyodide/harness.py", src);
-  py.runPython("import sys; sys.path.insert(0, '/home/pyodide'); import harness");
+  py.runPython("import sys; sys.path.insert(0, '/home/pyodide'); import harness; import warnings; warnings.filterwarnings('ignore', category=FutureWarning); warnings.filterwarnings('ignore', category=DeprecationWarning)");
   py.setStdout({ batched: (s) => postMessage({ id: currentId, type: "stdout", data: s + "\n" }) });
   py.setStderr({ batched: (s) => postMessage({ id: currentId, type: "stderr", data: s + "\n" }) });
   postMessage({ type: "ready" });

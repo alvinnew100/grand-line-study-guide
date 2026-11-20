@@ -250,6 +250,143 @@ Compose concepts map onto Kubernetes objects, which is why Compose is a good ste
 > `depends_on: condition: service_healthy`; `docker compose up --wait`, run integration tests against real
 > HTTP endpoints, tear down with `down -v`. The same compose file runs in CI.
 
+## The Prometheus configuration behind the stack
+
+The `prometheus` service mounts `./ops/prometheus.yml`. For a Compose stack it is short, because targets
+are just service names:
+
+```yaml
+# ops/prometheus.yml
+global:
+  scrape_interval: 5s          # short interval for local experiments; 15-30 s in production
+  evaluation_interval: 5s
+rule_files: ["/etc/prometheus/alerts.yml"]
+scrape_configs:
+  - job_name: churn-api
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["api:8000"]   # DNS name of the compose service
+```
+
+Bring the stack up, send a few requests, then open `http://localhost:9090` and query
+`rate(predict_requests_total[1m])` — you now have the full observability loop from module 10 running on
+a laptop. Adding Grafana with a provisioned data source makes dashboards reproducible too:
+
+```yaml
+# ops/grafana/provisioning/datasources/prometheus.yml
+apiVersion: 1
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+```
+
+```yaml
+  grafana:
+    image: grafana/grafana:11.1.0
+    ports: ["3000:3000"]
+    environment: {GF_AUTH_ANONYMOUS_ENABLED: "true", GF_AUTH_ANONYMOUS_ORG_ROLE: Admin}   # local only!
+    volumes:
+      - ./ops/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./ops/grafana/dashboards:/var/lib/grafana/dashboards:ro
+```
+
+Dashboards and data sources as files in Git — "monitoring as code" — means a new teammate gets the same
+view with one command, and the same JSON can be deployed to the production Grafana.
+
+## One-off jobs in the same stack: training and seeding
+
+A model API needs a model. Compose can run the training job as a service that exits, and make the API
+wait for it:
+
+```yaml
+  train:
+    build: {context: ., target: builder}
+    command: ["python", "-m", "churn.train", "--params", "tests/fixtures/params.small.yaml", "--register"]
+    environment:
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
+      AWS_ACCESS_KEY_ID: minio
+      AWS_SECRET_ACCESS_KEY: minio12345
+    depends_on:
+      mlflow: {condition: service_healthy}
+      create-bucket: {condition: service_completed_successfully}
+    profiles: ["seed"]
+
+  create-bucket:                                  # one-shot init job
+    image: minio/mc:RELEASE.2024-06-12T14-34-03Z
+    entrypoint: >
+      /bin/sh -c "mc alias set local http://minio:9000 minio minio12345 &&
+                  mc mb --ignore-existing local/mlflow"
+    depends_on: [minio]
+```
+
+```bash
+docker compose --profile seed run --rm train     # train a small model and register it as @champion
+docker compose up -d --wait                      # now the API can load models:/churn@champion
+```
+
+`condition: service_completed_successfully` is the third `depends_on` condition (besides
+`service_started` and `service_healthy`); it is how you express "run this init job first".
+
+## Worked example: a full local test session
+
+```bash
+export GIT_SHA=$(git rev-parse --short HEAD)
+docker compose build                                   # build once, tagged with the SHA
+docker compose --profile seed run --rm train           # seed a model
+docker compose up -d --wait                            # start everything, block until healthy
+docker compose ps                                      # STATUS should show (healthy)
+
+# exercise the API
+curl -s localhost:8000/readyz | jq
+curl -s -X POST localhost:8000/predict -H 'content-type: application/json' \
+  -d '{"instances":[{"tenure_months":3,"monthly_charges":95,"plan":"basic","support_tickets_30d":4}]}' | jq
+
+# generate some load, then look at metrics
+for i in $(seq 1 200); do curl -s -o /dev/null -X POST localhost:8000/predict \
+  -H 'content-type: application/json' -d @tests/fixtures/request.json; done
+curl -s localhost:8000/metrics | grep -E "predict_requests_total|predict_latency_seconds_count"
+
+# failure drill: kill the registry and see what the API does
+docker compose stop mlflow
+curl -s localhost:8000/readyz                          # still ready: the model is already in memory
+docker compose restart api && sleep 5
+docker compose ps api                                  # now unhealthy/restarting: cannot load the model
+docker compose start mlflow
+
+docker compose down -v                                 # clean up everything including volumes
+```
+
+The failure drill teaches something a diagram does not: the registry is a **startup dependency**, not a
+request-time dependency. That informs production design — keep enough replicas running that a registry
+outage cannot take the service down, cache the model on local disk, or bake it into the image.
+
+## Common Compose problems
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `connection refused` to another service | using `localhost` inside a container | use the service name |
+| API crashes at startup, works after a manual restart | dependency not ready | healthcheck + `condition: service_healthy`, plus retries in the app |
+| Port already allocated | another process/stack uses the host port | change the host side (`"8001:8000"`) or stop the other stack |
+| Code changes not reflected | image not rebuilt and no bind mount | `up --build` or mount the source in an override |
+| Data vanished | `down -v`, or no volume declared | named volumes; avoid `-v` unless you mean it |
+| Works on Linux, slow on macOS/Windows | bind-mount I/O through the VM | mount less, use named volumes for dependencies, `compose watch` |
+| Environment variable empty | `.env` not in the project directory or variable not exported | `docker compose config` shows the resolved values |
+| Two projects interfere | same default project name | set `name:` or `-p` |
+
+## Compose in CI: making it deterministic
+
+- Pin image tags (never `latest`) so a CI run today equals a run next month.
+- Use `--wait` with health checks instead of `sleep 30`.
+- Always dump logs on failure and tear down with `down -v` in a `trap`/`always()` step so runners stay
+  clean.
+- Keep the CI stack minimal with profiles: integration tests rarely need Grafana.
+- Build the image once in an earlier job and `docker load`/pull it by SHA, so the tests exercise the
+  exact artifact that will be deployed.
+
 ## Summary
 
 - Compose defines multi-container apps declaratively; services talk by name on a shared network.

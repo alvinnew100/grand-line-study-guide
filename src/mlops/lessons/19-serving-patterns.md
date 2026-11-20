@@ -214,6 +214,90 @@ only when freshness or request-time context earns its cost.
 > the latency budget? Then propose the simplest pattern that satisfies the answers, and mention hybrids
 > (precompute + lookup, retrieval offline + re-rank online) and fallbacks.
 
+## Designing a batch scoring job properly
+
+Batch inference looks trivial, which is why its failure modes are neglected. A production-grade job has
+five properties.
+
+1. **Idempotent and partitioned**: output keyed by `(scoring_date, model_version)`; a rerun overwrites.
+2. **Pinned model**: resolve `@champion` to a concrete version *once* at job start and record it; never
+   let half the rows be scored by one version and half by another.
+3. **Validated inputs and outputs**: check feature freshness and row counts before scoring; check the
+   score distribution after.
+4. **Atomic publish**: write to a staging location, validate, then swap — consumers never read a
+   half-written table.
+5. **Observable**: emit rows scored, duration, null rates and score-distribution summaries; alert on
+   staleness (the table was not updated by its deadline).
+
+```python-run
+import numpy as np
+rng = np.random.default_rng(0)
+
+def score_batch(features, model_version):
+    w = {"v7": 0.9, "v8": 1.1}[model_version]
+    return 1 / (1 + np.exp(-(w * features - 1.0)))
+
+def publish(table, staging, key, checks):
+    """Validate the staged output, then swap atomically."""
+    problems = [name for name, ok in checks(staging).items() if not ok]
+    if problems:
+        return f"REJECTED {problems}: previous partition kept"
+    table[key] = staging                       # single pointer swap
+    return f"published {len(staging)} rows"
+
+yesterday = score_batch(rng.normal(0, 1, 10_000), "v7")
+def checks(staged):
+    return {"row count within 10% of yesterday": abs(len(staged) / len(yesterday) - 1) < 0.10,
+            "no NaN scores": not np.isnan(staged).any(),
+            "mean score within 0.05 of yesterday": abs(staged.mean() - yesterday.mean()) < 0.05}
+
+table = {("2025-01-14", "v7"): yesterday}
+good = score_batch(rng.normal(0, 1, 10_050), "v7")
+print("normal run        :", publish(table, good, ("2025-01-15", "v7"), checks))
+truncated = score_batch(rng.normal(0, 1, 4_000), "v7")              # upstream delivered a partial file
+print("partial input     :", publish(table, truncated, ("2025-01-16", "v7"), checks))
+shifted = score_batch(rng.normal(0, 1, 10_000) * 100, "v7")         # unit bug upstream
+print("unit bug upstream :", publish(table, shifted, ("2025-01-16", "v7"), checks))
+print("partitions served :", sorted(k[0] for k in table))
+```
+
+When a run is rejected, consumers keep reading yesterday's predictions — stale but sane — while an alert
+goes out. That is almost always better than publishing garbage on time.
+
+### Throughput for batch on GPUs
+
+Sort or bucket inputs by length (for text) so batches are homogeneous; use the largest batch that fits;
+keep the GPU fed with parallel data loading; write results in large files rather than row by row. Batch
+jobs are also where **spot instances** shine: split the work into chunks, checkpoint progress as
+completed chunk IDs, and a preempted job resumes where it stopped.
+
+## Request path design for online serving: precompute vs compute
+
+Within an online request, each piece of work can happen at one of three times:
+
+| When | Examples | Trade-off |
+|---|---|---|
+| **Offline (batch)** | user embeddings, item embeddings, candidate lists, aggregate features | cheapest, stale |
+| **Nearline (streaming, seconds)** | counters over recent events, session features | fresher, operationally heavier |
+| **Online (at request time)** | features from the request itself, final ranking, business rules | freshest, inside the latency budget |
+
+A good serving design pushes work as far *left* as freshness requirements allow. Typical recommendation
+architecture: embeddings and candidate retrieval indexes built offline; recent-activity features nearline;
+a light ranker online over a few hundred candidates.
+
+## Failure modes and fallbacks by pattern
+
+| Pattern | Typical failure | Detection | Fallback |
+|---|---|---|---|
+| Batch | job did not run / partial input / wrong model version | freshness and volume alerts, output validation | keep serving the last good partition |
+| Online | dependency timeout, overload, bad deploy | error rate, latency SLO, canary analysis | default prediction, cached value, simpler model, rules |
+| Streaming | consumer lag grows, poison message, state corruption | lag metrics, dead-letter queue size | scale consumers, skip to DLQ, replay from offset |
+| Async queue | queue grows unbounded, workers crash on one job | queue depth and age of oldest message | autoscale on depth, max retries then DLQ, reject new jobs |
+| Edge | model/app version mismatch, device too weak | telemetry sampling, crash reports | bundled smaller model, server-side fallback |
+
+Design the fallback **before** launch and exercise it: a fallback path that has never run in production
+will not work the day you need it.
+
 ## Summary
 
 - Batch: scheduled, cheap, simple, stale. Online: fresh and contextual but operationally demanding.
