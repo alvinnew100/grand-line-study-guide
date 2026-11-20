@@ -216,7 +216,7 @@
   "words": 115849,
   "modules": 13,
   "lessons": 30,
-  "problems": 20
+  "problems": 27
  },
  {
   "id": "mongodb",
@@ -338,7 +338,7 @@
   "words": 0,
   "modules": 1,
   "lessons": 0,
-  "problems": 17
+  "problems": 27
  },
  {
   "id": "django",
