@@ -592,7 +592,7 @@
       <section class="hero2" ${hero ? `style="background-image:url('${hero.src}')"` : ""}>
         <div class="hero2-in">
           <p class="hero2-kicker">Big Tech interview prep · a Studio Ghibli themed, fan-made study guide</p>
-          <h1>Build your castle in the cloud, one lesson a day.</h1>
+          <h1>Build your castle in the sky, one lesson a day.</h1>
           <p>Everything top tech companies interview on: algorithms with a live judge, systems, operating systems, Linux, SQL and databases, CI/CD, machine learning, MLOps, AI engineering and open-ended engineering questions.</p>
           <div class="hero2-cta">${cont}<a class="btn glass" href="#/roadmap">Roadmap</a><button class="btn glass" id="rndBtn" type="button">Random problem</button></div>
         </div>
