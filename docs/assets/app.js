@@ -481,7 +481,7 @@
   // ---------------------------------------------------------------- Ghibli stills & quotes
   const TRACK_FILM = { csapp: "laputa", python: "baron", "dsa-foundations": "mimi", "neet-arrays": "majo", "neet-window-stack": "howl",
     "neet-linked-trees": "totoro", "neet-heap-graphs": "mononoke", "neet-dp": "chihiro", "neet-greedy-math": "porco", sql: "kokurikozaka",
-    databases: "nausicaa", ml: "kazetachinu", fastapi: "ponyo", mlops: "karigurashi", "ai-eng": "kimitachi", "llm-practice": "kaguyahime", os: "ged", "linux-cli": "yamada", vim: "marnie", cicd: "umi", thinking: "omoide", "html-css": "tanuki", javascript: "red-turtle", git: "aya", networking: "ghiblies", "web-security": "onyourmark", docker: "umi", redis: "baron", mongodb: "nausicaa", nodejs: "howl", react: "totoro", firebase: "ponyo", graphql: "kaguyahime", django: "majo", nginx: "porco", "js-testing": "mimi", typescript: "kazetachinu", go: "laputa" };
+    databases: "nausicaa", ml: "kazetachinu", fastapi: "ponyo", mlops: "karigurashi", "ai-eng": "kimitachi", "llm-practice": "kaguyahime", os: "ged", "linux-cli": "yamada", vim: "marnie", cicd: "umi", thinking: "omoide", "html-css": "tanuki", javascript: "red-turtle", git: "aya", networking: "ghiblies", "web-security": "onyourmark", docker: "umi", redis: "baron", mongodb: "nausicaa", nodejs: "howl", react: "totoro", firebase: "ponyo", graphql: "kaguyahime", django: "majo", nginx: "porco", "js-testing": "mimi", typescript: "kazetachinu", go: "laputa", java: "chihiro", spring: "totoro", aws: "nausicaa", kubernetes: "ponyo", terraform: "mononoke", "system-design": "laputa", microservices: "howl", "interview-prep": "mimi" };
   const Ghibli = {
     works: {}, list: [], quotes: [], note: "", terms: "",
     async load() {
@@ -680,23 +680,32 @@
 
   // ---------------------------------------------------------------- roadmap (recommended study flow)
   const PATH = [
-    { title: "Start here", why: "The tools every later track assumes: a first programming language, the terminal, a terminal editor, and version control.",
-      tracks: [["python", "Python Mastery"], ["linux-cli", "The Linux Command Line"], ["vim", "Practical Vim"], ["git", "Git"]] },
-    { title: "Interview coding", why: "The largest part of most interview loops. Learn the theory once, then drill the patterns in order.",
+    { title: "Start here", why: "The tools every later stage assumes. Python is also the most requested language in Singapore tech postings.",
+      tracks: [["python", "Python Mastery"], ["linux-cli", "The Linux Command Line"], ["git", "Git"], ["vim", "Practical Vim"]] },
+    { title: "Interview coding", why: "Every junior posting asks for data structures and algorithms, and the coding round tests them. Keep a few problems going every day from here on.",
       tracks: [["dsa-foundations", "DSA Foundations"], ["neet-arrays", "Arrays, Hashing & Two Pointers"], ["neet-window-stack", "Sliding Window, Stack & Binary Search"],
-        ["neet-linked-trees", "Linked Lists, Trees & Tries"], ["neet-heap-graphs", "Heaps, Backtracking & Graphs"], ["neet-dp", "Dynamic Programming"], ["neet-greedy-math", "Greedy, Intervals, Math & Bits"]] },
-    { title: "How computers work", why: "The fundamentals interviewers probe with 'what happens when' questions.",
-      tracks: [["csapp", "Computer Systems"], ["os", "Operating Systems"], ["networking", "Computer Networking"]] },
-    { title: "Data", why: "SQL is tested directly; the rest is the vocabulary of every system design conversation.",
+        ["neet-linked-trees", "Linked Lists, Trees & Tries"], ["neet-heap-graphs", "Heaps, Backtracking & Graphs"], ["neet-dp", "Dynamic Programming"], ["neet-greedy-math", "Greedy, Intervals, Math & Bits"],
+        ["interview-prep", "Cracking the Coding Interview"]] },
+    { title: "SQL and data stores", why: "SQL is the second most requested skill in Singapore postings and has its own interview round.",
       tracks: [["sql", "SQL"], ["databases", "Databases & Data-Intensive Systems"], ["redis", "Redis"], ["mongodb", "MongoDB"]] },
-    { title: "Building and shipping software", why: "How backend services are written in Python and Go, packaged, secured and released, plus the open-ended questions about it.",
-      tracks: [["fastapi", "FastAPI & Backend"], ["go", "Go"], ["docker", "Docker & Containers"], ["cicd", "CI/CD"], ["web-security", "Web Application Security"], ["thinking", "Open-Ended Engineering Questions"]] },
-    { title: "Machine learning and AI", why: "For ML, MLOps and AI engineering roles. Do this after Python, SQL and the backend stage.",
+    { title: "A backend language and framework", why: "Postings ask for one strong backend language. Java with Spring and Go lead in Singapore; Python and Node.js follow. Learn one stack well, then skim the others.",
+      tracks: [["java", "Java"], ["spring", "Spring Boot"], ["go", "Go"], ["fastapi", "FastAPI & Backend"], ["javascript", "JavaScript"], ["typescript", "TypeScript"],
+        ["nodejs", "Node.js"], ["graphql", "GraphQL & API Design"], ["django", "Django"]] },
+    { title: "Cloud and DevOps", why: "AWS, containers and automation show up in a large and rising share of postings.",
+      tracks: [["docker", "Docker & Containers"], ["kubernetes", "Kubernetes"], ["aws", "AWS"], ["terraform", "Terraform"], ["cicd", "CI/CD"], ["nginx", "NGINX"]] },
+    { title: "System design and architecture", why: "The design round, and the open-ended questions around it.",
+      tracks: [["networking", "Computer Networking"], ["system-design", "System Design Interview"], ["microservices", "Microservices"], ["web-security", "Web Application Security"], ["thinking", "Open-Ended Engineering Questions"]] },
+    { title: "How computers work", why: "The fundamentals behind 'what happens when' questions.",
+      tracks: [["csapp", "Computer Systems"], ["os", "Operating Systems"]] },
+    { title: "Machine learning and AI", why: "For ML and AI engineer roles: Python, models, LLMs, retrieval and deployment.",
       tracks: [["ml", "Machine Learning"], ["mlops", "MLOps"], ["ai-eng", "AI Engineering"], ["llm-practice", "LLMs Hands-On"]] },
-    { title: "JavaScript backend and APIs", why: "Widely asked for in backend and full-stack job descriptions: the JavaScript language, TypeScript, Node.js services, GraphQL APIs and testing.",
-      tracks: [["javascript", "JavaScript"], ["typescript", "TypeScript"], ["nodejs", "Node.js"], ["graphql", "GraphQL & API Design"], ["js-testing", "JavaScript Testing"]] },
-    { title: "Web front end and frameworks", why: "What users see and the frameworks around it: pages, React with Firebase, Django, and the web server in front.",
-      tracks: [["html-css", "HTML & CSS"], ["react", "React with Firebase"], ["django", "Django"], ["nginx", "NGINX"]] },
+    { title: "Front end", why: "For full-stack roles: pages, React and testing.",
+      tracks: [["html-css", "HTML & CSS"], ["react", "React with Firebase"], ["js-testing", "JavaScript Testing"]] },
+  ];
+  const ROLES = [
+    ["Backend engineer", ["python", "git", "linux-cli", "dsa-foundations", "neet-arrays", "sql", "java", "spring", "docker", "aws", "system-design"]],
+    ["Full-stack engineer", ["python", "git", "dsa-foundations", "neet-arrays", "sql", "javascript", "typescript", "react", "nodejs", "docker", "system-design"]],
+    ["AI / ML engineer", ["python", "git", "dsa-foundations", "neet-arrays", "sql", "ml", "ai-eng", "llm-practice", "fastapi", "docker", "mlops"]],
   ];
   function nextTrack() {
     for (const st of PATH) for (const [id] of st.tracks) { const t = DATA.tracks[id]; if (t && trackProgress(t).pct < 100) return id; }
@@ -720,6 +729,9 @@
     }).join("");
     setPage(`<div class="page"><div class="crumbs"><a href="#/">Home</a></div><h1 class="page-title">Roadmap</h1>
       <p class="muted">Follow the stages top to bottom and the numbered tracks left to right. Every stage is asked about in real job descriptions, so none is filler. Start with Stage 1, keep Stage 2 problems going every day, and choose the order of the later stages by the jobs you are applying for.</p>
+      <div class="card" style="margin-top:14px"><h3 style="margin:0">Short on time? The first tracks to finish for each role</h3>
+        ${ROLES.map(([role, ids]) => `<p style="margin:6px 0 0"><b>${role}:</b> ${ids.map((id) => (DATA.tracks[id] ? `<a href="#/track/${id}">${esc(DATA.tracks[id].title)}</a>` : `<span class="muted">${esc(id)} (being written)</span>`)).join(" → ")}</p>`).join("")}
+        <p class="muted" style="font-size:12px;margin:8px 0 0">Ordered from a survey of Singapore job postings in late 2026. The full path below covers everything.</p></div>
       ${stages}${Ghibli.figure("laputa", "roadmap", "wide")}</div>`);
   }
 

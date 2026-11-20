@@ -45,6 +45,20 @@
   "problems": 25
  },
  {
+  "id": "vim",
+  "title": "Practical Vim",
+  "icon": "⌨️",
+  "blurb": "tmp",
+  "color": "#1f9d55",
+  "sources": [
+   "Neil, Practical Vim 2e"
+  ],
+  "words": 0,
+  "modules": 1,
+  "lessons": 0,
+  "problems": 23
+ },
+ {
   "id": "dsa-foundations",
   "title": "DSA Foundations (Goodrich)",
   "icon": "📚",
@@ -89,7 +103,7 @@
   "words": 20005,
   "modules": 3,
   "lessons": 8,
-  "problems": 35
+  "problems": 51
  },
  {
   "id": "neet-linked-trees",
@@ -135,7 +149,7 @@
   "words": 25523,
   "modules": 3,
   "lessons": 11,
-  "problems": 28
+  "problems": 39
  },
  {
   "id": "neet-greedy-math",
@@ -151,47 +165,7 @@
   "words": 22712,
   "modules": 4,
   "lessons": 8,
-  "problems": 34
- },
- {
-  "id": "csapp",
-  "title": "Computer Systems & Architecture",
-  "icon": "🖥️",
-  "blurb": "How programs really run: bits and floats, x86-64 assembly, pipelined processors, caches, linking, processes and signals, virtual memory, I/O, sockets and threads, following CS:APP.",
-  "color": "#3d7ea6",
-  "sources": [
-   "Bryant & O'Hallaron, Computer Systems: A Programmer's Perspective, 3rd ed. (CS:APP 3e)"
-  ],
-  "words": 147316,
-  "modules": 13,
-  "lessons": 34,
-  "problems": 26
- },
- {
-  "id": "os",
-  "title": "Operating Systems (Tanenbaum)",
-  "icon": "🧵",
-  "blurb": "Processes, memory, files, I/O, deadlocks, virtualization, multiprocessors and security, with runnable simulations of every classic algorithm and two real-system case studies.",
-  "color": "#0f8b8d",
-  "sources": [
-   "Tanenbaum & Bos, Modern Operating Systems, 4th ed., ch. 1–12"
-  ],
-  "words": 0,
-  "modules": 12,
-  "lessons": 33,
-  "problems": 33
- },
- {
-  "id": "networking",
-  "title": "Computer Networking for Engineers",
-  "icon": "🌐",
-  "blurb": "tmp",
-  "color": "#2a6fdb",
-  "sources": [],
-  "words": 0,
-  "modules": 1,
-  "lessons": 0,
-  "problems": 28
+  "problems": 46
  },
  {
   "id": "sql",
@@ -245,6 +219,22 @@
   "problems": 25
  },
  {
+  "id": "go",
+  "title": "Go (Learning Go)",
+  "icon": "🐹",
+  "blurb": "Go from the first `go run` to production services: types, slices and maps, interfaces, generics, errors, modules, goroutines and channels, context, testing, the standard library and the runtime questions interviewers love. Written for complete beginners, with runnable simulations and practice problems.",
+  "color": "#00add8",
+  "sources": [
+   "Jon Bodner, Learning Go: An Idiomatic Approach to Real-World Go Programming, 2nd ed. (O'Reilly), ch. 1-16 (topic coverage and fact-checking only; all wording and examples are original)",
+   "The Go Programming Language Specification, go.dev/ref/spec",
+   "Go documentation: Effective Go, the Go Memory Model, the Go blog and package docs, go.dev/doc and pkg.go.dev"
+  ],
+  "words": 0,
+  "modules": 18,
+  "lessons": 42,
+  "problems": 30
+ },
+ {
   "id": "fastapi",
   "title": "FastAPI & Backend Engineering",
   "icon": "⚡",
@@ -261,6 +251,49 @@
   "problems": 18
  },
  {
+  "id": "javascript",
+  "title": "JavaScript (Eloquent JavaScript)",
+  "icon": "✨",
+  "blurb": "The JavaScript language from values and closures to promises and the event loop, then the browser (DOM, events, canvas, fetch) and Node.js, with runnable examples, live pages and judged problems.",
+  "color": "#c99a06",
+  "sources": [
+   "Haverbeke, Eloquent JavaScript (4th ed.), ch. 1-21",
+   "MDN Web Docs (developer.mozilla.org)"
+  ],
+  "words": 0,
+  "modules": 17,
+  "lessons": 37,
+  "problems": 35
+ },
+ {
+  "id": "graphql",
+  "title": "GraphQL & API Design",
+  "icon": "🕸️",
+  "blurb": "tmp",
+  "color": "#d6338a",
+  "sources": [
+   "Porcello & Banks, Learning GraphQL (O'Reilly, 2018)"
+  ],
+  "words": 0,
+  "modules": 1,
+  "lessons": 0,
+  "problems": 9
+ },
+ {
+  "id": "django",
+  "title": "Django",
+  "icon": "🎸",
+  "blurb": "tmp",
+  "color": "#0c7c59",
+  "sources": [
+   "tmp"
+  ],
+  "words": 0,
+  "modules": 1,
+  "lessons": 0,
+  "problems": 26
+ },
+ {
   "id": "docker",
   "title": "Docker & Containers",
   "icon": "🐳",
@@ -274,7 +307,7 @@
   "words": 51064,
   "modules": 14,
   "lessons": 16,
-  "problems": 15
+  "problems": 25
  },
  {
   "id": "cicd",
@@ -287,10 +320,22 @@
    "Forsgren, Humble & Kim, Accelerate / DORA State of DevOps research (four key metrics)",
    "Official docs: GitHub Actions, GitLab CI/CD, Docker, Kubernetes, Terraform, Argo CD, Argo Rollouts, OpenFeature, Semantic Versioning, Conventional Commits, trunkbaseddevelopment.com"
   ],
-  "words": 32544,
-  "modules": 6,
-  "lessons": 11,
+  "words": 127245,
+  "modules": 18,
+  "lessons": 38,
   "problems": 0
+ },
+ {
+  "id": "networking",
+  "title": "Computer Networking for Engineers",
+  "icon": "🌐",
+  "blurb": "tmp",
+  "color": "#2a6fdb",
+  "sources": [],
+  "words": 0,
+  "modules": 1,
+  "lessons": 0,
+  "problems": 28
  },
  {
   "id": "web-security",
@@ -320,6 +365,34 @@
   "modules": 1,
   "lessons": 0,
   "problems": 24
+ },
+ {
+  "id": "csapp",
+  "title": "Computer Systems & Architecture",
+  "icon": "🖥️",
+  "blurb": "How programs really run: bits and floats, x86-64 assembly, pipelined processors, caches, linking, processes and signals, virtual memory, I/O, sockets and threads, following CS:APP.",
+  "color": "#3d7ea6",
+  "sources": [
+   "Bryant & O'Hallaron, Computer Systems: A Programmer's Perspective, 3rd ed. (CS:APP 3e)"
+  ],
+  "words": 147316,
+  "modules": 13,
+  "lessons": 34,
+  "problems": 26
+ },
+ {
+  "id": "os",
+  "title": "Operating Systems (Tanenbaum)",
+  "icon": "🧵",
+  "blurb": "Processes, memory, files, I/O, deadlocks, virtualization, multiprocessors and security, with runnable simulations of every classic algorithm and two real-system case studies.",
+  "color": "#0f8b8d",
+  "sources": [
+   "Tanenbaum & Bos, Modern Operating Systems, 4th ed., ch. 1–12"
+  ],
+  "words": 0,
+  "modules": 12,
+  "lessons": 33,
+  "problems": 33
  },
  {
   "id": "ml",
@@ -391,21 +464,6 @@
   "problems": 24
  },
  {
-  "id": "javascript",
-  "title": "JavaScript (Eloquent JavaScript)",
-  "icon": "✨",
-  "blurb": "The JavaScript language from values and closures to promises and the event loop, then the browser (DOM, events, canvas, fetch) and Node.js, with runnable examples, live pages and judged problems.",
-  "color": "#c99a06",
-  "sources": [
-   "Haverbeke, Eloquent JavaScript (4th ed.), ch. 1-21",
-   "MDN Web Docs (developer.mozilla.org)"
-  ],
-  "words": 0,
-  "modules": 17,
-  "lessons": 37,
-  "problems": 35
- },
- {
   "id": "react",
   "title": "React (with Firebase)",
   "icon": "⚛️",
@@ -421,49 +479,5 @@
   "modules": 10,
   "lessons": 29,
   "problems": 30
- },
- {
-  "id": "django",
-  "title": "Django",
-  "icon": "🎸",
-  "blurb": "tmp",
-  "color": "#0c7c59",
-  "sources": [
-   "tmp"
-  ],
-  "words": 0,
-  "modules": 1,
-  "lessons": 0,
-  "problems": 26
- },
- {
-  "id": "go",
-  "title": "Go (Learning Go)",
-  "icon": "🐹",
-  "blurb": "Go from the first `go run` to production services: types, slices and maps, interfaces, generics, errors, modules, goroutines and channels, context, testing, the standard library and the runtime questions interviewers love. Written for complete beginners, with runnable simulations and practice problems.",
-  "color": "#00add8",
-  "sources": [
-   "Jon Bodner, Learning Go: An Idiomatic Approach to Real-World Go Programming, 2nd ed. (O'Reilly), ch. 1-16 (topic coverage and fact-checking only; all wording and examples are original)",
-   "The Go Programming Language Specification, go.dev/ref/spec",
-   "Go documentation: Effective Go, the Go Memory Model, the Go blog and package docs, go.dev/doc and pkg.go.dev"
-  ],
-  "words": 0,
-  "modules": 18,
-  "lessons": 42,
-  "problems": 18
- },
- {
-  "id": "vim",
-  "title": "Practical Vim",
-  "icon": "⌨️",
-  "blurb": "tmp",
-  "color": "#1f9d55",
-  "sources": [
-   "Neil, Practical Vim 2e"
-  ],
-  "words": 0,
-  "modules": 1,
-  "lessons": 0,
-  "problems": 23
  }
 ]
