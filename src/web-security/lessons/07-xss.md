@@ -85,7 +85,7 @@ Places where untrusted data enters are called **sources** (URL, form fields, sto
 
 ## The core defence: output encoding
 
-The fix is not to forbid `<` in names. People are called O'Brien, companies are called "A & B <Holdings>", and a programming forum must be able to discuss `<script>`. The fix is to make sure the browser treats those characters as **text**.
+The fix is not to forbid `<` in names. People are called O'Brien, companies are called "A & B &lt;Holdings&gt;", and a programming forum must be able to discuss `<script>`. The fix is to make sure the browser treats those characters as **text**.
 
 HTML has a way to write a character so that it is displayed and not interpreted: **character references** (also called HTML entities). `&lt;` displays `<`. `&amp;` displays `&`. Converting special characters to these safe forms at the moment you place data into a page is called **output encoding** or **escaping**.
 

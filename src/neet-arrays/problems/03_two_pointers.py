@@ -1089,7 +1089,7 @@ dict(
     difficulty="Hard",
     pattern="Two Pointers",
     leetcode="https://leetcode.com/problems/trapping-rain-water/",
-    neetcode="https://neetcode.io/problems/trapping-water",
+    neetcode="https://neetcode.io/problems/trapping-rain-water",
     entry="trap",
     description=r"""
 `height` describes an elevation map: bar `i` has width 1 and height `height[i]`. After heavy rain, water

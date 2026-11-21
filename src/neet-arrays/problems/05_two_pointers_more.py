@@ -579,7 +579,7 @@ dict(
     difficulty="Medium",
     pattern="Two Pointers",
     leetcode=_lc("3sum-closest"),
-    neetcode=_nc("3sum-closest"),
+    neetcode=None,  # not on neetcode.io (checked 2026-11-21); the LeetCode link stays
     entry="threeSumClosest",
     description=r"""
 Given an integer list `nums` and an integer `target`, choose **three numbers at different positions**
