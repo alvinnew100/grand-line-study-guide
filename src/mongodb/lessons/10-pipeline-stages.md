@@ -398,38 +398,38 @@ Try adding a `{"$match": {"day": "Sun"}}` stage at the front of the second pipel
 
 ```quiz
 [
-  {"q": "In {$group: {_id: \"$stall\", revenue: {$sum: \"$total\"}}}, what does \"$stall\" mean?",
+  {"q": "In {\\$group: {_id: \"\\$stall\", revenue: {\\$sum: \"\\$total\"}}}, what does \"\\$stall\" mean?",
    "options": ["The literal text $stall", "The value of the field stall in each incoming document", "A stage named stall", "The name of the output collection"],
    "answer": 1,
    "explain": "A string value beginning with a dollar sign is a field path: it reads that field from the current document."},
-  {"q": "What does {$sum: 1} compute inside a $group stage?",
+  {"q": "What does {\\$sum: 1} compute inside a \\$group stage?",
    "options": ["The sum of a field named 1", "The number of documents in each group", "Always 1", "The first document of each group"],
    "answer": 1,
    "explain": "Adding 1 per document counts the documents in the group."},
-  {"q": "A sale has items: [\"tea\", \"bao\", \"soda\"]. How many documents does {$unwind: \"$items\"} output for it?",
+  {"q": "A sale has items: [\"tea\", \"bao\", \"soda\"]. How many documents does {\\$unwind: \"\\$items\"} output for it?",
    "options": ["1", "3", "0", "6"],
    "answer": 1,
    "explain": "One output document per array element."},
-  {"q": "What happens to a document whose items array is empty when it passes through {$unwind: \"$items\"}?",
+  {"q": "What happens to a document whose items array is empty when it passes through {\\$unwind: \"\\$items\"}?",
    "options": ["It passes through unchanged", "It is dropped from the pipeline", "It causes an error", "It is output with items: null"],
    "answer": 1,
    "explain": "By default empty or missing arrays yield no output; preserveNullAndEmptyArrays: true keeps the document."},
   {"q": "Which pipeline returns the three largest sales?",
-   "options": ["[{$limit: 3}, {$sort: {total: -1}}]", "[{$sort: {total: -1}}, {$limit: 3}]", "[{$group: {_id: null}}, {$limit: 3}]", "[{$match: {total: 3}}]"],
+   "options": ["[{\\$limit: 3}, {\\$sort: {total: -1}}]", "[{\\$sort: {total: -1}}, {\\$limit: 3}]", "[{\\$group: {_id: null}}, {\\$limit: 3}]", "[{$match: {total: 3}}]"],
    "answer": 1,
    "explain": "Stages run in order: sorting first and then limiting gives the top three. Limiting first sorts three arbitrary documents."},
   {"q": "Why should a $match stage be placed as early as possible?",
    "options": ["Later stages are not allowed to filter", "It can use an index when first, and it reduces the documents later stages must process", "It makes $group output sorted", "It is required before $project"],
    "answer": 1,
    "explain": "An initial $match behaves like find and can use indexes; fewer documents downstream means less work and memory."},
-  {"q": "After {$unwind: \"$items\"}, you sum the per-sale field total. What is wrong?",
+  {"q": "After {\\$unwind: \"\\$items\"}, you sum the per-sale field total. What is wrong?",
    "options": ["Nothing", "Each sale's total is counted once per item, inflating the sum", "total no longer exists", "The sum is always zero"],
    "answer": 1,
    "explain": "Unwinding repeats the non-array fields on every copy, so per-document values are multiplied by the array length."},
   {"q": "How is SQL's HAVING expressed in a pipeline?",
-   "options": ["A $match stage before $group", "A $match stage after $group", "A $project stage", "It cannot be expressed"],
+   "options": ["A \\$match stage before \\$group", "A \\$match stage after \\$group", "A $project stage", "It cannot be expressed"],
    "answer": 1,
-   "explain": "HAVING filters on aggregated values, so it is a $match placed after the $group that computes them."}
+   "explain": "HAVING filters on aggregated values, so it is a \\$match placed after the \\$group that computes them."}
 ]
 ```
 

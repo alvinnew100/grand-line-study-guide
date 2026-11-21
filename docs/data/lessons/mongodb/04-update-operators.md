@@ -395,7 +395,7 @@ Reading the output:
    "options": ["$set", "$setOnInsert", "$addToSet", "$currentDate"],
    "answer": 1,
    "explain": "$setOnInsert is ignored when an existing document is updated."},
-  {"q": "In {$set: {\"bookings.$.paid\": true}}, what does $ refer to?",
+  {"q": "In {\\$set: {\"bookings.\\$.paid\": true}}, what does \\$ refer to?",
    "options": ["Every element of bookings", "The last element of bookings", "The first element of bookings matched by the filter", "The document's _id"],
    "answer": 2,
    "explain": "The positional operator stands for the position of the first array element that satisfied the filter."},

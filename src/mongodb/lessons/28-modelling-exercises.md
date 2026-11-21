@@ -485,7 +485,7 @@ Change `READS` to `4_000` to model a write-heavy system and see fan-out on read 
    "answer": 1,
    "explain": "Unbounded lists get their own collection; subset and computed patterns keep the book page to one read."},
   {"q": "Which update prevents selling a book that is out of stock?",
-   "options": ["Read stock, check it in code, then $set the new value", "updateOne({_id: id, stock: {$gte: 1}}, {$inc: {stock: -1}}) and check modifiedCount", "updateOne({_id: id}, {$inc: {stock: -1}})", "deleteOne({_id: id})"],
+   "options": ["Read stock, check it in code, then $set the new value", "updateOne({_id: id, stock: {\\$gte: 1}}, {\\$inc: {stock: -1}}) and check modifiedCount", "updateOne({_id: id}, {$inc: {stock: -1}})", "deleteOne({_id: id})"],
    "answer": 1,
    "explain": "The precondition in the filter makes the check and the decrement one atomic single-document operation."},
   {"q": "Why not store a user's followers as an array in the user document?",

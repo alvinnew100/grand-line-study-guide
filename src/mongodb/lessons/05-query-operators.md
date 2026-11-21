@@ -381,8 +381,8 @@ Try adding a trail with `ratings: [4]` and predict which queries change.
 
 ```quiz
 [
-  {"q": "A document has ratings: [3, 9]. Does {ratings: {$gt: 8, $lt: 4}} match it?",
-   "options": ["No, because no number is both above 8 and below 4", "Yes, because 9 satisfies $gt: 8 and 3 satisfies $lt: 4", "It raises an error on arrays", "Only if the array is sorted"],
+  {"q": "A document has ratings: [3, 9]. Does {ratings: {\\$gt: 8, \\$lt: 4}} match it?",
+   "options": ["No, because no number is both above 8 and below 4", "Yes, because 9 satisfies \\$gt: 8 and 3 satisfies \\$lt: 4", "It raises an error on arrays", "Only if the array is sorted"],
    "answer": 1,
    "explain": "Each operator may be satisfied by a different element. Use $elemMatch to require one element to satisfy both."},
   {"q": "Which documents does {region: {$ne: \"north\"}} return?",
@@ -392,7 +392,7 @@ Try adding a trail with `ratings: [4]` and predict which queries change.
   {"q": "What does {closed: null} match?",
    "options": ["Only documents where closed is explicitly null", "Only documents without a closed field", "Documents where closed is null and documents without the field", "Documents where closed is false"],
    "answer": 2,
-   "explain": "Querying for null matches both an explicit null and an absent field; use $exists or $type to tell them apart."},
+   "explain": "Querying for null matches both an explicit null and an absent field; use \\$exists or \\$type to tell them apart."},
   {"q": "A document has guide: {name: \"Mira\", years: 4}. Which filter matches it reliably even if more fields are added to guide later?",
    "options": ["{guide: {name: \"Mira\"}}", "{guide: {years: 4, name: \"Mira\"}}", "{\"guide.name\": \"Mira\"}", "{guide: \"Mira\"}"],
    "answer": 2,
@@ -404,11 +404,11 @@ Try adding a trail with `ratings: [4]` and predict which queries change.
   {"q": "Why should $where be avoided?",
    "options": ["It returns results in random order", "It runs JavaScript per document, cannot use indexes and is an injection risk", "It only works on arrays", "It modifies the documents it reads"],
    "answer": 1,
-   "explain": "$where is slow and dangerous; $expr with built-in operators is the replacement for comparing fields."},
+   "explain": "\\$where is slow and dangerous; \\$expr with built-in operators is the replacement for comparing fields."},
   {"q": "Which filter finds trails in the south or east regions most idiomatically?",
    "options": ["{region: \"south\", region: \"east\"}", "{region: {$in: [\"south\", \"east\"]}}", "{region: {$all: [\"south\", \"east\"]}}", "{region: {$size: 2}}"],
    "answer": 1,
-   "explain": "$in matches any listed value. Repeating a key in one document is invalid, and $all would require both values at once."},
+   "explain": "\\$in matches any listed value. Repeating a key in one document is invalid, and \\$all would require both values at once."},
   {"q": "A login handler builds the filter {user: name, pass: pw} from JSON sent by the browser. What can go wrong?",
    "options": ["Nothing; filters are always safe", "The browser may send pw as {\"$ne\": null}, turning the equality into a condition that matches any password", "The query will be slow", "The document will be deleted"],
    "answer": 1,

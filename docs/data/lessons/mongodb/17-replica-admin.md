@@ -152,6 +152,67 @@ A member that has fallen too far behind is rebuilt by emptying its data folder a
 > [!INTERVIEW]
 > **"How do you upgrade a replica set with no downtime?"** A rolling upgrade: upgrade the secondaries one at a time, waiting for each to return to `SECONDARY` and catch up; then `rs.stepDown()` the primary, let a secondary take over, and upgrade the old primary. A majority is available throughout. Add the application side: the step-down causes a brief election that retryable writes and the driver's server selection ride through. For a major version, mention the final step of raising the feature compatibility version only after every member runs the new binaries, because that step is what makes the upgrade hard to reverse.
 
+## Replication chaining and running on a budget
+
+### Where do secondaries copy from?
+
+So far the picture was simple: the primary writes, every secondary copies the primary's oplog. In practice a secondary may choose to copy from **another secondary** instead. This is called **replication chaining**, like a line of people passing buckets of water: the primary hands to one, who hands to the next.
+
+```mermaid
+graph LR
+  P["Primary"] --> S1["Secondary 1"]
+  S1 --> S2["Secondary 2"]
+  P --> S3["Secondary 3"]
+```
+
+By default each secondary picks its source automatically, preferring a member that is close (low network delay) and ahead of it. Chaining has real advantages: it spares the primary from serving every copier, and it saves bandwidth when a data centre holds several secondaries, because only one of them needs to cross the expensive link to the primary and the rest copy from their neighbour.
+
+The disadvantage is delay. A change reaches the second secondary only after the first has applied it, so lag adds up along the chain, and a majority-acknowledged write may wait longer. If the middle member is slow, everything behind it is slow too.
+
+### Replication loops
+
+A **replication loop** is a cycle of members each copying from the next: A copies from B, B from C, C from A. None of them copies from the primary, so none receives new writes, and all fall behind together. Automatic source selection avoids loops by only choosing a source that is ahead. Loops can appear only when sources are forced by hand with the `replSetSyncFrom` command (the shell helper is `rs.syncFrom("host:port")`). Before using it, read `rs.status()` and make sure the chosen source is ahead and does not itself copy from you.
+
+### Disabling chaining
+
+If you prefer predictable, short lag over saving the primary's bandwidth, switch chaining off. The setting lives in the replica set configuration, under `settings`:
+
+```javascript
+rs0:PRIMARY> cfg = rs.conf()
+rs0:PRIMARY> cfg.settings = cfg.settings || {}
+rs0:PRIMARY> cfg.settings.chainingAllowed = false
+rs0:PRIMARY> rs.reconfig(cfg)
+```
+
+- `rs.conf()` fetches the current configuration, as in the earlier "Changing the configuration" steps.
+- The `settings` sub-document may not exist yet, so it is created if missing.
+- `chainingAllowed` defaults to `true`; setting it to `false` makes every secondary copy straight from the primary.
+- `rs.reconfig` submits the change from the primary.
+
+If the primary becomes unavailable, secondaries fall back to copying from each other so that they can keep up. The cost of turning chaining off is that the primary serves more copiers; with a handful of members, that is rarely a problem.
+
+### Replication on a budget
+
+A full replica set normally means several equally strong machines, which is expensive. If you can afford only one excellent server, you can still gain a safety copy by adding a cheaper machine used purely for disaster recovery: less memory, a slower disk, and no client traffic. The good server is always the primary. The cheap one is configured with these member options:
+
+```javascript
+{ _id: 1, host: "cheap.example.org:27017",
+  priority: 0,          // never becomes primary
+  hidden: true,         // invisible to drivers, so no client reads reach it
+  buildIndexes: false,  // optional: skips building secondary indexes
+  votes: 0 }            // only if the set has just two members
+```
+
+- `priority: 0` means the member can never stand for election, so the weak machine never takes over from the strong one.
+- `hidden: true` removes it from the list drivers see, so reads cannot be sent to it. (A hidden member must also have priority 0.)
+- `buildIndexes: false` saves a lot of work, because the member then keeps no indexes except `_id`. The cost: restoring from this member means rebuilding every index. This option can only be set when the member is added.
+- `votes: 0` addresses a two-member set. With two voting members, losing either leaves no majority, so the primary would step down. Taking the vote away from the cheap member lets the primary keep working if the cheap one fails. If a third machine exists, even the application server, a lightweight arbiter running there is better than `votes: 0`.
+
+You get a continuous, up-to-date copy for backup and recovery, without paying for two high-end machines. You do not get automatic failover to equal performance: if the primary dies, the cheap member cannot step in as an equal.
+
+> [!WARNING]
+> A budget secondary protects data, not availability. Plan for a manual recovery, and test it before you need it.
+
 ## The same from Python
 
 ```python
@@ -326,6 +387,12 @@ Reading the output:
 - **Step down** - a primary voluntarily giving up its role.
 - **Standalone** - a `mongod` running outside any replica set.
 - **Resync** - rebuilding a member's data with a full initial sync.
+- **Replication chaining** - a secondary copying from another secondary instead of from the primary.
+- **Replication loop** - a cycle of members each copying from the next, so that none receives new writes.
+- **`chainingAllowed`** - a replica set setting (default true) controlling whether chaining is permitted.
+- **Hidden member** - a member that drivers do not see and so receives no client reads.
+- **`priority: 0`** - a member option making a member ineligible to become primary.
+- **`buildIndexes: false`** - a member option that skips building secondary indexes on that member.
 
 ## Check yourself
 
@@ -362,7 +429,27 @@ Reading the output:
   {"q": "What does maxTimeMS do?",
    "options": ["Limits how long the driver waits to find a primary", "Tells the server to abandon the operation after the given time", "Sets the heartbeat interval", "Delays replication"],
    "answer": 1,
-   "explain": "It is a server-side limit on processing time for one operation, which also frees server resources."}
+   "explain": "It is a server-side limit on processing time for one operation, which also frees server resources."},
+  {"q": "What is replication chaining?",
+   "options": ["A secondary copying from another secondary instead of the primary", "Linking two replica sets together", "Running two writes in sequence", "Encrypting the oplog"],
+   "answer": 0,
+   "explain": "Chaining spares the primary some work but adds delay along the chain."},
+  {"q": "Which setting forces every secondary to copy directly from the primary?",
+   "options": ["settings.chainingAllowed = false", "priority = 0", "hidden = true", "votes = 0"],
+   "answer": 0,
+   "explain": "chainingAllowed defaults to true; setting it to false disables chaining. If the primary is unreachable, members still fall back to each other."},
+  {"q": "How can a replication loop arise?",
+   "options": ["Only by forcing sync sources manually in a circle", "Automatically on every failover", "By enabling hidden members", "By lowering the oplog size"],
+   "answer": 0,
+   "explain": "Automatic selection picks sources that are ahead, so loops need a hand-forced replSetSyncFrom."},
+  {"q": "A cheap disaster-recovery secondary should never become primary and never get client reads. Which options achieve this?",
+   "options": ["priority: 0 and hidden: true", "votes: 5", "buildIndexes: true only", "arbiterOnly: true"],
+   "answer": 0,
+   "explain": "priority 0 blocks elections and hidden hides it from drivers."},
+  {"q": "Why set votes: 0 on the cheap member of a two-member set?",
+   "options": ["So the primary can keep its majority if the cheap member fails", "To make it faster", "To make it the primary", "To disable the oplog"],
+   "answer": 0,
+   "explain": "With two voters, losing either member loses the majority and the primary would step down."}
 ]
 ```
 

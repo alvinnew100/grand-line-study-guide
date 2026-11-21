@@ -151,6 +151,46 @@ Each of these is the subject of the next module. For now, notice the shape: the 
 
 To check a value's type, use the `$type` query operator: `db.members.find({ joined: { $type: "date" } })` returns the documents where `joined` is a real date, and replacing `"date"` with `"string"` finds the broken ones.
 
+## Shell tips: startup file, prompt and document size
+
+Three small habits make the shell pleasanter to live in.
+
+### A startup file
+
+If you type the same helper functions every session, put them in a **startup file**, a script the shell runs by itself each time it launches. In `mongosh` this is `.mongoshrc.js` (the `rc` stands for "run commands", a Unix naming habit) in your home folder. Older versions of the legacy `mongo` shell used `.mongorc.js` for the same job; `mongosh` does not read that name, so rename or copy the file when you move over.
+
+```javascript
+// ~/.mongoshrc.js
+function recent(coll, n = 5) {
+  return db.getCollection(coll).find().sort({ _id: -1 }).limit(n).toArray();
+}
+```
+
+After this, typing `recent("members", 3)` in any session returns the three newest documents, because the function was defined at startup. Keep the file small and harmless: it runs on every start, so a slow or failing line is felt every time.
+
+### Customising the prompt
+
+The prompt, that `toolshare>` at the start of the line, can be replaced by assigning a function to the shell variable `prompt`. The function returns the text to display; the shell calls it before every line.
+
+```javascript
+prompt = () => `${new Date().toLocaleTimeString()} ${db.getName()}> `;
+```
+
+Put it in `.mongoshrc.js` to keep it permanently. A prompt that shows the time, or the database name, helps when you are connected to a production system and want to be certain where you are.
+
+### Checking a document's size
+
+Documents are limited to 16 MB, and storage and network cost grow with size, so it is useful to measure. The shell provides `Object.bsonsize(doc)`, which returns the number of bytes the document occupies when encoded as BSON:
+
+```javascript
+toolshare> Object.bsonsize({ _id: ObjectId() })
+22
+toolshare> Object.bsonsize(db.members.findOne())
+118
+```
+
+The first result is 22 bytes: 4 for the length prefix, 1 for the type, 4 for the name `_id` with its terminator, 12 for the ObjectId, and 1 closing byte. The second measures a real document read from the collection. For many documents at once, the aggregation operator `$bsonSize` computes the same figure on the server (`{ $project: { bytes: { $bsonSize: "$$ROOT" } } }`), which finds the largest documents without dragging them to the shell.
+
 ## The same from Python
 
 ```python
@@ -278,6 +318,9 @@ Reading the output:
 - **Dot notation** - writing `"address.city"` to name a field inside an embedded document.
 - **CRUD** - Create, Read, Update, Delete: the four basic data operations.
 - **Update operator** - an instruction such as `$set` that describes a change to a document.
+- **Startup file** - a script (`.mongoshrc.js`; `.mongorc.js` in the legacy shell) that runs each time the shell starts.
+- **Prompt** - the text shown before each line you type; in the shell it can be replaced by assigning a function to `prompt`.
+- **`Object.bsonsize`** - a shell function that returns a document's size in bytes when encoded as BSON.
 
 ## Check yourself
 
@@ -310,7 +353,15 @@ Reading the output:
   {"q": "Two ObjectIds are generated in the same second by the same process. Which part differs?",
    "options": ["The timestamp", "The random value", "The counter", "Nothing; they collide"],
    "answer": 2,
-   "explain": "Timestamp and per-process random value are identical; the 3-byte counter increments for every id."}
+   "explain": "Timestamp and per-process random value are identical; the 3-byte counter increments for every id."},
+  {"q": "Where do you put helper functions you want available in every mongosh session?",
+   "options": ["In .mongoshrc.js in your home folder", "In the _id field", "In a capped collection", "In the connection string"],
+   "answer": 0,
+   "explain": "The startup file runs at every launch. The legacy shell used .mongorc.js."},
+  {"q": "Which call returns the size in bytes of a document as stored in BSON?",
+   "options": ["Object.bsonsize(doc)", "doc.length", "db.stats(doc)", "sizeof(doc)"],
+   "answer": 0,
+   "explain": "Object.bsonsize encodes the document as BSON and reports its byte size."}
 ]
 ```
 

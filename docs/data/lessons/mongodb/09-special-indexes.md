@@ -163,6 +163,122 @@ Because similar values land far apart, a hashed index is useless for ranges and 
 > [!INTERVIEW]
 > **"How do you enforce uniqueness on an optional field?"** A plain unique index treats a missing field as `null`, so the second document without the field is rejected. Use a partial unique index: `{ unique: true, partialFilterExpression: { email: { $exists: true } } }` (or `{ $type: "string" }` to exclude explicit nulls as well). Then add the follow-up they are waiting for: queries must include the same condition for the planner to use a partial index, and in a sharded collection a unique index must contain the shard key.
 
+## GridFS: storing large files
+
+Sooner or later an application needs to keep **files**: profile photos, PDF invoices, audio clips. A file is just a long run of bytes. MongoDB documents are limited to 16 MB each, so a 200 MB video cannot be stored as one document, and even a 10 MB file stored that way would be loaded into memory whole every time it was read. **GridFS** is the standard answer: a convention, implemented in the drivers, for cutting a file into pieces and storing each piece as its own document.
+
+Think of a long film shipped on several reels. Each reel is a small, manageable can, and a separate card in the office says which reels belong to the film and in what order. GridFS keeps exactly that: the reels are **chunks**, the card is the file's metadata document.
+
+### The two collections
+
+GridFS uses two collections inside a **bucket**, which is just a named pair of collections. The default bucket is called `fs`, so the collections are `fs.files` and `fs.chunks`.
+
+```javascript
+// one document in fs.files: the "card"
+{ _id: ObjectId("66f1..."), filename: "report.pdf", length: 3145728,
+  chunkSize: 261120, uploadDate: ISODate("2026-03-02T09:14:00Z"),
+  metadata: { owner: "pia", kind: "invoice" } }
+
+// three of the many documents in fs.chunks: the "reels"
+{ _id: ObjectId("..."), files_id: ObjectId("66f1..."), n: 0, data: BinData(0, "...") }
+{ _id: ObjectId("..."), files_id: ObjectId("66f1..."), n: 1, data: BinData(0, "...") }
+{ _id: ObjectId("..."), files_id: ObjectId("66f1..."), n: 2, data: BinData(0, "...") }
+```
+
+- In `fs.files`, `length` is the total size in bytes, `chunkSize` the size of each piece, `uploadDate` the time of upload, and `filename` is what you asked for. `metadata` is an empty drawer for any fields you wish: owner, content type, tags.
+- In `fs.chunks`, `files_id` points back to the card, `n` is the piece number counting from 0, and `data` is the binary piece itself.
+- Reading a file means fetching its chunks sorted by `n` and joining them. The driver does this for you.
+
+The default chunk size in current drivers is 255 kB (261,120 bytes), chosen so that a chunk plus its small overhead fits comfortably inside a document. Every chunk except the last is full.
+
+### Indexes GridFS creates
+
+When a driver first writes to a bucket it creates two indexes, so that normal operations are fast:
+
+- on `fs.files`: `{ filename: 1, uploadDate: 1 }`, which finds a file by name and, among several versions with the same name, the newest;
+- on `fs.chunks`: a **unique** compound index `{ files_id: 1, n: 1 }`. Unique, because a given piece number of a given file must exist only once; compound, so that one index lookup finds exactly the chunk needed to start reading in the middle of a file.
+
+This is a compound unique index of the kind described in the unique-index section above: the two fields together are what must be unique.
+
+### Trying it: mongofiles and a driver
+
+`mongofiles` is a command-line tool shipped in the MongoDB Database Tools. Its main commands are `put` (upload a file), `list`, `get` (download), `search` (find by name) and `delete`:
+
+```bash
+$ mongofiles --db=club put report.pdf
+$ mongofiles --db=club list
+$ mongofiles --db=club get report.pdf
+```
+
+Drivers expose the same operations. In PyMongo:
+
+```python
+import gridfs
+from pymongo import MongoClient
+
+db = MongoClient()["club"]
+fs = gridfs.GridFS(db)                                   # the default "fs" bucket
+
+file_id = fs.put(b"hello, world", filename="hello.txt")  # split into chunks and stored
+data = fs.get(file_id).read()                            # chunks fetched in order and joined
+fs.delete(file_id)                                       # removes the card and all chunks
+```
+
+`put` returns the new file's `_id`; `get` returns a file-like object, so a large file can be read piece by piece and streamed to a web client instead of being loaded whole. Newer drivers also offer a bucket-style API (`GridFSBucket` in several languages) with the same ideas under different method names.
+
+### When to use it, and when not to
+
+GridFS earns its place when:
+
+- files are larger than 16 MB (the only case where plain documents cannot work), or you want to read part of a file without loading it all;
+- you want the files to enjoy the same replication, backup and sharding as the rest of your data, and to avoid running a second storage system;
+- you want to attach searchable metadata to a file and query it like any other document.
+
+A dedicated file store (a network file system, or an object store such as Amazon S3) is usually better when:
+
+- files are small (under 16 MB). Storing them as ordinary `BinData` fields in documents is simpler and faster;
+- files are served directly to browsers: an object store with a content-delivery network is built for that and costs less per gigabyte;
+- you edit files in place. GridFS cannot safely change part of a file, because the pieces are separate documents that cannot be locked together; the safe method is to write a new file and delete the old one.
+
+A common compromise is to keep the file in an object store and keep only its location and metadata in MongoDB.
+
+> [!NOTE]
+> Everything about GridFS is done by the driver. The server sees only two ordinary collections, which is why you can inspect them with `find` and why a half-finished upload can leave orphan chunks behind.
+
+## Tailable cursors on capped collections
+
+A normal cursor reads the documents that match, then finishes. A **tailable cursor** does not finish: when it has delivered everything, it stays open and waits, delivering new documents as they arrive. It is named after the Unix command `tail -f`, which keeps printing new lines added to a log file.
+
+This only works on **capped collections** (the fixed-size, overwrite-the-oldest collections from the previous section), because they keep documents in insertion order, so "everything after the last one I saw" is well defined. A normal collection has no such order.
+
+```python
+from pymongo import MongoClient, CursorType
+import time
+
+db = MongoClient()["app"]
+if "jobs" not in db.list_collection_names():
+    db.create_collection("jobs", capped=True, size=1_048_576)   # 1 MiB ring buffer
+
+cursor = db.jobs.find({}, cursor_type=CursorType.TAILABLE_AWAIT)
+while cursor.alive:
+    for job in cursor:             # yields what is there, then falls out when idle
+        print("processing", job)
+    time.sleep(0.1)                # the cursor stays open; ask again
+```
+
+- `create_collection(..., capped=True, size=...)` makes the fixed-size log; `size` is in bytes.
+- `TAILABLE` alone returns immediately when there is nothing new, so the program would spin in a busy loop. `TAILABLE_AWAIT` sets the **awaitData** option: the server holds the request open for a short while (adjustable with `maxAwaitTimeMS`) before answering "nothing yet", which saves both network traffic and CPU.
+- `cursor.alive` becomes false when the server closes the cursor, and the program must then run the query again.
+
+A tailable cursor can die for several reasons: the query matched nothing when it was first opened (a common beginner surprise: insert one document first), the cursor sat idle too long (roughly ten minutes), or the document it was positioned at was overwritten because the collection wrapped around. Robust consumers therefore remember the last `_id` they processed and re-query from there.
+
+Typical uses were work queues (producers insert jobs, workers tail them), live logs, and chat-style feeds. The mongo shell does not support tailable cursors; use a driver.
+
+For new designs, prefer **change streams** ([Change streams and Atlas Vector Search for RAG](#/lesson/mongodb/change-streams-vector)). They work on ordinary collections, can be filtered, can be resumed from exactly where they stopped after a failure, and report updates and deletes as well as inserts. Tailable cursors see only new inserts into a capped collection, and offer no resume. They remain useful for the small, simple case of a capped log with a few readers.
+
+> [!INTERVIEW]
+> **"How would you build a simple job queue in MongoDB?"** Mention the options in order of modernity: a change stream on the jobs collection to wake workers; a capped collection with a tailable cursor for a fixed-size queue; or plain polling with `findOneAndUpdate` to claim a job atomically. Whichever you choose, say how a worker claims a job exactly once.
+
 ## The same from Python
 
 ```python
@@ -318,6 +434,12 @@ Reading the output:
 - **Hashed index** - an index on the hash of a field, used mainly for sharding.
 - **Wildcard index** - an index over all fields beneath a path.
 - **Capped collection** - a fixed-size collection that overwrites its oldest documents.
+- **GridFS** - a driver-level convention for storing files larger than the document limit by splitting them into chunk documents.
+- **Chunk** - one fixed-size piece of a file, stored as a document in `fs.chunks`.
+- **Bucket** - a named pair of GridFS collections; the default is `fs` (`fs.files` and `fs.chunks`).
+- **`mongofiles`** - a command-line tool to put, get, list, search and delete GridFS files.
+- **Tailable cursor** - a cursor on a capped collection that stays open and delivers new documents as they arrive.
+- **`awaitData`** - a tailable-cursor option making the server wait briefly for new data instead of replying empty.
 
 ## Check yourself
 
@@ -354,7 +476,31 @@ Reading the output:
   {"q": "What does a text index store for the sentence \"The runners were running\"?",
    "options": ["The whole sentence as one key", "Entries for stemmed, non-stop words such as runner and run", "Every character separately", "Only the first word"],
    "answer": 1,
-   "explain": "Text indexing drops stop words like 'the' and 'were' and reduces the rest to stems."}
+   "explain": "Text indexing drops stop words like 'the' and 'were' and reduces the rest to stems."},
+  {"q": "A user uploads a 120 MB video. Why can it not be stored as one ordinary document?",
+   "options": ["BSON cannot hold binary data", "A document is limited to 16 MB", "Videos need a text index", "Documents cannot have a filename"],
+   "answer": 1,
+   "explain": "The 16 MB document limit forces larger files to be split. GridFS does the splitting into chunk documents."},
+  {"q": "Which fields tie a GridFS chunk to its file and say where it belongs in the file?",
+   "options": ["_id and data", "files_id and n", "filename and length", "chunkSize and uploadDate"],
+   "answer": 1,
+   "explain": "files_id points to the document in fs.files and n is the chunk number; together they are unique."},
+  {"q": "Which statement about GridFS is true?",
+   "options": ["The server reassembles files itself; drivers only send bytes", "It is ideal for editing a few bytes in the middle of a file", "It stores a file as chunk documents in fs.chunks plus one metadata document in fs.files", "It only works on sharded clusters"],
+   "answer": 2,
+   "explain": "GridFS is a convention handled by drivers. In-place editing is unsafe because the chunks cannot be locked together."},
+  {"q": "A tailable cursor is opened on a normal (not capped) collection. What happens?",
+   "options": ["It works the same", "It fails: tailable cursors require a capped collection", "It works but only for deletes", "It converts the collection to capped"],
+   "answer": 1,
+   "explain": "Only capped collections keep insertion order, which a tailable cursor relies on."},
+  {"q": "What does the awaitData option change for a tailable cursor?",
+   "options": ["The server waits a short while for new documents before replying empty, instead of answering at once", "The cursor returns documents sorted by _id", "The cursor never dies", "It enables writes through the cursor"],
+   "answer": 0,
+   "explain": "Without it a polling loop would hammer the server with instant empty replies."},
+  {"q": "Why are change streams usually preferred to tailable cursors in new code?",
+   "options": ["They work on ordinary collections, can be filtered and can resume after a failure", "They are older and better tested", "They need no server connection", "They only report deletes"],
+   "answer": 0,
+   "explain": "Change streams are the modern, more capable replacement for most tailable-cursor uses."}
 ]
 ```
 

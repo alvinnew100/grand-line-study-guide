@@ -123,6 +123,64 @@ The first two lines label shards. The third says: for the collection `app.users`
 
 Typical uses: **data residency** (laws requiring that certain people's data stay within a region), **locality** (keeping data near its users for speed), and **tiering** (recent data on fast, expensive hardware and old data on cheap hardware).
 
+## Further strategies: firehose, location-based and manual
+
+The ranged, hashed and compound keys above cover most designs. Three more strategies exist for special situations. Each trades some of MongoDB's automatic behaviour for control, so each should be chosen on purpose and not by accident.
+
+### The firehose strategy
+
+Imagine a cluster whose shards are not equal: one machine has fast storage and a lot of memory, and the other ten are modest. An ascending key (such as `_id` or a timestamp) normally sends every insert to the last chunk, which is the "hot shard" problem. The **firehose strategy** turns that weakness into a feature: it deliberately sends all new writes to the strongest shard (the fire hose points at the biggest bucket), and lets the balancer drain older data to the weaker shards afterwards.
+
+It is built from zones, described in the previous section:
+
+```javascript
+mongos> sh.addShardToZone("shardBig", "hot")
+mongos> sh.updateZoneKeyRange("app.events", { _id: ObjectId() }, { _id: MaxKey }, "hot")
+```
+
+- The first line labels the powerful shard with the zone name `hot`.
+- The second pins every key from "now" (a freshly generated `ObjectId`, which is larger than all existing ones) up to the largest possible value (`MaxKey`) to that zone. All new inserts have keys in that range, so all land on `shardBig`, with the low latency of one fast machine.
+
+There is a catch: "now" moves. After a day, the pinned range starts at yesterday's boundary, and yesterday's data cannot leave the hot shard until the range is moved forward. So a scheduled job (for example, once a day) must raise the lower bound of the range, after which the balancer migrates the older chunks to the other shards.
+
+When it fits: write-heavy, append-only data (events, logs, metrics) with a clearly stronger machine, and a team willing to run the daily job. When it does not: the strongest shard is the ceiling. If writes outgrow one machine there is no easy way to split the stream, and an ascending key without a firehose shard simply creates a hot shard.
+
+### Location-based sharding
+
+In **location-based** sharding the geography of the data decides where it lives, as in the data residency and locality uses of zones. The design has two parts:
+
+1. **A key that starts with a location field**, such as `{ region: 1, user_id: 1 }`. Documents with the same region sit next to each other in key order, so a range of the key corresponds to a place.
+2. **Zones that map those ranges to shards** in the right place: the `EU` region on shards in Frankfurt, the `US` region on shards in Virginia.
+
+```javascript
+mongos> sh.shardCollection("app.users", { region: 1, user_id: 1 })
+mongos> sh.updateZoneKeyRange("app.users", { region: "EU", user_id: MinKey }, { region: "EU", user_id: MaxKey }, "EU")
+mongos> sh.updateZoneKeyRange("app.users", { region: "US", user_id: MinKey }, { region: "US", user_id: MaxKey }, "US")
+```
+
+The first line shards on the compound key. The next two pin the whole range of each region to the zone of the same name. The second field, `user_id`, exists so that a large region can still be split into many chunks: with `region` alone, all documents of one region would share one key value, and could never be divided.
+
+Benefits: legal residency, lower latency for local users, and queries that include `region` go to one place. Costs: regions with unequal populations give unequal shards, and a query that omits the region key scatters across the cluster.
+
+### Manual sharding
+
+With **manual sharding** you switch off the balancer and decide yourself which chunk lives on which shard. This is the most laborious option and is meant for unusual cases: a requirement that particular customers sit on particular hardware, or a controlled one-off redistribution.
+
+```javascript
+mongos> sh.stopBalancer()
+mongos> sh.moveChunk("app.users", { region: "EU", user_id: 1000 }, "shardEU2")
+```
+
+- `sh.stopBalancer()` turns the automatic migration of chunks off. A migration already in progress finishes first.
+- `sh.moveChunk(namespace, find, toShard)` moves the chunk containing the key given in `find` to the named shard. The chunk map can be read from the `config.chunks` collection.
+
+Newer versions can also disable balancing for one collection only (`sh.disableBalancing("app.users")`), which is gentler than stopping it for the whole cluster. Remember to enable it again afterwards.
+
+The price is that you now own the balance. New data keeps arriving, and nothing evens out load unless you do it. Most teams that think they need manual sharding are better served by zones, which give the same control over placement while letting the balancer keep working inside each zone.
+
+> [!TIP]
+> Order of preference when you want control over placement: first a good key and the balancer; then zones; and only then a firehose or manual sharding. Each step hands more work to you.
+
 ## Can the key be changed later?
 
 For years the answer was no, which is why older material treats the choice as irreversible. Modern versions are more forgiving:
@@ -300,6 +358,10 @@ Reading the output:
 - **Zone** - a label on shards to which ranges of the key can be pinned.
 - **Data residency** - a requirement that data be stored within a particular region.
 - **Resharding** - changing a collection's shard key by redistributing its data.
+- **Firehose strategy** - pinning the newest key range to one powerful shard so that all writes go there, then letting the balancer move old data away.
+- **Location-based sharding** - a key starting with a location field plus zones, so that data lives in the right region.
+- **Manual sharding** - disabling the balancer and placing chunks yourself with `sh.moveChunk`.
+- **`MaxKey` / `MinKey`** - special values that compare higher / lower than every other value.
 
 ## Check yourself
 
@@ -336,7 +398,23 @@ Reading the output:
   {"q": "Which command lets a modern cluster change a collection's shard key entirely?",
    "options": ["rs.reconfig", "reshardCollection", "sh.addShard", "compact"],
    "answer": 1,
-   "explain": "reshardCollection (5.0) rewrites the collection with a new key; refineCollectionShardKey (4.4) only adds suffix fields."}
+   "explain": "reshardCollection (5.0) rewrites the collection with a new key; refineCollectionShardKey (4.4) only adds suffix fields."},
+  {"q": "What is the purpose of the firehose strategy?",
+   "options": ["Spread writes evenly over all shards", "Send all new writes to one powerful shard, then let the balancer move old data elsewhere", "Make range queries faster", "Avoid using the balancer entirely"],
+   "answer": 1,
+   "explain": "An ascending key is pinned by a zone to the strongest shard, giving low-latency writes; older chunks drain to the others."},
+  {"q": "A firehose range is pinned from one ObjectId up to MaxKey and never adjusted. What happens over time?",
+   "options": ["Nothing; the balancer handles it", "Everything from the pinned start onward stays trapped on the hot shard, so it keeps growing", "Writes fail", "The shard key changes automatically"],
+   "answer": 1,
+   "explain": "The lower bound must be raised regularly (for example by a daily job) so that older chunks become free to move."},
+  {"q": "Why does a location-based key such as {region: 1, user_id: 1} include user_id?",
+   "options": ["To make region unique", "So a large region can still be split into many chunks", "To turn the key hashed", "It is required by zones"],
+   "answer": 1,
+   "explain": "Documents sharing the whole key value cannot be split; the second field provides the variety."},
+  {"q": "Which is the main cost of manual sharding?",
+   "options": ["Data cannot be queried", "You must keep the cluster balanced yourself because the balancer is off", "It needs a hashed key", "It disables replication"],
+   "answer": 1,
+   "explain": "With the balancer stopped nothing evens out load unless you move chunks yourself."}
 ]
 ```
 
