@@ -10,7 +10,7 @@
    "Matthes, Python Crash Course (3rd ed.), Parts I-II (topic coverage; all wording and examples original)",
    "The Python Tutorial, Language Reference (Data Model) and Library Reference, docs.python.org/3"
   ],
-  "words": 127218,
+  "words": 140561,
   "modules": 15,
   "lessons": 43,
   "problems": 44
@@ -69,7 +69,7 @@
   "sources": [
    "Goodrich, Tamassia & Goldwasser, Data Structures and Algorithms in Python (Wiley, 2013), ch. 3-15"
   ],
-  "words": 122336,
+  "words": 134871,
   "modules": 13,
   "lessons": 38,
   "problems": 33
@@ -194,7 +194,7 @@
    "SQLite documentation (window functions, WITH clause, EXPLAIN QUERY PLAN)",
    "PostgreSQL and MySQL reference manuals (dialect notes)"
   ],
-  "words": 113622,
+  "words": 122292,
   "modules": 20,
   "lessons": 39,
   "problems": 93
@@ -212,7 +212,7 @@
    "Apache Kafka documentation (kafka.apache.org/documentation)",
    "Malkov & Yashunin, Efficient and robust approximate nearest neighbor search using HNSW graphs (2016)"
   ],
-  "words": 166027,
+  "words": 170794,
   "modules": 13,
   "lessons": 33,
   "problems": 18
@@ -423,7 +423,7 @@
   "words": 187984,
   "modules": 21,
   "lessons": 46,
-  "problems": 25
+  "problems": 32
  },
  {
   "id": "aws",
@@ -487,10 +487,10 @@
    "Official docs: nginx.org/en/docs (core, proxy, upstream, limit_req, limit_conn, cache, ssl, v2, v3, stream, njs, otel)",
    "Official docs: docs.nginx.com (NGINX Plus features), letsencrypt.org, kubernetes.io (Ingress)"
   ],
-  "words": 57954,
+  "words": 116580,
   "modules": 14,
-  "lessons": 18,
-  "problems": 0
+  "lessons": 33,
+  "problems": 7
  },
  {
   "id": "networking",
