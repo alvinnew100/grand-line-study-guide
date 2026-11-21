@@ -12,6 +12,54 @@ Why it matters for a job: Next.js, Nuxt, Remix, SvelteKit and Astro are all buil
 
 > **Before this lesson:** read [Sharing code between browser and server](#/lesson/nodejs/universal-sharing-code). You need the first HTTP server from [npm, package.json and your first HTTP server](#/lesson/nodejs/npm-first-server) and `async`/`await`. Knowing a front-end framework helps but is not required; the examples use plain functions.
 
+## A five-minute React primer
+
+The examples in this lesson use plain functions, but real frameworks put **React** (or something like it) at the centre, and the vocabulary appears in every SSR conversation. If you know none of it, this section is enough to follow the rest. The React track teaches it properly: [JSX, components and props](#/lesson/react/jsx-components-props) and [State with useState](#/lesson/react/usestate).
+
+**React** is a JavaScript library for describing a user interface as a tree of pieces. Its basic building block is an **element**: a small plain object that says "I would like a heading with this text here". The function that makes one is `createElement`:
+
+```js
+import { createElement } from "react";
+
+const heading = createElement("h1", { className: "title" }, "Hello");
+// roughly: { type: "h1", props: { className: "title", children: "Hello" } }
+```
+
+Writing nested `createElement` calls by hand is tiresome, so React code is normally written in **JSX**, a notation that looks like HTML inside JavaScript. A browser or Node cannot run JSX; a build tool translates it into the `createElement` calls above before the code ever runs:
+
+```jsx
+const heading = <h1 className="title">Hello</h1>;   // same thing, easier to read
+```
+
+A **component** is a function, with a name starting in a capital letter, that returns elements. **Props** (short for properties) are the arguments passed to it, collected into one object, and a component must treat them as read-only:
+
+```jsx
+function Greeting({ name }) {
+  return <p>Welcome back, {name}.</p>;
+}
+
+// used like an HTML tag:  <Greeting name="Ada" />
+```
+
+**State** is a value that a component remembers between renders. The `useState` function gives you the current value and a function to change it; changing it asks React to run the component again and update the screen:
+
+```jsx
+import { useState } from "react";
+
+function Counter() {
+  const [count, setCount] = useState(0);
+  return <button onClick={() => setCount(count + 1)}>Clicked {count} times</button>;
+}
+```
+
+### Why this matters for universal rendering
+
+Because a component is, in effect, a function from props and state to a description of the page, that function can run anywhere. On the server, React's `renderToString` (from `react-dom/server`) runs your components once and returns finished HTML. In the browser, `hydrateRoot` (from `react-dom/client`) takes that HTML, runs the *same* components, checks that the output matches, and attaches the click handlers. Three consequences follow, and the rest of this lesson revisits them:
+
+- Only the first render happens on the server. State starts at its initial value and no clicks ever occur there, so the `Counter` above is sent as "Clicked 0 times".
+- Anything that touches the browser (`window`, `document`, `localStorage`) must not run during rendering, or the server will throw.
+- The server and browser outputs must agree, or hydration complains about a mismatch.
+
 ## Three ways to produce a page
 
 | | Client-side rendering (CSR) | Server-side rendering (SSR) | Static generation (SSG) |
@@ -339,6 +387,12 @@ Current frameworks soften these costs with further techniques, worth knowing by 
 - **Route**: a mapping from a URL pattern to a page.
 - **Loader**: the function that fetches the data a route needs.
 - **Time to first byte**: how long until the first part of the response arrives.
+- **React**: A JavaScript library for building a user interface out of components
+- **Element (React)**: A small plain object describing a piece of the interface, made by `createElement`
+- **JSX**: HTML-like notation inside JavaScript that a build tool turns into `createElement` calls
+- **Props**: The read-only arguments passed to a component
+- **State**: A value a component remembers between renders; changing it triggers a new render
+- **`renderToString`**: React's server function that runs components once and returns HTML text
 
 ```quiz
 [
@@ -357,7 +411,9 @@ Current frameworks soften these costs with further techniques, worth knowing by 
   {"q": "Why is `<script>window.DATA = ${JSON.stringify(data)}</script>` dangerous?", "options": ["JSON.stringify is slow", "A string containing </script> inside the data ends the script element and lets attacker-controlled HTML run", "window is undefined on the server", "It breaks hydration"], "answer": 1,
    "explain": "The HTML parser sees the closing tag before the JavaScript parser sees the string. Escape < as \\u003c."},
   {"q": "For which page is plain client-side rendering usually an acceptable choice?", "options": ["A public product page that should rank in search engines", "A news article shared on social media", "An admin dashboard behind a login", "A marketing landing page"], "answer": 2,
-   "explain": "No crawler needs to read it and users are already in the application, so SSR's benefits matter least."}
+   "explain": "No crawler needs to read it and users are already in the application, so SSR's benefits matter least."},
+  {"q": "What does a build tool do with JSX before the code runs?", "options": ["Nothing: browsers understand JSX natively", "Translates it into createElement calls", "Sends it to the server as HTML", "Compiles it to CSS"], "answer": 1, "explain": "JSX is only notation. It becomes ordinary JavaScript function calls during the build."},
+  {"q": "A component using useState is rendered on the server with renderToString. What state does the HTML reflect?", "options": ["Whatever the user last clicked", "The initial state value, because only one render happens and no events occur", "A random value", "The state is skipped and the component is omitted"], "answer": 1, "explain": "The server renders once from the initial values. Interactivity arrives only after hydration in the browser."}
 ]
 ```
 

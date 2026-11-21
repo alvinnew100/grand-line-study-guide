@@ -94,6 +94,21 @@ Signals to watch, from `db.serverStatus().wiredTiger.cache`:
 - **dirty share**, the part of the cache waiting to be written. Sustained values above about 20 per cent mean the disks cannot keep up with writes.
 - **pages read into the cache** per second. A rising rate with steady traffic means the working set no longer fits.
 
+### Page faults: how a too-large working set shows itself
+
+Operating systems manage memory in fixed-size blocks called **pages**, commonly 4 KB. A program sees a large, tidy address space, but only some pages are in physical RAM at any moment. When the program touches a page that is not in RAM, the processor raises a **page fault**: the operating system pauses the program, finds the page (in a file or on swap space), loads it, and lets the program carry on. Think of a desk and a filing cabinet. Papers on the desk are instant to use; a trip to the cabinet is a page fault.
+
+Not all faults hurt. A *minor* fault is resolved without touching the disk, for instance because the page is already in the operating system's file cache. A *major* fault needs a real disk read and costs thousands of times more than a memory access, so a stream of them makes the database crawl.
+
+Here is how this connects to the working set. If the working set fits in RAM, then after a warm-up period almost every access finds its page in memory and major faults stay near zero. If the working set is larger than the memory available, every request has some chance of touching a cold page, and the system keeps swapping pages in and out: the same pages are read, evicted and read again. Operators call this **thrashing**. The visible symptoms are rising disk reads, rising query latency, and page-fault counters that climb during slow periods. MongoDB reports a page-fault counter in `serverStatus` (under `extra_info`), and on Linux `vmstat` and the `pgmajfault` line of `/proc/vmstat` show the system-wide picture. The server's manual notes that a few sporadic faults are normal; the sign of trouble is a sustained rise that lines up with slowness.
+
+What to do when you see it:
+
+1. **Confirm the cause.** Compare the WiredTiger cache figures and disk read rate with the latency graph. Faults without slowness are harmless.
+2. **Shrink the working set.** Add or fix indexes so queries touch fewer documents; use projections so only needed fields are read; remove indexes nobody uses, because they compete for cache; archive or expire old data that is never read.
+3. **Grow the memory** of the machine, or spread data across more machines by sharding.
+4. **Keep the database out of swap.** Swapping out database memory is far worse than a slow query. Production guides recommend setting the kernel's `vm.swappiness` very low.
+
 ### Disk
 
 - **Free space.** A full disk stops the database. Alert early, for example at 70 per cent used, because adding storage takes time.
@@ -330,6 +345,10 @@ Reading the output:
 - **`mongostat` / `mongotop`** - command-line tools showing live server and per-collection activity.
 - **Baseline** - a record of normal metric values against which changes are judged.
 - **Alert** - an automatic notification that a condition needs attention.
+- **Page** - A fixed-size block (often 4 KB) in which an operating system manages memory
+- **Page fault** - An access to a page that is not in physical RAM, forcing the operating system to load it first
+- **Major fault** - A page fault that needs a real disk read, which is far slower than a minor one
+- **Thrashing** - A state in which the system spends its time moving pages in and out of memory instead of doing useful work
 
 ## Check yourself
 
@@ -366,7 +385,9 @@ Reading the output:
   {"q": "High processor use with very little disk activity most likely points to what?",
    "options": ["A failing disk", "In-memory work such as collection scans or sorts that an index would avoid", "Replication lag", "A full oplog"],
    "answer": 1,
-   "explain": "The data is in memory, so the cost is computation; the slow-query log will show the scans."}
+   "explain": "The data is in memory, so the cost is computation; the slow-query log will show the scans."},
+  {"q": "What is a major page fault?", "options": ["A fault resolved entirely from memory", "An access that needs a page to be read from disk", "A crash of the mongod process", "A full cache flush"], "answer": 1, "explain": "A major fault requires disk I/O. Minor faults are resolved without touching disk."},
+  {"q": "Page-fault counters climb steadily while query latency rises. What is the most likely explanation?", "options": ["The working set no longer fits in memory", "Too many connections are idle", "Journaling is disabled", "The oplog is too large"], "answer": 0, "explain": "When the working set exceeds available RAM, requests keep touching cold pages and the system reads them from disk repeatedly."}
 ]
 ```
 

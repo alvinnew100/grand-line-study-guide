@@ -250,6 +250,30 @@ The colon is what marks an argument as remote; forget it and `scp` cheerfully ma
 > [!INTERVIEW]
 > Favourites: "A user cannot reach your web service — how do you troubleshoot?" (walk the five questions in order, naming a tool for each), "Difference between connection refused and timeout?" (active rejection because nothing listens, versus silent drop by a firewall or dead route), "What does binding to `0.0.0.0` versus `127.0.0.1` mean?", and "What happens when you type a URL and press Enter?" (DNS lookup, TCP handshake, TLS negotiation, HTTP request and response — each of which you can now demonstrate with a command).
 
+## Legacy file transfer: `ftp` and `lftp`
+
+**FTP** (File Transfer Protocol) is one of the oldest internet protocols. It sends the user name, the password and the files themselves unencrypted, so for anything private it has been replaced by `sftp` and `scp`, shown above. It survives in two places: public download servers that allow **anonymous** logins (user name `anonymous`, any password) for software and data, and old business systems that still exchange files over it. You are therefore likely to be asked about it.
+
+The plain `ftp` command is a bare-bones interactive client. `lftp` is the comfortable one, and it speaks several protocols (`ftp://`, `ftps://`, `sftp://`, `http://`).
+
+```bash
+mira@forge:~$ lftp ftp://ftp.example.org
+lftp ftp.example.org:~> cd pub/releases
+lftp ftp.example.org:/pub/releases> ls
+lftp ftp.example.org:/pub/releases> get tool-2.1.tar.gz
+lftp ftp.example.org:/pub/releases> mget *.sig
+lftp ftp.example.org:/pub/releases> bye
+```
+
+Inside, the commands mirror what a shell does remotely: `ls`, `cd`, `get` to download one file, `mget` for several with a wildcard, and `put`/`mput` to upload. What makes `lftp` worth knowing:
+
+- **`mirror`** copies an entire directory tree. `mirror remote-dir local-dir` downloads; `mirror -R local-dir remote-dir` (reverse) uploads. Adding `-c` continues an interrupted run, and it skips files that are already up to date.
+- **`pget -n 4 file`** downloads one file in four parallel pieces, which can help on a slow link.
+- **Resume and retry.** It reconnects after drops and continues partial downloads, which plain `ftp` cannot.
+- **Scripting.** `lftp -e "mirror /pub/data ./data; quit" ftp.example.org` runs commands non-interactively, so a cron job can use it.
+
+When you have a choice, connect with `lftp sftp://user@host` to get the same convenience over an encrypted SSH connection.
+
 ## Pitfalls
 
 - **Treating ping as proof.** It tests ICMP reachability only; many hosts block it.
@@ -304,6 +328,10 @@ The colon is what marks an argument as remote; forget it and `scp` cheerfully ma
 | firewall | a filter that allows or blocks network traffic |
 | HTTP | the protocol used by web sites and web services |
 | SSH | Secure Shell: encrypted login to and command execution on another computer |
+| FTP | File Transfer Protocol: an old, unencrypted protocol for moving files between machines |
+| Anonymous FTP | A public FTP server that accepts the user name `anonymous` so anyone may download |
+| `lftp` | A feature-rich command-line client that supports FTP, FTPS, SFTP and HTTP, with mirroring and resume |
+| `mirror` | The lftp command that copies a whole directory tree, skipping files that are already current |
 
 ## Check yourself
 
@@ -340,7 +368,9 @@ The colon is what marks an argument as remote; forget it and `scp` cheerfully ma
   {"q": "You run `scp report.pdf otto@build01` and no file arrives on the server. What happened?",
    "options": ["scp needs sudo", "Without a colon the destination is treated as a local file name, so a local copy called otto@build01 was created", "The file was too large", "scp only copies directories"],
    "answer": 1,
-   "explain": "The colon after the host is what marks a remote path, as in otto@build01:/path/."}
+   "explain": "The colon after the host is what marks a remote path, as in otto@build01:/path/."},
+  {"q": "Why is plain FTP unsuitable for sending private files over the internet?", "options": ["It cannot send large files", "It transmits credentials and data without encryption", "It only works on local networks", "It needs a graphical interface"], "answer": 1, "explain": "FTP sends everything in clear text. Use sftp, scp or FTPS instead."},
+  {"q": "Which lftp command uploads a local directory tree to the server?", "options": ["mirror remote local", "mirror -R local remote", "pget -n 4 local", "mget local"], "answer": 1, "explain": "mirror downloads by default; -R reverses the direction so it uploads."}
 ]
 ```
 

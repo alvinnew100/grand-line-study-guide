@@ -66,6 +66,20 @@ The first two rows protect against a machine restarting. Only the third protects
 
 A related word of caution concerns **backups**. Durability protects against crashes. It does not protect against a mistaken `deleteMany({})` or a bug that corrupts documents: those are faithfully journaled and replicated everywhere within milliseconds. Only a backup, covered in the server administration module, protects against mistakes.
 
+## What MongoDB does not guarantee
+
+A clear list of limits is as useful as the ladder of guarantees above, because most data-loss stories begin with an assumption that was never promised.
+
+- **An acknowledged write can still be rolled back.** With `w: 1` the primary says "done" once it alone has the write. If it fails before a secondary copies the write and a new primary is elected, the old primary later rejoins and *undoes* that write to match the new history. Only `w: "majority"` writes are safe from rollback, because a majority member always survives into the new primary.
+- **An unacknowledged write is a hope, not a promise.** With `w: 0` the client does not even wait to learn whether the server received the write. A full queue, a dropped connection or a validation failure all pass silently.
+- **A network error does not tell you what happened.** If the connection breaks after you send a write but before the reply arrives, the write may or may not have been applied. Drivers offer *retryable writes* so that the retry is applied at most once, but your own code must still expect the ambiguity.
+- **Several documents do not change together by default.** Atomicity is per document. Updating an order and its stock count in two operations means a crash can leave one done and one not, unless you wrap both in a multi-document transaction.
+- **Reads do not automatically see only durable data.** A default read from the primary can return data that has not reached a majority and may yet be rolled back. Read concern `"majority"` returns only data that cannot be rolled back, at a small cost in freshness.
+- **Hardware that lies breaks every promise.** As the warning above explains, a disk that acknowledges flushes it has not performed defeats `j: true`.
+- **Nothing here protects against people.** A mistaken delete is a perfectly durable write.
+
+Keeping these limits in mind makes the design choices clear: use majority write concern for data you cannot lose, make writes idempotent so retries are safe, keep related facts in one document where you can, and keep real backups for everything else.
+
 ## Compression and checksums
 
 WiredTiger compresses data before writing it. Collections use a fast algorithm called **snappy** by default; indexes use **prefix compression**, which stores the part that neighbouring keys have in common only once. Stronger options, `zlib` and `zstd`, squeeze data further at the cost of more processor time. This is why `storageSize` in a collection's statistics is normally smaller than `size`, often by half or more.
@@ -292,6 +306,9 @@ Change `CRASH` to `120_000` (exactly at a checkpoint) and to `179_999` (far from
 - **Hidden index** - an index maintained on writes but ignored by the query planner.
 - **`compact`** - a command that rewrites a collection to release unused disk space.
 - **Rolling index build** - building an index on one member at a time, outside the set.
+- **Rollback** - Undoing writes on a former primary that were never copied to a majority, so its history matches the new primary's
+- **Retryable writes** - A driver feature that re-sends a failed write safely so it is applied at most once
+- **Read concern** - A setting that chooses how durable the data must be before a read may return it, e.g. `"majority"`
 
 ## Check yourself
 
@@ -328,7 +345,9 @@ Change `CRASH` to `120_000` (exactly at a checkpoint) and to `179_999` (far from
   {"q": "What is the purpose of a checkpoint?",
    "options": ["To elect a new primary", "To write a consistent snapshot of the data to the data files, after which older journal records can be discarded", "To compress the oplog", "To validate indexes"],
    "answer": 1,
-   "explain": "Checkpoints bound how much journal must be replayed and keep the data files reasonably current."}
+   "explain": "Checkpoints bound how much journal must be replayed and keep the data files reasonably current."},
+  {"q": "A client writes with w: 1 and receives an acknowledgement. The primary then fails before any secondary has the write. What may happen?", "options": ["The write is always preserved", "The write may be rolled back when the old primary rejoins", "The secondaries ask the client to resend", "The write is merged into the new primary automatically"], "answer": 1, "explain": "Only the old primary had the write. The newly elected primary never saw it, so on rejoining the old primary undoes it. A majority write concern prevents this."},
+  {"q": "Which statement about atomicity is true by default?", "options": ["Updates across many documents are all-or-nothing", "A single-document write is atomic; several documents need a transaction", "Nothing in MongoDB is atomic", "Only writes with j: true are atomic"], "answer": 1, "explain": "Atomicity is guaranteed within one document. Multi-document atomicity needs an explicit transaction."}
 ]
 ```
 

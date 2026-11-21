@@ -275,6 +275,58 @@ CSS reads them with attribute selectors and `attr()`; JavaScript reads them thro
 > [!WARNING]
 > Anything in the HTML, including comments, `hidden` elements and `data-*` attributes, is delivered to every visitor and can be read with View Source. Never place passwords, keys or private data there.
 
+## Third-party content and libraries: what you are inviting in
+
+Sooner or later a page needs something you did not write: a map showing the shop's location, a hosted video, a payment form, a chat widget. The simplest way to get a map is to let a mapping provider host it and paste in a snippet of theirs. That snippet is usually an `<iframe>`, introduced in [Video, audio and embedded content](#/lesson/html-css/media-embeds); here the focus is on what it costs and how to tame it.
+
+```html
+<iframe
+  src="https://maps.example.com/embed?place=Harbour+Street+12"
+  title="Map showing our shop at Harbour Street 12"
+  width="600" height="400"
+  loading="lazy"
+  referrerpolicy="no-referrer-when-downgrade"
+  sandbox="allow-scripts allow-same-origin"
+  allow="fullscreen"></iframe>
+```
+
+(`maps.example.com` is a stand-in; real providers give you their own address.)
+
+### The trade-offs
+
+| Concern | What happens |
+|---|---|
+| Speed | The frame is a whole extra web page with its own requests and scripts. Several map frames can outweigh the rest of your page. |
+| Privacy | The provider learns that each visitor loaded your page, and may set cookies or track them. Many laws expect you to disclose or ask consent. |
+| Security | The framed page cannot read your page (browsers keep different origins apart), but it runs its own scripts and can show whatever it likes inside its rectangle. |
+| Reliability | If the provider is slow or down, your rectangle is blank or spinning. |
+
+### The attributes that tame an embed
+
+- **`loading="lazy"`** delays the download until the frame is about to scroll into view. Always use it for a map far down the page.
+- **`title`** gives the frame an accessible name, as with a picture's alt text.
+- **`sandbox`** switches on a strict set of restrictions (no scripts, no forms, no pop-ups, treated as a stranger origin) and each `allow-...` token deliberately lifts one. Start with a bare `sandbox` and add only what the embed needs. Be careful with the pair `allow-scripts` and `allow-same-origin` together on content from *your own* origin: it lets the framed page remove its own sandbox, which defeats the point.
+- **`allow`** is a permission list for powerful browser features such as `geolocation`, `camera` or `fullscreen`. Naming a feature grants it to the frame; a feature you leave out is not delegated.
+- **`referrerpolicy`** controls how much of your page's address is sent to the provider.
+
+A common performance and privacy pattern is a **facade**: show a plain image of the map with a "Load interactive map" button, and only insert the real iframe when the visitor clicks.
+
+The relationship also runs the other way. Your own pages can refuse to be framed by others, using the `Content-Security-Policy: frame-ancestors` header, which protects against **clickjacking** (a hidden frame of your site placed under a decoy button).
+
+### And what was jQuery for?
+
+Embedded scripts are the sharper version of the same bargain, because a script you include runs inside your page with full power. The best-known example in older tutorials is **jQuery**, a JavaScript **library** (a bundle of ready-made code you load and call). Released in 2006, it gave one short, consistent way to select elements and react to clicks in the days when browsers disagreed about how to do it:
+
+```html
+<script src="https://code.example.com/jquery.min.js"
+        integrity="sha384-...checksum..." crossorigin="anonymous"></script>
+<script>
+  $("#menu-button").click(function () { $("#menu").toggle(); });
+</script>
+```
+
+Today the browser's own `document.querySelector`, `classList`, `addEventListener` and `fetch` cover most of that, so new projects seldom need jQuery. You will still meet it constantly in legacy sites and in plug-ins. When you load any third-party script from a CDN, add an `integrity` attribute (**Subresource Integrity**, a checksum the browser verifies) so a tampered file is refused.
+
 ## Pitfalls
 
 - **Duplicate ids.** Breaks labels, fragment links and ARIA references in confusing ways.
@@ -328,6 +380,12 @@ Ids name unique elements so that links, labels, ARIA attributes and scripts can 
 | Open Graph | Meta tags that control how a link looks when shared on social networks |
 | Favicon | The small icon shown in the browser tab |
 | Data attribute | A custom attribute whose name starts with `data-` |
+| Embed | Showing content hosted by someone else inside your page, usually with an `<iframe>` |
+| Sandbox (iframe) | An attribute that strips a frame's abilities (scripts, forms, pop-ups) until specific `allow-` tokens restore them |
+| Facade | A lightweight placeholder, such as an image with a button, swapped for the heavy embed only when the visitor asks |
+| Clickjacking | Tricking a visitor into clicking something hidden by placing your site in an invisible frame beneath a decoy |
+| Library (jQuery) | A bundle of ready-made code that you load and call; jQuery smoothed over browser differences when selecting elements and handling events |
+| Subresource Integrity | An `integrity` attribute holding a checksum, so the browser rejects a script or style file that was altered |
 
 ## Check yourself
 
@@ -346,7 +404,9 @@ Ids name unique elements so that links, labels, ARIA attributes and scripts can 
   {"q": "How does JavaScript read the attribute data-due-date='12 May' on element el?", "options": ["el.data.dueDate", "el.dataset.dueDate", "el.dataset['due-date']", "el.dueDate"], "answer": 1,
    "explain": "dataset exposes data-* attributes with the prefix removed and the rest converted from kebab-case to camelCase."},
   {"q": "What is the purpose of link rel='canonical'?", "options": ["It preloads the page", "It tells search engines which URL is the preferred one for duplicate or near-duplicate content", "It sets the favicon", "It redirects the browser"], "answer": 1,
-   "explain": "Canonical consolidates ranking signals onto one URL when the same content is reachable under several addresses."}
+   "explain": "Canonical consolidates ranking signals onto one URL when the same content is reachable under several addresses."},
+  {"q": "Which attribute makes a map iframe that sits far down the page download only when it is about to be seen?", "options": ["sandbox", "loading=\"lazy\"", "allow", "title"], "answer": 1, "explain": "`loading=\"lazy\"` postpones the request, saving bandwidth for visitors who never scroll that far."},
+  {"q": "Why add an integrity attribute to a script loaded from a CDN?", "options": ["It makes the script run faster", "The browser refuses the file if its checksum does not match, so tampering is detected", "It lets the script access cookies", "It is needed for HTTPS"], "answer": 1, "explain": "Subresource Integrity compares the downloaded bytes to the checksum you supplied, so a modified file is blocked."}
 ]
 ```
 

@@ -104,6 +104,28 @@ The default mechanism, **SCRAM**, verifies the password without ever sending it 
 
 The members of a replica set or cluster must also authenticate to *each other*, using a shared **keyfile** or, better, X.509 certificates. Without this, any machine able to reach the port could join the set as a member and receive all the data.
 
+### Internal authentication: keyfile or x.509
+
+Clients prove who they are with a username and password, but the *members* of a replica set or sharded cluster also talk to each other: secondaries pull changes from the primary, and routers talk to shards. Internal authentication is how one member proves it belongs. There are two methods, and the difference is between a shared password and individual identity cards.
+
+**Keyfile.** All members read the same secret from a file. A member that presents that secret is trusted. In outline:
+
+1. Generate a long random string (the manual suggests a base64 value of reasonable length) and save it in a file.
+2. Copy the identical file to every member and restrict it so only the account running `mongod` can read it. On Unix the server refuses to start if the permissions are too loose.
+3. Set the `security.keyFile` option to that path on every member and restart them, one at a time with the primary last.
+
+Setting a keyfile also switches on access control for clients, so create your first administrator before you do it (or use the localhost exception). The method is simple and suits a small deployment or a test cluster. Its weaknesses: every member holds the same secret, so one stolen file lets an attacker impersonate any member, and changing it means touching all members.
+
+**X.509 certificates.** Here each member has its *own* certificate, signed by a **certificate authority** (CA), an issuer that both sides trust. Members connect over TLS and present their certificates; the other side checks the signature and confirms the certificate is one it accepts. In outline:
+
+1. Create or choose a CA, and issue one certificate per member that lists the member's hostname, so name checks succeed.
+2. Make sure the certificates' subject names are compatible with the cluster rules (members' certificates need matching organisation-style attributes in their distinguished names; check the manual's exact requirement for your version).
+3. Enable TLS on every member (certificate file, CA file) and set `security.clusterAuthMode` to `x509`.
+4. Roll the change through the cluster. MongoDB provides intermediate modes (the cluster first *sends* its keyfile but *accepts* either, then sends certificates, then requires them) so that an existing keyfile cluster can migrate without downtime.
+5. Plan certificate renewal. Certificates expire, and an expired member certificate means a member that cannot join, so monitor expiry dates like any other alert.
+
+The benefits are per-member identity (a single member's certificate can be revoked or replaced), no shared secret to leak, and the same TLS setup you want for encryption in transit anyway. The cost is certificate management. As a rule of thumb: keyfile for learning and small private clusters; x.509 for anything serious or regulated.
+
 ### Layer 3: authorization - what may you do?
 
 **Authorization** decides what an authenticated user may do. MongoDB uses **role-based access control**: permissions are grouped into **roles**, and users are given roles.
@@ -343,6 +365,10 @@ Reading the output:
 - **Encryption at rest** - encrypting data stored on disk.
 - **Client-side field level encryption** - encrypting chosen fields in the driver before they reach the server.
 - **Auditing** - recording who performed which actions.
+- **Internal authentication** - How members of a replica set or cluster prove their identity to one another
+- **Certificate authority (CA)** - A trusted issuer whose signature on a certificate lets others accept it
+- **X.509** - The standard format of the digital certificates used with TLS and for member or client authentication
+- **`security.clusterAuthMode`** - The setting that chooses keyfile or x509 for internal authentication, with transition modes for migration
 
 ## Check yourself
 
@@ -379,7 +405,9 @@ Reading the output:
   {"q": "What is the only reliable evidence that backups work?",
    "options": ["The backup job reports success", "A regularly performed test restore", "The files exist", "The monitoring dashboard is green"],
    "answer": 1,
-   "explain": "Only restoring proves the backup is complete and usable, and it also measures the real recovery time."}
+   "explain": "Only restoring proves the backup is complete and usable, and it also measures the real recovery time."},
+  {"q": "What is the main security weakness of keyfile authentication compared with x.509?", "options": ["Keyfiles are not supported by replica sets", "Every member shares one secret, so a single leak lets an attacker impersonate any member", "Keyfiles disable TLS", "Keyfiles expire every day"], "answer": 1, "explain": "A keyfile is a shared secret. X.509 gives each member its own certificate that can be replaced or revoked individually."},
+  {"q": "Why must certificate expiry dates be monitored in an x.509 cluster?", "options": ["Expired certificates are silently ignored", "An expired member certificate prevents that member from authenticating and joining", "Expiry deletes the data files", "Expiry changes the replica set name"], "answer": 1, "explain": "Certificates have a validity period. After it ends, peers reject the member."}
 ]
 ```
 

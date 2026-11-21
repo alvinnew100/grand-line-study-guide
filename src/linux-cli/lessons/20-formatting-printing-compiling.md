@@ -194,6 +194,25 @@ mira@forge:~$ zcat /usr/share/man/man1/ls.1.gz | groff -man -T utf8 | head -n 4
 
 Lines starting with a dot are instructions (`.TH` title, `.SH` section heading). Today most people write documentation in Markdown instead, and convert between formats with `pandoc`, but `groff` remains the engine behind `man`.
 
+### `csplit` — cut a file at patterns
+
+You already know `split`, which cuts a file into pieces of a fixed size or line count. `csplit` cuts at *content*: wherever a line matches a pattern or reaches a line number. Think of tearing a long scroll at each chapter heading rather than every metre.
+
+```bash
+mira@forge:~$ csplit -f part- -z notes.md '/^## /' '{*}'
+1043
+2210
+1876
+mira@forge:~$ ls part-*
+part-00  part-01  part-02
+```
+
+The first argument after the options is the file. `'/^## /'` is a regular expression: start a new piece at every line that begins with two hashes and a space. `'{*}'` means "repeat as many times as it keeps matching" (a number such as `'{3}'` repeats that many times). The numbers printed are the byte counts of each piece. Useful options: `-f` sets the file-name prefix (default `xx`), `-n` sets how many digits are in the numbering, and `-z` drops empty pieces. A plain number cuts at a line: `csplit data.txt 100` puts lines 1 to 99 in `xx00` and the rest in `xx01`.
+
+### A note on `nroff` and `groff`
+
+`groff` belongs to a family called **roff**, the oldest text formatters on Unix, descended from a 1960s program named RUNOFF. `troff` produces output for typesetters, and `nroff` produces plain text for terminals and line printers. `groff` is the GNU rewrite that does both. On modern systems `nroff` is usually a small wrapper that runs `groff` with a terminal-friendly device. The commands (`.TH`, `.SH`) in a manual page come from a **macro package** called `man`; `-man` on the command line loads it. You will not usually write roff, but knowing the family explains the odd names in `man` and in old documentation.
+
 ## Part 2 — Printing
 
 On Linux, printing is handled by a service called **CUPS** (Common Unix Printing System). You do not talk to the printer directly; you submit a **print job** to a **queue**, and the service feeds jobs to the printer in order. Two families of commands exist for historical reasons and both work.
@@ -444,6 +463,9 @@ mira@forge:~/src/diction-1.11$ which diction
 | executable | a file that can be run as a program |
 | Makefile | the file that tells `make` what to build, from what, and how |
 | target / prerequisite / recipe | what to build / what it depends on / the commands that build it |
+| `csplit` | A command that splits a file at lines matching a pattern or at given line numbers |
+| roff | The family of Unix text formatters (`nroff`, `troff`, `groff`) behind manual pages |
+| `nroff` / `troff` | The roff formatters that produce plain terminal text / typeset output |
 
 ## Check yourself
 
@@ -480,7 +502,9 @@ mira@forge:~/src/diction-1.11$ which diction
   {"q": "Which command shows the jobs waiting to be printed?",
    "options": ["lpr", "lpq", "pr", "fmt"],
    "answer": 1,
-   "explain": "lpq (or lpstat -o) lists the queue. lpr submits a job and pr only formats text into pages."}
+   "explain": "lpq (or lpstat -o) lists the queue. lpr submits a job and pr only formats text into pages."},
+  {"q": "What does csplit -f part- -z notes.md '/^## /' '{*}' do?", "options": ["Splits the file every 100 lines", "Splits the file at every line starting with ## and names pieces part-00, part-01 and so on", "Joins several files", "Counts lines starting with ##"], "answer": 1, "explain": "csplit cuts at pattern matches. {*} repeats for every match, -f sets the prefix and -z discards empty pieces."},
+  {"q": "Which formatter in the roff family produces plain text for terminals?", "options": ["troff", "nroff", "pr", "fmt"], "answer": 1, "explain": "nroff targets terminals and line printers; troff targets typesetters. groff does both."}
 ]
 ```
 

@@ -338,6 +338,54 @@ And measure throughout. Use a **profiler** to learn where the time is spent befo
 > [!INTERVIEW]
 > **"Why is processing a sorted array sometimes faster than an unsorted one?"** If the loop contains a data-dependent branch, sorted data makes it follow a long run one way and then a long run the other, which the branch predictor learns almost perfectly. Random data makes it mispredict about half the time at roughly 15 to 20 cycles each. Rewriting the choice as a conditional expression that compiles to a conditional move removes the dependence on predictability.
 
+## SIMD: several operations in one instruction
+
+Everything so far kept one operation per instruction and tried to overlap *different* instructions. There is a second route to speed: make each instruction do more. A **SIMD** instruction (single instruction, multiple data) performs the same operation on several values at once.
+
+Picture a cashier scanning items one at a time versus a till that scans a whole row of identical items in a single sweep. The row has to be laid out neatly for the sweep to work, and the same is true here.
+
+### The hardware
+
+On x86-64 the processor has extra, wider registers beside the integer ones. They are named after the instruction-set extensions that introduced them:
+
+| Extension | Register names | Width | Holds, for example |
+|---|---|---|---|
+| SSE | `%xmm0`-`%xmm15` | 128 bits | 4 floats, 2 doubles or 16 bytes |
+| AVX / AVX2 | `%ymm0`-`%ymm15` | 256 bits | 8 floats, 4 doubles or 32 bytes |
+| AVX-512 (some chips only) | `%zmm0`-`%zmm31` | 512 bits | 16 floats |
+
+Each slot inside such a register is a **lane**. A *packed* instruction such as `vaddps` adds all eight float lanes of one `%ymm` register to the matching lanes of another in one go. A scalar `vaddss` adds just one pair. This is **data parallelism**: the same work on many independent data items, as opposed to the instruction-level parallelism of the earlier sections. The two combine: a modern core can also issue more than one vector instruction per cycle, so the multiple-accumulator ideas still apply on top.
+
+### Auto-vectorisation
+
+You rarely write vector instructions by hand (though *intrinsics* such as `_mm256_add_ps` let you). Instead the compiler **auto-vectorises**: it rewrites a scalar loop to process a whole vector of elements per trip. With GCC this is switched on at `-O3`, and recent versions also apply a cautious version at `-O2`. A catch: unless you allow newer instructions with a flag such as `-mavx2` or `-march=native`, the compiler may only use the baseline SSE2 available on every x86-64 chip.
+
+A loop usually vectorises when:
+
+- **iterations are independent.** Element `i` does not depend on a result from element `i-1`. A loop-carried dependence such as `a[i] = a[i-1] + x` blocks it.
+- **the trip count is known up front**, so the compiler can chop it into vector-sized chunks and a short leftover.
+- **memory is walked contiguously**, one element after another. Strides, gathers and pointer chasing defeat it.
+- **the compiler can prove arrays do not overlap.** If `dst` and `src` might alias, writing a vector to `dst` could change `src` mid-loop. The `restrict` qualifier promises no overlap.
+- **the body is simple.** Short `if`s can become masked lanes, but calls to unknown functions or early exits usually stop it.
+
+```c
+void scale(float *restrict out, const float *restrict in, float k, long n) {
+    for (long i = 0; i < n; i++)
+        out[i] = in[i] * k;      /* independent, contiguous, no aliasing: vectorises */
+}
+```
+
+### Reductions and floating point
+
+Summing an array is a reduction, and it ties back to the reassociation section. A vector sum keeps one partial sum per lane and adds the lanes at the end, which changes the order of the additions. For integers that is harmless. For floating point it can change the rounded result, so a compiler will *not* do it unless you allow it (`-ffast-math` or `-fassociative-math`), exactly as with multiple accumulators.
+
+### What limits the gain
+
+Eight lanes do not mean eight times faster. Memory bandwidth, loop leftovers, misaligned data and the time to load and reshuffle vectors all eat into it. A loop that is already waiting for memory gains almost nothing, which is the lesson of the memory sections above.
+
+> [!TIP]
+> Ask the compiler what it did: GCC's `-fopt-info-vec-missed` flag, or Clang's `-Rpass-missed=loop-vectorize`, names the loops it declined to vectorise and why.
+
 ## 10. Pitfalls
 
 - **Unrolling without separating accumulators** and expecting a gain on slow operations.
@@ -373,6 +421,12 @@ And measure throughout. Use a **profiler** to learn where the time is spent befo
 - **Multiple accumulators**: keeping several partial results so their updates do not depend on each other.
 - **Reassociation**: regrouping an expression with parentheses to shorten the dependency chain.
 - **Register spilling**: what happens when there are more live values than registers, forcing some into memory.
+- **SIMD**: Single instruction, multiple data: one instruction applies the same operation to several values at once
+- **Lane**: One slot inside a vector register, holding one data item
+- **SSE / AVX**: x86 instruction-set extensions with 128-bit (xmm) and 256-bit (ymm) vector registers
+- **Auto-vectorisation**: The compiler's automatic rewriting of a scalar loop into vector instructions
+- **Loop-carried dependence**: When one iteration needs a result of an earlier iteration, which prevents running them side by side
+- **`restrict`**: A C qualifier promising that a pointer's memory is not reached through any other pointer, which helps vectorisation
 
 ```quiz
 [
@@ -399,7 +453,9 @@ And measure throughout. Use a **profiler** to learn where the time is spent befo
    "answer": 1, "explain": "The address for each load is the result of the previous load, so they cannot be overlapped, unlike array accesses whose addresses come from an index."},
   {"q": "A hot loop contains an if statement whose outcome is random with respect to the data. What is the most effective remedy?",
    "options": ["Unroll the loop", "Express the choice as a conditional expression so the compiler can use a conditional move", "Add more accumulators", "Mark the variables volatile"],
-   "answer": 1, "explain": "A conditional move computes both values and selects one without a jump, so there is no prediction to get wrong and no misprediction penalty."}
+   "answer": 1, "explain": "A conditional move computes both values and selects one without a jump, so there is no prediction to get wrong and no misprediction penalty."},
+  {"q": "Which loop is the best candidate for auto-vectorisation?", "options": ["a[i] = a[i-1] + b[i]", "c[i] = a[i] + b[i] on non-overlapping arrays", "A loop that follows next pointers in a linked list", "A loop that calls an unknown function each trip"], "answer": 1, "explain": "Independent iterations over contiguous memory with no aliasing are exactly what vector lanes handle. The others have a dependence, scattered loads or an opaque call."},
+  {"q": "Why will GCC not vectorise a floating-point sum at -O3 without -ffast-math?", "options": ["Vector registers cannot hold floats", "It changes the order of additions, which can change the rounded result", "Floating-point addition is not supported by SIMD", "The loop is too short"], "answer": 1, "explain": "A vector sum keeps partial sums per lane, so the additions happen in a different order. Floating-point addition is not associative, so the result may differ."}
 ]
 ```
 

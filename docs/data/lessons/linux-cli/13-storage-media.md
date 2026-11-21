@@ -134,6 +134,43 @@ dists
 EFI
 ```
 
+## Making ISO images and burning discs
+
+CDs, DVDs and Blu-ray discs are rare in laptops now, but you will still meet them in old servers, in firmware-recovery procedures, and in interview questions about Linux tools. The tool chain is short and the idea is useful beyond discs.
+
+An **ISO image** is a single file containing a complete **ISO 9660** file system, the format used on data CDs and DVDs. Earlier you mounted one with the loopback option; this is how you make one.
+
+```bash
+mira@forge:~$ genisoimage -o backup.iso -R -J -V PHOTOS_2025 ~/photos/
+```
+
+`genisoimage` (its older name was `mkisofs`; on some systems `xorriso -as mkisofs` accepts the same options) reads a directory and packs it into an image. The flags you need:
+
+- `-o` names the output file.
+- `-R` adds the **Rock Ridge** extensions, which store Unix file names, permissions and symbolic links. Without it you get short, DOS-style names.
+- `-J` adds **Joliet** extensions, which give long names to Windows.
+- `-V` sets the volume label that appears when the disc is inserted.
+
+To copy an existing disc into an image, read the device as a stream of bytes with `dd`, as in the earlier section:
+
+```bash
+mira@forge:~$ dd if=/dev/cdrom of=disc.iso bs=2048 status=progress
+```
+
+Before burning, check that the image is sound by mounting it with `-o loop,ro` and listing it.
+
+**Burning** writes the image to a blank disc. The classic Linux tool is `wodim` (a descendant of `cdrecord`):
+
+```bash
+mira@forge:~$ wodim -scanbus                        # find the burner's device name
+mira@forge:~$ wodim dev=/dev/sr0 -v -eject backup.iso
+mira@forge:~$ wodim dev=/dev/sr0 blank=fast         # erase a rewritable disc first
+```
+
+On some distributions the burner device is `/dev/cdrw` or `/dev/sr0`; `-scanbus` tells you. A badly timed burn ruins a write-once disc, so closing other heavy programs and verifying the result afterwards (`mount`, then compare checksums) is good practice.
+
+The modern equivalent of burning is writing an installer image to a USB stick. It uses the same `dd` idea, but the target is a whole disk, so triple-check it with `lsblk` first: pointing `of=` at your system disk destroys it.
+
 ## Mounting automatically: `/etc/fstab`
 
 File systems that should be mounted at boot are listed in `/etc/fstab`, one per line with six fields:
@@ -351,6 +388,10 @@ du("var/lib", 2)
 | image | a single file containing the complete contents of a disk |
 | checksum | a short fingerprint of a file, used to verify that a copy is identical |
 | inode | the record a file system keeps for each file |
+| ISO image | A single file holding a complete ISO 9660 disc file system |
+| `genisoimage` / `mkisofs` | The tool that packs a directory into an ISO image |
+| Rock Ridge / Joliet | Extensions to ISO 9660 that keep Unix names and permissions / provide long file names for Windows |
+| `wodim` | The command-line program that writes images to CDs and DVDs, descended from `cdrecord` |
 
 ## Check yourself
 
@@ -387,7 +428,9 @@ du("var/lib", 2)
   {"q": "An application reports 'No space left on device' although `df -h` shows 40% used. What should you check next?",
    "options": ["df -i, because the file system may have run out of inodes", "free -h", "uptime", "lsblk -f"],
    "answer": 0,
-   "explain": "Each file needs an inode. Millions of tiny files can exhaust the inode table while plenty of blocks remain free."}
+   "explain": "Each file needs an inode. Millions of tiny files can exhaust the inode table while plenty of blocks remain free."},
+  {"q": "Which genisoimage option preserves Unix file names, permissions and symlinks in the image?", "options": ["-J", "-R", "-V", "-o"], "answer": 1, "explain": "-R adds the Rock Ridge extensions. -J is Joliet for Windows names, -V sets the label and -o names the output file."},
+  {"q": "Which command writes an existing image to a blank optical disc?", "options": ["genisoimage", "wodim", "mount -o loop", "fsck"], "answer": 1, "explain": "wodim burns images. genisoimage creates them, mount reads them and fsck checks file systems."}
 ]
 ```
 

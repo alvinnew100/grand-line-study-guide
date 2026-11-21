@@ -309,6 +309,26 @@ To halt or restart the whole machine: `sudo shutdown -h now`, `sudo shutdown -r 
 > [!INTERVIEW]
 > Frequently asked: "Difference between `kill` and `kill -9`?" (TERM can be handled for a clean shutdown; KILL cannot be caught and risks leaving state inconsistent.) "What is a zombie process and how do you get rid of it?" (An exited child whose status the parent has not collected; fix or restart the parent — killing the zombie itself is impossible.) "A process is using port 8080 — how do you find it?" (`ss -ltnp | grep 8080` or `lsof -i :8080`.) "What does load average mean?" (Average run-queue length over 1, 5 and 15 minutes; interpret it relative to the core count.)
 
+## Load monitors: `tload`, `xload` and their successors
+
+Earlier you met the **load average**, the three numbers that say how busy the machine has been over the last one, five and fifteen minutes. Reading three numbers once is less informative than watching them move, so Unix grew small tools that draw them.
+
+- **`tload`** draws a text graph of the load average in the terminal window and redraws it every few seconds (change the interval with `-d`, the vertical scale with `-s`). Run it in a spare terminal and you can see a spike appear when a build starts.
+- **`xload`** does the same in a small window on a graphical X11 desktop. It belongs to the old X11 utilities (often installed separately as `x11-apps`) and does not work on a machine without a graphical session.
+
+Both are historical. They only show one number, keep no history after you close them and cannot send an alert. In practice you will use something more capable:
+
+| Need | Modern tool |
+|---|---|
+| A quick look | `uptime`, or `cat /proc/loadavg` |
+| Interactive view with CPU, memory and load | `top`, `htop`, `btop` |
+| Redraw a command every two seconds | `watch uptime` |
+| Per-second system statistics | `vmstat 1` |
+| History after the fact | `sar` from the `sysstat` package |
+| Dashboards and alerts across many servers | a metrics agent (for example `node_exporter`) feeding Prometheus and Grafana |
+
+The reading skill is unchanged: compare the load with the number of CPU cores (`nproc`). A rising load with idle CPUs often means processes are waiting for disk or network rather than computing, which is where `vmstat` and `top`'s wait column help.
+
 ## Pitfalls
 
 - **Reaching for `-9` first.**
@@ -363,6 +383,9 @@ To halt or restart the whole machine: `sudo shutdown -h now`, `sudo shutdown -r 
 | load average | the average number of processes running or waiting to run |
 | RSS | resident set size: the physical memory a process occupies |
 | exit status | the number a process returns when it ends; 0 means success |
+| `tload` | A terminal program that draws the load average as a text graph |
+| `xload` | An X11 window program that graphs the load average on a graphical desktop |
+| `sar` | A tool from the sysstat package that records and reports system statistics over time |
 
 ## Check yourself
 
@@ -399,7 +422,9 @@ To halt or restart the whole machine: `sudo shutdown -h now`, `sudo shutdown -r 
   {"q": "What is the difference between `kill 1` and `kill %1`?",
    "options": ["None", "kill 1 signals the process with PID 1; kill %1 signals job number 1 of the current shell", "%1 means 1 percent of processes", "kill %1 sends signal 1"],
    "answer": 1,
-   "explain": "A percent sign introduces a job specification, which is local to the shell. A bare number is a process ID."}
+   "explain": "A percent sign introduces a job specification, which is local to the shell. A bare number is a process ID."},
+  {"q": "Which tool shows the load average as a graph inside a text terminal?", "options": ["xload", "tload", "top", "uptime"], "answer": 1, "explain": "tload draws a text graph. xload needs a graphical X11 session; uptime prints the numbers once."},
+  {"q": "A server has 4 cores and a load average of 12 while the CPUs are mostly idle. What is a likely cause?", "options": ["Too many CPUs", "Processes are waiting on disk or network input and output", "The load average is broken", "tload is running"], "answer": 1, "explain": "Load counts processes that are running or waiting. A high load with idle CPUs often means waiting for I/O."}
 ]
 ```
 

@@ -268,6 +268,44 @@ SVG can also be written directly in the HTML. It then becomes part of the DOM: s
 
 Give a meaningful inline SVG `role="img"` and an `aria-label` (its equivalent of `alt`). Give a decorative one `aria-hidden="true"`, as on the icon beside the visible word "Home".
 
+## Image maps: clickable regions inside one picture
+
+Imagine a floor plan of a shopping centre on a notice board. You tap the bakery and one page opens; you tap the pharmacy and a different one opens. The plan is a single picture, yet different parts of it behave as different links. HTML has a feature for exactly this, called an **image map**.
+
+An image map has three cooperating parts:
+
+1. an `<img>` carrying a `usemap` attribute, whose value is `#` plus a name;
+2. a `<map>` element with a matching `name`, which holds the definition (it displays nothing itself);
+3. one `<area>` element inside the map for each clickable region.
+
+```html
+<img src="floor-plan.png" width="600" height="300"
+     alt="Floor plan of the centre showing a bakery and a pharmacy"
+     usemap="#floorplan">
+
+<map name="floorplan">
+  <area shape="rect"   coords="20,30,200,140"  href="/shops/bakery"   alt="Bakery">
+  <area shape="circle" coords="420,150,60"     href="/shops/pharmacy" alt="Pharmacy">
+  <area shape="poly"   coords="300,10,380,10,340,90" href="/shops/florist" alt="Florist">
+</map>
+```
+
+The `shape` says what kind of outline to draw and `coords` gives its numbers, counted in pixels from the image's top-left corner. A `rect` takes the left, top, right and bottom edges; a `circle` takes the centre's x and y then the radius; a `poly` (polygon) takes a list of x,y corner points. A `default` shape covers whatever the other areas do not. Each `area` with an `href` needs an `alt`, because it is a link and a link needs a name that a screen reader can announce.
+
+### Why you will rarely write one today
+
+- **The coordinates are fixed pixels.** If CSS shrinks the image on a phone, the picture scales but the `coords` do not, so the clickable regions slide away from what they were meant to cover. Responsive layouts are the normal case now, and image maps fight them. (Scripts that rescale the numbers exist, but that is a lot of machinery for a link.)
+- **The regions are invisible.** Sighted mouse users get no hover effect, no focus outline of your own design, and no hint that anything is clickable, unless you add extra work.
+- **They are awkward for everyone else.** The alt text of the image describes the picture as a whole while each `area` needs its own text. Keyboard users tab through the regions in source order, so the order of the `area` elements must make sense. Touch targets are often too small.
+- **Better tools exist.** The usual replacements are an **inline SVG** (covered above) whose shapes are wrapped in `<a>` elements and scale with the image; absolutely positioned links on top of an image, using percentages; or simply a normal list of links beside the picture, which is the most accessible option of all.
+
+There is also an ancient server-side variant (`ismap`) in which the browser sent the click position to the server. Treat it as history.
+
+Image maps still turn up in old sites, email templates and interview trivia, so recognise the syntax and know the accessibility rules, but reach for SVG first.
+
+> [!NOTE]
+> A good accessibility test for any clickable picture is to unplug the mouse. Can you reach every region with Tab, see which one is focused, and hear a meaningful name for it?
+
 ## Pitfalls
 
 - **Missing `alt`.** The worst option. Decide between a real description and `alt=""`.
@@ -319,6 +357,9 @@ Every `img` needs a `src` and a deliberate `alt`: a short replacement for inform
 | Art direction | Supplying a different crop of an image for different layouts |
 | Lazy loading | Delaying a download until the image is about to scroll into view |
 | Data URL | An address beginning `data:` that contains the file's content itself |
+| Image map | A picture in which different regions link to different places, built from `usemap`, `<map>` and `<area>` |
+| `<map>` / `<area>` | The element that names an image map / one clickable region inside it, with a `shape`, `coords` and `href` |
+| `coords` | The numbers that position a region of an image map, in pixels from the image's top-left corner |
 
 ## Check yourself
 
@@ -337,7 +378,9 @@ Every `img` needs a `src` and a deliberate `alt`: a short replacement for inform
   {"q": "What does this render when photo.jpg does not exist? <img src='photo.jpg' alt='Two swans on a lake'>", "options": ["Nothing at all", "The text Two swans on a lake (usually with a broken-image icon)", "The file name photo.jpg", "A browser error page"], "answer": 1,
    "explain": "When the image cannot load, the browser displays the alt text in its place."},
   {"q": "Where should loading='lazy' NOT be used?", "options": ["On thumbnails in a long gallery", "On the large hero image visible when the page first loads", "On images in the footer", "On images inside a collapsed section"], "answer": 1,
-   "explain": "The hero image is typically the Largest Contentful Paint element; lazy loading delays it. Lazy-load only off-screen images."}
+   "explain": "The hero image is typically the Largest Contentful Paint element; lazy loading delays it. Lazy-load only off-screen images."},
+  {"q": "You shrink an image with CSS on small screens. What happens to the clickable regions defined by an image map's coords?", "options": ["They scale automatically with the image", "They keep their fixed pixel positions and no longer line up with the picture", "They are removed by the browser", "They switch to percentages"], "answer": 1, "explain": "The `coords` are plain pixel numbers. CSS scaling changes the picture but not the numbers, which is the main reason image maps are fragile in responsive pages."},
+  {"q": "Which alternative is usually best for a clickable diagram that must scale and stay accessible?", "options": ["A larger image map", "An inline SVG whose shapes are wrapped in anchor elements", "A server-side image map with ismap", "Pictures of text"], "answer": 1, "explain": "SVG shapes scale with the drawing and each anchor is a real, focusable link with its own accessible name."}
 ]
 ```
 

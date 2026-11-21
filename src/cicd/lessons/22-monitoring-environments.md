@@ -292,6 +292,35 @@ for name, decision in reap(environments, now):
 - **Regular rebuilds**: recreating staging from scratch on a schedule proves the definitions are complete.
 - **Disaster recovery rehearsed**: restoring a backup into a fresh environment is the only proof the backup works. State your recovery time and recovery point objectives and test against them.
 
+## Multihomed servers and IT service continuity
+
+Two last topics belong to the same theme as the rest of the lesson: keeping the environments your pipeline delivers to safe and recoverable.
+
+### Multihomed systems
+
+A **multihomed** server has more than one **network interface card** (NIC), each connected to a different network. Instead of one road for everything, there are separate roads for separate traffic. A typical production layout uses three:
+
+- a **production network** carrying customer traffic and traffic between application components;
+- an **administration network** used for `ssh`, monitoring and deployments, physically separate so that people cannot reach the management services from the production side;
+- a **backup network**, so that bulk copying at night does not slow customers down or clog the admin path.
+
+The security gain is that a service such as `ssh` can be *bound* only to the administration interface and is then invisible from the production network. The performance gain is that heavy backup traffic has its own wire. There are traps to plan around:
+
+1. **Applications must be told which interface to bind to.** If a program listens on every address, the separation is lost. Make the listen address configurable at deploy time instead of hard-coding it.
+2. **Manage the network configuration centrally** as code, like any other environment definition. The book's authors tell the story of an engineer who took down the administration NIC of a production box while logged in through it, and so needed a trip to the data centre.
+3. **Do not let traffic cross between interfaces.** If the server forwards packets from one network to another, it can quietly connect networks you meant to keep apart and expose data.
+
+### IT service continuity planning
+
+Monitoring tells you something is wrong. A **service continuity plan** says what you will do about a disaster: a lost data centre, a failed storage system or a ransomware attack. In IT service management (the ITIL framework) it is a deliberate process, owned by named people, that answers the following:
+
+- Which services matter most, and what are their recovery targets (how long can each be down, and how much recent data may be lost)? These are the **recovery time objective** and **recovery point objective** from the backup lessons.
+- What is the recovery arrangement for each: a standby site, replicated data, restoring from backups into new infrastructure?
+- Who does what, in which order? Written **runbooks** beat memory during an emergency.
+- How do we know it works? Plans that are never exercised fail. Rehearse failovers and restores on a schedule.
+
+Continuous delivery helps here more than people expect. If every environment can be rebuilt from version control and the deployment pipeline is dependable, then "recover the service" reduces to "run the pipeline against the standby infrastructure". The corollary is that the pipeline, the artifact repository and the secrets they depend on are themselves critical services, and the continuity plan must cover them too.
+
 ## Pitfalls
 
 - **Dashboards without alerts**, or alerts on causes rather than symptoms.
@@ -336,6 +365,10 @@ for name, decision in reap(environments, now):
 - **Synthetic monitoring** — a scheduled probe that performs a user journey against the live system.
 - **Ephemeral (preview) environment** — a short-lived environment created for one proposed change.
 - **Deploy marker** — a line on a dashboard showing when a deployment happened.
+- **Multihomed system** — A server with several network interfaces, each attached to a different network
+- **Administration network** — A network separated from production traffic and used only for managing servers
+- **IT service continuity plan** — A rehearsed plan for restoring important services after a disaster, with recovery targets and named responsibilities
+- **Runbook** — A written, step-by-step procedure for a recurring or emergency operation
 
 ## Check yourself
 
@@ -372,7 +405,9 @@ for name, decision in reap(environments, now):
   {"q": "What proves that backups are usable?",
    "options": ["The backup job reports success", "Regularly restoring them into a fresh environment and checking the result", "A large backup file", "A written policy"],
    "answer": 1,
-   "explain": "Only a rehearsed restore demonstrates that recovery time and recovery point objectives can be met."}
+   "explain": "Only a rehearsed restore demonstrates that recovery time and recovery point objectives can be met."},
+  {"q": "Why do multihomed production servers usually bind ssh only to the administration interface?", "options": ["It makes ssh faster", "Management services then cannot be reached from the production network", "ssh cannot run on production NICs", "It reduces disk usage"], "answer": 1, "explain": "Binding to one interface keeps the service invisible on the others, reducing exposure."},
+  {"q": "How does a reliable deployment pipeline help service continuity?", "options": ["It removes the need for backups", "Environments can be rebuilt from version control, so recovery means running the pipeline against standby infrastructure", "It makes disasters impossible", "It replaces runbooks"], "answer": 1, "explain": "Reproducible environments shorten recovery. Backups and runbooks are still needed, and the pipeline itself needs protection."}
 ]
 ```
 

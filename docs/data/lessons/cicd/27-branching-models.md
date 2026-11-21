@@ -217,6 +217,29 @@ git push                                  # the branch pipeline builds and tags 
 
 If you deploy a hosted service continuously from `main`, you probably do not need release branches at all: the "release" is whichever commit is in production, identified by a tag or a digest, and a fix is the next commit.
 
+## A short history: locks, streams and views
+
+Branching habits make more sense once you know what tools taught people before Git. Interviewers and legacy employers still ask about these.
+
+### Two ways to stop people overwriting each other
+
+- **Pessimistic locking.** To edit a file you first *check it out* and take a lock; everyone else can read it but not change it until you check it back in. Nobody ever has to merge, which is attractive for files that cannot be merged, such as images or binary documents. The price is waiting: work queues behind the lock, and a lock left by someone on holiday blocks the team. Early tools such as RCS and Visual SourceSafe worked this way.
+- **Optimistic locking.** Everyone edits their own copy freely, and conflicts are sorted out at the moment of check-in by merging. This assumes (optimistically) that clashes are uncommon and cheap to resolve. It is the default in CVS, Subversion and Git. Optimistic working is what makes frequent integration possible, but it only works if merges stay small, which is the whole argument of this lesson.
+
+### From CVS to Subversion to Git
+
+**CVS** (1980s and 1990s) versioned each file separately, so a "commit" touching ten files was ten independent operations that could fail halfway, and branches were slow and awkward. **Subversion** (2000) fixed those points: atomic commits, one revision number for the whole tree and cheap branches that are really just cheap copies. It is still *centralised*: one server holds the history. Subversion also lets you take a lock on a file explicitly, so teams can mix both styles for binary assets. **Git** and Mercurial are *distributed*: every clone has the full history, so branching and committing are local and fast, and the cost of branching fell to nearly zero. That convenience is also a temptation to hide in long-lived branches.
+
+### Stream-based systems
+
+Some commercial tools, among them IBM Rational ClearCase (with its UCM project model) and Perforce (with its *streams* feature), organise branches into a **stream hierarchy**. A stream is a branch with a defined parent and rules about how changes flow. Typically a team's *integration stream* sits under the project's *mainline*; each developer or feature gets a private *child stream*. Changes move up by *delivering* (promoting) them to the parent, and move down by *rebasing* (picking up the parent's latest). Perforce streams add types, such as mainline, development, release and task streams, and the tool nudges changes to flow in sensible directions (merge down from the parent, copy up to it).
+
+The idea is that structure makes merging safer. The continuous delivery argument is that a private stream is just a long-lived branch with a nicer label: if you promote several times a day, you did not need the hierarchy, and if you promote rarely, you will meet the same big-bang merge as before.
+
+### Static versus dynamic views
+
+ClearCase also distinguishes how a developer *sees* the code. In a **static view** you decide when to update: your files stay as they are until you ask for newer versions. A **dynamic view** is live: the moment someone merges a change into a stream you inherit from, it appears in your file system. That sounds like continuous integration for free, and it removes some conflicts, but the authors of the book report two problems: access to files was slow, which hurts compilation, and changes arriving mid-task disrupt your thinking. Contrast that with the Git habit of choosing when to pull, which is the static-view behaviour, combined with the discipline of pulling often.
+
 ## Other patterns, briefly
 
 - **Environment branches** (`dev`, `staging`, `production`, promoted by merging). Avoid them. Each merge creates a new commit, so what reaches production is not the artifact that was tested — a violation of build-once. Promote *artifacts* between environments, not branches. GitOps repositories that track desired state per environment use *directories*, not branches, for the same reason.
@@ -303,6 +326,11 @@ A good metric to track on any model is **branch age at merge**. If the median is
 - **Squash merge** — merging a branch as a single commit.
 - **Pull request** — a proposed change, reviewed and checked before merging.
 - **Feature flag** — a setting that hides unfinished work that has already been merged.
+- **Pessimistic locking** — Stopping others from changing a file by locking it while one person edits
+- **Optimistic locking** — Letting everyone edit freely and resolving conflicts by merging at check-in
+- **CVS / Subversion** — Older centralised version control systems; Subversion added atomic commits and cheap branches
+- **Stream** — In stream-based tools such as ClearCase UCM or Perforce, a branch with a parent and rules for how changes flow
+- **Static / dynamic view** — A view of the code that updates when you ask / one that updates live as upstream changes arrive
 
 ## Check yourself
 
@@ -339,7 +367,9 @@ A good metric to track on any model is **branch age at merge**. If the median is
   {"q": "Why does squash merging suit trunk-based development?",
    "options": ["It hides who wrote the code", "Each reviewed change becomes exactly one commit on main, which is simple to revert and to bisect", "It skips CI", "It makes branches live longer"],
    "answer": 1,
-   "explain": "One pull request, one commit: a clean unit of change for recovery tools."}
+   "explain": "One pull request, one commit: a clean unit of change for recovery tools."},
+  {"q": "Which locking style is the default in Git and Subversion?", "options": ["Pessimistic: lock a file before editing", "Optimistic: edit freely and merge at check-in", "No version control", "Locks held by the server administrator"], "answer": 1, "explain": "Both rely on merging at check-in. Subversion allows optional explicit locks for binary files."},
+  {"q": "In a ClearCase-style dynamic view, when does a developer see a change merged into a parent stream?", "options": ["Only after running update", "Immediately, as it is merged", "At the next release", "Never"], "answer": 1, "explain": "A dynamic view updates live. A static view changes only when the developer chooses to update."}
 ]
 ```
 

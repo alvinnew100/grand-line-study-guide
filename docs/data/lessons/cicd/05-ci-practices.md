@@ -207,6 +207,22 @@ services:
 
 Writing the test first is not required for CI, but it is the most reliable way to end up with the fast, comprehensive suite CI depends on. It also keeps changes small by construction: one failing test, the code to pass it, a refactor, commit.
 
+## Making the build impossible to ignore: radiators and feedback devices
+
+A red build in a web page nobody opens is a build nobody fixes. Teams therefore put the status where people cannot avoid it. Such a display is called an **information radiator**, a term from agile development: information that *radiates* to everyone walking past, like heat from a stove, without anyone having to go looking.
+
+The simplest radiator is a wall-mounted monitor or television showing the pipelines of the team's projects: green for passing, red for failing, perhaps the name of the last committer and the time the build has been red. Some teams add an **extreme feedback device**: a physical object wired to the build status. Famous examples are a lava lamp that glows green and turns to a red one when the build fails, a USB traffic light on a desk, a coloured orb or desk light, or a siren for the brave. Their advantage is that they are felt rather than read: a red light in the corner of your eye changes behaviour without any conscious check.
+
+The principle behind both is the same as the rest of this lesson: shorten the time between a mistake and the person who made it noticing.
+
+Make a radiator work for you:
+
+- **Show only what needs action.** Build state, test failures and the age of the current red are useful. A wall of vanity statistics is not.
+- **Show staleness.** A radiator that has lost its connection and still shows the last green is worse than none. Have it turn grey or flash a warning if the feed has not updated recently.
+- **Place it in the shared space**, visible from where people sit, not in a corner or in an inbox.
+- **Avoid blame.** Showing the committer helps the quick fix; using it for shame teaches people to commit less often.
+- **Do not rely on it alone.** A radiator supplements the notifications that go to the person who committed.
+
 ## What the CI server gives you beyond pass or fail
 
 Once every commit is built on a neutral machine, several things come almost for free:
@@ -276,6 +292,8 @@ Same defect, same developers. The only variable is how long the two changes were
 - **Workflow** — in GitHub Actions, a file describing an automated process.
 - **Runner** — the temporary machine on which CI jobs run.
 - **Test-driven development** — writing a failing test first, then the code that makes it pass.
+- **Information radiator** — A display placed where everyone passes, showing important status such as the state of the build
+- **Extreme feedback device** — A physical object, such as a lava lamp or traffic light, that signals build status
 
 ## Check yourself
 
@@ -308,7 +326,9 @@ Same defect, same developers. The only variable is how long the two changes were
   {"q": "A team builds every feature branch on a CI server, and branches typically live three weeks. Are they practising CI?",
    "options": ["Yes, every branch is built", "No, their work is not being integrated with each other's until the branches merge", "Yes, as long as the builds are green", "Only if they also deploy"],
    "answer": 1,
-   "explain": "Building isolated branches verifies each in isolation. Integration, by definition, requires merging into the shared line frequently."}
+   "explain": "Building isolated branches verifies each in isolation. Integration, by definition, requires merging into the shared line frequently."},
+  {"q": "What is the main idea of an information radiator?", "options": ["Keeping reports in a database", "Putting important status where people see it without having to look for it", "Sending an email to the manager", "Hiding red builds"], "answer": 1, "explain": "It radiates to anyone passing, so a failing build cannot be ignored."},
+  {"q": "Why should a build radiator show when its data was last updated?", "options": ["For decoration", "So a disconnected display does not keep showing a stale green", "To make builds faster", "Because browsers require it"], "answer": 1, "explain": "A frozen green display misleads everyone. Showing staleness exposes a broken feed."}
 ]
 ```
 

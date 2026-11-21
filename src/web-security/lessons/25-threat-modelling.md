@@ -245,6 +245,35 @@ Nothing about the application's features changed. But an injection flaw in the r
 > [!INTERVIEW]
 > For "design a secure X" — a login system, a file-sharing feature, a payments flow — structure the answer on the four questions. Sketch the components and trust boundaries; name the assets; walk STRIDE across the main elements, giving one concrete threat and control per letter; rank the top risks; mention logging and how you would verify. Using the names *trust boundary*, *STRIDE*, *least privilege* and *defence in depth* naturally, attached to specifics, is what distinguishes a prepared candidate.
 
+## Sensitive data: PII and financial data
+
+Many threats in a model reduce to one question: what is stored where, and what would it be worth to an attacker? Marking the data on your diagram makes the answer visible.
+
+**Classify first.** *Data classification* sorts information into a few levels, each with handling rules. A common four-level scheme is *public* (the marketing page), *internal* (staff wiki), *confidential* (customer records) and *restricted* (card numbers, passwords, health data). The rules attach to the level: restricted data is encrypted at rest and in transit, access is logged and limited to few roles, and it never appears in logs, test data or screenshots. **Personally identifiable information** (PII) is anything that identifies a real person, alone or in combination: a name with an address, an email address, a national ID number, a device identifier. Law, such as GDPR in Europe, adds obligations on top.
+
+**Minimise.** The cheapest data to protect is data you do not hold. Ask of every field: do we need it, do we need it *now*, do we need it in this form? Collect less; delete on a schedule; show only the last four digits on screen; keep PII out of logs and error messages; give analytics a pseudonymous ID instead of an email address. In the model, every data store that holds PII is a threat target, so every one you remove shrinks the model.
+
+**Tokenise.** **Tokenisation** replaces a sensitive value with a meaningless stand-in (a token) and keeps the real value in a tightly guarded **vault**. Your database stores `tok_8f3a...` instead of a card number; only the vault, or the payment provider, can turn it back. Unlike encryption there is no key that decrypts a stolen token, so the rest of your system holds nothing worth stealing. Tokens can even be shaped like the original (for example, the same length) so that old software keeps working.
+
+**Shrink the PCI DSS scope.** **PCI DSS** is the industry security standard for anyone who handles payment-card data. Its requirements apply to every system that stores, processes or transmits card numbers, plus every system connected to those. That *scope* is where the cost is, so the best strategy is to make it small:
+
+- let a payment provider collect the card number through a hosted page or hosted fields inside an iframe, so card data never touches your servers (this puts you in the lightest compliance category);
+- store the provider's token and the last four digits, never the full number;
+- never store the security code (CVV) after authorisation;
+- separate any remaining card-handling systems on their own network segment.
+
+This is a high-level orientation, not legal advice; read the standard and your provider's guidance for the details that apply to you.
+
+## Protecting search features
+
+A search box feels harmless, yet it takes free text from anyone, runs a query against your data and returns what it finds. That shape invites three threats.
+
+**Search injection.** If the text is pasted into a query, the user controls part of it. SQL `LIKE` clauses, NoSQL operator objects, LDAP filters and the query syntax of full-text engines are all injectable. In some engines the special syntax lets a visitor write `field:value`, reach fields you never meant to expose, or submit a regular expression or leading wildcard that burns CPU for minutes. Defences: parameterise queries; use a *simple* query parser that treats input as plain words; escape special characters; allow only listed fields and sort columns; and cap the query length and number of terms.
+
+**Rate limiting.** Search is expensive and easy to automate, so it is a target for **denial of service** (overload) and for **scraping** (harvesting everything by querying `a`, `b`, `c`...). Limit requests per account, address and token; weight costly queries more heavily; cap page size and page depth; and require login for deep or bulk results.
+
+**Result leakage.** The most common flaw is applying access control *after* the search. If the engine finds 40 documents and the application then hides the 38 the user may not see, the response is correct but the page still shows "40 results", facet counts, spell-check suggestions or autocomplete entries that reveal that the hidden documents exist. The fix is to put the user's permissions *inside* the query as a filter, so counts and suggestions only describe what that user may see. Related traps: caches shared between users, error messages that echo the query's internals, and indexes that include fields the user may not read.
+
 ## How to test a threat model
 
 - **Trace to tests.** For each mitigated threat, point to the automated test or control that verifies it.
@@ -291,6 +320,12 @@ Nothing about the application's features changed. But an injection flaw in the r
 - **Attack tree** — a diagram branching from an attacker's goal into ways of achieving it.
 - **Zero trust** — verifying every request regardless of its network origin.
 - **Data minimisation** — collecting and keeping only the data that is needed.
+- **PII** — Personally identifiable information: data that identifies a real person alone or in combination
+- **Data classification** — Sorting data into levels such as public, internal, confidential and restricted, each with handling rules
+- **Tokenisation** — Replacing a sensitive value with a meaningless token and keeping the real value in a protected vault
+- **PCI DSS** — The security standard for organisations that store, process or transmit payment-card data
+- **Search injection** — Altering a search query's meaning by supplying text that the search engine treats as syntax
+- **Result leakage** — Revealing hidden data through search counts, facets or suggestions even when the results list is filtered
 
 ```quiz
 [
@@ -317,7 +352,9 @@ Nothing about the application's features changed. But an injection flaw in the r
    "explain": "Acceptance is a conscious choice with an owner. An unrecorded, undiscussed risk is merely ignored."},
   {"q": "Why give each service its own narrowly scoped database account?",
    "options": ["It makes queries faster", "A flaw in one service then reaches only that service's data and rights (least privilege)", "Databases require it", "It replaces the need for validation"], "answer": 1,
-   "explain": "Least privilege limits the blast radius of any single compromise."}
+   "explain": "Least privilege limits the blast radius of any single compromise."},
+  {"q": "What is the most effective way to reduce a web shop's PCI DSS scope?", "options": ["Encrypt the card numbers in your own database", "Let a payment provider collect the card number so it never reaches your servers", "Hide the card form with JavaScript", "Store card numbers in log files"], "answer": 1, "explain": "Systems that never see card data are outside the scope, which removes the biggest costs."},
+  {"q": "A search page filters hidden documents out of the list but shows 'About 40 results'. What is the problem?", "options": ["Nothing: the list is correct", "The count leaks that restricted documents exist", "The page is too slow", "The query is too short"], "answer": 1, "explain": "Authorisation must be part of the query itself so that counts, facets and suggestions cover only visible documents."}
 ]
 ```
 

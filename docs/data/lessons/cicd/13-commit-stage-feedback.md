@@ -251,6 +251,15 @@ A platform team can still provide shared building blocks — reusable workflows,
 
 On very large teams it helps to give one person at a time the explicit job of tending the stage: watching its duration and failure rate, chasing unreliable tests, and helping people when it breaks. This is the build-cop role again, applied to the health of the stage itself.
 
+### The build master on very large teams
+
+On a team of up to twenty or thirty people, self-organisation works. When the build breaks you can see who just committed and either remind them or lend a hand. As the team grows, spreads over time zones or is new to continuous integration, that stops working: everyone assumes someone else will notice, and a red build sits for hours.
+
+Some organisations therefore appoint a **build master**. Their job is to watch the build, to find out who broke it and to nudge them (or the team) to fix it or back the change out quickly. It is about enforcing build discipline, not about doing everyone's repairs. Two refinements keep the idea healthy:
+
+- **Rotate the role**, for example weekly. Everyone gains an appreciation of what a broken build costs others, and nobody becomes the build team's scapegoat or its single point of failure.
+- **Treat it as a symptom.** If you need a permanent build master for ever, ask why discipline has not become a habit, and whether the commit stage is too slow or too flaky to trust. A good commit stage with a visible, shared status usually makes the role fade away.
+
 ## Worked example: from 26 minutes to under 5
 
 A service's commit stage has drifted to 26 minutes. A profile of one run:
@@ -314,6 +323,7 @@ New critical path: 0.4 (restore) + 1.2 (unit tests) + 1.2 (image) with component
 - **Test selection** — running only the tests a change could affect.
 - **Time budget** — a limit on how long a stage may take.
 - **Wall-clock time** — the real elapsed time, as opposed to the total machine time used.
+- **Build master** — A person, ideally rotating weekly, who watches the build on a large team and makes sure breakages are fixed or reverted quickly
 
 ## Check yourself
 
@@ -350,7 +360,8 @@ New critical path: 0.4 (restore) + 1.2 (unit tests) + 1.2 (image) with component
   {"q": "A team speeds up the stage by automatically retrying any failed unit test three times. What is the downside?",
    "options": ["Nothing", "Genuine intermittent defects and unreliable tests are hidden instead of fixed", "The cache is invalidated", "Coverage decreases"],
    "answer": 1,
-   "explain": "Blanket retries mask races and order dependence. Unreliable tests should be quarantined and repaired, not papered over."}
+   "explain": "Blanket retries mask races and order dependence. Unreliable tests should be quarantined and repaired, not papered over."},
+  {"q": "Why should the build master role rotate among team members?", "options": ["To save money", "Everyone learns the cost of a broken build and the role does not become a single point of failure", "Rotation is required by Git", "It makes builds faster"], "answer": 1, "explain": "Rotation spreads responsibility and understanding. A permanent build master hides the underlying discipline problem."}
 ]
 ```
 

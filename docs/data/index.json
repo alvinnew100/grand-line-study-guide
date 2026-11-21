@@ -25,7 +25,7 @@
    "Shotts, The Linux Command Line (5th internet edition)",
    "Original material on ssh, tmux, curl, jq, git, cron, systemd, GPUs and Docker"
   ],
-  "words": 136671,
+  "words": 138484,
   "modules": 12,
   "lessons": 36,
   "problems": 25
@@ -286,7 +286,7 @@
    "PyMongo and Motor documentation (pymongo.readthedocs.io, motor.readthedocs.io)",
    "MongoDB Atlas Vector Search documentation (mongodb.com/docs/atlas/atlas-vector-search)"
   ],
-  "words": 112400,
+  "words": 114223,
   "modules": 12,
   "lessons": 28,
   "problems": 25
@@ -396,7 +396,7 @@
    "Casciaro & Mammino, Node.js Design Patterns (3rd ed.), ch. 1-13",
    "Node.js API documentation (nodejs.org/docs/latest/api)"
   ],
-  "words": 118597,
+  "words": 119255,
   "modules": 15,
   "lessons": 33,
   "problems": 33
@@ -513,7 +513,7 @@
    "Forsgren, Humble & Kim, Accelerate / DORA State of DevOps research (four key metrics)",
    "Official docs: GitHub Actions, GitLab CI/CD, Docker, Kubernetes, Terraform, Argo CD, Argo Rollouts, OpenFeature, Semantic Versioning, Conventional Commits, trunkbaseddevelopment.com"
   ],
-  "words": 140847,
+  "words": 143078,
   "modules": 18,
   "lessons": 38,
   "problems": 22
@@ -615,7 +615,7 @@
    "OWASP Cheat Sheet Series — https://cheatsheetseries.owasp.org/",
    "MDN Web Docs, Security on the web — https://developer.mozilla.org/en-US/docs/Web/Security"
   ],
-  "words": 115080,
+  "words": 116069,
   "modules": 10,
   "lessons": 30,
   "problems": 26
@@ -651,7 +651,7 @@
   "sources": [
    "Bryant & O'Hallaron, Computer Systems: A Programmer's Perspective, 3rd ed. (CS:APP 3e)"
   ],
-  "words": 147316,
+  "words": 148207,
   "modules": 13,
   "lessons": 34,
   "problems": 26
@@ -782,7 +782,7 @@
    "MDN Web Docs (developer.mozilla.org)",
    "WCAG 2.2"
   ],
-  "words": 96882,
+  "words": 98463,
   "modules": 9,
   "lessons": 28,
   "problems": 33
