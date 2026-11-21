@@ -69,7 +69,7 @@
   "sources": [
    "Goodrich, Tamassia & Goldwasser, Data Structures and Algorithms in Python (Wiley, 2013), ch. 3-15"
   ],
-  "words": 111438,
+  "words": 122336,
   "modules": 13,
   "lessons": 38,
   "problems": 33
@@ -212,7 +212,7 @@
    "Apache Kafka documentation (kafka.apache.org/documentation)",
    "Malkov & Yashunin, Efficient and robust approximate nearest neighbor search using HNSW graphs (2016)"
   ],
-  "words": 128257,
+  "words": 142106,
   "modules": 13,
   "lessons": 33,
   "problems": 18
@@ -435,12 +435,14 @@
    "AWS Certified Solutions Architect Official Study Guide: Associate Exam (Sybex), ch. 1-14",
    "AWS documentation (docs.aws.amazon.com): EC2, EBS, S3, VPC, RDS, DynamoDB, IAM, Lambda, CloudWatch, Route 53, CloudFront, Elastic Load Balancing, Auto Scaling, SQS, SNS, Kinesis, CloudFormation user guides",
    "AWS Well-Architected Framework (docs.aws.amazon.com/wellarchitected)",
-   "AWS Billing user guide: Free Tier (docs.aws.amazon.com/awsaccountbilling)"
+   "AWS Billing user guide: Free Tier (docs.aws.amazon.com/awsaccountbilling)",
+   "Amazon Lightsail, Amazon SageMaker AI and Amazon Bedrock user guides (docs.aws.amazon.com)",
+   "AWS Certified Solutions Architect - Associate (SAA-C03) exam guide (docs.aws.amazon.com/aws-certification)"
   ],
-  "words": 129908,
+  "words": 163519,
   "modules": 15,
-  "lessons": 34,
-  "problems": 33
+  "lessons": 40,
+  "problems": 37
  },
  {
   "id": "terraform",
