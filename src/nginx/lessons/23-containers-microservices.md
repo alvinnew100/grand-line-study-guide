@@ -444,7 +444,7 @@ Container platforms usually collect metrics with Prometheus, which fetches a tex
    "options": ["To save memory", "A container stops when its main process exits, and daemon mode makes the starting process exit", "To disable logging", "It is required for TLS"], "answer": 1,
    "explain": "In daemon mode the launching process forks and exits; the container runtime would see its main process end."},
   {"q": "A template contains `proxy_set_header Host $host;` and `server ${APP_HOST}:8000;`. Only APP_HOST is set in the environment. What does the image's rendering produce?",
-   "options": ["Both are replaced; $host becomes empty", "Only ${APP_HOST} is replaced; $host is kept", "Neither is replaced", "The container fails to start"], "answer": 1,
+   "options": ["Both are replaced; $host becomes empty", "Only \\${APP_HOST} is replaced; \\$host is kept", "Neither is replaced", "The container fails to start"], "answer": 1,
    "explain": "The image's envsubst step substitutes only variables defined in the environment, so NGINX variables survive."},
   {"q": "What does `server orders.service.internal service=http resolve;` look up?",
    "options": ["An A record with port 80", "The SRV record _http._tcp.orders.service.internal", "A TXT record", "The hosts file"], "answer": 1,

@@ -393,7 +393,7 @@ Each drill is small on purpose. Motor learning works on short sequences repeated
   {"q": "Which keys append a comma to the end of four consecutive lines of different lengths, starting on the first?",
    "options": ["<C-v>3jA,<Esc>", "<C-v>3j$A,<Esc>", "V3jA,<Esc>", "v3j$a,<Esc>"],
    "answer": 1,
-   "explain": "The $ makes the block follow each line's own end, so A appends there. Without $ the comma goes at a fixed column."},
+   "explain": "The \\$ makes the block follow each line's own end, so A appends there. Without \\$ the comma goes at a fixed column."},
   {"q": "On the line 'a.b.c.d' with the cursor on a, what does f.;; do?",
    "options": ["Moves to the first dot", "Moves to the second dot", "Moves to the third dot", "Deletes three dots"],
    "answer": 2,

@@ -311,7 +311,7 @@ For an Insert-mode change, a count repeats the typed text: after `a-<Esc>`, typi
   {"q": "The buffer has three lines that each need a trailing comma. The cursor is on line 1. Which sequence does the job in the fewest keystrokes?",
    "options": ["$a,<Esc> then j. twice", "A,<Esc> then j. twice", "A,<Esc> then j$. twice", "i,<Esc> then j. twice"],
    "answer": 1,
-   "explain": "A folds 'go to end of line' into the change, so j. is enough on the following lines. With $a the motion $ is not stored and would have to be retyped each time."},
+   "explain": "A folds 'go to end of line' into the change, so j. is enough on the following lines. With \\$a the motion \\$ is not stored and would have to be retyped each time."},
   {"q": "You type dw and then move down a line and press dot. What happens?",
    "options": ["The same word that was deleted before is pasted back", "The text from the new cursor position to the start of the next word is deleted", "Nothing, because the cursor moved", "The whole line is deleted"],
    "answer": 1,

@@ -366,7 +366,7 @@ The `awk` program walks the fields of each line, counts those beginning `cache=`
    "explain": "The entry was removed after 10 unused minutes, so nothing is found: a MISS."},
   {"q": "Two different sites proxy to the same upstream name and share one cache zone with the default key. A visitor to site B requests /index.html shortly after site A's was cached. What does the visitor receive?",
    "options": ["Site B's page", "Site A's cached page, because the default key uses the proxy host and not the visitor's Host", "A 502", "A redirect to site A"], "answer": 1,
-   "explain": "$proxy_host is the upstream name, identical for both. Add $host to the key."}
+   "explain": "\\$proxy_host is the upstream name, identical for both. Add \\$host to the key."}
 ]
 ```
 

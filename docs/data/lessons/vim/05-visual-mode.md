@@ -309,7 +309,7 @@ The price of supplying the noun by pointing rather than by naming is that Vim ha
   {"q": "Lines of different lengths need a comma at the end of each. Cursor on line 1. Which works?",
    "options": ["<C-v>jjA,<Esc>", "<C-v>jj$A,<Esc>", "VjjA,<Esc>", "vjj$a,<Esc>"],
    "answer": 1,
-   "explain": "The $ extends the block to the end of every line, so A appends at each line's own end. Without $ the comma would be placed at one fixed column, with shorter lines padded."},
+   "explain": "The \\$ extends the block to the end of every line, so A appends at each line's own end. Without \\$ the comma would be placed at one fixed column, with shorter lines padded."},
   {"q": "You selected with v, moved, and notice the selection should have started two words earlier. What is the quickest fix?",
    "options": ["<Esc> and start again", "o then bb then o", "gv", "V"],
    "answer": 1,

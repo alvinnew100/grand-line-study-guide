@@ -375,7 +375,7 @@ host=tidepool.test uri=/whoami args=x=1 from=127.0.0.1
    "explain": "Without the flag, the first server defined for that address and port is the default; wildcard includes load alphabetically."},
   {"q": "For GET /catalogue/list?page=2, what is $uri?",
    "options": ["/catalogue/list?page=2", "/catalogue/list", "page=2", "catalogue/list"], "answer": 1,
-   "explain": "$uri is the normalised path without the query string. $request_uri includes the query and $args is the query alone."}
+   "explain": "\\$uri is the normalised path without the query string. \\$request_uri includes the query and \\$args is the query alone."}
 ]
 ```
 

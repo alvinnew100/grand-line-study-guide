@@ -383,13 +383,13 @@ The last case is the important one: a forged entry on the left does not win, bec
 
 ```quiz
 [
-  {"q": "map $uri $pool { default web; ~^/api/ api; ~^/api/v2/ apiv2; } What is $pool for /api/v2/users?",
+  {"q": "map \\$uri \\$pool { default web; ~^/api/ api; ~^/api/v2/ apiv2; } What is \\$pool for /api/v2/users?",
    "options": ["apiv2", "api", "web", "empty"], "answer": 1,
    "explain": "Regex rows are tested in order and the first match wins; ~^/api/ comes first."},
-  {"q": "geo $net { default public; 10.0.0.0/8 office; 10.9.0.0/16 lab; } What is $net for 10.9.3.4?",
+  {"q": "geo \\$net { default public; 10.0.0.0/8 office; 10.9.0.0/16 lab; } What is \\$net for 10.9.3.4?",
    "options": ["office", "lab", "public", "It is an error"], "answer": 1,
    "explain": "geo picks the most specific range containing the address, regardless of order."},
-  {"q": "split_clients \"$remote_addr\" $v { 20% new; * old; } A visitor from one address makes 50 requests. How many go to new?",
+  {"q": "split_clients \"\\$remote_addr\" \\$v { 20% new; * old; } A visitor from one address makes 50 requests. How many go to new?",
    "options": ["About 10", "Either all 50 or none", "Exactly 20", "25"], "answer": 1,
    "explain": "The same key always hashes to the same position, so the visitor is entirely in one group."},
   {"q": "A map has no default row and no pattern matches. What is the resulting variable?",
