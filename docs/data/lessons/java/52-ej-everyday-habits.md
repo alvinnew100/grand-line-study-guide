@@ -329,20 +329,23 @@ System.out.println(java.util.Comparator.<Integer>naturalOrder().compare(42, 42))
 **Null: unboxing can throw.**
 
 ```java
-static Integer counter;                  // a field: defaults to null, not 0
+public class Main {
+    static Integer counter;              // a field: defaults to null, not 0
 
-public static void main(String[] args) {
-    if (counter == 42) {                 // counter is unboxed for the comparison
-        System.out.println("unbelievable");
+    public static void main(String[] args) {
+        if (counter == 42) {             // counter is unboxed for the comparison
+            System.out.println("unbelievable");
+        }
     }
 }
 ```
 
 ```text
-Exception in thread "main" java.lang.NullPointerException
+Exception in thread "main" java.lang.NullPointerException: Cannot invoke "java.lang.Integer.intValue()" because "Main.counter" is null
+        at Main.main(Main.java:5)
 ```
 
-When a boxed and a primitive value meet in one operation, the boxed one is unboxed. Unboxing `null` throws. Declaring `counter` as `int` fixes it.
+When a boxed and a primitive value meet in one operation, the boxed one is unboxed. Unboxing `null` throws, and the message (Java 14 and later) even names the hidden `intValue()` call that the compiler inserted. Declaring `counter` as `int` fixes it.
 
 **Cost: boxing in a loop.**
 

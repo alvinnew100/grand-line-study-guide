@@ -175,6 +175,7 @@ public class Arrays1 {
 4.75
 null
 Exception in thread "main" java.lang.ArrayIndexOutOfBoundsException: Index 4 out of bounds for length 4
+        at Arrays1.main(Arrays1.java:15)
 ```
 
 - `new int[4]` creates four slots numbered **0 to 3**. The number in brackets is an **index**.

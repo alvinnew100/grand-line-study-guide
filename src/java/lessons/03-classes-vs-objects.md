@@ -262,6 +262,7 @@ public class NullDemo {
 ```text
 Exception in thread "main" java.lang.NullPointerException: Cannot read field "onLoan" because "this.left" is null
         at Shelf.countAvailable(ShelfDemo.java:7)
+        at NullDemo.main(NullDemo.java:4)
 ```
 
 A `NullPointerException` (often shortened to NPE) is the most common runtime failure in Java. Modern JVMs print a helpful message that names the exact variable that was null. The cure is to make sure objects are fully set up before use, which is the job of constructors: see [Constructors, this and super](#/lesson/java/java-constructors).

@@ -290,7 +290,7 @@ Three elements display values rather than collect them.
 <head><meta charset="utf-8"><title>Output elements</title>
 <style> body { font-family: system-ui, sans-serif; } label, p { display: block; margin: .6rem 0; } </style></head>
 <body>
-  <form oninput="total.value = (qty.valueAsNumber * 3.5).toFixed(2)">
+  <form oninput="total.value = (qty.valueAsNumber * 3.5).toFixed(2)" onsubmit="return false">
     <label>Cups at £3.50: <input type="number" id="qty" name="qty" value="2" min="0"></label>
     <p>Total: £<output name="total" for="qty">7.00</output></p>
   </form>
