@@ -352,4 +352,4 @@ A practical middle path: write business logic as factories that take their depen
 ]
 ```
 
-> **Source:** Casciaro & Mammino, *Node.js Design Patterns* 3e, ch. 7 (topics only; wording and examples are original). Documentation: https://nodejs.org/docs/latest/api/modules.html#caching, https://nodejs.org/docs/latest/api/packages.html#dual-package-hazard
+> **Source:** Casciaro & Mammino, *Node.js Design Patterns* 3e, ch. 7 (topics only; wording and examples are original). Documentation: https://nodejs.org/docs/latest/api/modules.html#caching, https://nodejs.org/docs/latest/api/packages.html#dual-commonjses-module-packages

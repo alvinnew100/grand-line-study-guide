@@ -398,4 +398,4 @@ Editing the JSON by hand is off the table except as a last resort guided by the 
 ]
 ```
 
-> **Source:** Brikman, Terraform: Up & Running 3e, ch. 3 (state management) and ch. 5 (refactoring can be tricky, terraform import). Documentation: https://developer.hashicorp.com/terraform/language/moved, https://developer.hashicorp.com/terraform/language/import, https://developer.hashicorp.com/terraform/language/resources/syntax#removing-resources, https://developer.hashicorp.com/terraform/cli/commands/state and https://developer.hashicorp.com/terraform/cli/commands/plan#planning-modes
+> **Source:** Brikman, Terraform: Up & Running 3e, ch. 3 (state management) and ch. 5 (refactoring can be tricky, terraform import). Documentation: https://developer.hashicorp.com/terraform/language/moved, https://developer.hashicorp.com/terraform/language/import, https://developer.hashicorp.com/terraform/language/block/removed, https://developer.hashicorp.com/terraform/cli/commands/state and https://developer.hashicorp.com/terraform/cli/commands/plan#planning-modes

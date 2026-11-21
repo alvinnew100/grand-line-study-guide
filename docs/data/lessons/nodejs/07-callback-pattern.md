@@ -357,4 +357,4 @@ After an uncaught exception some operation was abandoned halfway: a file left op
 ]
 ```
 
-> **Source:** Casciaro & Mammino, *Node.js Design Patterns* 3e, ch. 3 (topics only; wording and examples are original). Documentation: https://nodejs.org/docs/latest/api/errors.html#error-first-callbacks, https://nodejs.org/docs/latest/api/process.html#event-uncaughtexception
+> **Source:** Casciaro & Mammino, *Node.js Design Patterns* 3e, ch. 3 (topics only; wording and examples are original). Documentation: https://nodejs.org/docs/latest/api/errors.html, https://nodejs.org/docs/latest/api/process.html#event-uncaughtexception

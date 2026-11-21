@@ -696,4 +696,4 @@ test("a label is computed from a fixed date", () => {
 ]
 ```
 
-> **Source:** Johansen, *Test-Driven JavaScript Development*, ch. 13 (Streaming Data with Ajax and Comet), section 13.1. Docs: https://vitest.dev/guide/mocking#timers , https://vitest.dev/api/vi.html#vi-usefaketimers , https://jestjs.io/docs/timer-mocks , https://nodejs.org/api/test.html#timers , https://developer.mozilla.org/en-US/docs/Web/API/Window/setTimeout
+> **Source:** Johansen, *Test-Driven JavaScript Development*, ch. 13 (Streaming Data with Ajax and Comet), section 13.1. Docs: https://vitest.dev/guide/mocking/timers , https://vitest.dev/api/vi.html#vi-usefaketimers , https://jestjs.io/docs/timer-mocks , https://nodejs.org/api/test.html#timers , https://developer.mozilla.org/en-US/docs/Web/API/Window/setTimeout

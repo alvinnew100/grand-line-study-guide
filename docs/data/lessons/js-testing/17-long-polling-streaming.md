@@ -739,4 +739,4 @@ A WebSocket client is tested the same way: a fake class with `send`, `close` and
 ]
 ```
 
-> **Source:** Johansen, *Test-Driven JavaScript Development*, ch. 13 (Streaming Data with Ajax and Comet), sections 13.2 to 13.4. Docs: https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events/Using_server-sent_events , https://developer.mozilla.org/en-US/docs/Web/API/WebSocket , https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Caching , https://vitest.dev/guide/mocking#timers
+> **Source:** Johansen, *Test-Driven JavaScript Development*, ch. 13 (Streaming Data with Ajax and Comet), sections 13.2 to 13.4. Docs: https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events/Using_server-sent_events , https://developer.mozilla.org/en-US/docs/Web/API/WebSocket , https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Caching , https://vitest.dev/guide/mocking/timers

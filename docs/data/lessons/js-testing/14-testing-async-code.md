@@ -478,4 +478,4 @@ A test that waits for something that never happens would hang for ever, so runne
 ]
 ```
 
-> **Source:** Johansen, *Test-Driven JavaScript Development*, ch. 12 (Abstracting Browser Differences: Ajax). Docs: https://vitest.dev/guide/features#async , https://jestjs.io/docs/asynchronous , https://developer.mozilla.org/en-US/docs/Web/API/Fetch_API/Using_Fetch
+> **Source:** Johansen, *Test-Driven JavaScript Development*, ch. 12 (Abstracting Browser Differences: Ajax). Docs: https://vitest.dev/guide/features , https://jestjs.io/docs/asynchronous , https://developer.mozilla.org/en-US/docs/Web/API/Fetch_API/Using_Fetch
