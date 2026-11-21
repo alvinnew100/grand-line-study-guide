@@ -266,6 +266,77 @@ Pick a lifetime comfortably above the slowest normal run, and for long jobs **ex
 periodically from a background thread (compare the token, then set a new expiry - again atomically).
 redis-py's lock has `extend()` and `reacquire()` for this.
 
+## Part 2b - lock one thing, not everything: fine-grained locking
+
+The lock from Part 2 works. The next question is *how much* it should lock. This is a design choice, and getting it wrong does not break correctness; it quietly wrecks performance.
+
+### The coarse lock and its price
+
+Linea has hundreds of lines, and a background job regenerates the timetable of a line when its schedule changes. The first idea is one lock for the whole system:
+
+```python
+token = acquire("timetables")          # one lock for ALL lines
+```
+
+This is safe, since only one regeneration runs at a time. But Line 7 and Line 12 have nothing to do with each other. If Line 7's job takes five seconds, the Line 12 job waits five seconds for no reason, and so does everyone queued behind it. A lock like this is called **coarse-grained**: it covers a large area, so it blocks work that never conflicted.
+
+An everyday comparison: a library with one key to the whole archive. Only one researcher at a time may enter, even though they are reading different shelves. Giving each shelf its own small key lets everyone work at once; two people still queue if they want the same shelf.
+
+### The fine-grained lock
+
+The fix is to name the lock after the **smallest thing that must not be changed by two workers at once**, here a single line:
+
+```python
+token = acquire(f"timetable:{line_id}")      # one lock PER line: "lock:timetable:line7"
+if token:
+    try:
+        rebuild_timetable(line_id)
+    finally:
+        release(f"timetable:{line_id}", token)
+```
+
+Nothing else changes: it is the same `acquire` and `release` from Part 2. Only the key's name is different. Locks for different lines are different Redis keys, so they never block each other. Two workers wanting the *same* line still queue, which is exactly the protection you wanted. This is called **fine-grained locking**: many small locks, each guarding one item. The idea is the same as in a shared marketplace, where a lock per listed item replaces a lock over the whole market: buying a bicycle should not wait for someone else's purchase of a lamp.
+
+**Contention** means several workers competing for the same resource. The coarse lock concentrates *all* competition on one key. The fine-grained locks spread it across many keys, so each one is competed for by few workers and most attempts succeed at once.
+
+### What you must get right
+
+- **Choose the unit carefully.** The lock must cover everything the protected action reads and changes. If rebuilding Line 7 also modifies a shared station index, then the per-line lock does not protect that index, and two workers on different lines can corrupt it. Either include the index in a second (also fine) lock, or accept a coarser lock around that step.
+- **Locking several things needs a fixed order.** If a transfer needs both Line 7 and Line 12, always acquire the one with the smaller name first. Otherwise worker A holds 7 and waits for 12 while worker B holds 12 and waits for 7: a **deadlock** where both wait until their locks expire.
+- **More locks, more keys.** Each lock is a small key that expires, so the cost is tiny, but name them consistently, with a clear prefix.
+- **Do not go finer than the data.** A lock per *field* of an item can make the code hard to reason about. Start with one lock per entity.
+
+> [!TIP]
+> Fine-grained locking is the cheapest performance win in many locking designs. Before reaching for faster hardware, check whether workers are waiting on a lock that guards more than they actually share.
+
+### Watching the difference
+
+The model below gives every worker a job that takes 5 time units. All 8 workers arrive at time 0, each for a line, with two pairs working on the same line. It computes when each finishes if they share one lock versus one lock per line.
+
+```python-run
+JOB = 5
+requests = [("w1", "line7"), ("w2", "line7"), ("w3", "line12"), ("w4", "line3"),
+            ("w5", "line3"), ("w6", "line9"), ("w7", "line21"), ("w8", "line30")]
+
+def simulate(lock_for):
+    free_at = {}                      # lock name -> time it becomes free
+    waits, finish = [], 0
+    for worker, line in requests:     # all arrive at time 0, served in order
+        lock = lock_for(line)
+        start = free_at.get(lock, 0)  # wait until that lock is free
+        waits.append(start)
+        free_at[lock] = start + JOB
+        finish = max(finish, start + JOB)
+    return finish, sum(waits) / len(waits)
+
+for label, fn in [("one lock for everything", lambda line: "all"),
+                  ("one lock per line", lambda line: line)]:
+    done, avg_wait = simulate(fn)
+    print(f"{label:26} all done at t={done:2}   average wait={avg_wait:.1f}")
+```
+
+With one shared lock the eight jobs run one after another and the last finishes at time 40, with an average wait of 17.5. With a lock per line only the genuine conflicts (two workers each on `line7` and `line3`) wait, everything is done by time 10, and the average wait falls to about 1.2. The protection is the same in both cases; only the amount of unnecessary waiting differs.
+
 ## Part 3 - counting semaphores
 
 Linea calls a partner's live-departures service that allows only three simultaneous requests per
@@ -471,6 +542,10 @@ stale holders have timed out.
 - **Counting semaphore** - a lock that allows up to a fixed number of simultaneous holders.
 - **Fair** - granting access strictly in order of arrival.
 - **Redlock** - an algorithm that takes the same lock on a majority of independent Redis servers.
+- **Coarse-grained lock** - one lock covering a large area, blocking work that never conflicted.
+- **Fine-grained lock** - many small locks, each guarding one item, so unrelated work proceeds in parallel.
+- **Contention** - several workers competing for the same resource.
+- **Lock ordering** - always acquiring several locks in the same fixed order to avoid deadlock.
 
 ```quiz
 [
@@ -505,7 +580,24 @@ stale holders have timed out.
   {"q": "Which statement about Redis-based locks is the most accurate?",
    "options": ["They guarantee mutual exclusion under all failures", "They are a good way to avoid duplicate work, but expiry and failover mean they should not be the only protection where overlap corrupts data", "They require three servers to work at all", "They block the Redis server while held"],
    "answer": 1,
-   "explain": "Treat them as an efficiency optimisation; enforce correctness at the resource with fencing or use a consensus-based system."}
+   "explain": "Treat them as an efficiency optimisation; enforce correctness at the resource with fencing or use a consensus-based system."},
+  {"q": "Linea uses one lock named timetables for rebuilding every line. What is the main problem?",
+   "options": ["It is unsafe", "It makes rebuilds of unrelated lines wait for each other for no reason", "Redis cannot store it", "It never expires"],
+   "answer": 1,
+   "explain": "The lock is correct but coarse: it blocks work that never conflicted. A lock per line keeps the protection and removes the needless waiting."},
+  {"q": "Which lock name is an example of fine-grained locking?",
+   "options": ["lock:all", "lock:timetable:line7", "lock:redis", "lock:*"],
+   "answer": 1,
+   "explain": "Naming the lock after the single entity being protected gives many small independent locks."},
+  {"q": "A job must change both line7 and line12. What rule avoids deadlock between two such jobs?",
+   "options": ["Acquire both at the same instant", "Always acquire the locks in the same fixed order, such as alphabetical", "Use a longer expiry", "Use a coarse lock only on Mondays"],
+   "answer": 1,
+   "explain": "If one job holds 7 and waits for 12 while another holds 12 and waits for 7, both wait. A fixed order makes that cycle impossible."},
+  {"q": "A per-line lock protects a rebuild that also writes a shared station index. What can go wrong?",
+   "options": ["Nothing; per-line locks cover everything", "Two jobs on different lines can update the shared index at once and corrupt it", "The locks will expire immediately", "Redis will refuse the second SET"],
+   "answer": 1,
+   "explain": "A lock must cover everything the protected action changes. The shared index needs its own lock or a coarser lock for that step."}
+
 ]
 ```
 

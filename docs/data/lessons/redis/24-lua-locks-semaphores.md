@@ -340,6 +340,174 @@ once they would be full again anyway.
 > one slot on a cluster; and a lock's expiry still allows overlap, so correctness-critical resources
 > need fencing tokens.
 
+## Part 5 - sharding a LIST with Lua
+
+Scripts are also the right tool when a data structure has to be kept in several pieces that move together. Here is a classic example: a **sharded LIST**.
+
+### Why shard a list?
+
+A Redis LIST is an ordered sequence of strings, and for a short list Redis stores it in a compact packed form. A very long list loses that compactness and uses noticeably more memory, and one huge value is awkward to move around. **Sharding** means splitting one logical thing into several smaller physical pieces (shards). If you have a task queue that may hold millions of jobs, you can store it as many short lists that each stay compact. Think of a long queue of people folded into several shorter queues in separate rooms, with a sign saying which room holds the front and which the back.
+
+The goal is that callers still see one list: push onto either end, pop from either end, with blocking and non-blocking pops. The difficulty is that each such operation must touch two or three keys consistently, which is exactly what a script's atomicity gives.
+
+### Structuring the shards
+
+Three kinds of keys describe a sharded list named `jobs`:
+
+- `jobs:0`, `jobs:1`, `jobs:2`, ... are the shards. Each is an ordinary LIST holding a slice of the elements. Shard numbers are integers and may go negative.
+- `jobs:first` is a plain string holding the number of the shard that contains the **left** end.
+- `jobs:last` holds the number of the shard that contains the **right** end.
+
+When the whole list is empty, `first` and `last` are equal. Pushing on the right with a full right-end shard moves `last` up by one and starts a new shard. Pushing on the left with a full left shard moves `first` down. Popping makes an end shard empty sooner or later; then the pointer moves back toward the middle. Every shard strictly between the two ends is full, only the end shards can be partly filled. That is also what makes counting cheap.
+
+```mermaid
+flowchart LR
+  F["jobs:first = 4"] -.-> S4
+  L["jobs:last = 6"] -.-> S6
+  S4["jobs:4 partly full"] --- S5["jobs:5 full"] --- S6["jobs:6 partly full"]
+```
+
+A missing `first` or `last` key means shard 0. Redis also deletes a list the moment its last element is removed, so "this shard is empty" and "this shard does not exist" are the same thing.
+
+### Pushing to the ends
+
+To push to the right: read `last`, see how much room that shard has, push as many items as fit and, if the shard is full, bump `last` and start a fresh shard. The whole step is one script so that no other client can push in between and overflow a shard:
+
+```lua
+-- KEYS[1] = "jobs:"  KEYS[2] = "jobs:first"  KEYS[3] = "jobs:last"
+-- ARGV[1] = "lpush" or "rpush"   ARGV[2] = shard capacity   ARGV[3..] = items
+local cmd, cap = ARGV[1], tonumber(ARGV[2])
+local endkey = (cmd == 'lpush') and KEYS[2] or KEYS[3]
+local shard  = redis.call('GET', endkey) or '0'
+local room   = cap - redis.call('LLEN', KEYS[1] .. shard)
+if room <= 0 then
+  shard = redis.call((cmd == 'lpush') and 'DECR' or 'INCR', endkey)
+  room  = cap
+end
+local n = math.min(#ARGV - 2, room)
+redis.call(cmd, KEYS[1] .. shard, unpack(ARGV, 3, 2 + n))
+return n
+```
+
+Reading it: `redis.call('GET', ...)` gives `false` for a missing key in Lua, and `false or '0'` falls back to shard 0. `room` is how many more items the end shard can take. If there is none, `INCR` or `DECR` both moves the pointer and returns the new number, and a new shard (which is empty, so has `cap` free slots) begins. The script then pushes `n` items, the lesser of "items given" and "room", and returns `n`, so the caller knows how many were taken. `unpack(ARGV, 3, 2 + n)` spreads items 3 through `2 + n` into separate arguments.
+
+Because the script may push only part of the batch, the caller loops: send items, remove the `n` that were taken from its own list, send the rest. Send modest batches (say 64) rather than a huge number at once. One reason is that Redis limits how many arguments a script call should carry; another is that, since a blocked client waiting on that shard is served only after the script ends, a very large push could overfill a shard.
+
+```python
+def sharded_rpush(r, name, *items, cap=100):
+    items, total = list(items), 0
+    while items:
+        n = push_script(keys=[name + ":", name + ":first", name + ":last"],
+                        args=["rpush", cap] + items[:64])
+        total += n
+        del items[:n]
+    return total
+```
+
+> [!WARNING]
+> The script computes which shard keys to touch while running, instead of having them listed up front in `KEYS`. On a single Redis server that is fine. Redis Cluster expects every key a script touches to be declared, so this design belongs on one server; the sharding here is for memory, not for spreading across machines.
+
+### Popping from the ends
+
+A pop reads the pointer for its end, pops from that shard, and if the shard just became empty moves the pointer inward, unless the two pointers are equal (then the entire list is empty and they stay):
+
+```lua
+-- KEYS as above, ARGV[1] = "lpop" or "rpop"
+local cmd   = ARGV[1]
+local mine  = (cmd == 'lpop') and KEYS[2] or KEYS[3]
+local other = (cmd == 'lpop') and KEYS[3] or KEYS[2]
+local step  = (cmd == 'lpop') and 'INCR' or 'DECR'
+local shard = redis.call('GET', mine) or '0'
+local item  = redis.call(cmd, KEYS[1] .. shard)
+if redis.call('EXISTS', KEYS[1] .. shard) == 0 then      -- this shard is now empty
+  local oshard = redis.call('GET', other) or '0'
+  if shard ~= oshard then                                -- there are more shards: move inward
+    shard = redis.call(step, mine)
+    if not item then item = redis.call(cmd, KEYS[1] .. shard) end
+  end
+end
+return item
+```
+
+If the shard was already empty and we popped nothing (`item` is `false`), the script uses the new shard to try once more, so the caller does not get a false "empty" while data exists. An ordinary transaction with `WATCH` could do this too, but under heavy use of a busy queue those transactions retry constantly (the retry storm from earlier in this lesson), while one script cannot be interrupted.
+
+The length of the list is the sum of `LLEN` over the shards from `first` to `last`. Because middle shards are full, a client can also compute it as full shards times capacity plus the two end shards.
+
+### Blocking pops
+
+`BLPOP` and `BRPOP` wait until an element arrives, which is the heart of a job queue. They are harder here, for two reasons.
+
+1. **A script cannot wait.** Redis does not let a script block the server, so blocking commands inside a script behave as their non-blocking forms. The same applies inside `MULTI`/`EXEC`. The waiting therefore has to happen in the client.
+2. **The thing to wait on can move.** A blocking command names one key, but the end shard changes as pushes and pops move the pointers.
+
+The practical approach is a loop on the client:
+
+1. Try the non-blocking scripted pop. If it returns an item, done.
+2. Otherwise read the pointer for the end you want. Issue `BLPOP` on that shard, but for **at most one second**, then loop again until the caller's own timeout expires. The short wait limits the damage if the pointer moved while we were blocked on the wrong shard.
+3. To narrow the race between reading the pointer and blocking, send a tiny script immediately before the blocking command in the same pipeline. It checks that the pointer still matches. If it does not, the script pushes a **dummy marker value** into the shard we are about to block on, so the blocking pop returns immediately instead of sleeping on a stale key. The client ignores the marker and loops.
+
+A small gap remains between the check and the block, so this design is "close enough" rather than perfect: another client could consume the marker, or the client could briefly wait on a shard that has just emptied. The book authors recommend non-blocking pops wherever blocking is not truly needed.
+
+> [!INTERVIEW]
+> **"How would you store a huge Redis list without using too much memory?"** "Shard it into fixed-capacity lists, with a `first` and `last` pointer key. Push and pop are small Lua scripts, so changing a shard and its pointer is atomic. Blocking pops need client-side help, since scripts cannot block, so I loop with short timeouts. The limits are that all shards stay on one server and that blocking has small races." Follow-up: **"Why not just use `WATCH`?"** "It works, but under contention it retries repeatedly. A script runs once without interruption."
+
+### Seeing the pointers move
+
+This model reproduces the two scripts in plain Python, with a shard capacity of 3, so you can watch `first`, `last` and the shards change:
+
+```python-run
+CAP = 3
+strings, lists = {}, {}        # strings: first/last pointers, lists: shards
+
+def spush(name, cmd, items):                       # mirrors the push script
+    endkey = name + (":first" if cmd == "lpush" else ":last")
+    shard = int(strings.get(endkey, 0))
+    room = CAP - len(lists.get(f"{name}:{shard}", []))
+    if room <= 0:
+        shard += -1 if cmd == "lpush" else 1
+        strings[endkey] = shard
+        room = CAP
+    n = min(len(items), room)
+    shard_list = lists.setdefault(f"{name}:{shard}", [])
+    for item in items[:n]:
+        shard_list.insert(0, item) if cmd == "lpush" else shard_list.append(item)
+    return n
+
+def push_all(name, cmd, *items):
+    items = list(items)
+    while items:
+        del items[:spush(name, cmd, items)]
+
+def spop(name, cmd):                               # mirrors the pop script
+    mine = name + (":first" if cmd == "lpop" else ":last")
+    other = name + (":last" if cmd == "lpop" else ":first")
+    step = 1 if cmd == "lpop" else -1
+    shard = int(strings.get(mine, 0))
+    key = f"{name}:{shard}"
+    lst = lists.get(key, [])
+    item = (lst.pop(0) if cmd == "lpop" else lst.pop()) if lst else None
+    if not lst:
+        lists.pop(key, None)                       # Redis deletes empty lists
+        if shard != int(strings.get(other, 0)):
+            shard += step
+            strings[mine] = shard
+            if item is None:
+                lst = lists.get(f"{name}:{shard}", [])
+                item = (lst.pop(0) if cmd == "lpop" else lst.pop()) if lst else None
+    return item
+
+def show(label):
+    shards = {k: v for k, v in sorted(lists.items())}
+    print(f"{label:22} first={strings.get('q:first', 0)} last={strings.get('q:last', 0)} {shards}")
+
+push_all("q", "rpush", 1, 2, 3, 4, 5, 6, 7, 8);  show("rpush 1..8")
+print("lpop x3 ->", [spop("q", "lpop") for _ in range(3)]);  show("after three lpop")
+push_all("q", "lpush", "a", "b");                show("lpush a, b")
+print("rpop x8 ->", [spop("q", "rpop") for _ in range(8)]);  show("after eight rpop")
+```
+
+Read the output: eight items fill shards 0, 1 and 2 (capacity 3, so 3 + 3 + 2). Three left-pops drain shard 0 completely and `first` moves up to 1. Pushing `a` and `b` on the left finds shard 1 full, so `first` moves down to 0 and a new shard 0 starts. Popping from the right drains shard 2, then shard 1, pulling `last` inward each time, and the final pops empty the list; the eighth pop returns `None` because nothing is left. When the list is empty both pointers are equal.
+
 ## Try it: script-style atomic operations and the retry storm
 
 The model runs each "script" as an uninterruptible function with a server clock. It exercises the
@@ -480,6 +648,10 @@ drip back in.
 - **Retry storm** - a burst of repeated attempts caused by clients invalidating each other.
 - **Token bucket** - a rate limiter that refills at a steady rate and allows bursts up to a capacity.
 - **Fencing token** - an increasing number checked by the protected resource to reject stale writers.
+- **Sharding** - splitting one logical structure into several smaller physical pieces.
+- **Sharded LIST** - one logical list stored as numbered shard lists plus first and last pointer keys.
+- **Shard pointer** - the string key naming which shard holds an end of the list.
+- **Dummy marker** - a placeholder value pushed to wake a blocking pop that waits on a stale shard.
 
 ```quiz
 [
@@ -514,7 +686,28 @@ drip back in.
   {"q": "What does a scripted lock still NOT protect against?",
    "options": ["Another client deleting the lock with the wrong token", "A holder whose work outlasts the lock's expiry while another client acquires it", "Two clients acquiring at the same instant", "Releasing without a token"],
    "answer": 1,
-   "explain": "Expiry-based locks can be held by two parties after a timeout. Fencing tokens at the resource handle that case."}
+   "explain": "Expiry-based locks can be held by two parties after a timeout. Fencing tokens at the resource handle that case."},
+  {"q": "In a sharded LIST, what do the keys name:first and name:last hold?",
+   "options": ["The first and last items", "The numbers of the shards containing the left and right ends", "The list's length", "Timestamps"],
+   "answer": 1,
+   "explain": "They are pointers to the end shards. Both are equal when the whole list is empty."},
+  {"q": "Why is pushing to a sharded LIST done in one Lua script?",
+   "options": ["Lua is faster than Python", "Reading the pointer, checking room, moving the pointer and pushing must happen without another client interleaving", "Redis forbids multiple commands otherwise", "To avoid creating shards"],
+   "answer": 1,
+   "explain": "Otherwise two clients could both see room and overfill a shard, or both move the pointer."},
+  {"q": "Why can a blocking pop on a sharded LIST not be done entirely inside a script?",
+   "options": ["Scripts cannot call LPOP", "Scripts cannot block: blocking commands inside them act as their non-blocking versions", "Blocking pops need a cluster", "Lua has no timers"],
+   "answer": 1,
+   "explain": "Waiting must be done by the client, which loops with short timeouts around the scripted non-blocking pop."},
+  {"q": "A client blocks on the end shard it just read, but the pointer moves while it waits. How does the design limit the harm?",
+   "options": ["It cannot happen", "Blocks last at most about one second at a time, and a small script can push a marker to wake a block on a stale shard", "The server cancels the client", "All pushes are paused"],
+   "answer": 1,
+   "explain": "Short blocking waits and a dummy marker keep a client from sleeping on a stale shard for long. A small race remains, so non-blocking pops are preferred."},
+  {"q": "Why is this sharded LIST design tied to a single Redis server?",
+   "options": ["Lua only runs on one server", "The script touches shard keys it computes at run time instead of receiving them in KEYS", "Lists cannot be copied", "Cluster does not support LIST"],
+   "answer": 1,
+   "explain": "Cluster expects every key a script touches to be declared up front. Here the shard keys are discovered inside the script."}
+
 ]
 ```
 

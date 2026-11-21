@@ -227,7 +227,7 @@
    "Josiah L. Carlson, Redis in Action (Manning, 2013), ch. 1-11",
    "Redis documentation (redis.io/docs): data types, persistence, replication, Sentinel, Cluster specification, streams, ACLs, client-side caching, eviction, programmability, vector search"
   ],
-  "words": 115849,
+  "words": 119264,
   "modules": 13,
   "lessons": 30,
   "problems": 27
