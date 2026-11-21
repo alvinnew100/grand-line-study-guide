@@ -1,5 +1,19 @@
 # Batch joins and dataflow engines
 
+> **Before this lesson:** read [From Unix pipes to MapReduce](#/lesson/databases/unix-mapreduce) for map, reduce, shuffle, distributed file systems and workflows. Joins come from [Relational vs document models](#/lesson/databases/relational-vs-document), hot keys and salting from [Partitioning key-value data](#/lesson/databases/partitioning-keys), column-oriented formats from [OLTP vs OLAP](#/lesson/databases/olap-column-stores), and graphs from [Graph models](#/lesson/databases/graph-models).
+
+## In plain words
+
+A **join** combines two sets of records that refer to the same things. One file says "user 4711 viewed this page". Another says "user 4711 was born in 1990". Joining them tells you which age groups view which pages. In an ordinary database a join looks up a few matching rows through an index. In batch processing there are billions of rows on each side and no index, so a different method is needed.
+
+An everyday picture: two enormous stacks of paper forms, one of orders and one of customer details, each form carrying a customer number. To match them up you have two sensible options. If the customer stack is small, memorise it (or keep it open on the desk) and go through the orders one by one, glancing at the matching customer each time. If both stacks are huge, sort both by customer number, then walk down the two stacks together like closing a zip, pairing forms as you go. Those are the two families of batch join: the **hash join** and the **sort-merge join**.
+
+The second half of the lesson is about speed. The MapReduce of the previous lesson wrote the complete result of every step to disk, three copies of it, before starting the next step. Newer systems such as **Spark** and **Flink**, called **dataflow engines**, pass data from step to step directly, the way the stations of an assembly line do, and keep a record of how each piece was made so that a lost piece can be made again.
+
+Why this matters for a job: Spark is the standard tool of data engineering, and "your job is stuck at 199 of 200 tasks, what is wrong?" is its most famous interview question. The answer (one overloaded key) and the fixes are in section 2. Choosing the right kind of join is routinely the difference between a job that takes minutes and one that takes hours.
+
+## More than one dataset
+
 The previous lesson treated a batch job as "read some files, group by a key, write some files". Real analytical work almost never stops at one dataset. The click log says *user 4711 viewed page X*; whether that user is a paying customer, which country they live in and how old their account is all sit in a different dataset. Bringing related records together is a **join**, and in batch processing a join is the operation that decides whether a job takes four minutes or four hours.
 
 This lesson has two halves. The first is about how joins and groupings are executed when the data is spread over thousands of files and no index exists. The second is about what came after classic MapReduce: **dataflow engines** such as Spark, Flink and Tez, which keep the good ideas (immutable inputs, deterministic functions, automatic retry) and discard the bad ones (writing every intermediate step to a replicated file system).
@@ -66,7 +80,27 @@ for uid, group in groupby(mapped, key=lambda kv: kv[0][0]):
             print(uid, value, birth_year)      # inner join would skip birth_year None
 ```
 
+What each part does:
+
+- `users` is the small table of (user ID, birth year). `clicks` is the activity log of (user ID, page).
+- The two lines that build `mapped` are the two mappers. Each record becomes a pair whose key is `(user ID, tag)`. User rows get tag 0 and click rows get tag 1.
+- `mapped.sort(...)` stands for the shuffle. Sorting by `(user ID, tag)` puts all records of one user together, and within a user puts the tag-0 row first.
+- `groupby(mapped, key=lambda kv: kv[0][0])` forms one group per user ID. That group is what a reducer would receive.
+- Inside a group, the loop remembers the birth year when it meets the tag-0 row, and prints one joined line for each click after it. Only one value is held in memory however many clicks the user has.
+
+```
+1 /home 1984
+1 /pay 1984
+3 /cart 1990
+3 /home 1990
+4 /home None
+```
+
+Users 1 and 3 have both a profile and clicks, so their clicks come out with a birth year attached. User 2 has a profile and no clicks, so nothing is printed for them.
+
 User 4 has clicks but no profile; whether to emit that row with a missing year (left outer join) or drop it (inner join) is one `if` in the reducer.
+
+(An **inner join** keeps only the pairs where both sides have a match. A **left outer join** keeps every record of the first dataset and leaves the other side's fields empty when there is no match.)
 
 ### Grouping is the same mechanism
 
@@ -96,12 +130,14 @@ A reduce-side join assumes nothing about the inputs, and pays for that generalit
 | **Partitioned hash join** (bucketed join) | Both sides are partitioned the same way: same key, same hash function, same number of partitions | Mapper for partition *i* of the big side loads only partition *i* of the other side |
 | **Map-side merge join** | Same partitioning **and** both sorted by the key | Mapper merges the two sorted files like a zipper; nothing needs to fit in memory |
 
+The program below runs the same join two ways on one machine and times each.
+
 ```python-run
 import time, random
 random.seed(1)
 
-users  = {uid: 1950 + uid % 60 for uid in range(50_000)}             # small side
-clicks = [(random.randrange(60_000), "/p%d" % (i % 100)) for i in range(400_000)]
+users  = {uid: 1950 + uid % 60 for uid in range(20_000)}             # small side
+clicks = [(random.randrange(24_000), "/p%d" % (i % 100)) for i in range(120_000)]
 
 # Broadcast hash join: build once, probe while streaming
 t = time.perf_counter()
@@ -123,6 +159,20 @@ print("rows joined:", len(joined), len(out))
 print("hash join  %.3fs   sort-merge %.3fs" % (t_hash, t_merge))
 ```
 
+What each part does:
+
+- `users` is a dictionary of 20,000 users. A dictionary is a hash table, so `users` is already the "small side loaded into memory". `clicks` is 120,000 click records with random user IDs, some of which do not exist in `users`.
+- The hash join is one list comprehension: for each click, check whether the user is in the dictionary (`uid in users`) and, if so, look up the birth year. Each lookup takes about the same tiny amount of time whatever the size of the dictionary.
+- `time.perf_counter()` reads a high-precision timer. Reading it before and after and subtracting gives the time taken.
+- The sort-merge join first sorts both sides by user ID. It then walks through the sorted clicks while moving an index `i` forward through the sorted users. The `while` loop advances `i` until it reaches a user ID at least as large as the click's. If they are equal, the pair is joined. Neither index ever moves backwards.
+
+Typical output (the times depend on your computer):
+
+```
+rows joined: 100188 100188
+hash join  0.019s   sort-merge 0.111s
+```
+
 Both produce the same rows. The hash join avoids the sort; the merge join's cost is dominated by it. On a cluster the gap is far larger, because the sort implies moving every byte over the network.
 
 There is a subtle consequence for the *output*. A reduce-side join produces output partitioned and sorted by the join key. A map-side join produces output arranged like the large input. If another join follows, that layout determines whether the next step can also be done map-side. Knowing how your datasets are physically laid out - bucket counts, sort columns - is therefore valuable metadata, which is why table catalogues (Hive metastore, Iceberg, Delta) record it.
@@ -137,7 +187,7 @@ Batch output is rarely a report read by a human. More often it is another **data
 
 The principle underneath all three is the same one that makes Unix pipes pleasant to work with: **inputs are never modified, outputs are fully replaced**. That gives you properties that are hard to get any other way:
 
-- A buggy job can be fixed and rerun; the old output is simply discarded. Rolling back is switching the pointer to yesterday's directory.
+- A faulty job can be corrected and run again, and the old output is thrown away. Rolling back means pointing readers at yesterday's directory.
 - Automatic retries are safe, because a failed attempt's partial output is thrown away and the rerun reads identical input.
 - The same input can feed several experimental jobs without them interfering.
 
@@ -148,7 +198,7 @@ The principle underneath all three is the same one that makes Unix pipes pleasan
 
 Massively parallel analytical databases (Teradata, Redshift, Snowflake, BigQuery) had parallel joins long before Hadoop. The distinguishing features of the Hadoop style were elsewhere:
 
-- **Storage is just files.** You can dump data first and decide how to interpret it later. That shifts the modelling burden to the reader but removes a bottleneck when dozens of teams want to land data.
+- **Storage is plain files.** You can store the data first and decide how to interpret it later. That moves the work of making sense of the data onto whoever reads it, and it removes a bottleneck when dozens of teams all want to add data.
 - **Arbitrary code.** Not everything is a SQL query; feature extraction, image processing and model training can read the same files.
 - **Built for frequent faults.** MapReduce assumed that tasks get killed often (at Google mostly because higher-priority work pre-empted them), so it retries individual tasks and writes eagerly to disk. An MPP database typically aborts the whole query when a node dies, which is perfectly reasonable for queries that take seconds.
 
@@ -159,7 +209,7 @@ Today the two worlds have largely merged: warehouses read open file formats, and
 A realistic pipeline chains many joins and groupings: fifty to a hundred MapReduce jobs is not unusual. Each job in classic MapReduce is completely independent. Its only way to pass data to the next job is to write a full output directory to the distributed file system, where it is replicated three times, and then have the next job read it back. This is **materialisation of intermediate state**, and it hurts in three ways:
 
 1. A job can only start when all its predecessors have completely finished, so one slow straggler task delays everything downstream.
-2. Mappers are often redundant: they merely re-read a file that the previous reducer just wrote, with the same partitioning.
+2. Mappers are often redundant: all they do is read back a file that the previous reducer has finished writing, with the same partitioning.
 3. Replicating temporary data to several nodes is wasted I/O.
 
 Compare with a Unix pipeline: `sort | uniq -c` streams data through a small in-memory buffer; nobody writes the intermediate result to a temp file first.
@@ -167,6 +217,8 @@ Compare with a Unix pipeline: `sort | uniq -c` streams data through a small in-m
 ## 6. Dataflow engines
 
 Spark, Flink and Tez treat an entire workflow as **one job**: a directed acyclic graph of operators through which records flow.
+
+A **directed acyclic graph**, usually shortened to **DAG**, is a set of steps joined by arrows that never lead back round in a circle. An **operator** is one step in that graph, such as a filter, a join or an aggregation.
 
 ```mermaid
 flowchart LR
@@ -187,6 +239,8 @@ What this buys:
 - **Pipelining.** Downstream operators start as soon as their input begins to arrive.
 - **Process reuse.** No new JVM for every task.
 
+(The **JVM**, the Java Virtual Machine, is the program that runs Java code. Hadoop started a fresh one for every task, which took a noticeable time. Dataflow engines keep worker processes running and reuse them.)
+
 The operators are generalisations of map and reduce - any function can be plugged in - so the same code that ran as MapReduce can be executed on Tez or Spark by flipping a setting in Hive or Pig.
 
 ### Fault tolerance without materialisation
@@ -194,6 +248,8 @@ The operators are generalisations of map and reduce - any function can be plugge
 If intermediate data is not durably stored, what happens when a machine dies? The engine **recomputes** the lost piece from data that still exists: an earlier intermediate stage, or ultimately the original input. To do that it must remember how each dataset was derived. Spark calls this the **lineage** of a resilient distributed dataset (RDD); Flink takes periodic **checkpoints** of operator state instead.
 
 Recomputation has one sharp requirement: the operators must be **deterministic**. Suppose a lost partition had already been partly consumed by a downstream operator. If recomputing produces different records, the downstream operator has now seen two contradictory versions of its input. Sources of accidental nondeterminism include iteration order of hash maps, random numbers without a fixed seed, reading the system clock and calling external services. If an operator cannot be made deterministic, the fix is to kill its downstream operators as well and rerun them too.
+
+The program below is a toy version of lineage.
 
 ```python-run
 # A toy lineage: each dataset remembers its parent and the function that derives it.
@@ -223,6 +279,27 @@ print("-- a node holding `evens` and `squares` dies --")
 evens.cache = squares.cache = None
 print(evens.compute())          # only the lost pieces are rebuilt; `raw` survives
 ```
+
+What each part does:
+
+- A `Dataset` remembers its `parent` (the dataset it was made from), the function `fn` that makes it from the parent, and a `cache` that holds the computed rows once they exist. The first dataset has no parent and a `source` to read instead.
+- `map(f)` and `filter(p)` do no work when called. Each returns a *new* `Dataset` that records "apply this function to my parent". This chain of records is the lineage.
+- `compute()` does the work. If the rows are already in the cache it returns them. Otherwise it asks its parent to compute (which may ask *its* parent), applies its own function to the result, and stores that in the cache. The `depth` argument only controls the indentation of the printed messages.
+- The script defines three datasets: the numbers 0 to 9, their squares, and the even squares. The first `evens.compute()` builds everything. Then the caches of `evens` and `squares` are wiped, standing for a machine failure, and `evens.compute()` is called again.
+
+```
+recompute from parent
+  recompute from parent
+    read source
+[0, 4, 16, 36, 64]
+-- a node holding `evens` and `squares` dies --
+recompute from parent
+  recompute from parent
+    cache hit
+[0, 4, 16, 36, 64]
+```
+
+The first run goes all the way back to the source. After the failure, the two lost datasets are rebuilt from `raw`, which survived, so the source is not read a second time. The result is identical, because every function in the chain is deterministic.
 
 Recomputation is not always cheaper than materialising. If the intermediate result is tiny compared to the input, or the computation is very CPU-heavy, saving it is wiser - which is what `persist()` and `checkpoint()` in Spark are for.
 
@@ -260,6 +337,23 @@ while inbox:
 print(label)
 ```
 
+What each part does:
+
+- A **connected component** is a group of vertices that can all reach one another by following edges. The goal is to label every vertex with the smallest ID in its component.
+- `nbrs` maps each vertex to the set of its neighbours, built from the edge list. `setdefault(a, set())` returns the set for `a`, creating an empty one first if needed.
+- `label` is each vertex's current answer, starting as its own ID. `inbox` holds the messages waiting for each vertex. At the start every vertex has a message containing its own ID, so every vertex is active.
+- Each pass of the `while` loop is one superstep. A vertex takes the smallest ID among its messages. If that improves on its label (or this is the first step), it updates its label and sends the new label to every neighbour whose label is larger.
+- Only vertices that were sent a message appear in `outbox`, which becomes the next `inbox`. When no messages are sent, the loop ends.
+
+```
+superstep 1 active vertices: 4
+superstep 2 active vertices: 2
+superstep 3 active vertices: 0
+{1: 1, 2: 1, 3: 1, 4: 4, 5: 4, 6: 6, 7: 4}
+```
+
+The final labels show three components: vertices 1, 2 and 3 share label 1; vertices 4, 5 and 7 share label 4; vertex 6, connected only to itself, keeps label 6.
+
 Notice how the number of active vertices shrinks each round. The weak point of this model on a cluster is communication: graph partitioning is hard, so most messages cross machine boundaries. If the graph fits in the memory of one large machine, a single-node library will very likely beat a distributed one.
 
 ## 8. Higher-level APIs and the return of declarative queries
@@ -295,6 +389,34 @@ If you instead pass an opaque lambda, the engine must call it row by row and can
 - **Dataflow engines** model the whole workflow as one operator graph, avoid unnecessary sorting and materialisation, and recover from faults by **recomputation from lineage** or checkpoints - which requires deterministic operators.
 - Graph algorithms use the vertex-centric **Pregel** model; declarative APIs let optimisers pick join strategies and push work down to the storage format.
 
+## Glossary
+
+- **Join** - combining records from two datasets that share a key.
+- **Inner join / left outer join** - keeping only matched pairs / keeping every record of the first dataset, matched or not.
+- **Reduce-side join (sort-merge join)** - both inputs are shuffled by the join key so matching records reach the same reducer in sorted order.
+- **Secondary sort** - controlling the order in which a reducer receives the records of one key.
+- **Sessionisation** - gathering all events of one user session together, in order.
+- **Skew / hot key** - an uneven spread of records over keys / a key with a huge share of the records.
+- **Combiner (pre-aggregation)** - partly aggregating on the map side before the shuffle.
+- **Salting** - adding a random suffix to a hot key so its records spread over several partitions.
+- **Map-side join** - a join done without shuffling, using known facts about size or layout.
+- **Broadcast hash join** - loading the small dataset into memory on every task and looking up each record of the large one.
+- **Partitioned hash join (bucketed join)** - a hash join done partition by partition when both sides are partitioned identically.
+- **Merge join** - walking two inputs sorted by the same key in step.
+- **Materialisation of intermediate state** - writing every intermediate result out in full.
+- **Dataflow engine** - a system (Spark, Flink, Tez) that runs a whole workflow as one graph of operators.
+- **DAG (directed acyclic graph)** - steps joined by arrows that never form a loop.
+- **Operator** - one processing step in a dataflow graph.
+- **Pipelining** - passing records to the next operator as they are produced.
+- **Lineage** - the record of how a dataset was derived, used to recompute lost parts.
+- **Checkpoint** - a saved copy of state from which processing can resume.
+- **Deterministic** - producing the same output from the same input every time.
+- **Pregel model / superstep** - graph processing in rounds, where each vertex reads its messages, updates its state and sends messages / one such round.
+- **Connected component** - a group of vertices that can all reach one another.
+- **UDF (user-defined function)** - custom code supplied by the user, which the engine's optimizer cannot see inside.
+- **Push-down** - having the file reader skip rows or columns the query does not need.
+- **JVM** - the program that runs Java code.
+
 ```quiz
 [
   {"q": "In a reduce-side join of a click log with a user table, what makes matching records meet?",
@@ -320,7 +442,7 @@ If you instead pass an opaque lambda, the engine must call it row by row and can
   {"q": "How does a dataflow engine such as Spark recover an intermediate dataset lost in a machine failure?",
    "options": ["It reads the three replicas the file system kept of every intermediate result", "It restarts the entire workflow from the beginning in all cases", "It recomputes the lost partitions from surviving ancestors using the recorded lineage", "It asks the user to resubmit the job"],
    "answer": 2,
-   "explain": "Intermediate state is not replicated; the engine tracks how each partition was derived and reruns just the necessary operators on the necessary inputs."},
+   "explain": "Intermediate state is not replicated; the engine tracks how each partition was derived and reruns only the necessary operators on the necessary inputs."},
   {"q": "Why must operators be deterministic for recomputation-based fault tolerance?",
    "options": ["Nondeterministic code cannot be serialised", "A recomputed partition could differ from the lost one that downstream operators already partly consumed, leaving them with inconsistent input", "Deterministic code uses less memory", "The scheduler refuses to run random functions"],
    "answer": 1,

@@ -1,5 +1,23 @@
 # Lost updates, write skew and phantoms
 
+> **Before this lesson:** read [ACID, read committed and snapshot isolation](#/lesson/databases/acid-weak-isolation). You need its terms: transaction, commit, abort, isolation level, dirty write, row lock, snapshot isolation, constraint and compare-and-set. Siblings, CRDTs and last write wins come from [Detecting concurrent writes](#/lesson/databases/concurrent-writes).
+
+## In plain words
+
+Two people do something sensible at the same moment, each checking first that it is allowed, and together they leave the data in a state that neither would have permitted. This lesson is about that family of bugs. They are called **race conditions**, because the outcome depends on which of two operations gets there first.
+
+An everyday picture: two flatmates each look in the fridge in the morning, see there is no milk, and each buys a carton on the way home. Each acted correctly on what they saw. The result, two cartons, is wrong, because each decision was based on a fact that the other person was about to change. Now replace "milk" with "the last seat on the flight", "the only remaining administrator" or "the account balance", and the same pattern costs money.
+
+There are three versions of the pattern, in rising order of subtlety:
+
+- A **lost update**: two writers change the *same* item, and one change overwrites the other.
+- **Write skew**: two writers change *different* items, and the combination breaks a rule.
+- A **phantom**: the clash involves an item that *does not exist yet*, so there is nothing to protect.
+
+Why this matters for a job: these bugs pass every test, because tests run one request at a time. They appear in production under load and are found weeks later as a balance that does not add up. "Two users try to book the last seat at the same instant; how do you prevent a double booking?" is among the most common practical database interview questions, and section 4 gives the model answer.
+
+## What the previous lesson left open
+
 The previous lesson dealt with what a transaction may **read** while others are writing. Read committed and snapshot isolation give sensible answers to that question. They say much less about what happens when two transactions **write** at the same time - and that is where the costliest concurrency bugs live.
 
 Dirty writes are prevented at every isolation level in practical use. Three subtler conflicts are not: the **lost update**, in which two writers of the *same* object overwrite each other; **write skew**, in which two writers of *different* objects jointly break a rule; and **phantoms**, where the conflict involves rows that do not exist yet. This lesson explains each of them, shows them happening in runnable code, and collects the tools for preventing them. If you remember one thing, let it be this: **snapshot isolation is not serialisability**, and the gap between the two has a precise shape.
@@ -19,6 +37,8 @@ A **read-modify-write cycle**. When two such cycles on the same object overlap, 
 - A "likes" counter: two requests read 41, both write 42. One like has vanished.
 - A JSON document holding a list of tags: two editors each add a tag to their own copy and save the whole document; one tag is gone.
 - A collaborative text field where every save sends the full text: the slower saver wipes out the faster one's edits.
+
+The program below acts out two clients, A and B, each performing "read the counter, then write back the value plus one".
 
 ```python-run
 import random
@@ -45,6 +65,21 @@ for _ in range(10_000):
 print(f"random interleavings that lose an increment: {lost / 100:.0f}%")
 ```
 
+What each part does:
+
+- `run(schedule)` takes a string of client letters giving the order of events. The first time a client's letter appears, that client **reads** the counter into its own private copy (`local[c]`). The second time, it **writes** back its private copy plus one.
+- `step` remembers whether each client has done its read yet. `step.get(c, 0)` returns 0 for a client not seen before.
+- `"AABB"` means A reads, A writes, B reads, B writes: one after the other. `"ABAB"` means A reads, B reads, A writes, B writes: overlapping.
+- The final loop shuffles the four events into a random order 10,000 times and counts how often the result is not the correct 43.
+
+```
+serial      A A B B -> 43
+interleaved A B A B -> 42
+random interleavings that lose an increment: 67%
+```
+
+Run one after the other, the two increments give 43. Interleaved, both clients read 41 and both write 42, and one increment is gone.
+
 Two thirds of the possible orderings lose an update. In production the window between read and write is short, so the bug shows up rarely - which makes it worse, not better, since it survives testing.
 
 There are five standard remedies.
@@ -57,9 +92,9 @@ The best fix is to avoid the cycle altogether by letting the database do the rea
 UPDATE posts SET likes = likes + 1 WHERE id = 99;
 ```
 
-The database executes this safely, typically by holding an exclusive lock on the row from the read to the write (sometimes called cursor stability) or by running such operations on a single thread. Document and key-value stores offer analogous operations: increment a field, append to a list, add to a set. Where an atomic operation expresses what you need, use it.
+The database carries out the read and the write as one indivisible step. Typically it does so by holding a lock on the row for the whole of that step, so that no other transaction can read or write the row in between. Some databases instead run all such operations one at a time, which has the same effect. Document and key-value stores offer similar single-step operations: add to a number, append to a list, add to a set. Where such an operation expresses what you need, use it.
 
-The trap is the object-relational mapper. Code like `post.likes += 1; post.save()` looks harmless and is exactly the unsafe read-modify-write cycle, carried out in application memory.
+The trap is the ORM (the object-relational mapper from the data-models lesson, which loads rows into objects in your program). Code such as `post.likes += 1; post.save()` looks harmless. It loads the row into memory, adds one there, and writes the result back: exactly the unsafe read-modify-write cycle.
 
 ### 1.2 Explicit locking
 
@@ -88,11 +123,13 @@ UPDATE documents SET body = :new_body, version = version + 1
 WHERE id = 5 AND version = :version_i_read;
 ```
 
-If the statement reports zero rows changed, somebody else got there first: reread and retry. This is **optimistic locking**, and the usual way to implement safe updates over an HTTP API (`If-Match` with an ETag). One caution: check that your database evaluates the condition against the current value and not against an old snapshot.
+The statement changes the row only if its `version` column still holds the number this client read earlier, and it raises the version as part of the same step. The database reports how many rows the statement changed. If the answer is zero, somebody else got there first: read the row again and retry. This approach is called **optimistic locking**, because it assumes conflicts are rare and checks only at the moment of writing, instead of locking in advance. It is also the usual way to make updates safe over a web API, where the client sends back a version tag it received with the data and the server refuses the update if the tag is out of date. One caution: make sure your database tests the condition against the current committed value, and not against an old snapshot.
 
 ### 1.5 Replication changes the picture
 
 Locks and compare-and-set presuppose that there is one authoritative copy of the data. In multi-leader and leaderless systems several nodes accept writes concurrently, so there is nothing to lock. Such systems let the conflicting versions (siblings) coexist and merge them afterwards. Operations that commute - incrementing a counter, adding to a set - merge cleanly, which is what CRDTs exploit. **Last write wins**, the default in many replicated stores, is by definition a lost update.
+
+The next program shows compare-and-set with retries. Five clients each want to add 1 to a shared value, and their steps are interleaved at random.
 
 ```python-run
 # Compare-and-set with retries: no update is lost, whatever the interleaving.
@@ -121,6 +158,19 @@ while pending:
             pending[c] = None; retries += 1   # conflict: read again
 print("final value:", store["value"], "| retries needed:", retries)
 ```
+
+What each part does:
+
+- `store` holds a value and a version number.
+- `cas(expected_version, new_value)` is the compare-and-set. If the stored version is not the one the caller expected, it changes nothing and returns `False`. Otherwise it writes the new value, raises the version by one, and returns `True`.
+- `pending` records, for each client still to finish, the copy of the store it last read (or `None` if it needs to read).
+- Each time round the loop a random unfinished client takes one step. If it has nothing in hand, it reads. If it has a copy, it attempts the compare-and-set. On success it is finished and is removed from `pending`. On failure it throws away its stale copy, so its next step will be a fresh read, and the retry counter goes up.
+
+```
+final value: 5 | retries needed: 5
+```
+
+Five clients, five increments, final value 5. Nothing was lost. The price was five wasted attempts: each time one client succeeded, any other client holding the old version had to start over. With many clients fighting over one value the retries multiply, which is why this approach suits situations where conflicts are uncommon.
 
 ## 2. Write skew
 
@@ -154,6 +204,8 @@ sequenceDiagram
   Note over DB: zero admins - rule broken
 ```
 
+The diagram shows the order of events from top to bottom. Each transaction counts the administrators and is told 2. Each then removes one administrator, a different one. Both commit.
+
 This is **write skew**. It generalises the lost update: two transactions read the same data and then write, but the writes go to different objects. Had they run one after the other, the second would have counted one admin and refused.
 
 ### 2.1 The pattern
@@ -164,7 +216,7 @@ Every instance of write skew has the same three steps:
 2. Application code decides, from the result, whether to go ahead.
 3. A write (`INSERT`, `UPDATE` or `DELETE`) is made, and **this write changes the answer to the query in step 1**.
 
-When two transactions both pass step 1 before either commits step 3, each has acted on a premise that the other has just invalidated.
+When two transactions both pass step 1 before either commits step 3, each has acted on a premise that the other has now invalidated.
 
 More examples of the same shape:
 
@@ -193,6 +245,8 @@ UPDATE members SET role = 'member' WHERE workspace_id = 12 AND user_id = :me;
 COMMIT;
 ```
 
+The `FOR UPDATE` clause locks the administrator rows that the `SELECT` returned. The second transaction to arrive has to wait at that line until the first has committed. When it is finally let through, it reads again, counts one administrator, and refuses.
+
 ## 3. Phantoms
 
 The locking trick worked for the admins because step 1 returned rows, and rows can be locked. Look at the booking example again: the query checks that **no** reservation exists for the slot. It returns nothing. `SELECT ... FOR UPDATE` has nothing to attach a lock to.
@@ -204,6 +258,8 @@ When one transaction's write alters what another transaction's search would retu
 If the difficulty is that there is no object to lock, one can create objects. For lab bookings, add a table with a row for every machine and every one-hour slot for the next six months. A booking transaction first locks (`FOR UPDATE`) the slot rows it wants, then checks for overlaps and inserts. The slot table stores no information of its own; its rows exist purely to be locked. The phantom has been turned into a lock conflict on concrete rows - hence **materialising conflicts**.
 
 It works, and it is unpleasant. Working out how to materialise a given conflict can be hard, the lock table must be maintained, and a concurrency-control mechanism has leaked into the data model. Treat it as a last resort when serialisable isolation is not available.
+
+The program below acts out the booking example twice: once with snapshot isolation alone, and once with lock rows.
 
 ```python-run
 # Snapshot isolation simulated: each transaction reads its snapshot, buffers writes, then commits.
@@ -234,6 +290,19 @@ rows, log = simulate(protect=True)
 print("with materialised locks :", rows, "|", log[0])
 ```
 
+What each part does:
+
+- `bookings` is the list of committed bookings. `slot_locks` stands for the table of lock rows, mapping a (machine, hour) pair to whoever holds the lock.
+- `txn(who, machine, hour)` is one booking transaction up to the point of deciding. It first copies `bookings` to stand for its snapshot.
+- If `protect` is on, it tries to take the lock row for the slot. `setdefault` stores `who` as the holder if nobody holds the lock yet, and returns the current holder either way. If someone else holds it, the transaction cannot go on, and the function records what would happen in a real database: it waits, reads again, and finds the slot taken.
+- It then checks its snapshot for a booking of the same machine and hour, and returns the new booking row if there is none.
+- Both transactions run their check before either commits. Then whatever rows they produced are committed.
+
+```
+snapshot isolation only : [('laser-cutter', 14, 'ana'), ('laser-cutter', 14, 'raj')]
+with materialised locks : [('laser-cutter', 14, 'ana')] | raj waits for ana, then re-reads and sees the slot is taken
+```
+
 Without protection both inserts commit: a double booking. With a lock row per slot, the second transaction is forced to wait and then sees the first one's booking.
 
 ## 4. A map of the anomalies
@@ -247,8 +316,12 @@ Without protection both inserts commit: a double booking. With a lock row per sl
 | Write skew | Decisions on a stale premise; writes to different objects | possible | **possible** | prevented |
 | Phantom | Another transaction's write changes the result of a search | possible | prevented for read-only queries; **causes write skew** in read-write ones | prevented |
 
+How to read the table: each row is one anomaly, and the last three columns say whether each isolation level stops it. The two cells in bold are the ones people get wrong. Snapshot isolation, the level many applications run at when they have asked for something "strong", still allows write skew.
+
 > [!INTERVIEW]
 > A typical question: "Two users book the last seat at the same time. How do you stop a double booking?" Offer the options in order of preference and name their trade-offs: a **unique constraint** on (event, seat) if seats are discrete - the simplest and safest; an **atomic conditional update** such as `UPDATE seats SET holder = :me WHERE id = :seat AND holder IS NULL` and check the affected row count; `SELECT ... FOR UPDATE` on the seat row; or **serializable** isolation with a retry loop. Then mention what does *not* work: a check followed by an insert under read committed or snapshot isolation.
+
+(`holder IS NULL` is the SQL test for "nobody holds this seat yet". The **affected row count** is the number of rows a statement changed, which the database reports back.)
 
 ## 5. Worked example: which fix for which rule?
 
@@ -266,6 +339,8 @@ A good exercise is to take the rules of one small application and decide, for ea
 
 The general method: first try to express the rule as a **constraint**; if that fails, try to **funnel the conflict onto one existing row** that can be updated atomically or locked; only when neither is possible reach for materialised locks or serialisable isolation. Whatever you choose, write down next to the rule *which* mechanism protects it, because the next developer to touch that code needs to know what must not be removed.
 
+Two kinds of constraint in that example may be new. A **check constraint** is a condition on the values in a single row that the database tests on every write, such as `seats_sold <= capacity`. An **exclusion constraint** is a PostgreSQL feature that forbids two rows from overlapping in some way, for example two bookings of one room whose time ranges intersect.
+
 ## Pitfalls
 
 - **Read-modify-write hidden in an ORM.** Loading an object, changing a field and saving it is a lost update waiting to happen. Use atomic updates or version columns.
@@ -282,6 +357,27 @@ The general method: first try to express the rule as a **constraint**; if that f
 - **Write skew** is the generalisation to different objects: each transaction checks a condition, acts on it, and its write invalidates the condition the other relied on. Snapshot isolation allows it.
 - A **phantom** is a write that changes the result of another transaction's search. When the check is for the *absence* of rows there is nothing to lock.
 - Remedies for write skew: **constraints** where they fit, **locking the rows the premise depends on**, **materialising conflicts** as a last resort, and above all **serialisable isolation**.
+
+## Glossary
+
+- **Race condition** - a bug whose appearance depends on the timing of two operations.
+- **Read-modify-write cycle** - reading a value, computing a new one from it, and writing the result back.
+- **Lost update** - two overlapping read-modify-write cycles on one object, where the later write erases the earlier.
+- **Atomic write operation** - a single database operation that reads and writes with no gap between, such as `likes = likes + 1`.
+- **Explicit lock (`SELECT ... FOR UPDATE`)** - the application asking the database to lock the rows a query returns until the transaction ends.
+- **Automatic lost-update detection** - the database noticing that a transaction would overwrite a change it never saw, and aborting it.
+- **Compare-and-set** - writing only if the value (or its version number) is still what was read.
+- **Optimistic locking** - assuming conflicts are rare and checking for them only at write time.
+- **Version column** - a number stored in a row and raised on every update, used for compare-and-set.
+- **Write skew** - two transactions each read the same data, make a decision, and write to different objects, together breaking a rule.
+- **Premise** - the fact a transaction checked before deciding to write.
+- **Phantom** - a write in one transaction changing the result of a search in another.
+- **Materialising conflicts** - creating rows whose only purpose is to be locked.
+- **Unique constraint / unique index** - a rule that no two rows may share a value in the given columns.
+- **Check constraint** - a condition on one row's values that the database enforces on every write.
+- **Exclusion constraint** - a rule that no two rows may overlap, for example in a time range.
+- **Affected row count** - the number of rows a statement changed.
+- **Serialisable isolation** - the level at which the result always equals that of running the transactions one after another.
 
 ```quiz
 [

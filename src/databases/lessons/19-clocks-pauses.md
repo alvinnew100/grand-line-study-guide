@@ -1,8 +1,24 @@
 # Unreliable clocks and process pauses
 
+> **Before this lesson:** read [Partial failures and unreliable networks](#/lesson/databases/networks-faults) for asynchronous networks, timeouts and virtual machines. Last write wins and version vectors come from [Detecting concurrent writes](#/lesson/databases/concurrent-writes), snapshot isolation from [ACID, read committed and snapshot isolation](#/lesson/databases/acid-weak-isolation), and leaders from [Single-leader replication](#/lesson/databases/leader-follower).
+
+## In plain words
+
+Every computer has a clock, and no two of them agree exactly. Programs spread across several machines keep being tempted to compare times taken from different clocks ("which of these two changes was made later?"), and the answer they get is sometimes wrong. That is the first half of this lesson.
+
+The second half is stranger. A running program can be frozen for many seconds at any point, by its own memory management or by the system it runs on, and when it wakes up nothing tells it that time has passed. It carries on from the exact instruction where it stopped, with a picture of the world that is now out of date.
+
+An everyday picture for clocks: three friends agree to meet "at noon by my watch", but one watch is four minutes fast and another two minutes slow. Each arrives on time by their own watch and each believes the others are late. Nobody is lying. There is no single "now" that they share.
+
+An everyday picture for pauses: you check that the road is clear, then fall asleep on your feet for fifteen seconds, then step out. The check was correct when you made it. It tells you nothing about the road at the moment you act.
+
+Why this matters for a job: timestamps are everywhere in software, and using the wrong kind of clock is a classic bug with a one-line fix. Databases that pick a winner between conflicting writes by timestamp lose data when clocks disagree. And any design that uses a lock with an expiry time must survive the question interviewers always ask: "what if the holder pauses right after checking that the lock is still valid?"
+
+## Two questions about time
+
 Software constantly asks two kinds of question about time. *How long* did something take - has this request timed out, what is the 99th-percentile latency, how long has the user been on the page? And *when* did something happen - when does this cache entry expire, what timestamp goes into the log line, which of these two writes came later?
 
-On one machine there is one clock, and although it may be wrong, it is at least consistently wrong. In a distributed system every machine has its own clock, a quartz oscillator that runs slightly fast or slow, and the machines can only compare notes by exchanging messages that take an unknown time to arrive. There is no shared "now".
+On one machine there is one clock, and although it may be wrong, it is at least wrong in the same way for every program on that machine. In a distributed system every machine has its own clock. Inside each is a small quartz crystal that vibrates at a nearly fixed rate, and the machine tells time by counting the vibrations. "Nearly" is the problem: every crystal runs a little fast or a little slow. The machines can compare their clocks only by exchanging messages, and those take an unknown time to arrive. There is no shared "now".
 
 This lesson examines what a clock can and cannot tell you, why timestamps from different machines are a poor basis for ordering events, and then turns to a second, related hazard: your program can be **frozen** at any line, for seconds, without knowing it. The two problems meet in one of the most instructive bugs in distributed systems - the lease that expired while its holder was not looking.
 
@@ -12,9 +28,9 @@ Every modern computer offers at least two different clocks. Using the wrong one 
 
 ### Time-of-day clocks
 
-A **time-of-day clock** answers "what is the date and time?". It reports wall-clock time, typically as a count of seconds or milliseconds since the epoch (midnight UTC on 1 January 1970, not counting leap seconds). `System.currentTimeMillis()` in Java, `time.time()` in Python and `clock_gettime(CLOCK_REALTIME)` on Linux are examples.
+A **time-of-day clock** answers "what is the date and time?". It reports the kind of time you would read from a clock on the wall, which is why its reading is called **wall-clock time**. Computers usually express it as the number of seconds (or milliseconds) since a fixed starting moment called the **epoch**: midnight at the start of 1 January 1970, in the worldwide standard time zone known as UTC. Python's `time.time()` and Java's `System.currentTimeMillis()` read this clock.
 
-These clocks are normally synchronised with **NTP**, so in principle a timestamp from one machine means the same as on another. The synchronisation is also their weakness. If the local clock has drifted too far from the NTP server, it may be **reset** - and it can jump *backwards* as easily as forwards. It also behaves strangely around leap seconds. A clock that can jump is unsuitable for measuring elapsed time.
+To keep these clocks roughly in agreement, machines regularly ask a time server for the correct time and adjust themselves. The standard method is **NTP**, the Network Time Protocol. In principle, then, a timestamp from one machine means the same as a timestamp from another. But the adjustment is also this clock's weakness. If the local clock has wandered too far from the server's, it may be **reset** to the correct value in one jump, and that jump can go *backwards* as easily as forwards. A clock that can jump is unsuitable for measuring how much time has passed.
 
 ### Monotonic clocks
 
@@ -23,6 +39,8 @@ A **monotonic clock** answers "how much time has passed?". `System.nanoTime()`, 
 Its *absolute* value is meaningless - it might be nanoseconds since boot, or anything else. Only the **difference** between two readings on the same machine means something. Comparing monotonic readings from two different computers is nonsense.
 
 NTP still influences a monotonic clock, gently: when it finds the local oscillator running fast or slow, it adjusts the *rate* at which the clock advances (this is called **slewing**) by a small fraction of a percent. It never makes it jump. In a distributed system, measuring a timeout or a duration with a monotonic clock is normally fine, since no synchronisation between nodes is assumed.
+
+The program below shows both clocks. The first part times a small calculation with the monotonic clock. The second part imitates what happens to a stopwatch built on the wall clock when NTP resets it during the measurement.
 
 ```python-run
 import time
@@ -44,20 +62,34 @@ wall.offset -= 0.400        # ...then NTP steps the clock back by 400 ms
 print(f"elapsed (wall clock): {(wall.now() - start) * 1000:.0f} ms  <- negative duration!")
 ```
 
+What each part does:
+
+- `t0 = time.monotonic()` takes a reading before the work. The line with `sum(...)` is some work to time. Taking a second reading afterwards and subtracting gives the time that passed, in seconds. Multiplying by 1000 turns it into milliseconds.
+- `WallClock` is a pretend time-of-day clock whose reading can be shifted by changing `offset`.
+- `start = wall.now()` is the stopwatch's starting reading. Then 250 milliseconds of work are imitated by moving the clock forward, and an NTP correction is imitated by moving it back 400 milliseconds.
+- The last line subtracts the start reading from the current one.
+
+```
+elapsed (monotonic): 16.0 ms
+elapsed (wall clock): -150 ms  <- negative duration!
+```
+
+The first number depends on how fast your computer is, so yours will differ. The second is always -150: the stopwatch reports that the work finished 150 milliseconds before it began.
+
 A negative duration will crash a naive rate limiter, confuse a retry loop, or produce a timeout that never fires.
 
 ## 2. How accurate can synchronised clocks be?
 
 A monotonic clock needs no synchronisation. A time-of-day clock is only useful if it is set from an external source, and that process is much less precise than one would hope.
 
-- **Drift.** A quartz oscillator's frequency depends on temperature. A commonly assumed bound for servers is 200 parts per million: about 6 ms of error if the clock is resynchronised every 30 seconds, about **17 seconds** if it is resynchronised once a day.
-- **Forced resets.** If the difference to the NTP server is too large, the client may refuse to synchronise or may step the clock, and applications see time jump.
-- **Blocked NTP.** A firewall misconfiguration can cut a node off from its time servers, and the growing error may go unnoticed for a long time.
-- **Network delay.** Synchronisation can never be more accurate than the uncertainty of the network round trip. Over the public internet tens of milliseconds are typical, and congestion can make the error much larger.
-- **Bad servers.** Some NTP servers are simply wrong. Clients query several and discard outliers, which helps but is not proof against all errors.
-- **Leap seconds.** A minute with 59 or 61 seconds breaks assumptions in software that was never tested for it, and has brought down large systems. A common workaround is to **smear** the leap second, spreading the adjustment over a day.
-- **Virtual machines.** The hardware clock is virtualised. When a VM is paused for a while and resumes, the guest sees its clock leap forward.
-- **Devices you do not control.** A user's phone may have a clock that is deliberately set wrong.
+- **Drift.** A clock's gradual wandering from the correct time is called **drift**. The rate of a quartz crystal changes with temperature. A commonly assumed limit for servers is 200 parts per million, which means up to 200 microseconds of error for every second that passes. That is about 6 milliseconds if the clock is corrected every 30 seconds, and about **17 seconds** if it is corrected once a day.
+- **Forced resets.** If the difference from the time server is too large, the machine may refuse to adjust, or may reset its clock in one jump. Programs then see time leap.
+- **Blocked NTP.** A mistake in network configuration can cut a machine off from its time servers. Its error then grows steadily, and this can go unnoticed for a long time.
+- **Network delay.** The time server's answer takes an unknown time to arrive, so the adjustment can never be more accurate than that uncertainty. Over the public internet it is typically tens of milliseconds, and far more when the network is congested.
+- **Bad servers.** Some time servers report the wrong time. Machines ask several and ignore any that disagree with the rest, which helps and is not foolproof.
+- **Leap seconds.** Occasionally an extra second is inserted into the world's official time to keep it in step with the Earth's rotation. A minute with 61 seconds breaks software that never expected one, and has brought down large systems. A common workaround is to **smear** the leap second: spread the adjustment thinly over a whole day.
+- **Virtual machines.** A virtual machine's clock is simulated. When the virtual machine is paused for a while and then resumed, the program inside sees its clock leap forward.
+- **Devices you do not control.** A user's phone may have its clock deliberately set wrong.
 
 Much better accuracy is achievable with effort: GPS receivers, the Precision Time Protocol, careful deployment and monitoring. But it takes considerable expertise, and if anything is misconfigured, drift goes unnoticed.
 
@@ -93,6 +125,20 @@ for r in store: apply(r, *w2)
 print("write 1 stamped", w1[0], "| write 2 stamped", w2[0])
 print("final state:", store)
 print("the causally later write (price=11) was discarded, and nobody was told")
+```
+
+What each part does:
+
+- `SKEW_B = -4` says node B's clock is 4 milliseconds behind. **Clock skew** is the difference between two clocks at the same moment.
+- `real_time` is the true time, which no node can see. `stamp(node)` returns what that node's clock reads: the true time, minus 4 if the node is B.
+- `store` holds each replica's current value as a pair (timestamp, value). `apply` is the last-write-wins rule: accept an incoming write only if its timestamp is larger than the one already stored.
+- At true time 100, a client sets the price to 10 through node A. The write is stamped 100 and applied to both replicas.
+- At true time 102, a second client, who has seen the price of 10, raises it to 11 through node B. Node B's clock reads 98, so the write is stamped 98.
+
+```
+write 1 stamped 100 | write 2 stamped 98
+final state: {'A': (100, 'price=10'), 'B': (100, 'price=10')}
+the causally later write (price=11) was discarded, and nobody was told
 ```
 
 The second write clearly happened later - its author had even seen the first value - yet it carries the *smaller* timestamp, because node B's clock is a few milliseconds slow. Every replica drops it. Resolving conflicts this way is known as **last write wins (LWW)**; many multi-leader and leaderless stores do it by default. Its problems:
@@ -134,6 +180,8 @@ Two things are wrong. First, the expiry was set by a *different* machine and is 
 
 Suppose the thread stops for 15 seconds right after the `is_valid()` check. When it resumes, the lease has expired and another node is now leader. But the code does not look at the clock again until the next iteration. It carries on and processes the request as if nothing had happened.
 
+The program below plays out that scenario with a simulated clock.
+
 ```python-run
 class Lease:
     def __init__(self, holder, expires): self.holder, self.expires = holder, expires
@@ -160,17 +208,34 @@ lease = Lease("node-2", expires=22.0)                      # (this happened at t
 print("       lease is held by", lease.holder, "- yet storage contains a write from node-1:", storage)
 ```
 
+What each part does:
+
+- A `Lease` records who holds it and when it expires. Node 1 holds one that expires at time 10.
+- `leader_step(node, pause)` is one turn of the leader's loop. It first checks the lease: is this node the holder, and is the current time before the expiry?
+- If the check passes, the line `now += pause` moves time forward. That stands for the program being frozen at exactly this point. The node's own code does nothing during the pause and does not know it happened.
+- Then the node writes to storage, relying on the check it made before the pause.
+- The script starts at time 8 and gives node 1 a 15-second pause. The next line records what happened elsewhere in the meantime: the lease passed to node 2.
+
+```
+t= 8.0  node-1 checks lease: valid
+t=23.0  node-1 resumes after a 15.0s pause, unaware anything happened
+t=23.0  node-1 writes to storage
+       lease is held by node-2 - yet storage contains a write from node-1: [(23.0, 'node-1')]
+```
+
+At time 8 the lease was valid. At time 23 node 1 wrote anyway, thirteen seconds after its lease ran out and while node 2 was the rightful leader.
+
 Is a 15-second freeze realistic? There are many ways for a thread to stop for a long time:
 
-- **Garbage collection.** Runtimes such as the JVM occasionally stop all application threads ("stop-the-world"). Pauses of several seconds, and in bad cases minutes, have been observed with large heaps.
-- **Virtual machine suspension.** A VM can be suspended and resumed, for example for live migration to another host. The pause can be arbitrarily long.
-- **Laptops and phones** suspend whenever the lid closes.
-- **Context switches and steal time.** The operating system or the hypervisor gives the CPU to another thread or another VM; under heavy load the wait is long.
-- **Synchronous disk I/O.** A file access - even an unexpected one, such as the lazy loading of a class - blocks while the disk, or a network file system, is slow.
-- **Paging.** If the operating system has swapped a page out, an innocent memory access turns into a disk read. Under memory pressure a process can spend most of its time swapping (**thrashing**), which is why paging is often disabled on servers.
-- **Signals.** A process sent `SIGSTOP` (Ctrl-Z, or an operator's mistake) stops until someone sends `SIGCONT`.
+- **Garbage collection.** Many programming languages reclaim unused memory automatically. In some, such as Java, the reclaiming process occasionally halts every part of the program until it has finished. This is called a "stop-the-world" pause. Pauses of several seconds, and in bad cases minutes, have been observed in programs holding a lot of memory.
+- **Suspending a virtual machine.** A virtual machine can be frozen and resumed later, for example to move it to a different physical computer without shutting it down. The freeze can last any length of time.
+- **Laptops and phones** freeze whenever the lid is closed or the device goes to sleep.
+- **Sharing the processor.** The operating system regularly takes the processor away from one thread and gives it to another (a context switch), and a hypervisor does the same between virtual machines. On a heavily loaded machine, a thread may wait a long time for its next turn.
+- **Slow disk access.** A thread that reads a file has to wait for the disk. If the disk is busy, or the file is really on another machine across a network, the wait can be long. Such reads sometimes happen where the programmer did not expect them.
+- **Paging.** When memory is short, the operating system moves some of a program's data out to disk. If the program then touches that data, an ordinary memory access turns into a slow disk read. A machine that spends most of its time moving data in and out like this is said to be **thrashing**. Servers often have paging switched off for this reason.
+- **Being stopped on purpose.** An operator can halt a running program with a single key press or command, and it stays halted until someone resumes it.
 
-In all these cases the thread is pre-empted at an arbitrary point and resumed later **without being told**. On a single machine we have tools for writing thread-safe code - mutexes, semaphores, atomic counters. They do not carry over to a distributed system, where there is no shared memory, only messages over an unreliable network.
+In all these cases the thread is interrupted at an arbitrary point and resumed later **without being told**. On a single machine, programmers have tools for making code safe when threads are interrupted, because the threads share the same memory and can coordinate through it. Those tools do not carry over to a distributed system, where machines share no memory and have only messages over an unreliable network.
 
 A node therefore has to reckon with being frozen for a long while *between any two instructions*. During the pause the rest of the world moves on, and may declare the node dead. When it resumes it may not notice that it was asleep until it next checks the clock.
 
@@ -232,6 +297,32 @@ Neither removes pauses entirely, but both reduce their effect on users.
 - A process can be **paused** at any point - garbage collection, VM suspension, scheduling, I/O, paging - and resumes unaware. A node therefore cannot trust its own belief that it still holds a **lease**.
 - Hard real-time guarantees are possible but too costly for most server software; instead, limit pauses operationally and make correctness independent of timing by having the resource check **fencing tokens**.
 
+## Glossary
+
+- **Time-of-day clock** - a clock that reports the date and time; it can be reset and may jump.
+- **Wall-clock time** - the date and time as a clock on the wall would show it.
+- **Epoch** - the fixed starting moment from which computers count time: the start of 1 January 1970, UTC.
+- **UTC** - the worldwide standard time zone.
+- **NTP (Network Time Protocol)** - the usual method by which machines adjust their clocks to a time server.
+- **Monotonic clock** - a clock that only moves forward, meant for measuring elapsed time on one machine.
+- **Slewing** - adjusting a clock's rate slightly, without making it jump.
+- **Drift** - a clock's gradual wandering from the correct time.
+- **Clock skew** - the difference between two clocks at the same moment.
+- **Leap second** - an extra second occasionally inserted into official time.
+- **Smearing** - spreading a leap second's adjustment over many hours.
+- **Last write wins (LWW)** - resolving a conflict by keeping the write with the largest timestamp.
+- **Logical clock** - a counter used to order events, not a measure of real time.
+- **Confidence interval** (of a clock) - the range in which the true time very probably lies.
+- **TrueTime** - Google's clock interface that returns an earliest and a latest possible time.
+- **Lease** - a lock that expires after a set time unless renewed.
+- **Process pause** - a period in which a program is frozen and does nothing, without being aware of it.
+- **Garbage collection** - automatic reclaiming of memory a program no longer uses.
+- **Stop-the-world pause** - a garbage collection that halts the whole program until it finishes.
+- **Context switch** - the operating system moving the processor from one thread to another.
+- **Paging / thrashing** - moving a program's data between memory and disk / spending most of the time doing so.
+- **Hard real-time system** - a system built so that every operation finishes within a guaranteed deadline.
+- **Fencing token** - an increasing number issued with each lease, which storage uses to reject requests from an outdated holder.
+
 ```quiz
 [
   {"q": "Which clock should be used to measure how long a request took?",
@@ -261,7 +352,7 @@ Neither removes pauses entirely, but both reduce their effect on users.
   {"q": "Which of the following can pause a process for a long time without its knowledge?",
    "options": ["Only garbage collection", "Garbage collection, VM suspension or migration, operating-system scheduling, paging and slow synchronous I/O", "Only network partitions", "Nothing; processes always know when they are paused"],
    "answer": 1,
-   "explain": "Many layers can pre-empt a thread at an arbitrary instruction. The thread simply continues afterwards with no notification."},
+   "explain": "Many layers can pre-empt a thread at an arbitrary instruction. The thread continues afterwards with no notification."},
   {"q": "Why do most server-side data systems not use hard real-time techniques to eliminate pauses?",
    "options": ["Real-time operating systems do not exist", "Guaranteed response times need support from every layer, restrict languages and tools, and reduce throughput, which is too costly for typical services", "Pauses never matter for servers", "The law forbids it"],
    "answer": 1,

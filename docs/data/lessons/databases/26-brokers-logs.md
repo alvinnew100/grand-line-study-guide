@@ -1,5 +1,21 @@
 # Message brokers and partitioned logs
 
+> **Before this lesson:** read [From Unix pipes to MapReduce](#/lesson/databases/unix-mapreduce) for batch processing and derived data. Message brokers, producers, consumers and idempotence were introduced in [Modes of data flow](#/lesson/databases/dataflow-modes); append-only logs and segments in [Log-structured storage](#/lesson/databases/log-structured); partitions and partition keys in [Partitioning key-value data](#/lesson/databases/partitioning-keys); replication logs and leaders in [Single-leader replication](#/lesson/databases/leader-follower).
+
+## In plain words
+
+A batch job works on a pile of data that is complete before the job starts. Much real data is never complete: customers keep clicking, sensors keep measuring, payments keep arriving. A never-ending sequence of small records like this is a **stream**, and each record is an **event**. Before a stream can be processed, something has to carry the events from the programs that create them to the programs that use them. That carrier is a **message broker**, and this lesson is about the two kinds.
+
+An everyday picture for the first kind: the ticket rail in a restaurant kitchen. A waiter clips an order to the rail. A cook takes it down, makes the dish, and throws the ticket away. Any free cook can take the next ticket, so more cooks means faster service. Once a ticket is gone, it is gone. This is a **traditional message queue**.
+
+An everyday picture for the second kind: a ship's logbook. Every entry is written on the next line and never erased. Anyone can read it, each reader keeps a bookmark at the line they have reached, and a new reader can start from page one. Reading does not use the entries up. This is a **log-based broker**, of which Apache Kafka is the best-known example.
+
+The difference sounds small and has large consequences: whether events stay in order, whether a second team can read the same events, whether you can go back and reprocess last week's data after fixing a bug.
+
+Why this matters for a job: nearly every backend at scale has a message broker in it, and "queue or log, RabbitMQ or Kafka?" is one of the most common design decisions and interview questions. Getting the choice of **partition key** wrong, or misunderstanding what "delivered" means, causes bugs that appear only in production.
+
+## From files to never-ending flows
+
 A batch job starts from a file that already exists and has an end. Much of the data we care about is not like that. Customers keep clicking, sensors keep measuring, services keep emitting log lines. Cutting this never-ending flow into daily files and processing each file after midnight means that every insight is up to a day old. **Stream processing** removes the artificial boundary: handle each piece of data shortly after it is produced.
 
 Before we can process a stream we need a way to *transport* it: something that takes records from the programs that produce them and delivers them to the programs that consume them, reliably, at high volume, and without the two sides having to know about each other. That transport layer is the topic of this lesson. It comes in two families that behave very differently - traditional **message brokers** and **log-based brokers** such as Apache Kafka - and understanding the difference is one of the most useful things a backend or ML engineer can carry into a system-design interview.
@@ -12,7 +28,7 @@ Before we can process a stream we need a way to *transport* it: something that t
 
 A file is written once and read many times. In a similar way, an event is produced once and may be handled by any number of consumers.
 
-### Why not just poll a database?
+### Why not poll a database?
 
 You could have producers insert rows into a table and consumers repeatedly ask "anything new since id 5512?". It works at small scale, but polling has an awkward trade-off: poll rarely and you add latency, poll often and most queries return nothing while still loading the database. What you want is for consumers to be **notified** when something arrives. Databases offer little for this (triggers, `LISTEN/NOTIFY`), so dedicated messaging systems grew up around the need.
 
@@ -24,7 +40,7 @@ You could have producers insert rows into a table and consumers repeatedly ask "
 2. **Buffer** them in a queue - and then decide what happens when the queue outgrows memory (crash? spill to disk? how does disk I/O affect throughput?).
 3. Apply **backpressure**: block the producer until the consumer catches up. TCP flow control and Unix pipes work this way.
 
-**What happens when a node crashes or goes offline - are messages lost?** Durability needs disk writes and/or replication, both of which cost throughput. Whether loss is acceptable depends on the application: dropping one temperature reading out of thousands is harmless; dropping a payment event is not, and for a counter, losing messages means the count is simply wrong.
+**What happens when a node crashes or goes offline: are messages lost?** Keeping messages safe requires writing them to disk, copying them to other machines, or both, and each of those reduces how many messages per second the system can handle. Whether losing a message is acceptable depends on the application. Dropping one temperature reading out of thousands does no harm. Dropping a payment event is serious, and for a counter, every lost message makes the total wrong.
 
 Keep these two questions in mind; every design below is a different pair of answers.
 
@@ -32,10 +48,10 @@ Keep these two questions in mind; every design below is a different pair of answ
 
 Some systems send messages straight from producer to consumer:
 
-- UDP multicast for market data feeds, where low latency beats reliability.
-- Brokerless libraries such as ZeroMQ, which implement publish/subscribe over TCP.
-- Metrics agents (StatsD style) that fire UDP packets at a collector.
-- **Webhooks**: the consumer exposes an HTTP endpoint, the producer calls it whenever an event occurs.
+- Financial market data feeds that broadcast prices to many listeners at once using **UDP**, a network protocol that, unlike TCP, sends each packet once and does not check that it arrived. Speed matters more than completeness there.
+- Messaging libraries such as ZeroMQ that let programs publish and subscribe to each other directly over TCP, with no server in between.
+- Monitoring agents that fire small UDP packets of measurements at a collecting server.
+- **Webhooks**: the consumer provides a web address, and the producer sends an HTTP request to that address whenever an event occurs.
 
 These are simple and fast, but they push reliability into application code and assume both sides are online at the same time. If the consumer is down, messages are usually lost; if the producer crashes, the retries it was holding in memory vanish too.
 
@@ -86,6 +102,8 @@ Two consequences follow directly:
 1. **Duplicates.** If the work was done but the acknowledgement got lost, the message is processed twice. This is *at-least-once* delivery. Consumers must therefore be **idempotent** or deduplicate.
 2. **Reordering.** With load balancing, a redelivered message arrives after messages that were sent later.
 
+The program below acts out six messages shared among several workers, two of which crash on their first attempt.
+
 ```python-run
 queue = [f"m{i}" for i in range(1, 7)]
 processed, attempt = [], {}
@@ -103,6 +121,21 @@ while queue:
 print("processing order:", processed)
 ```
 
+What each part does:
+
+- `queue` holds messages `m1` to `m6` in the order they were sent.
+- Each time round the loop, `queue.pop(0)` takes the message at the front, as a free worker would. `attempt` counts how many times each message has been handed out.
+- For `m2` and `m4`, the first attempt ends in a crash before any acknowledgement. The broker waits for a timeout and then puts the message back. `queue.insert(2, msg)` places it two positions further down, standing for the fact that other workers have meanwhile taken later messages.
+- A message that is handled successfully is added to `processed`.
+
+```
+m2: worker crashed, no ack -> redelivered after the timeout
+m4: worker crashed, no ack -> redelivered after the timeout
+processing order: ['m1', 'm3', 'm2', 'm5', 'm4', 'm6']
+```
+
+Message `m3` was processed before `m2`, and `m5` before `m4`.
+
 The output order differs from the send order even though the broker tried to preserve it. If messages are independent that is fine. If they are causally related ("create account", then "update account") it is a bug waiting to happen, and the usual cure is to avoid load balancing for such a queue - one consumer per queue - at the cost of parallelism.
 
 > [!INTERVIEW]
@@ -115,7 +148,7 @@ A traditional broker treats messages as transient: once acknowledged they are go
 Could we have the durable, rereadable nature of a file together with the low-latency notification of a broker? Yes: make the broker an **append-only log**.
 
 - A producer appends its message to the end of the log.
-- A consumer reads the log sequentially and, when it reaches the end, waits to be told about new data - conceptually `tail -f`.
+- A consumer reads the log from the beginning towards the end, in order. When it reaches the end, it waits to be told that new data has been added.
 
 ### Partitions and offsets
 
@@ -145,6 +178,8 @@ The broker does not assign individual messages to consumers. It assigns **whole 
 This is the same idea as the log sequence number in single-leader database replication: the broker is the leader, the consumer is a follower, and the offset lets a follower reconnect and resume without missing anything.
 
 If a consumer dies, another member of its group takes over the partition and starts from the last committed offset. Messages processed after that commit but before the crash are handled a second time - so the at-least-once caveat and the need for idempotence still apply.
+
+The program below builds a small partitioned log and a consumer that crashes before saving its position.
 
 ```python-run
 class Partition:
@@ -178,6 +213,24 @@ committed[1] = start + len(batch2)
 print("after commit ", poll(1)[1])
 ```
 
+What each part does:
+
+- A `Partition` is a list. `append` adds a message and returns its position in the list, which is its offset.
+- A `Topic` is a list of partitions. `send(key, value)` chooses a partition from the key (adding up the key's bytes and taking the remainder after dividing by the number of partitions) and appends the message there. The same key always chooses the same partition.
+- Eight events are sent, each keyed by a user's name. The first `print` shows what each partition holds.
+- `committed` is the consumer group's saved position in each partition, all starting at 0.
+- `poll(part)` returns up to two messages from a partition, starting at the committed offset. It does not change the committed offset. Reading and saving the position are separate steps.
+- The script polls partition 1, then polls again without committing (standing for a crash and a replacement consumer), then commits and polls a third time.
+
+```
+{0: [], 1: ['event1', 'event3', 'event4', 'event7'], 2: ['event0', 'event2', 'event5', 'event6']}
+consumer reads [('bob', 'event1'), ('cy', 'event3')] from offset 0
+after crash   [('bob', 'event1'), ('cy', 'event3')] (duplicates -> must be idempotent)
+after commit  [('bob', 'event4'), ('cy', 'event7')]
+```
+
+The second poll returns the same two events as the first, because nothing was committed in between. Only after the commit does the consumer move on. Notice also in the first line that Bob's events (1 and 4) are both in partition 1, in the order they were sent.
+
 All events of one user land in the same partition, so they stay in order. That is the purpose of the **partition key**: choose the key such that everything that must be ordered relative to each other shares it.
 
 ### Comparing the two styles
@@ -198,7 +251,7 @@ All events of one user land in the same partition, so they stay in order. That i
 
 ### Disk space and retention
 
-An append-only log grows forever unless something trims it. The log is split into **segments**; old segments are deleted or archived once they exceed a time or size limit. The log is thus effectively a very large, disk-based **ring buffer**. Back-of-envelope: a 6 TB disk written at 150 MB/s fills in about eleven hours, so a broker with such a disk can hold at least eleven hours of traffic even at full write speed - in practice days or weeks, since traffic is rarely at the maximum. Tiered storage, which moves old segments to object storage, extends this to months or indefinitely.
+An append-only log would grow for ever unless something trimmed it. The log is divided into **segments**, and old segments are deleted or moved to cheaper storage once they pass a limit on age or size. The log therefore behaves like a very large buffer of fixed size in which the newest data continually overwrites the oldest. (Programmers call such a structure a **ring buffer**.) A rough calculation: a 6-terabyte disk written at 150 megabytes per second fills in about eleven hours. So a broker with such a disk holds at least eleven hours of messages even at full writing speed, and in practice days or weeks, since traffic is rarely at the maximum. Moving old segments to cheap bulk storage extends this to months.
 
 Because every message hits disk anyway, throughput stays roughly constant regardless of how much history is retained. That is unlike brokers that hold queues in memory and slow down sharply when they have to page them out.
 
@@ -225,6 +278,8 @@ You do not need to memorise Kafka's configuration, but a few concepts come up co
 - **Number of partitions.** It sets the maximum parallelism of each consumer group and cannot be reduced later. Increasing it changes which partition a key maps to, which breaks per-key ordering for keys that are in flight.
 - **Retention.** Time-based, size-based, or **log compaction** (keep the latest value per key), which the next lesson relies on.
 
+The short program below does the arithmetic an operator would do when a consumer is falling behind.
+
 ```python-run
 # How much lag is tolerable? A tiny capacity model.
 produce_rate   = 12_000      # msgs/s into the topic
@@ -241,6 +296,23 @@ print(f"data loss for this consumer in about {hours_left:.0f} hours unless it sp
 for consumers, partitions in [(3, 12), (12, 12), (20, 12)]:
     print(consumers, "consumers on", partitions, "partitions ->", min(consumers, partitions), "active")
 ```
+
+What each part does:
+
+- The first four lines are the situation: messages arrive at 12,000 per second, the consumer group handles 9,000 per second, the broker keeps 72 hours of messages, and the group is already 50 million messages behind.
+- `growth` is how much further behind the group falls every second: 3,000 messages.
+- `retained` is how many messages 72 hours of traffic amounts to. The group starts losing data when its lag equals that number. `hours_left` is the remaining gap divided by the rate at which the gap is closing.
+- The final loop shows the limit on adding consumers: the number doing useful work is the smaller of the number of consumers and the number of partitions.
+
+```
+lag grows by 10,800,000 msgs/hour
+data loss for this consumer in about 283 hours unless it speeds up
+3 consumers on 12 partitions -> 3 active
+12 consumers on 12 partitions -> 12 active
+20 consumers on 12 partitions -> 12 active
+```
+
+There are 283 hours, nearly twelve days, in which to fix the slow consumer. Adding consumers helps up to twelve, one per partition. The eight extra consumers in the last line would have nothing to do.
 
 > [!INTERVIEW]
 > Design prompt: "Order events must be processed in order per customer, at 50k events per second, and a new fraud model should be able to train on the last 30 days." Sketch: a log-based topic keyed by `customer_id` (per-key order), enough partitions for the consumer parallelism you need plus headroom, replication factor 3 with `acks=all`, 30-day retention or tiered storage, one consumer group per downstream system, idempotent consumers, and alerting on lag.
@@ -262,6 +334,37 @@ for consumers, partitions in [(3, 12), (12, 12), (20, 12)]:
 - **Log-based brokers** store messages in partitioned append-only logs. Consumers track an **offset**; order is preserved within a partition; reading is non-destructive, so **replay** and independent consumer groups are cheap.
 - The price of the log model is that parallelism is bounded by the partition count and a slow message blocks its partition.
 - Operate logs by watching **consumer lag** against the retention window, and make consumers **idempotent** because delivery is at-least-once in both families.
+
+## Glossary
+
+- **Stream** - a never-ending sequence of events.
+- **Event (message, record)** - a small, unchangeable description of something that happened.
+- **Producer / consumer** - a program that creates events / a program that handles them.
+- **Topic** - a named group of related events.
+- **Backpressure** - making the producer wait until the consumer catches up.
+- **UDP** - a network protocol that sends packets without checking they arrive.
+- **Webhook** - a web address the producer calls whenever an event occurs.
+- **Message broker (message queue)** - a server that receives messages from producers and delivers them to consumers.
+- **Load balancing (competing consumers)** - each message goes to one of several consumers.
+- **Fan-out** - each message goes to every group of subscribers.
+- **Acknowledgement** - a consumer's confirmation that it has finished processing a message.
+- **Redelivery** - the broker sending a message again because no acknowledgement arrived.
+- **At-least-once / at-most-once delivery** - a message is never lost but may be repeated / never repeated but may be lost.
+- **Log-based broker** - a broker that stores messages in append-only logs, such as Kafka.
+- **Partition** - one independent, ordered log within a topic.
+- **Offset** - a message's position within its partition.
+- **Consumer group** - a set of consumers that share a topic's partitions among themselves.
+- **Committed offset** - the position up to which a group has recorded its processing as done.
+- **Partition key** - the part of a message that decides its partition; messages with the same key stay in order.
+- **Head-of-line blocking** - one slow message holding up everything behind it in a partition.
+- **Retention** - how long, or how much, a log keeps before deleting old data.
+- **Ring buffer** - a fixed-size buffer in which new data overwrites the oldest.
+- **Consumer lag** - how far a group's committed offset is behind the newest message.
+- **Replay** - reading old messages again by moving the offset back.
+- **In-sync replica set (ISR)** - the replicas of a partition that are fully caught up.
+- **Rebalancing** - reassigning partitions when consumers join or leave a group.
+- **Log compaction** - keeping only the latest message for each key.
+- **Dead-letter topic** - a place to put messages that repeatedly fail, so processing can continue.
 
 ```quiz
 [

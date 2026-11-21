@@ -1,46 +1,62 @@
 # Encoding formats and schema evolution
 
-Applications change. New features need new fields, and new fields mean data formats and schemas must change. In a large application, code changes cannot happen everywhere at once:
+> **Before this lesson:** you should know what a schema, JSON, schema-on-read and schema-on-write are, from [Relational vs document models](#/lesson/databases/relational-vs-document), and what a rolling upgrade is, from [Reliability and maintainability](#/lesson/databases/reliability-maintainability). The code uses Python dictionaries, functions and `bytes`.
 
-- **Server-side** applications use **rolling upgrades**: upgrade a small batch of nodes, watch them for trouble, and only then move on to the next batch. This avoids downtime and makes frequent small releases safe.
-- **Client-side** applications are updated whenever the user gets round to it, which can be months later.
+## In plain words
 
-So **old and new versions of code, and old and new data formats, coexist**. To keep working we need compatibility in **both directions**:
+Programs constantly hand data to other programs: over a network, or by saving it to a file that some other program (or a later version of the same program) will read. Inside one running program, data lives as objects connected to each other in memory. None of that can be sent as it is. It has to be flattened into a plain sequence of bytes first, and rebuilt on the other side. Flattening is called **encoding**. Rebuilding is called **decoding**.
 
-- **Backward compatibility.** *Newer* code can read data written by *older* code. This is usually easy, because you know the old format.
-- **Forward compatibility.** *Older* code can read data written by *newer* code. This is trickier, because old code must ignore additions it does not understand.
+An everyday picture: sending furniture by post. A wardrobe cannot go through the letterbox as it stands. You take it apart, pack the pieces flat in a box, and include a sheet that says which piece is which. The person at the other end follows the sheet to put it back together. The flat pack is the encoded data. The sheet is the **schema**.
 
-## 1. Encoding = serialization
+Now the complication that this lesson is really about. The factory changes the wardrobe design every few months, but customers still own old instruction sheets, and boxes packed last year are still sitting in warehouses. A person holding an old sheet must cope with a new box, and a person holding a new sheet must cope with an old box. In software this is called **schema evolution**, and getting it wrong breaks systems during upgrades.
 
-Programs keep data in two representations:
+Why this matters for a job: any time two services talk, or data is saved and read later, a format is in use. Engineers choose between JSON, Protocol Buffers and Avro routinely, and "how do you change a message format without breaking the programs that read it?" is a common interview question with a precise answer.
 
-1. **In memory**: objects, structs, lists, hash tables, trees, with pointers, optimised for CPU access.
-2. **As a self-contained byte sequence** for writing to a file or sending over the network. Pointers make no sense here.
+## 1. Why old and new must coexist
 
-Translating 1 → 2 is **encoding** (also called *serialization* or *marshalling*), and 2 → 1 is **decoding** (*parsing*, *deserialization*, *unmarshalling*).
+Applications change. A new feature needs a new field, so the data format changes. In any system of real size the code cannot all change at the same instant:
+
+- On the **server side**, new versions are installed by a **rolling upgrade**: a few machines get the new version, they are watched for problems, and then the next few are done. For a while, some machines run old code and some run new.
+- On the **client side** (apps on people's phones), an update happens whenever the user installs it, which may be months later or never.
+
+So old code and new code run at the same time, and data written by each is read by the other. Two properties are needed:
+
+- **Backward compatibility:** *newer* code can read data written by *older* code. This is the easier of the two, because the authors of the new code know what the old format looked like.
+- **Forward compatibility:** *older* code can read data written by *newer* code. This is harder. The old code was written before the new format existed, so it must be built to ignore things it does not recognise.
+
+A memory aid: the direction describes which way the *reader* looks. Backward compatible means a reader can look back at older data. Forward compatible means a reader can cope with data from its future.
+
+## 2. Encoding = serialization
+
+A program holds data in two forms:
+
+1. **In memory**, as objects, lists, dictionaries and so on. These refer to one another through **pointers**, which are memory addresses. This form is designed for fast access by the processor.
+2. **As a self-contained sequence of bytes**, for writing to a file or sending over a network. Pointers cannot appear here, since a memory address means nothing to another program.
+
+Going from form 1 to form 2 is **encoding**, also called **serialization** or *marshalling*. Going back is **decoding**, also called *parsing* or **deserialization**.
 
 > [!NOTE]
-> "Serialization" also means something completely different in the context of transactions (Chapter 7). DDIA says "encoding" to avoid the clash.
+> The word "serialization" has a second, unrelated meaning in the lessons on transactions. To avoid confusion this track says "encoding", as DDIA does.
 
-## 2. Language-specific formats
+## 3. Language-specific formats
 
-Java has `java.io.Serializable`, Ruby has `Marshal`, and Python has `pickle`. They are convenient but have serious problems:
+Many programming languages have encoding built in. Python has `pickle`, Java has `java.io.Serializable`, Ruby has `Marshal`. One function call turns any object into bytes. That convenience comes with four problems:
 
-- They are **tied to one language**, which locks you in.
-- **Security.** Decoding must be able to instantiate arbitrary classes, so an attacker who can make you decode their bytes can often execute arbitrary code. Never unpickle untrusted data.
-- **Versioning** is often an afterthought, with poor forward and backward compatibility.
-- **Efficiency** is often poor. Java serialization is notorious for bad performance and bloated output.
+- **They are tied to one language.** Data pickled in Python is very hard to read from Java. Choosing such a format commits you to that language for as long as the data exists.
+- **They are a security risk.** To rebuild arbitrary objects, the decoder must be able to create an instance of any class. An attacker who can get you to decode bytes of their choosing can often make your program run their code. Never unpickle data from a source you do not trust.
+- **Versioning is neglected.** These formats were designed for quick convenience, and forward and backward compatibility were rarely thought through.
+- **Efficiency is often poor.** Java's built-in serialization is known for being slow and producing bulky output.
 
-The advice is to use them only for very transient purposes.
+The sensible rule is to use them only for short-lived, internal purposes.
 
-## 3. JSON, XML and binary variants
+## 4. JSON, XML and binary variants
 
-Textual formats are widely supported and human-readable, and they are the de facto standard for data interchange between organisations. They have subtle problems:
+The next option is a standard text format that every language can read. The three common ones are **JSON**, **XML** (a format with nested tags in angle brackets, like HTML) and **CSV** (comma-separated values: one record per line, fields separated by commas). They are readable by people and supported everywhere, and they are the usual choice when different organisations exchange data. They also have subtle weaknesses:
 
-- **Numbers are ambiguous.** XML and CSV cannot distinguish a number from a string of digits without a schema. JSON separates strings and numbers but not integers and floats, and specifies no precision. Integers greater than $2^{53}$ cannot be represented exactly by an IEEE-754 double, so they get silently rounded in JavaScript. This is why Twitter's API includes each tweet ID in two forms: a JSON number and, to be safe, the same digits as a string.
-- **No binary strings.** JSON and XML support Unicode text but not raw bytes. People Base64-encode binary data, which grows it by 33% and is hacky.
-- **Optional, complex schemas.** XML Schema and JSON Schema are powerful but complicated, and many JSON tools ignore schemas, so the correct interpretation of the data is hardcoded in application code.
-- **CSV has no schema at all**, and its escaping rules (commas or newlines inside values) are vague, so many parsers get them wrong.
+- **Numbers are ambiguous.** XML and CSV cannot tell a number from text made of digits unless a schema says which it is. JSON separates text from numbers, but it does not separate whole numbers from numbers with a fractional part, and it sets no limit on precision. This causes a real problem with large whole numbers. JavaScript stores every number in a 64-bit **floating-point** format (the standard is called IEEE 754), which can represent whole numbers exactly only up to $2^{53}$. Larger ones are silently rounded. Twitter's identifiers exceed that limit, which is why its API returns each tweet's ID twice: once as a JSON number and once as text.
+- **No raw bytes.** JSON and XML can hold text but not arbitrary binary data such as an image. The usual workaround is **Base64**, which rewrites bytes using 64 printable characters. It works, and it makes the data one third larger.
+- **Schemas are optional and complicated.** Schema languages exist for XML and JSON, but many programs do not use them. The rules for interpreting the data then live only in application code.
+- **CSV has no schema at all.** It also has loosely defined rules for a value that itself contains a comma or a line break, and many programs handle those cases incorrectly.
 
 ```python-run
 import json
@@ -53,17 +69,33 @@ import base64
 print("base64 of 6 bytes:", base64.b64encode(blob).decode(), f"({len(base64.b64encode(blob))} chars for 6 bytes)")
 ```
 
-Binary JSON variants such as **MessagePack**, BSON, BJSON, UBJSON and BISON are a bit more compact but still embed **field names** in every record because they have no schema. DDIA's example record:
+What each part does:
+
+- `big = 2**53 + 1` is the first whole number that a 64-bit float cannot hold exactly.
+- `int(float(big))` converts it to a float and back, imitating what a JavaScript program would do to it.
+- `json.dumps(big)` encodes the number as JSON text and `json.loads` decodes it again. Python's whole numbers have unlimited precision, so the round trip is exact here.
+- `bytes(range(6))` makes six raw bytes with the values 0 to 5, and `base64.b64encode` converts them to Base64.
+
+```
+python int     : 9007199254740993
+as float (JS)  : 9007199254740992 <- silently rounded!
+json roundtrip : 9007199254740993 (Python keeps ints exact; JavaScript would not)
+base64 of 6 bytes: AAECAwQF (8 chars for 6 bytes)
+```
+
+The number ending in 993 became 992 with no error message. If that were a customer ID, the request would now refer to a different customer. The last line shows the Base64 cost: 6 bytes became 8 characters.
+
+**Binary variants of JSON.** Formats such as **MessagePack** and BSON keep JSON's data model but write it as compact bytes instead of text. The saving is modest, because without a schema they still have to write every **field name** into every record. Take this record, used as the running example in DDIA:
 
 ```json
 {"userName": "Martin", "favoriteNumber": 1337, "interests": ["daydreaming", "hacking"]}
 ```
 
-is 81 bytes as compact JSON and 66 bytes as MessagePack. That is only an 18% reduction, and it costs human readability.
+As compact JSON text it is 81 bytes. As MessagePack it is 66 bytes. An 18% saving is a small return for giving up human readability. The formats in the next sections do much better, by taking the field names out.
 
-## 4. Thrift and Protocol Buffers
+## 5. Thrift and Protocol Buffers
 
-Apache **Thrift** (from Facebook) and Google **Protocol Buffers** (protobuf) are binary encodings that **require a schema**, described in an IDL:
+**Protocol Buffers** (shortened to **protobuf**), created at Google, and **Thrift**, created at Facebook, are binary formats that **require a schema**. You describe each kind of record in a small definition language. Such a language is called an **IDL** (interface definition language). In protobuf:
 
 ```protobuf
 message Person {
@@ -73,7 +105,13 @@ message Person {
 }
 ```
 
-A code generator produces classes in many languages. The key idea is that **field tags** (numbers 1, 2, 3) replace field names in the encoded data. Each field is encoded as *(tag, type, value)*. Integers use **variable-length encoding** (varint), so 1337 takes 2 bytes. The example record becomes **33 bytes** in protobuf. Thrift's CompactProtocol gives 34 bytes, and its BinaryProtocol 59.
+Each line declares one field: whether it must be present (`required`), may be absent (`optional`) or may appear many times (`repeated`), then its type, its name and a number. A tool called a **code generator** reads this definition and produces classes in the programming language of your choice, with methods to encode and decode.
+
+The numbers after the equals signs are the central idea. They are **field tags**. In the encoded bytes, a field is identified by its tag number and not by its name. Each field is written as three things: the tag, a marker saying what kind of value follows, and the value. The names `user_name` and so on never appear in the data.
+
+A second space-saving device is the **variable-length integer**, or **varint**. A small number is written in one byte and a large one in several. Each byte carries seven bits of the number, and its eighth bit says whether another byte follows.
+
+With tags and varints, the example record takes **33 bytes** in protobuf, compared with 81 as JSON. The program below builds those bytes by hand.
 
 ```python-run
 def varint(n):
@@ -100,22 +138,36 @@ print(len(msg), "bytes:", msg.hex(" "))
 print("varint(1337) =", varint(1337).hex(" "), " varint(1) =", varint(1).hex())
 ```
 
-Run it and you get exactly 33 bytes, matching DDIA's figure.
+What each part does:
 
-### 4.1 Field tags and schema evolution
+- `varint(n)` produces the variable-length form of a number. `n & 0x7F` takes the lowest seven bits. `n >>= 7` shifts the number right by seven bits, discarding the ones already taken. If anything is left (`if n:`), the byte is written with its top bit switched on (`| 0x80`) to say "more follows". Otherwise the byte is written as it is and the function returns.
+- `field(tag, wire_type, payload)` writes the header of a field. It packs the tag number and a 3-bit type marker into one number, `(tag << 3) | wire_type`, encodes that as a varint, and appends the value.
+- `string_field` encodes text: type marker 2 means "a length, then that many bytes".
+- `msg` joins four fields: the name, the number, and the two interests. Both interests use tag 3. That is how a `repeated` field is written: the same tag appears more than once.
 
-- **Adding a field.** Give it a **new tag number**. Old code reading new data sees an unknown tag and **skips it**, using the type annotation to know how many bytes to skip. That gives forward compatibility. New code can always read old data because tag numbers keep their meaning, which gives backward compatibility, provided the new field is *optional* or has a default. A new `required` field would make new code fail on old data.
-- **Removing a field.** You can only remove **optional** fields, and you must **never reuse the tag number**, because old data with that tag may still exist. Protobuf has `reserved 4;` for this.
-- **Changing a field name** is fine, since names are not in the encoded data. **Changing a tag** breaks everything.
-- **Changing a datatype** is possible in some cases but risky. Widening int32 to int64 works for new code reading old data, but old code reading a 64-bit value into a 32-bit variable truncates it.
-- Protobuf has no list type. A `repeated` field is the same field tag appearing several times. That makes it fine to change an `optional` (single) field into a `repeated` one: an old reader that still expects one value keeps just the final element of the list. Thrift has a dedicated list type that supports nested lists but does not allow this change.
+```
+33 bytes: 0a 06 4d 61 72 74 69 6e 10 b9 0a 1a 0b 64 61 79 64 72 65 61 6d 69 6e 67 1a 07 68 61 63 6b 69 6e 67
+varint(1337) = b9 0a  varint(1) = 01
+```
+
+The output is written in **hexadecimal**, a compact way of showing bytes with two characters each. Read the beginning: `0a` is the header for tag 1 with type 2. `06` is the length. The next six bytes, `4d 61 72 74 69 6e`, are the letters of "Martin". Then `10` is the header for tag 2 with type 0, and `b9 0a` is 1337 as a two-byte varint. The total is 33 bytes, the same figure DDIA gives.
+
+### 5.1 Field tags and schema evolution
+
+Because the data contains tags and not names, the rules for changing a schema safely follow directly.
+
+- **Adding a field.** Give it a tag number that has never been used. Old code that meets the new tag does not recognise it and **skips it**; the type marker tells it how many bytes to skip. That is forward compatibility. New code can read old data because every existing tag still means what it always meant. That is backward compatibility, on one condition: the new field must be optional or have a default value. If it were `required`, new code would reject every old record for not containing it.
+- **Removing a field.** Only an optional field can be removed, for the mirror-image reason. And its tag number must **never be used again**, because old data carrying that tag still exists and would be misread. Protobuf lets you write `reserved 4;` to block a retired number.
+- **Renaming a field** is harmless, since names are not in the data. **Changing a tag number** makes all existing data unreadable.
+- **Changing a field's type** is sometimes possible and always risky. If a 32-bit integer field is widened to 64 bits, new code reads old data without trouble. But old code reading a new 64-bit value into a 32-bit variable will cut off part of the number.
+- **Single to repeated.** Protobuf has no separate list type; a repeated field is one tag appearing several times. An optional field can therefore be changed to a repeated one. New code reading old data sees a list with zero or one items, and old code reading new data sees only the final item.
 
 > [!NOTE]
-> proto3 removed `required` altogether. Every field is optional with a zero-value default, because `required` turned out to be an evolution hazard. You cannot safely add or remove one.
+> The current version of the language, proto3, removed `required` entirely. Every field is optional and has a default (zero, empty text and so on). Experience showed that a required field can never be safely added or removed later, so it was a trap.
 
-## 5. Avro
+## 6. Avro
 
-Apache **Avro** started in 2009 as a Hadoop subproject because Thrift was not a good fit. It has two schema languages: Avro IDL for humans and JSON for machines.
+**Apache Avro** is a third binary format, created in 2009 for the Hadoop data-processing system. It also uses a schema:
 
 ```
 record Person {
@@ -125,20 +177,24 @@ record Person {
 }
 ```
 
-The encoding contains **no field tags and no type annotations**, only the values concatenated. Strings are length-prefixed and integers use zig-zag varints. The example is just **32 bytes**, the most compact of all. To parse it, you walk through the fields in the order they appear in the schema. So the bytes can be decoded correctly **only if the reader uses the exact schema the data was written with**.
+This declares the same three fields. `union { null, long }` means "either nothing or a 64-bit whole number", and `= null` sets its default value.
 
-### 5.1 Writer's schema and reader's schema
+Avro's encoding goes one step further than protobuf's. It contains **no tag numbers and no type markers**. The bytes are the values and nothing else, one after another, in the order the schema lists the fields. The example record takes **32 bytes**, the smallest of all the formats here.
 
-- The **writer's schema** is the schema the encoding application used.
-- The **reader's schema** is the schema the decoding application expects. Code is generated from it.
+That raises a question. If the data does not say which field is which, how can it be read? The decoder walks through the schema: "first field is text, so read a length and that many bytes; second field is a union, so read which alternative and then its value". The consequence is strict. The bytes can be decoded correctly **only by a reader that knows the exact schema the writer used**.
 
-They do not have to be identical, only **compatible**. Avro's library resolves the differences by matching fields **by name**:
+### 6.1 Writer's schema and reader's schema
 
-- Field order can differ, because matching is by name.
-- A field in the writer's schema but not the reader's is **ignored**.
-- A field the reader expects but the writer lacks is filled with the reader's **default value**.
+Avro deals with change by always working with two schemas:
 
-The compatibility rules follow from this. You can only add or remove fields that **have a default value**. Adding a field with no default breaks backward compatibility, because new readers cannot fill it for old data. Removing a field with no default breaks forward compatibility. `null` is not an implicit default. To allow null you must declare a **union** type such as `union { null, long }`, which is more verbose than "everything nullable" but helps prevent bugs. Renaming a field works through **aliases** in the reader's schema, which is backward compatible but not forward compatible.
+- The **writer's schema** is the one the encoding program used.
+- The **reader's schema** is the one the decoding program expects, the one its own code was written against.
+
+The two need not be identical. They need to be **compatible**, and the Avro library converts between them by matching fields **by name**:
+
+- The order of fields may differ, since matching is by name.
+- A field that the writer has and the reader does not is **ignored**.
+- A field that the reader expects and the writer lacks is filled in with the **default value** from the reader's schema.
 
 ```mermaid
 flowchart LR
@@ -146,6 +202,10 @@ flowchart LR
   RS["Reader's schema v2: userName, interests, photoUrl default null"] --> R
   R --> O["Decoded record: favoriteNumber ignored, photoUrl = null"]
 ```
+
+In the diagram, data written with version 1 is read by a program expecting version 2. The field `favoriteNumber` is dropped because version 2 does not have it. The field `photoUrl` did not exist in version 1, so it receives its default.
+
+The rules for safe changes follow from the matching rules. **A field may be added or removed only if it has a default value.** Adding a field without a default breaks backward compatibility: a new reader has nothing to put in that field for old data. Removing a field without a default breaks forward compatibility: an old reader expects it and has no default to fall back on. Avro also does not treat "empty" as an automatic default. To allow a field to be empty you must declare it as a union that includes `null`, as in the schema above. That is more to type, and it prevents a whole class of bugs.
 
 ```python-run
 def resolve(record, writer_fields, reader_schema):
@@ -170,49 +230,88 @@ except ValueError as e:
     print("ERROR:", e)
 ```
 
-### 5.2 Where does the reader get the writer's schema from?
+What each part does:
 
-Including the whole schema in every record would defeat the compactness. It depends on context:
+- `resolve` imitates Avro's matching. For each field the reader wants, it takes the value from the record if the writer had that field, takes the reader's default if there is one, and otherwise raises an error.
+- Fields the writer had but the reader does not ask for are never looked at, which is how they get ignored.
+- The first call reads a version 1 record with a version 2 reader schema. The second uses a reader schema demanding an `email` field with no default.
 
-- **Large file with lots of records** (Hadoop): the writer includes its schema **once** at the start of the file. These are Avro **object container files**.
-- **Database with individually written records**: include a **schema version number** at the start of each record and keep a list of schema versions. Kafka's Confluent **Schema Registry** does this, prefixing each message with a schema id.
-- **Network connection**: the two sides negotiate the schema version at connection setup, as in the Avro RPC protocol.
+```
+{'userName': 'Martin', 'interests': ['hacking'], 'photoUrl': None}
+ERROR: incompatible: reader needs 'email' with no default
+```
 
-### 5.3 Dynamically generated schemas
+In the first result `favoriteNumber` has disappeared and `photoUrl` has been filled with its default. The second shows the failure that the "must have a default" rule exists to prevent.
 
-Because Avro has no tag numbers, it suits schemas **generated** from another source. Say you want to dump a relational database to a file. Generate an Avro schema from the table definitions, with one record schema per table and one field per column. When the database schema changes, generate a new Avro schema. Fields are matched by name, so the result stays compatible. With Thrift or protobuf an administrator would have to assign tag numbers by hand and never reuse them. Avro was designed with this use in mind, and Thrift and protobuf were not.
+### 6.2 Where does the reader get the writer's schema from?
 
-### 5.4 Code generation
+Attaching the full schema to every record would cancel the space saving. What is done depends on the situation:
 
-Thrift and protobuf rely on code generation, which suits statically typed languages (Java, C++, Go) because you get efficient in-memory structures and type checking. In dynamic languages (Python, JavaScript) code generation is often an unnecessary obstacle. Avro supports it optionally, and an object container file is **self-describing**, so you can open it in Pig or Python and analyse it without generated code, much like a JSON file.
+- **A large file of many records.** The writer puts its schema once at the top of the file. Avro defines a file layout for this, called an object container file.
+- **A database where records are written one at a time, possibly under different schema versions.** Each record starts with a small **schema version number**, and a separate list holds every version of the schema. The reader looks up the version and fetches the matching schema. A service that stores such a list is called a **schema registry**, and it is the standard way to use Avro with the message system Kafka.
+- **A network connection between two programs.** The two sides agree on the schema when the connection is opened and use it for as long as the connection lasts.
 
-## 6. The merits of schemas
+### 6.3 Dynamically generated schemas
 
-Schema-based binary formats are an old idea. ASN.1 (1984) is still used in SSL certificates (DER encoding) and resembles protobuf with tag numbers. Databases have long had proprietary binary wire protocols as well. Advantages of schemas:
+The absence of tag numbers gives Avro one clear advantage: its schemas are easy to produce automatically. Suppose you want to export a relational database to a file. A program can read the table definitions and write an Avro schema with one field per column. If a column is added later, the program generates a new schema, and because fields are matched by name, old and new exports remain compatible. With protobuf or Thrift, someone would have to assign tag numbers by hand and make sure no number was ever reused. Avro was designed with generated schemas in mind.
 
-- **Compactness**: field names are omitted.
-- The schema is **documentation that is guaranteed to be up to date**, because decoding requires it.
-- A **database of schemas** lets you check forward and backward compatibility *before* deploying.
-- **Code generation** enables compile-time type checking.
+### 6.4 Code generation
 
-Schema evolution gives the same flexibility as schema-on-read JSON while offering better guarantees and tooling.
+Protobuf and Thrift depend on generated code. That suits **statically typed** languages such as Java, C++ and Go, where types are checked before the program runs: the generated classes are efficient and the compiler catches mistakes. In **dynamically typed** languages such as Python and JavaScript, a code-generation step is often more hindrance than help. Avro makes code generation optional. An Avro file carries its schema with it, so it is **self-describing**, and a script can open and explore it directly, much as it would a JSON file.
+
+## 7. The merits of schemas
+
+Binary formats with schemas are an old idea. A format called ASN.1, defined in 1984, uses tag numbers much as protobuf does and is still used inside the security certificates that protect web connections. Compared with schemaless text formats, schema-based formats have these advantages:
+
+- **They are smaller**, because field names are left out of the data.
+- **The schema is documentation that cannot go stale.** Decoding fails without the correct schema, so the schema has to match reality.
+- **Compatibility can be checked ahead of time.** With all versions of a schema stored in one place, a tool can verify that a proposed change is forward and backward compatible *before* anything is deployed.
+- **Generated code allows type checking** in statically typed languages.
+
+Schema evolution, done with these rules, gives much of the flexibility of schema-on-read while keeping firmer guarantees about what the data contains.
 
 > [!INTERVIEW]
-> "How do you evolve the event schema in your Kafka pipeline without breaking consumers?" Use Avro or protobuf with a **schema registry**, enforce a compatibility mode (BACKWARD, FORWARD or FULL), add only fields with defaults, never reuse tag numbers or remove required fields, and deploy consumers before producers when the change requires it. Mention that the registry rejects incompatible schemas at publish time.
+> A typical question: "How do you change the format of events in a Kafka pipeline without breaking the programs that read them?" A strong answer: use Avro or protobuf with a **schema registry**, and configure the registry to enforce a compatibility mode (backward, forward, or both) so that an incompatible schema is rejected when someone tries to publish it. Add only fields that have defaults. Never reuse a tag number or remove a required field. Decide the order of deployment from the direction of compatibility: when readers must understand a new format, upgrade the readers first.
 
-## 7. Pitfalls
+## 8. Pitfalls
 
-- **Reusing a protobuf tag number** after deleting a field corrupts old data. Use `reserved`.
-- **Old code rewriting data it does not understand.** If old code decodes a record with a new field, ignores the field, then re-encodes and writes it back, **the new field is lost**. Libraries such as protobuf preserve unknown fields, but your ORM-mapping layer may not.
-- **Adding an Avro field with no default** breaks old data reads.
-- **JSON big integers** silently rounded by JavaScript clients.
+- **Reusing a protobuf tag number** after deleting a field. Old data with that tag will be misread as the new field. Mark retired numbers `reserved`.
+- **Old code rewriting data it does not fully understand.** Suppose old code reads a record that contains a new field, ignores the field, changes something else, and writes the record back. If the unknown field was not carried along, **it is now gone**. The protobuf library preserves unknown fields, but a layer of your own code that copies records into its own objects may not.
+- **Adding an Avro field with no default.** New readers can no longer read old data.
+- **Large whole numbers in JSON.** A JavaScript client will round them without warning. Send identifiers as text.
 
-## 8. Summary
+## 9. Summary
 
-- Rolling upgrades mean old and new code coexist, so you need **backward** (new reads old) and **forward** (old reads new) compatibility.
-- Language-specific serialization is insecure and not portable. JSON/XML/CSV are ubiquitous but vague about types and lack binary strings.
-- **Protobuf/Thrift** use numeric **field tags**. Evolve by adding optional fields with new tags and never reusing tags.
-- **Avro** has no tags. The writer's and reader's schemas are resolved **by field name**, with defaults. It is the most compact and suits generated schemas.
+- Rolling upgrades and slow client updates mean old and new code run together. **Backward** compatibility (new reads old) and **forward** compatibility (old reads new) are both needed.
+- Language-specific encodings are unsafe and lock you into one language. JSON, XML and CSV are universal but vague about number types and cannot hold raw bytes.
+- **Protobuf and Thrift** identify fields by numeric **tags**. Evolve a schema by adding optional fields under new tags and never reusing a tag.
+- **Avro** has no tags. The writer's and reader's schemas are matched **by field name**, with defaults filling the gaps. It is the most compact and the best fit for automatically generated schemas.
+
+## Glossary
+
+- **Encoding (serialization)** - turning in-memory data into a sequence of bytes.
+- **Decoding (deserialization, parsing)** - turning bytes back into in-memory data.
+- **Pointer** - a memory address held by one object to refer to another.
+- **Backward compatibility** - newer code can read data written by older code.
+- **Forward compatibility** - older code can read data written by newer code.
+- **Schema evolution** - changing a data format over time while keeping old and new compatible.
+- **XML / CSV** - a text format of nested tags / a text format of comma-separated fields.
+- **Floating-point number** - a number format with limited precision that can hold fractions; exact for whole numbers only up to 2 to the power 53.
+- **Base64** - a way of writing arbitrary bytes using 64 printable characters.
+- **MessagePack / BSON** - binary encodings of JSON-style data that still include field names.
+- **Protocol Buffers (protobuf) / Thrift** - binary formats that need a schema and identify fields by tag number.
+- **IDL (interface definition language)** - a small language for declaring record types.
+- **Code generator** - a tool that turns a schema into classes in a programming language.
+- **Field tag** - the number that identifies a field in encoded protobuf or Thrift data.
+- **Varint** - a whole number written in as few bytes as its size requires.
+- **Hexadecimal** - a notation showing each byte as two characters from 0-9 and a-f.
+- **Avro** - a binary format with no tags, decoded by walking the schema.
+- **Writer's schema / reader's schema** - the schema used to encode / the schema the decoding program expects.
+- **Default value** - the value used for a field that is missing from the data.
+- **Union** - a type that allows one of several alternatives, such as null or a number.
+- **Schema registry** - a service that stores every version of each schema and can check compatibility.
+- **Self-describing** - carrying its own schema, so no outside information is needed to read it.
+- **Statically / dynamically typed** - types checked before the program runs / while it runs.
 
 ```quiz
 [

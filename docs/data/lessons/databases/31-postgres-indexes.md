@@ -1,5 +1,23 @@
 # PostgreSQL essentials and indexes in practice
 
+> **Before this lesson:** you need B-trees, pages, heap files, secondary, clustered, covering and concatenated indexes from [B-trees](#/lesson/databases/btrees); the write-ahead log from the same lesson; MVCC, snapshots and isolation levels from [ACID, read committed and snapshot isolation](#/lesson/databases/acid-weak-isolation); `FOR UPDATE` and write skew from [Lost updates, write skew and phantoms](#/lesson/databases/lost-updates-write-skew). You should be able to read a basic `SELECT ... WHERE ... ORDER BY` query.
+
+## In plain words
+
+**PostgreSQL** (often shortened to Postgres) is a free, open-source relational database, and the one you are most likely to be handed in a new job. This lesson is the practical counterpart to the theory in the earlier modules: what goes on inside it, and how to make its queries fast.
+
+Most of the lesson is about **indexes**, because most slow queries are slow for want of the right one. An everyday picture: a library with a million books shelved in the order they were bought. To find every book by one author you would have to walk past every shelf. The card catalogue fixes that: a cabinet of cards sorted by author, each card saying where the book stands. But a catalogue sorted by author is no help for finding books by year of publication. That needs a second cabinet, sorted by year. And every new book now means writing and filing one card per cabinet. An index is such a cabinet: it makes one kind of search fast, and it makes every addition a little slower.
+
+Three skills come out of this lesson:
+
+1. Knowing which searches a given index can serve, especially an index on several columns.
+2. Reading the database's own description of how it will run a query, called a **query plan**.
+3. Recognising the handful of mistakes behind most performance problems.
+
+Why this matters for a job: "this query is slow, what do you do?" is asked in almost every backend interview, and it is asked again by reality in the first month of almost every backend job. The answer is a short routine, given in section 6.
+
+## Why PostgreSQL
+
 The first twelve modules explained how databases work in principle. This last module is about using them well in day-to-day engineering, starting with the database you are most likely to meet: PostgreSQL. It is the default relational choice for new projects, it backs a large share of ML platforms (experiment tracking, feature metadata, labelling tools, application backends), and with extensions it also serves as a document store, a queue, a time-series store and a vector database.
 
 The goal here is practical fluency. After this lesson you should be able to describe what happens inside PostgreSQL when a query runs, choose the right index for a query, read an `EXPLAIN` plan, and recognise the handful of mistakes that cause most production performance problems. The runnable examples use SQLite, which ships with Python and shares the relevant index behaviour; wherever PostgreSQL differs, the text says so.
@@ -25,6 +43,8 @@ flowchart TB
 - **Write-ahead log.** Every change is appended to the WAL and flushed before the commit is acknowledged; data pages are written back lazily. The WAL also feeds streaming replicas, point-in-time recovery, and logical decoding for change data capture.
 - **MVCC.** An `UPDATE` does not overwrite a row. It writes a new row version and marks the old one as expired; a `DELETE` only marks. Readers see the versions that their snapshot allows, so readers never block writers and writers never block readers.
 - **Vacuum.** The price of MVCC is that dead row versions accumulate. **Autovacuum** reclaims them, refreshes planner statistics, and maintains the visibility map. A table that is updated heavily and vacuumed too rarely suffers **bloat**: it grows, and scans slow down.
+
+Two terms in that last point. The **planner** (or optimiser) is the part of the database that decides how to carry out a query. To choose well it keeps **statistics** about each table, such as how many rows it has and how common each value is. The **visibility map** is a small record of which pages contain only row versions that every transaction can see, which lets some operations skip those pages.
 
 > [!WARNING]
 > A transaction left open for hours - an abandoned notebook session, a forgotten `BEGIN` in a console - forces PostgreSQL to keep every row version newer than its snapshot. Vacuum cannot clean up, tables bloat, and performance degrades for everybody. Setting `idle_in_transaction_session_timeout` is cheap insurance.
@@ -63,6 +83,8 @@ FROM next WHERE jobs.id = next.id
 RETURNING jobs.id, jobs.payload;
 ```
 
+Reading that statement: the part inside `WITH next AS ( ... )` selects the ID of the oldest queued job and locks that row. `SKIP LOCKED` tells it to pass over any row another worker has already locked, so two workers never wait for each other and never pick the same job. The `UPDATE` then marks the chosen job as running, and `RETURNING` hands back its ID and contents in the same round trip.
+
 ## 3. What an index really is
 
 Without an index, the only way to find rows matching a condition is to read the whole table: a **sequential scan**, cost proportional to table size. An index is an additional data structure, maintained on every write, that lets the database find matching rows without looking at all of them. This is the trade-off met throughout this track - **work is moved from the read path to the write path**.
@@ -77,6 +99,8 @@ The default index is a **B-tree**: a balanced tree with a large fan-out, whose l
 
 Lookup cost is the tree height, which grows with the logarithm of the row count - three or four page reads for hundreds of millions of rows.
 
+The program below creates a table of 100,000 events and runs the same query before and after adding an index.
+
 ```python-run
 import sqlite3, time, random
 random.seed(42)
@@ -84,7 +108,7 @@ db = sqlite3.connect(":memory:")
 db.execute("CREATE TABLE events (id INTEGER PRIMARY KEY, user_id INT, kind TEXT, ts INT, amount REAL)")
 kinds = ["view"] * 90 + ["cart"] * 8 + ["purchase"] * 2          # skewed on purpose
 db.executemany("INSERT INTO events (user_id, kind, ts, amount) VALUES (?,?,?,?)",
-               [(random.randrange(20_000), random.choice(kinds), i, random.random() * 100) for i in range(300_000)])
+               [(random.randrange(20_000), random.choice(kinds), i, random.random() * 100) for i in range(100_000)])
 
 def plan(sql):
     return " | ".join(r[3] for r in db.execute("EXPLAIN QUERY PLAN " + sql))
@@ -99,6 +123,22 @@ print("before:", plan(q), f"-> {timed(q):.2f} ms")
 db.execute("CREATE INDEX idx_events_user ON events (user_id)")
 print("after: ", plan(q), f"-> {timed(q):.3f} ms")
 ```
+
+What each part does:
+
+- The first lines create an in-memory SQLite database with one table, `events`, and insert 100,000 rows with random user IDs.
+- `plan(sql)` asks the database how it would run a query. `EXPLAIN QUERY PLAN` returns rows describing the steps, and the fourth field of each row is the human-readable description.
+- `timed(sql, n=20)` runs a query 20 times and returns the average time in milliseconds.
+- The script prints the plan and the timing for a search by `user_id`, creates an index on that column, and prints both again.
+
+Typical output (times vary by machine, and the wording of plans varies slightly between SQLite versions):
+
+```
+before: SCAN events -> 2.79 ms
+after:  SEARCH events USING INDEX idx_events_user (user_id=?) -> 0.005 ms
+```
+
+`SCAN events` means the whole table was read. `SEARCH ... USING INDEX` means the index was used to go straight to the matching rows.
 
 A full scan became an index search, and the query got faster by two or three orders of magnitude. Notice what the experiment did *not* measure: every `INSERT` into `events` is now slightly slower, for ever.
 
@@ -134,6 +174,19 @@ print("2", plan("SELECT * FROM events WHERE user_id = 7 AND ts > 40000"))
 print("3", plan("SELECT * FROM events WHERE user_id = 7 ORDER BY ts DESC LIMIT 10"))
 print("4", plan("SELECT * FROM events WHERE ts > 49990"))
 print("5", plan("SELECT user_id, ts FROM events WHERE user_id = 7"))
+```
+
+What each part does:
+
+- The setup creates the same kind of table with 50,000 rows and one composite index on `(user_id, ts)`. `ANALYZE` makes the database gather statistics about the data.
+- The five `print` lines ask for the plan of five queries, numbered to match the discussion.
+
+```
+1 SEARCH events USING INDEX idx_user_ts (user_id=?)
+2 SEARCH events USING INDEX idx_user_ts (user_id=? AND ts>?)
+3 SEARCH events USING INDEX idx_user_ts (user_id=?)
+4 SCAN events
+5 SEARCH events USING COVERING INDEX idx_user_ts (user_id=?)
 ```
 
 Plans 1 to 3 search the index, and 3 needs no separate sort step. Plan 4 has to scan the table because `ts` is not a leading column. Plan 5 says **covering index**: every column the query needs is in the index, so the table is not touched at all.
@@ -174,6 +227,8 @@ CREATE INDEX idx_users_email_lower ON users (lower(email));
 | **Hash** | Equality only; rarely better than a B-tree | |
 | **HNSW / IVFFlat** (pgvector) | Approximate nearest-neighbour search on embeddings | next lesson |
 
+The program below tries a partial index and an expression index.
+
 ```python-run
 import sqlite3, random
 random.seed(5)
@@ -200,6 +255,24 @@ print(plan("SELECT * FROM jobs INDEXED BY idx_partial WHERE status = 'queued' OR
 print(plan("SELECT * FROM jobs WHERE lower(email) = 'user77@example.com'"))
 print(plan("SELECT * FROM jobs WHERE email LIKE '%77@Example.com'"))
 ```
+
+What each part does:
+
+- The table `jobs` gets 100,000 rows, about 98% with status `done`. Email addresses are stored with mixed capital letters.
+- Three indexes are created: a full index on `(status, created)`, a partial index on `created` covering only queued jobs, and an expression index on `lower(email)`.
+- `pages(name)` asks SQLite how many storage pages an index occupies. That information comes from an optional feature called `dbstat`. If your SQLite does not include it, the `try` block prints a note instead.
+- The last three lines print the plans of three queries. `INDEXED BY` in the first one tells SQLite which index to use.
+
+Typical output:
+
+```
+(dbstat not available in this build; the partial index holds ~2% of the rows)
+SCAN jobs USING INDEX idx_partial
+SEARCH jobs USING INDEX idx_email_l (<expr>=?)
+SCAN jobs
+```
+
+The first query reads the small partial index in order, which is exactly the queued jobs sorted by creation time. The second uses the expression index: `<expr>` stands for `lower(email)`. The third finds no usable index and scans the table.
 
 The last query has a leading wildcard, so no B-tree can help; in PostgreSQL the answer would be a trigram GIN index or full-text search.
 
@@ -275,6 +348,36 @@ With an index on `(created_at, id)`, every page costs the same.
 - Use `EXPLAIN (ANALYZE, BUFFERS)`; compare estimated with actual row counts; remember that **selectivity** decides whether an index is worth using.
 - Prefer **keyset pagination**, avoid N+1 queries, batch writes, build indexes **concurrently**, pool connections, and keep transactions short.
 
+## Glossary
+
+- **PostgreSQL (Postgres)** - a widely used open-source relational database.
+- **Connection pooler** - a component that shares a small number of database connections among many clients.
+- **Heap** (in PostgreSQL) - the file where a table's rows are stored in no particular order.
+- **Write-ahead log (WAL)** - the append-only record of every change, written before the change is acknowledged.
+- **MVCC** - keeping several versions of each row so readers and writers do not block one another.
+- **Vacuum / autovacuum** - the process that removes row versions no transaction can see any more.
+- **Bloat** - wasted space from dead row versions that have not been cleaned up.
+- **Planner (optimiser)** - the part of the database that chooses how to run a query.
+- **Statistics** - the database's summary of what a table contains, used by the planner.
+- **Visibility map** - a record of which pages hold only row versions visible to everyone.
+- **Upsert** - an insert that becomes an update if the row already exists.
+- **`RETURNING`** - a clause that hands back the rows a write statement affected.
+- **`SKIP LOCKED`** - an option that passes over rows locked by other transactions instead of waiting.
+- **Sequential scan** - reading an entire table to find matching rows.
+- **Index** - an extra structure that lets the database find rows without reading the whole table.
+- **Composite index** - an index on several columns, sorted by the first, then the second, and so on.
+- **Leftmost-prefix rule** - a composite index helps only queries that constrain its leading columns.
+- **Covering index / index-only scan** - an index containing every column a query needs / answering from the index without touching the table.
+- **Partial index** - an index over only the rows that satisfy a condition.
+- **Expression index** - an index on the result of a function applied to a column.
+- **GIN / GiST / BRIN** - PostgreSQL index types for multi-element values / geometric and range data / very large tables whose values follow physical order.
+- **Query plan (`EXPLAIN`)** - the database's description of how it will run a query.
+- **`EXPLAIN ANALYZE`** - running the query and reporting what really happened at each step.
+- **Selectivity** - the fraction of rows a condition matches; the smaller, the more an index helps.
+- **Cardinality** - the number of distinct values in a column.
+- **Keyset pagination** - fetching the next page by filtering on the last key seen, instead of using `OFFSET`.
+- **N+1 query problem** - one query for a list, then one more query per item in it.
+
 ```quiz
 [
   {"q": "Which query can efficiently use a B-tree index on (user_id, created_at)?",
@@ -308,7 +411,7 @@ With an index on `(created_at, id)`, every page costs the same.
   {"q": "What does SELECT ... FOR UPDATE SKIP LOCKED enable?",
    "options": ["Reading uncommitted data", "Several workers taking different rows from a queue table without waiting on each other", "Skipping the write-ahead log", "Index-only scans on locked tables"],
    "answer": 1,
-   "explain": "Each worker locks the rows it selects and simply passes over rows already locked by others, which gives a simple and safe job queue."}
+   "explain": "Each worker locks the rows it selects and passes over rows already locked by others, which gives a simple and safe job queue."}
 ]
 ```
 

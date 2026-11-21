@@ -1,5 +1,21 @@
 # Ordering, causality, Lamport clocks and total order broadcast
 
+> **Before this lesson:** read [Linearizability and the CAP theorem](#/lesson/databases/linearizability). You also need happens-before, concurrent operations and version vectors from [Detecting concurrent writes](#/lesson/databases/concurrent-writes); clock skew and logical clocks from [Unreliable clocks and process pauses](#/lesson/databases/clocks-pauses); and safety properties and fencing tokens from [Truth, majorities, fencing tokens](#/lesson/databases/truth-fencing).
+
+## In plain words
+
+Much of what a distributed database does comes down to one question: **in what order did things happen?** If every machine applies the same changes in the same order, every machine ends up with the same data. If they disagree about the order, they end up with different data. This lesson is about how machines with no shared clock can agree on an order.
+
+An everyday picture: three people write a report together by email. Nobody has a trustworthy clock, so "sent at 10:03" is not reliable. But some things are certain all the same: a reply was written after the message it answers, and a comment on a draft was written after the draft. Those certain relationships are **causal order**, the order of cause and effect. Other pairs of emails are unrelated; two people wrote them independently, and there is no fact about which came first.
+
+There is a neat trick for numbering the emails so that every reply gets a higher number than what it replies to. Each person keeps a counter, writes the counter on every email, and on receiving an email with a higher number jumps their own counter forward to match. These numbers are **Lamport timestamps**.
+
+They have a limit. Suppose two people each try to claim the last parking space by sending an email. Sorting all the emails afterwards will show who was first. But each person needs to know *now* whether the space is theirs, and neither can be sure the other has not sent an email with a lower number that is still in transit. For that, the group needs a shared notice board where each notice is pinned in a fixed position and nothing can later be inserted above it. That board is **total order broadcast**, and it is the idea underneath every strongly consistent database.
+
+Why this matters for a job: this lesson explains why some problems can be solved cheaply with counters and others need a heavy agreement protocol. That distinction is what lets you answer design questions such as "can we enforce unique usernames across datacenters using timestamps?" (no) and understand what systems such as ZooKeeper, etcd and Kafka are really providing.
+
+## One idea in many forms
+
 Look back over this track and one idea keeps returning in different clothes: **order**. The whole job of a leader in single-leader replication is to decide the order of writes, so that followers apply them identically. Serializability means transactions behave as if executed in *some* order. Linearizability means operations appear to happen in one well-defined order that agrees with real time. Timestamps and clocks were attempts to impose order on a messy world - which write happened later?
 
 This lesson treats ordering as a subject in its own right. It turns out that there are two notions of order, a weak one (causal order, a *partial* order) and a strong one (a *total* order), that the weak one is cheap and the strong one expensive, and that the strong one - in the form of **total order broadcast** - is equivalent to consensus. Understanding where the boundary lies explains why some things can be done with clever counters and others need a full consensus protocol.
@@ -24,7 +40,7 @@ A **total order** lets you compare any two elements: of two distinct integers on
 The two consistency models differ in exactly this way:
 
 - **Linearizability** imposes a total order. The system behaves as one copy with atomic operations, so for any two operations we can say which took effect first. There are no concurrent operations in this view: a single timeline.
-- **Causality** defines a partial order. Two operations are ordered if one happened before the other; if they are concurrent they are simply incomparable. The history is not a line but a graph that forks and merges - much like the commit history in Git, where branches are created by concurrent work and joined again by merges.
+- **Causality** defines a partial order. Two operations are ordered if one happened before the other. If they are concurrent, neither comes first, and they cannot be compared. The history is then not a single line but a diagram that splits and joins. It resembles the history of a shared document where two people edit separate copies at the same time and later combine their changes.
 
 ```mermaid
 flowchart LR
@@ -53,7 +69,7 @@ Tracking every dependency explicitly becomes unwieldy when clients read a lot be
 
 ## 2. Ordering with sequence numbers
 
-A better trick: give every operation a **sequence number** or **timestamp** from a **logical clock** - a counter, not an oscillator. Sequence numbers are compact, a few bytes, and they provide a total order.
+A better technique is to give every operation a **sequence number** or **timestamp** taken from a **logical clock**. A logical clock is a counter that a program increases by one for each event. It has nothing to do with the time of day. Sequence numbers are compact, a few bytes each, and they provide a total order, since any two numbers can be compared.
 
 We want that total order to be **consistent with causality**: if A happened before B, A's number is smaller. Concurrent operations may be ordered arbitrarily. A total order with that property captures all the causal information and adds some extra ordering on top.
 
@@ -84,6 +100,8 @@ There is a simple scheme that *is* consistent with causality, due to Leslie Lamp
 
 So information about "how far the counters have got" spreads along every message. An effect, which was produced after receiving a message from its cause, always gets a larger timestamp than the cause.
 
+The program below has three nodes, A, B and C, exchange two messages and do some work of their own.
+
 ```python-run
 class Node:
     def __init__(self, name): self.name, self.counter = name, 0
@@ -110,6 +128,25 @@ for ts in sorted(events):                                 # total order: by (cou
     print(ts)
 ```
 
+What each part does:
+
+- Each `Node` has a name and a counter starting at 0.
+- `local(what)` records an event on this node: it raises the counter by one and returns the timestamp as a tuple `(counter, node name, description)`.
+- `send(what)` is a local event whose timestamp travels with the message.
+- `receive(msg, what)` is the key rule. `msg[0]` is the counter that came with the message. The node first raises its own counter to at least that value with `max`, and then records the receive event, which adds one more.
+- The script has A make two edits and send the draft to B. C does something unrelated. B receives the draft and sends comments to C, who receives them.
+- `sorted(events)` orders the tuples by counter first and node name second. That is the total order.
+
+```
+(1, 'A', 'A edits draft')
+(1, 'C', 'C does unrelated work')
+(2, 'A', 'A edits draft again')
+(3, 'A', 'A sends draft to B')
+(4, 'B', 'B receives draft')
+(5, 'B', 'B sends comments to C')
+(6, 'C', 'C receives comments')
+```
+
 Node B had done nothing, yet its first event gets counter 4, because it must come after the message it reacts to. C's unrelated work at counter 1 is concurrent with A's events; the total order places it somewhere, arbitrarily but deterministically.
 
 **Lamport timestamps versus version vectors.** They serve different purposes. From two version vectors you can read off whether one operation built on the other or whether they were concurrent. A Lamport timestamp cannot - from two timestamps alone you cannot tell concurrency from causal order - but it always gives a total order, and it is far more compact. The practice problems `db-lamport-order` and `db-vector-clock-compare` let you implement both.
@@ -118,9 +155,11 @@ Node B had done nothing, yet its first event gets counter 4, because it must com
 
 Lamport timestamps yield a total order consistent with causality. That still does not solve some common problems. Take the classic: a system must guarantee that a username is claimed by one account only. Two users try to create the same name at the same moment.
 
-It seems the total order settles it: the request with the lower timestamp wins. That works for deciding the winner **afterwards**, once all the create-username operations in the system have been collected and compared. But a node that has just received a request must decide **now** whether to accept it. At that moment it does not know whether some other node is concurrently handling a request for the same name with a lower timestamp. To be sure, it would have to ask every other node - and if one of them is down or unreachable, the system stops.
+It seems the total order settles it: the request with the lower timestamp wins. That works for deciding the winner **afterwards**, once all the create-username operations in the system have been collected and compared. But a node that receives a request must decide **now** whether to accept it. At that moment it does not know whether some other node is concurrently handling a request for the same name with a lower timestamp. To be sure, it would have to ask every other node - and if one of them is down or unreachable, the system stops.
 
 The problem is that the total order only **emerges** after all operations are known. To implement a uniqueness constraint you need to know when the order is **final**: when you are certain that nothing can still be inserted before a given operation. Knowing that is the subject of total order broadcast.
+
+The short program below makes the difference between "afterwards" and "now" concrete.
 
 ```python-run
 # Two nodes each receive a "claim the name kiwi" request, concurrently.
@@ -137,6 +176,20 @@ decision = min(known_to_node1, key=lambda r: r["ts"])["user"]
 print("node1, deciding immediately, tells", decision, "that the name is theirs  <- wrong")
 print("to be safe node1 must hear from every node that no lower timestamp exists -> blocks if any node is down")
 ```
+
+What each part does:
+
+- Two requests for the name "kiwi" arrive at two different nodes at about the same moment. Each carries a Lamport timestamp. Raj's is lower: counter 6 against counter 7.
+- `min(..., key=lambda r: r["ts"])` picks the request with the smallest timestamp. Given both requests, it correctly picks Raj's.
+- `known_to_node1` is what node 1 has in front of it when it must answer Ana: only her request. Applying the same rule to that incomplete list picks Ana.
+
+```
+in hindsight the winner is: raj
+node1, deciding immediately, tells ana that the name is theirs  <- wrong
+to be safe node1 must hear from every node that no lower timestamp exists -> blocks if any node is down
+```
+
+The rule for choosing the winner is the same in both cases. What differs is how much node 1 knows. The timestamps define an order, but they cannot tell node 1 that it has seen everything that belongs before Ana's request.
 
 ## 3. Total order broadcast
 
@@ -170,6 +223,8 @@ Given total order broadcast, linearizable storage can be built on top. Take the 
 
 Because log entries reach all nodes in the same order, all nodes agree, when there are several concurrent claims, on which came first. Choosing the first as the winner and aborting the rest makes all nodes agree on whether a write was committed or aborted. The same pattern implements a linearizable compare-and-set.
 
+The program below implements those three steps, with a Python list standing in for the shared log.
+
 ```python-run
 class SharedLog:
     """Stands in for total order broadcast: one agreed sequence, visible to every node."""
@@ -193,6 +248,19 @@ p2 = claim("node2", "raj", "kiwi")
 p3 = claim("node3", "li",  "mango")
 for who, pos in (("ana", p1), ("raj", p2), ("li", p3)):
     print(who, "->", outcome(pos))
+```
+
+What each part does:
+
+- `SharedLog.append` adds a message to the end of the one agreed list and returns its position.
+- `claim(node, user, name)` is step 1: append a message saying "this user wants this name". It returns the position the message was given.
+- `outcome(my_pos)` is steps 2 and 3. It fetches the node's own message from the log, which stands for waiting until the message has been delivered back. Then it scans the log from the beginning for the first claim on the same name. `next(...)` returns the first item that matches. If that first claim is this node's own message, the claim is granted.
+- Three claims are appended: two for "kiwi" and one for "mango".
+
+```
+ana -> granted
+raj -> rejected (ana was first)
+li -> granted
 ```
 
 Compare with the previous snippet: here node 2 does not need to poll anyone. It waits until its own entry is delivered; at that point everything before it in the log is final.
@@ -246,6 +314,26 @@ flowchart LR
 - **Lamport timestamps** - (counter, node id), with every node fast-forwarding to the highest counter it sees - give a compact total order consistent with causality, but cannot detect concurrency and do not tell you when the order is final.
 - **Total order broadcast** delivers the same messages to all nodes in the same, fixed order. It underlies state machine replication, serialisable execution, logs and fencing tokens.
 - Total order broadcast, a linearizable compare-and-set register and **consensus** are equivalent problems: each can be built from the others.
+
+## Glossary
+
+- **Causality** - the relationship of cause and effect: a cause comes before its effect.
+- **Causally consistent** - never showing an effect without everything that led to it.
+- **Total order** - an order in which any two items can be compared.
+- **Partial order** - an order in which some pairs of items cannot be compared.
+- **Concurrent** - neither operation happened before the other.
+- **Causal dependency** - an earlier operation that a later one relied on.
+- **Sequence number** - a number given to an operation to mark its place in an order.
+- **Logical clock** - a counter used to order events, unrelated to the time of day.
+- **Lamport timestamp** - a pair (counter, node id), where every node raises its counter to the highest value it has seen.
+- **Version vector** - one counter per replica, able to show whether two versions are concurrent.
+- **Total order broadcast (atomic broadcast)** - delivering the same messages to every node, in the same fixed order.
+- **Reliable delivery** - if one node receives a message, all nodes do.
+- **State machine replication** - keeping replicas identical by having each apply the same operations in the same order.
+- **Shared log** - an append-only sequence of messages that every node reads in the same order.
+- **Increment-and-get** - raising a counter by one and returning the new value as one indivisible step.
+- **Linearizable register** - a single stored value that behaves as if there were one copy.
+- **Consensus** - several nodes reliably agreeing on a value despite failures.
 
 ```quiz
 [

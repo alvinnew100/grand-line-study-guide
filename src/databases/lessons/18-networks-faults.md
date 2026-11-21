@@ -1,5 +1,19 @@
 # Partial failures and unreliable networks
 
+> **Before this lesson:** you should know the words fault, failure, node and cascading failure from [Reliability and maintainability](#/lesson/databases/reliability-maintainability); percentiles and tail latency from [Scalability](#/lesson/databases/scalability-percentiles); timeouts and idempotence from [Modes of data flow](#/lesson/databases/dataflow-modes); and failover from [Single-leader replication](#/lesson/databases/leader-follower). No knowledge of networking is assumed.
+
+## In plain words
+
+A **distributed system** is a group of computers that work together by sending messages to one another over a network. Every replicated or partitioned database from the earlier lessons is one. This lesson is about the single fact that makes such systems hard: when you send a message and hear nothing back, you cannot know why.
+
+An everyday picture: you send a friend a text asking them to book a table for dinner, and no reply comes. Maybe the text never arrived. Maybe they have not looked at their phone. Maybe their phone is off. Or maybe they read it, booked the table, and their reply got lost. From where you sit, all four look identical: silence. If you now book a table yourself, you may end up with two. If you do nothing, you may end up with none. And however long you wait, the silence does not tell you which situation you are in.
+
+Computers on a network are in that position constantly. The only tool they have is to wait for a while and then guess, which is called a **timeout**. This lesson explains why the guess can be wrong, how to choose how long to wait, and why networks were built to behave this way.
+
+Why this matters for a job: most serious production incidents in backend systems involve a slow or unreachable machine being handled badly, with retries that double-charge customers or a "dead" server that was only slow. "Your call to another service timed out. What do you know?" is a classic interview question, and the correct answer ("almost nothing") is the starting point for designing anything reliable.
+
+## The comfortable world of one machine
+
 A program running on one computer lives in a comfortable world. An operation either works or the machine crashes; the same input gives the same result; if something is wrong with the hardware, the usual consequence is a total stop, not a subtly wrong answer. Computers are deliberately built this way - we would rather have a machine fail outright than lie.
 
 A program spread over several computers connected by a network has no such comfort. This lesson and the two after it are a deliberate tour of what can go wrong: the network (here), clocks and pauses (next), and what a node can know at all (after that). The tone is pessimistic on purpose. Anyone who designs or operates distributed data systems needs an accurate picture of the failure modes, because building reliable systems means assuming these things *will* happen and planning for them, not hoping they will not.
@@ -8,31 +22,35 @@ A program spread over several computers connected by a network has no such comfo
 
 The defining feature of a distributed system is the **partial failure**: some parts are broken while others work fine, and - this is the difficult bit - you often cannot tell which. A request you sent might have been processed or not. A node might be dead or merely slow. The failure is **nondeterministic**: try the same thing twice and you may get different results.
 
-On a single machine we simply do not design for half-working states. In a distributed system they are the normal condition, and the software has to keep functioning in spite of them.
+On a single machine nobody designs for a state in which half the computer works. In a distributed system such half-working states are the normal condition, and the software has to keep functioning in spite of them.
 
 ### Two philosophies of large-scale computing
 
 It helps to contrast two ways of building big systems.
 
-A **supercomputer** running a scientific simulation treats itself as one machine. It checkpoints the computation's state to durable storage every so often. When a node breaks, the whole job is stopped, the hardware is fixed, and the job resumes from the checkpoint. Partial failure is turned into total failure, which is easy to reason about.
+A **supercomputer** running a scientific simulation treats itself as one machine. Every so often it saves the complete state of the calculation to disk, which is called taking a **checkpoint**. When one of its nodes breaks, the whole job is stopped, the hardware is repaired, and the job starts again from the last checkpoint. A partial failure is deliberately turned into a total one, which is much easier to reason about.
 
 **Internet services** cannot work like this:
 
 - They are **online**. Users expect an answer at any hour; stopping everything for repairs is not acceptable.
 - They run on **commodity machines**, cheap and individually less reliable than specialised hardware.
-- They use ordinary IP and Ethernet networks rather than purpose-built interconnects.
+- They use ordinary, general-purpose networking equipment, the same technology as an office network, and not specially built high-reliability links.
 - With thousands of machines, **something is always broken**. If recovery meant stopping the whole system, it would never be running.
 - Being able to lose a node and carry on is also *useful*: it makes rolling upgrades possible, one node at a time.
 - Deployments span regions, with the comparatively slow and flaky public internet in between.
 
-So fault tolerance has to live in the software: we must build a **reliable system from unreliable components**. This is an old idea. Error-correcting codes carry data accurately over noisy radio links. TCP provides ordered, retransmitted delivery over IP, which promises nothing. The reliable layer is never perfect - a code can only correct so many flipped bits, and TCP cannot remove delay - but it hides most low-level faults and leaves a smaller set to reason about.
+So the ability to tolerate faults has to live in the software: we must build a **reliable system from unreliable components**. This is an old idea with well-known examples. Radio links are noisy, yet data crosses them accurately, because extra check information is sent along with it that lets the receiver detect and repair damaged bits. The internet itself is another example. Its basic delivery service, **IP** (Internet Protocol), promises nothing: a message may be lost, repeated or arrive out of order. On top of it runs **TCP** (Transmission Control Protocol), which numbers the pieces of a message, resends any that go missing, and puts them back in order. The reliable layer is never perfect. TCP cannot make a delayed message arrive sooner. But it hides most low-level faults and leaves a smaller set to think about.
 
 > [!WARNING]
 > It is tempting to assume that faults are rare and to deal with them "later". At scale rare is not rare: an event with a one-in-a-million chance per request happens a thousand times a day at a billion requests. Consider a wide range of faults, and create them artificially in testing to see what your system does.
 
 ## 2. What the network does to a request
 
-The systems in this track are **shared-nothing**: machines with their own memory and disk that communicate only by sending messages over a network. The networks in question are **asynchronous packet networks**: a node can send a message, and the network makes no promise about when it will arrive, or whether it will.
+The systems in this track are shared-nothing: each machine has its own memory and disk, and machines cooperate only by sending messages over a network. Three facts about those networks are needed here.
+
+- Data travels in small units called **packets**. A long message is cut into many packets, each of which is sent separately.
+- Between the sender and the receiver are devices that pass packets along. A **switch** connects machines within one building; a **router** connects networks to one another.
+- The networks in question are **asynchronous**: a machine can send a packet, and the network makes no promise about when it will arrive, or whether it will arrive at all.
 
 Suppose you send a request and wait for the reply. Any of the following can happen:
 
@@ -61,6 +79,8 @@ From the sender's seat all six look exactly the same: **nothing comes back**. Th
 
 The standard response is a **timeout**: wait a while, then give up and assume the reply is not coming. But note what the timeout does *not* tell you - whether the request was carried out. If you retry, an operation such as "charge the card" may run twice. This is the root of the need for idempotent requests, which appears again and again in later lessons.
 
+The program below is a toy model of that uncertainty. Each request can be lost on the way, can find the server down, or can be carried out with its reply lost.
+
 ```python-run
 import random
 random.seed(11)
@@ -85,6 +105,22 @@ executed = outcomes[("timeout", "reply lost - EXECUTED")]
 print(f"\nof all timeouts, {executed / timeouts:.0%} were actually executed -> blind retry would duplicate them")
 ```
 
+What each part does:
+
+- `send()` plays out one request. `random.random()` gives a number between 0 and 1, so `random.random() < 0.1` is true one time in ten. The function checks three possible mishaps in turn and returns a pair: what the client observes, and what really happened.
+- In three of the four outcomes the client observes the same thing, `"timeout"`. Only the second element of the pair, which the client cannot see, tells them apart.
+- The loop sends 100,000 requests and counts each (seen, truth) combination in the dictionary `outcomes`.
+- The last lines print each combination as a share of all requests, then work out what fraction of the timeouts concealed a request that had in fact been carried out.
+
+```
+ok       executed                      76.9%
+timeout  reply lost - EXECUTED          8.5%
+timeout  request lost - NOT executed   10.0%
+timeout  server down - NOT executed     4.6%
+
+of all timeouts, 37% were actually executed -> blind retry would duplicate them
+```
+
 In this toy model more than a third of the timeouts hide a request that *was* executed. The client cannot know which ones.
 
 ### Network faults do happen
@@ -99,12 +135,14 @@ Many components need to know whether a node is alive: a load balancer should sto
 
 Occasionally the environment gives explicit negative feedback:
 
-- If the machine is reachable and nothing listens on the port (the process crashed), the operating system refuses the connection with a `RST` or `FIN` packet. But if the node crashed *while* handling your request, you still do not know how far it got.
-- If the process died and the OS survives, a script can tell other nodes straight away, so they need not wait for a timeout.
-- The management interface of a switch may report that a link is down at the hardware level - if you have access to it.
-- A router that knows the target address is unreachable may answer with an ICMP "destination unreachable" - though routers have no magic knowledge either.
+- **A refused connection.** A program that accepts network requests listens on a numbered **port**. If the machine is up but the program has crashed, nothing is listening on its port, and the operating system refuses the connection at once, so the sender gets a quick, definite "no". But if the program crashed *while* handling your request, you still do not know how far it got.
+- **A notification from the machine itself.** If the program died and the operating system survived, a script on that machine can tell the other nodes immediately, so they need not wait for a timeout.
+- **A report from the network equipment.** A switch can report that the cable to a machine has gone dead, if you have access to the switch's management interface.
+- **An "unreachable" message.** A router that knows it cannot deliver to an address may send back a message saying so. Routers have no special knowledge of whether a machine is healthy, though.
 
 Fast negative feedback is welcome, but you cannot rely on it. And even a *positive* acknowledgement at the TCP level only says that the remote kernel received the bytes; the application may have crashed before handling them. **Only an explicit reply from the application proves that the request was carried out.**
+
+A further term: a **heartbeat** is a small message that a node sends at regular intervals for no purpose other than to show it is still alive. Other nodes watch for it, and a run of missing heartbeats is the usual sign that something is wrong.
 
 In general, then, you must assume that when something is wrong you may get no response at all. You retry a few times, wait for a timeout, and eventually declare the node dead.
 
@@ -113,7 +151,7 @@ In general, then, you must assume that when something is wrong you may get no re
 If a timeout is the only reliable detector, how long should it be? There is no right answer, only a trade-off.
 
 - **Long timeout:** a truly dead node is declared dead late. Meanwhile users wait or see errors.
-- **Short timeout:** faster detection, with a higher risk of declaring a node dead that was just slow for a moment - a load spike, a brief pause.
+- **Short timeout:** faster detection, with a higher risk of declaring a node dead when it was only slow for a moment, because of a spike in load or a brief pause.
 
 A false positive is costly. If the node was alive and in the middle of an action, and another node takes over, the action may be performed twice. And failover itself creates load: responsibilities move to other nodes, data may be copied. If the node was slow *because the system is overloaded*, moving its work to others makes them slower too; they in turn miss their heartbeats and are declared dead. In the worst case this becomes a **cascading failure** in which all nodes declare each other dead and everything stops.
 
@@ -123,13 +161,15 @@ Imagine, for a moment, a network that guaranteed a maximum delay $d$ for every p
 
 The variability of packet delay is mostly **queueing**, like cars at a junction:
 
-- Several nodes send to the same destination at once; the **switch** queues the packets and feeds them into the outgoing link one by one. If the queue is full, packets are dropped and must be resent, even though nothing is "broken".
-- At the destination, if all CPU cores are busy, the **operating system** queues the incoming request until the application can take it.
-- In **virtualised** environments a virtual machine is regularly paused for tens of milliseconds while another uses the core. Incoming data waits in the hypervisor.
-- **TCP flow control** makes the *sender* hold data back to avoid overloading the link or the receiver - a queue before the data even enters the network.
-- TCP treats a packet as lost if no acknowledgement arrives in time, and **retransmits**. The application does not see the loss, only the extra delay.
+- Several machines send to the same destination at the same moment. The switch has to feed their packets into one outgoing cable one at a time, so it holds the rest in a queue. If the queue fills up, further packets are thrown away and have to be sent again, although nothing is broken.
+- At the destination, if all processor cores are busy, the operating system holds the incoming request in a queue until the application is ready for it.
+- In the cloud, your program runs in a virtual machine that shares a real processor with other virtual machines. The software that shares it out, called a **hypervisor**, regularly pauses one virtual machine for some tens of milliseconds to let another run. Data arriving during a pause has to wait.
+- TCP limits how fast a sender may send, to avoid overwhelming the network or the receiver. This is **flow control**, and it means data can queue up at the sender before it has even entered the network.
+- TCP assumes a packet is lost if it has not been acknowledged within a certain time, and sends it again. The application never sees the loss. It sees only the extra delay.
 
 In public clouds and multi-tenant data centres you also share switches, network interfaces and CPUs with strangers. A **noisy neighbour** running a heavy batch job can stretch your delays without warning.
+
+The next program measures how queueing delay grows as a server gets busier. It simulates a single server with requests arriving at random moments.
 
 ```python-run
 import random
@@ -155,13 +195,30 @@ for u in (0.3, 0.6, 0.8, 0.9, 0.95):
     print(f"{u:>4.0%}  {p50:6.2f}  {p99:7.1f}  {mx:7.1f}")
 ```
 
+What each part does:
+
+- `utilisation` is the fraction of time the server is busy: 0.3 means it is working 30% of the time.
+- Each request takes 1 millisecond to serve on average (`service_mean`). To hit the wanted utilisation, requests must arrive on average every `service_mean / utilisation` milliseconds.
+- `random.expovariate` produces random gaps and random service times whose averages are the given values, a standard model for independent arrivals.
+- `t` is the arrival time of the current request. `free_at` is the moment the server finishes the previous one. A request starts at whichever is later: `start = max(t, free_at)`. If the server is still busy when the request arrives, the difference is time spent queueing.
+- `free_at - t` is the request's total response time: waiting plus service. All 40,000 are collected, sorted, and the median, the 99th percentile and the maximum are returned.
+
+```
+load   median    p99      max   (ms)
+ 30%    0.97      6.4     12.5
+ 60%    1.74     12.1     29.4
+ 80%    3.66     23.6     45.5
+ 90%    6.36     41.2     57.7
+ 95%   10.53     58.3     83.0
+```
+
 With plenty of spare capacity queues drain quickly. Near full utilisation every percentile climbs roughly tenfold, and in absolute terms the tail is what hurts: a 99th percentile of about 6 ms at 30 percent load becomes roughly 60 ms at 95 percent. A timeout tuned on a quiet day will fire constantly on a busy one.
 
 ### Measure, then adapt
 
 Timeouts therefore have to be chosen **experimentally**: measure the distribution of round-trip times over a long period and across many machines, combine it with what your application can tolerate, and pick a point on the trade-off.
 
-Better still, let the system adjust by itself. Rather than fixed timeouts, it can continuously track response times and their variability (the **jitter**) and move the threshold accordingly. The **phi accrual failure detector**, used in Akka and Cassandra, does this: instead of a yes/no verdict it outputs a suspicion level that rises the longer a heartbeat is overdue relative to the observed history. TCP's retransmission timeout works on the same principle.
+Better still, let the system adjust the timeout by itself. It can keep measuring how long responses take and how much that time varies (the variation is called **jitter**), and move the threshold to match. A well-known method of this kind is the **phi accrual failure detector**, used in the Akka framework and in Cassandra. It does not give a yes-or-no verdict. It outputs a suspicion level, called phi, that rises the longer a heartbeat is overdue compared with the pattern seen so far. TCP decides when to resend a packet on the same principle.
 
 ```python-run
 import random, statistics, math
@@ -187,21 +244,33 @@ for label, jitter in (("steady network", 0.02), ("jittery network", 0.4)):
     print(f"{label:<16} declares the node dead after {silent:.1f}s of silence")
 ```
 
+What each part does:
+
+- `heartbeat(now)` is called whenever a heartbeat arrives. It records the gap since the previous one, keeping the most recent 100 gaps.
+- `suspicion(now)` works out how unusual the current silence is. It computes the mean of the past gaps and their **standard deviation**, a measure of how much they vary. `z` expresses how far beyond the usual gap the current silence has gone, in units of that variation. `p_later` is the estimated chance that a heartbeat is merely late and still on its way. The function returns phi, which grows as that chance shrinks: phi of 1 means about 10% chance the node is still alive, phi of 3 means about 0.1%.
+- The loop tries two networks. On each, 200 heartbeats arrive about one second apart, with small random variation on the steady network and large variation on the jittery one.
+- The line starting `silent =` then imagines the heartbeats stopping and finds how many seconds of silence it takes for phi to pass 8.
+
+```
+steady network   declares the node dead after 1.2s of silence
+jittery network  declares the node dead after 3.0s of silence
+```
+
 The same detector waits much longer on a jittery network before raising the alarm, because long gaps are normal there. A fixed timeout would be either too jumpy on one network or too sluggish on the other.
 
 ## 5. Why not a network with guaranteed delays?
 
 The old fixed-line telephone network is remarkably dependable: delayed audio and dropped calls are rare. Why can data networks not be like that?
 
-A telephone call sets up a **circuit**: a fixed amount of bandwidth is reserved along the whole route for the duration of the call - for example a fixed number of bits in every time frame of an ISDN line. Because the capacity is reserved, no queueing occurs, and the end-to-end delay has a fixed upper bound. Such a network is **synchronous**; it offers a **bounded delay**.
+A telephone call sets up a **circuit**: a fixed amount of carrying capacity is reserved along the entire route for as long as the call lasts. The capacity of a link, the amount of data it can carry per second, is its **bandwidth**. Because the call's share is reserved, its data never waits in a queue, and the delay from end to end has a fixed upper limit. A network that works this way is called **synchronous**, and it offers a **bounded delay**.
 
-Ethernet and IP are **packet-switched**. Nothing is reserved; each packet takes whatever capacity happens to be free, and waits in a queue if none is. A TCP connection is not a circuit.
+The internet, and the networks inside datacenters, are **packet-switched**. Nothing is reserved. Each packet takes whatever capacity happens to be free at that moment and waits in a queue if none is. A TCP connection is not a circuit.
 
-The reason for this design is **bursty traffic**. A phone call needs a constant bit rate for its duration, so a fixed reservation suits it. Fetching a web page, sending an email or transferring a file has no natural bit rate - we simply want it done as fast as possible. A circuit sized too small would make the transfer needlessly slow; sized too large, it would waste capacity, or could not be set up at all. Packet switching lets every sender use whatever is available at the moment, which gives far better utilisation of the wires.
+The reason for this design is **bursty traffic**, meaning traffic that comes in sudden bursts with quiet periods between. A phone call needs the same number of bits every second for its whole duration, so a fixed reservation suits it. Loading a web page or transferring a file has no natural rate: the aim is to finish as quickly as possible, and then nothing is sent until the next request. A circuit reserved too small would make the transfer needlessly slow. One reserved too large would waste capacity while idle. Packet switching lets every sender use whatever is free at the moment, which makes far better use of the cables.
 
-That is a deliberate **cost-benefit choice**. Static allocation gives predictable latency and poor utilisation, which makes it expensive. Dynamic sharing gives high utilisation and unpredictable latency, which makes it cheap. The same trade-off governs CPUs: a core shared dynamically among threads is used efficiently, with variable response time; a core reserved for one task is predictable and mostly idle. **Variable delay is not a law of nature; it is the price of cheap, shared infrastructure.**
+That is a deliberate **cost-benefit choice**. Reserving capacity gives predictable delay and poor use of the equipment, which makes it expensive. Sharing capacity as needed gives good use of the equipment and unpredictable delay, which makes it cheap. The same trade-off applies to processors: a core shared among many tasks is used efficiently and responds in a variable time, while a core reserved for one task responds predictably and sits mostly idle. **Variable delay is not a law of nature. It is the price of cheap, shared infrastructure.**
 
-Quality-of-service mechanisms and admission control can emulate circuits on packet networks, but they are not enabled in ordinary multi-tenant data centres or on the public internet. So for the systems we build, we must assume that congestion, queueing and unbounded delay will occur, and that there is no "correct" timeout.
+Techniques exist that imitate circuits on packet networks by giving some traffic priority, but they are not switched on in ordinary shared datacenters or on the public internet. So for the systems we build, we must assume that congestion, queueing and unbounded delay will occur, and that there is no "correct" timeout.
 
 > [!INTERVIEW]
 > A favourite question: "The client's call to your service timed out. What do you know?" The answer: almost nothing - the request may not have arrived, may be in progress, or may have completed with the reply lost. Follow with the consequences: retries must be safe (idempotency keys, or naturally idempotent operations), retries need backoff and jitter so they do not amplify overload, and "declaring a node dead" is a guess that the rest of the system must be able to survive when it is wrong.
@@ -226,6 +295,35 @@ Quality-of-service mechanisms and admission control can emulate circuits on pack
 - Delays are **unbounded** mainly because of **queueing** - in switches, operating systems, hypervisors and TCP - made worse by shared, multi-tenant infrastructure. Tail latency rises sharply as utilisation approaches capacity.
 - Choose timeouts from **measurements**, or use adaptive detectors such as **phi accrual**.
 - Bounded-delay (circuit-switched) networks exist but waste capacity on bursty traffic; packet switching trades predictability for **utilisation and cost**.
+
+## Glossary
+
+- **Distributed system** - several computers cooperating by exchanging messages over a network.
+- **Partial failure** - some parts of a system are broken while others work, often without a way to tell which.
+- **Nondeterministic** - not giving the same outcome every time.
+- **Checkpoint** - a saved copy of a computation's complete state, from which it can be restarted.
+- **IP / TCP** - the internet's basic, unreliable packet delivery / the layer on top that resends lost packets and restores their order.
+- **Packet** - a small unit of data sent across a network.
+- **Switch / router** - a device connecting machines within a network / a device connecting networks.
+- **Asynchronous network** - a network that gives no promise about when, or whether, a message arrives.
+- **Timeout** - giving up waiting for a reply after a chosen time.
+- **Network partition (netsplit)** - a fault that cuts one group of machines off from another.
+- **Port** - a number identifying one program's network endpoint on a machine.
+- **Heartbeat** - a regular small message a node sends to show it is alive.
+- **False positive** (in failure detection) - declaring a node dead when it is alive.
+- **Unbounded delay** - no upper limit on how long a message can take.
+- **Queueing** - waiting in line because the resource ahead is busy.
+- **Hypervisor** - the software that shares one physical machine among several virtual machines.
+- **Flow control** - TCP limiting how fast a sender sends.
+- **Noisy neighbour** - another customer's workload on shared equipment that slows yours down.
+- **Jitter** - variation in delay from one message to the next.
+- **Phi accrual failure detector** - a failure detector that outputs a suspicion level based on the history of heartbeat gaps.
+- **Standard deviation** - a measure of how much a set of values varies around its average.
+- **Circuit** - capacity reserved along a route for the length of a connection.
+- **Bandwidth** - the amount of data a link can carry per second.
+- **Synchronous network / bounded delay** - a network with reserved capacity / a guaranteed maximum delay.
+- **Packet switching** - sending each packet separately through whatever capacity is free.
+- **Bursty traffic** - traffic that arrives in bursts separated by quiet periods.
 
 ```quiz
 [

@@ -1,42 +1,59 @@
 # Relational vs document models
 
-Data models may be the most important part of a software design, because they shape *how we think about the problem* as well as how the code is written. Applications are built in layers. Each layer represents its data in terms of the next model down:
+> **Before this lesson:** you should know what a database, a client and an API are, from [Reliability and maintainability](#/lesson/databases/reliability-maintainability). You should have seen a SQL query such as `SELECT name FROM users` and be able to read a Python dictionary and a `for` loop. Nothing else is assumed.
 
-1. The application developer models the real world as **objects and data structures**, with APIs that manipulate them.
-2. Those structures are stored in a **general-purpose data model**: relational tables, JSON documents or a graph.
-3. Database engineers decide how that model is represented as **bytes** in memory, on disk and on the network.
-4. Hardware engineers represent bytes as electrical currents, magnetic fields and pulses of light.
+## In plain words
 
-Each layer hides the complexity of the one below behind a clean model. This lesson compares the two dominant general-purpose models, **relational** and **document**. The next one covers **graphs**.
+A **data model** is the shape in which a database lets you describe your information. Two shapes dominate.
 
-## 1. A short history
+- In the **relational model**, data lives in **tables**. A table is a grid, like a spreadsheet tab: each **row** is one thing (one customer, one order) and each **column** is one fact about it (name, price).
+- In the **document model**, data lives in **documents**. A document is a self-contained record that can hold lists and smaller records inside it, like a filled-in form with attached pages.
 
-- **Hierarchical model** (IBM IMS, 1960s). Data is one big tree of records. It handles one-to-many relationships well and many-to-many relationships badly, and it has no joins.
-- **Network model** (CODASYL). Records can have multiple parents. Programmers navigate **access paths** by following pointers by hand. That makes queries brittle: change the access path and the code must change.
-- **Relational model** (Codd, 1970). Data is organised into **relations** (tables) of **tuples** (rows). There are no access paths. The **query optimizer** decides how to execute a query and which indexes to use. New indexes can be added without changing queries.
+An everyday picture: think of how a clinic could keep patient information. One way is a set of ledgers, one for patients, one for appointments, one for prescriptions, each line carrying a patient number so the ledgers can be matched up. That is the relational way. The other way is one folder per patient with everything about that person inside. That is the document way. The folder is wonderful when you want everything about one patient. The ledgers are wonderful when you want to ask "which patients were prescribed this drug?", a question that would mean opening every folder.
 
-The relational model dominated from the mid-1980s for transaction processing and batch work and outlived several challengers (object databases, XML databases). Around 2010 **NoSQL** arrived. The name started as a Twitter hashtag for a meetup and was later back-filled as "Not Only SQL". The forces behind it:
+Why this matters for a job: "would you use SQL or NoSQL here?" is among the most common system-design questions, and the wrong data model is expensive to change once a product has real data in it. The right answer is never a brand name. It is a statement about how the pieces of data relate to each other and how they will be read. This lesson gives you the words for that answer.
 
-- a need for greater scalability than relational databases offered at the time (very large datasets, very high write throughput),
-- a preference for free and open source software,
-- specialised query operations the relational model did not support well,
-- a feeling that fixed relational schemas got in the way, and an appetite for data models that bend more easily.
+## 1. Models stacked on models
 
-The likely future is **polyglot persistence**: relational databases used alongside a variety of non-relational stores.
+Software is built in layers, and each layer describes its data using the layer below.
 
-## 2. The object-relational mismatch
+1. An application programmer thinks about real things (people, orders, sensors) and represents them as **objects** or **data structures** in a programming language: dictionaries, lists, classes.
+2. To store those structures, the programmer expresses them in a **general-purpose data model**: tables, documents, or a graph.
+3. The engineers who build the database decide how tables or documents become **bytes** in memory and on disk. A byte is the basic unit of computer storage, a number from 0 to 255.
+4. Hardware engineers decide how bytes become electrical charges and magnetic fields.
 
-Most application code is object-oriented, and an awkward translation layer is needed between objects and tables. Kleppmann calls this the **impedance mismatch**. ORMs such as Hibernate or ActiveRecord reduce the boilerplate but cannot hide the differences completely.
+Each layer hides the mess below it behind a clean surface, which is the idea of abstraction from the first lesson. This lesson is about layer 2. It compares the relational and document models. The next lesson covers the third option, graphs.
 
-Consider a résumé or LinkedIn-style profile. It has one `user_id`, a name, a summary, and then **one-to-many** lists: positions held, education, contact info.
+## 2. A short history
 
-**Relational options:**
+Knowing where the models came from explains why they look the way they do.
 
-- normalised: separate `positions`, `education` and `contact_info` tables, each with a foreign key to `users`,
-- structured or JSON columns (SQL:1999 added structured types; PostgreSQL has `jsonb`),
-- store the whole thing as a text blob and let the app interpret it, which makes it impossible to query inside.
+- **Hierarchical model** (IBM's IMS, 1960s). All data formed one big tree: a record had one parent and any number of children. This suits **one-to-many** relationships, where one thing owns several others, such as one customer with many orders. It handles **many-to-many** relationships badly (many students take many courses), and it had no way to combine records from different branches.
+- **Network model** (a standard known as CODASYL). A record could have several parents. To reach a record, the programmer wrote code that followed links from record to record by hand. The route taken is called an **access path**. If the layout of the data changed, every program that walked the old route had to be rewritten.
+- **Relational model** (proposed by Edgar Codd in 1970). Data is laid out in the open as tables. The formal names are **relation** for a table and **tuple** for a row. There are no access paths in your code. You state what you want, and a part of the database called the **query optimizer** works out the route. An **index**, an extra structure that speeds up lookups in the way a book's index does, can be added later without changing a single query.
 
-**Document option:** a single JSON document:
+The relational model won, and by the mid-1980s it was the default choice for business data. It outlasted several challengers. Around 2010 a new wave arrived under the name **NoSQL**. The word began as a label for a meetup and was later explained as "Not Only SQL". Several forces were behind it:
+
+- a need to handle more data, or more writes per second, than the relational databases of the day managed comfortably,
+- a preference for free, open-source software,
+- kinds of query that the relational model expressed awkwardly,
+- frustration with rigid table definitions, and a wish for something more flexible.
+
+The outcome was not a replacement. Most companies now use relational databases alongside other kinds of store, each for the job it does best. That mix is called **polyglot persistence**.
+
+## 3. The object-relational mismatch
+
+Most application code is **object-oriented**: it handles data as objects, where one object can contain lists of other objects. Tables are flat. So a translation step is needed between the two, and it is awkward enough to have a name, the **impedance mismatch**. Libraries called **ORMs** (object-relational mappers, such as Hibernate or ActiveRecord) automate much of the translation, but they cannot make the difference disappear.
+
+A concrete case: a professional profile, like a résumé. Each profile has one user ID, one name and one summary. It also has lists: several jobs held, several schools attended, several ways to get in touch. Each of those is a one-to-many relationship.
+
+**How a relational database stores it.** There are three common choices:
+
+- Put jobs, schools and contact details in separate tables. Each row in those tables carries the ID of the user it belongs to. A column that holds the ID of a row in another table is called a **foreign key**.
+- Keep the lists inside one column using a structured type. PostgreSQL, for example, has a column type called `jsonb` for this.
+- Store the whole profile as a blob of text and let the application interpret it. The database then cannot search inside it.
+
+**How a document database stores it.** As one document, usually written in **JSON** (JavaScript Object Notation), a text format made of names paired with values:
 
 ```json
 {
@@ -54,23 +71,27 @@ Consider a résumé or LinkedIn-style profile. It has one `user_id`, a name, a s
 }
 ```
 
-The document has better **locality**. Fetching the profile is one lookup, while the normalised version needs several queries or a multi-way join. The one-to-many relationships form a **tree**, and JSON makes the tree explicit.
+Reading the notation: curly braces `{ }` enclose a record made of `"name": value` pairs. Square brackets `[ ]` enclose a list. So `"positions"` is a list holding two small records, each with a job title and an organisation.
 
-## 3. Many-to-one and many-to-many relationships
+The document has better **locality**, meaning that data used together is stored together. Fetching the profile is one lookup. The version with separate tables needs several queries, or one query that combines several tables. Notice also that the one-to-many relationships form a **tree**: the user at the root, lists branching off it. JSON writes that tree down directly.
 
-Why is `region_id` an ID and not the string `"Greater London"`? Using IDs (**normalisation**) has several benefits:
+## 4. Many-to-one and many-to-many relationships
 
-- consistent style and spelling across profiles,
-- no ambiguity, for example between several cities with the same name,
-- ease of updating, because the name lives in one place,
-- localisation, since the display name can be translated,
-- better search, because a hierarchy of regions can be encoded.
+Look again at the document. Why does it say `"region_id": "eu:gb:london"` and not the words "Greater London"?
 
-The ID is meaningful only to the database and never needs to change, while anything human-meaningful might need to change one day. If the information were duplicated, every copy would need updating. That causes write overhead and risks **inconsistency**. Removing duplication is the core idea of normalisation.
+Storing an ID that points to the real name, kept in one place, is called **normalisation**. It has several advantages:
 
-Normalisation creates **many-to-one** relationships: many people live in one region. Those need **joins**. Relational databases make joins easy. Document databases historically had weak join support, so the application had to emulate the join with multiple queries.
+- Every profile uses the same spelling and style.
+- There is no confusion between two cities with the same name.
+- A rename is one change in one place.
+- The name can be shown in the reader's own language.
+- Search improves, because the database can know that London is inside Great Britain.
 
-Data also tends to become *more interconnected* as features are added. Suppose organisations and schools become entities with their own pages, and users can write **recommendations** for each other that show the recommender's current photo. You now have **many-to-many** relationships, and the tree shape breaks down.
+The underlying principle: an ID means nothing to humans, so it never needs to change. Anything meaningful to humans may need to change someday. If the meaningful text is copied into a thousand profiles, all thousand copies must be updated, which costs time and risks missing some. Copies that disagree are called an **inconsistency**. Normalisation is the removal of such duplication.
+
+Normalisation creates **many-to-one** relationships: many people live in one region. To show a profile, the region's name has to be looked up from its ID. Combining rows from two tables through a shared value is called a **join**. Relational databases are built around joins. Document databases historically supported them poorly, so the application had to do the lookup itself with extra queries.
+
+There is a second problem, and it grows over time. Data tends to become more interconnected as a product gains features. Suppose organisations and schools get their own pages, so a profile should link to them and not merely name them. Suppose users can write recommendations for one another, and each recommendation should show the writer's current photo. One user now connects to many organisations and each organisation to many users. These are **many-to-many** relationships, and the tidy tree no longer describes the data.
 
 ```mermaid
 graph LR
@@ -82,60 +103,12 @@ graph LR
   U2 -->|lives in| R1
 ```
 
+In the diagram each box is a record and each arrow is a relationship. Two users point at the same organisation and the same region, and one user points at another. No single box can be the root with everything else nested inside it.
+
 > [!NOTE]
-> Document databases reopened a 1970s debate. CODASYL's network model and today's document stores both struggle with many-to-many relationships. The relational answer was declarative joins planned by an optimizer. Once records point at other records, the two models handle it in much the same way: both use a unique identifier to refer to the related item, called a *foreign key* in one and a *document reference* in the other.
+> Document databases reopened an argument from the 1970s. The old network model and today's document stores both find many-to-many relationships difficult. The relational answer was joins, planned by the optimizer. Once records refer to other records, the two models do the same thing underneath: each stores a unique identifier of the related item. Relational databases call it a *foreign key*; document databases call it a *document reference*.
 
-## 4. Relational vs document databases today
-
-### 4.1 Which model leads to simpler application code?
-
-- If the data is **document-like**, a tree of one-to-many relationships usually loaded all at once, the document model is a good fit. **Shredding** it into many tables leads to cumbersome schemas and complicated code.
-- Limitations of documents: you cannot refer directly to a nested item (you say "the second position in the list for user 251", similar to an access path), and **join support** may be weak.
-- **Many-to-many** relationships take away most of the document model's charm. Denormalisation leaves you keeping copies consistent, and application-side joins are slower and more complex than joins inside the database.
-- When **almost everything links to everything else**, documents are a poor fit, tables cope, and a **graph** model feels the most natural.
-
-### 4.2 Schema flexibility: schema-on-read vs schema-on-write
-
-Calling document databases "schemaless" is misleading. The code that reads the data assumes *some* structure, so there is an **implicit** schema that the database does not enforce.
-
-- **Schema-on-write** (relational): the structure is declared up front and the database rejects any write that does not match it. It is analogous to **static** type checking.
-- **Schema-on-read** (document): the structure is implicit and interpreted only when data is read. It is analogous to **dynamic** type checking.
-
-The difference shows up when the format changes. Say you want to split `name` into `first_name` and `last_name`.
-
-Schema-on-read: write new documents with the new fields and handle old ones in code:
-
-```python
-if user and user.get("name") and not user.get("first_name"):
-    # documents written before Dec 8 2023 lack first_name
-    user["first_name"] = user["name"].split(" ")[0]
-```
-
-Schema-on-write: run a migration:
-
-```sql
-ALTER TABLE users ADD COLUMN first_name text;
-UPDATE users SET first_name = split_part(name, ' ', 1);      -- PostgreSQL
-```
-
-`ALTER TABLE` is fast in most databases. MySQL historically copied the whole table on `ALTER TABLE`, which could mean minutes or hours of downtime, although tools and newer versions mitigate this. An `UPDATE` that rewrites every row of a big table is slow in any database. You can leave the new column `NULL` by default and fill it at read time, as a document database would.
-
-Schema-on-read is advantageous when the items in a collection are **heterogeneous**, for example:
-
-- many different types of objects, each impractical to put in its own table,
-- structure determined by external systems you do not control, which may change at any time.
-
-When all records are expected to share a structure, an explicit schema is a useful mechanism for documenting and enforcing it.
-
-### 4.3 Data locality for queries
-
-A document is usually stored as one continuous string (JSON, or a binary variant such as MongoDB's BSON). If the app often needs the *whole* document, locality is a performance win, because related data split across tables needs multiple index lookups and disk seeks. The advantage applies only when you need large parts of the document at once. On an update, the whole document typically has to be rewritten, and only modifications that do not change the encoded size can be done in place. The advice is to keep documents fairly small and avoid writes that grow them.
-
-Locality is not unique to documents. Google **Spanner** can interleave child-table rows within a parent row. Oracle has **multi-table index cluster tables**. The **column-family** concept in Bigtable, Cassandra and HBase serves a similar purpose.
-
-### 4.4 Convergence
-
-The models are converging. PostgreSQL (since 9.3), MySQL (5.7) and DB2 support JSON documents, including indexing inside them. Document stores such as RethinkDB support relational-like joins, and MongoDB drivers resolve references automatically (with `$lookup` in the aggregation pipeline). Databases that offer both styles side by side are probably heading in the right direction.
+The program below shows the trade-off with a tiny dataset held in Python dictionaries.
 
 ```python-run
 # Same data, two shapes: normalized (relational) vs embedded (document).
@@ -162,9 +135,89 @@ print("relational read after rename:", profile_relational(251)["region"])
 print("document copies now stale   :", stale, "-> must update", len(stale), "docs")
 ```
 
-## 5. Query languages: declarative vs imperative
+What each part does:
 
-SQL is **declarative**: you specify the pattern of the data you want (which conditions, which transformations such as sort or group) and not *how* to get it. IMS and CODASYL were **imperative**: code walked records step by step.
+- `users`, `regions` and `positions` play the part of three tables. `users` maps a user ID to that user's fields. `positions` is a list of pairs `(user ID, job title)`.
+- `profile_relational(uid)` builds a profile at the moment it is asked for. It looks up the user, then follows `region_id` into `regions` (a join done by hand), then collects the job titles whose owner matches. The expression `[t for (owner, t) in positions if owner == uid]` is a list comprehension: it walks through `positions` and keeps the title from every pair that belongs to this user.
+- `docs` builds one finished document per user, each containing its own copy of the region's name. Storing copies like this is **denormalisation**.
+- Then the region is renamed in the `regions` table, and `stale` lists every document whose copy no longer matches.
+
+The output is:
+
+```
+{'name': 'Ada', 'region': 'Greater London', 'positions': ['Analyst', 'Translator']}
+{'name': 'Ada', 'region': 'Greater London', 'positions': ['Analyst', 'Translator']}
+relational read after rename: London (Greater)
+document copies now stale   : [251, 252] -> must update 2 docs
+```
+
+The first two lines are identical: both shapes answer the same question. The difference appears after the rename. The normalised version picks up the new name on its next read, because there was only one copy. The document version has two stale copies to find and fix. With two users that is trivial; with fifty million it is a serious job, and while it runs, some profiles show the old name and some the new.
+
+## 5. Relational vs document databases today
+
+### 5.1 Which model leads to simpler application code?
+
+- If the data is **document-like**, meaning a tree of one-to-many relationships that is usually loaded all at once, the document model fits well. Splitting such data across many tables (sometimes called **shredding**) produces clumsy table layouts and complicated code.
+- Documents have limits. You cannot point directly at an item nested inside one. You have to say something like "the second position in the list for user 251", which resembles the old access paths. And joins may be weak or missing.
+- **Many-to-many** relationships remove most of the document model's appeal. Either you keep copies and take on the burden of keeping them consistent, or you join in application code, which is slower and more complicated than a join inside the database.
+- When nearly everything links to everything else, documents fit poorly, tables cope, and a **graph** model (next lesson) is the most natural.
+
+### 5.2 Schema flexibility: schema-on-read vs schema-on-write
+
+A **schema** is a description of the structure data must have: which fields exist and what type each one is. Document databases are often called "schemaless". That word misleads. The code that reads the data still expects *some* structure, so a schema exists. It is **implicit**, living in the application code, and the database does not check it.
+
+- **Schema-on-write** (typical of relational databases): the structure is declared in advance, and the database refuses any write that does not fit.
+- **Schema-on-read** (typical of document databases): anything can be written, and the structure is interpreted only when the data is read.
+
+Programmers will recognise the parallel with type checking. Schema-on-write resembles **static typing**, where mistakes are caught before the program runs. Schema-on-read resembles **dynamic typing**, where they surface while it runs.
+
+The difference is clearest when the format has to change. Suppose a `name` field should become `first_name` and `last_name`.
+
+With schema-on-read, the application starts writing new documents in the new form and copes with old documents when it meets them:
+
+```python
+if user and user.get("name") and not user.get("first_name"):
+    # documents written before Dec 8 2023 lack first_name
+    user["first_name"] = user["name"].split(" ")[0]
+```
+
+`user.get("name")` returns the value stored under `"name"`, or `None` if there is no such field. The `if` line therefore reads: "this user has a `name` but no `first_name`". The last line splits the name at the space and keeps the first piece.
+
+With schema-on-write, you change the table definition and convert the existing data. Such a change is called a **migration**:
+
+```sql
+ALTER TABLE users ADD COLUMN first_name text;
+UPDATE users SET first_name = split_part(name, ' ', 1);      -- PostgreSQL
+```
+
+The first statement adds an empty column to every row. The second fills it in by taking the first space-separated part of `name`.
+
+`ALTER TABLE` is quick in most databases. MySQL was the notable exception for a long time: it copied the entire table, which could mean hours of unavailability on a large one, though newer versions and extra tools have eased this. The `UPDATE` that rewrites every row is slow on a big table in any database. A common way out is to leave the new column empty (`NULL`) and fill it in when a row is read, which is the same trick the document approach uses.
+
+Schema-on-read is the better choice when the items in a collection are **heterogeneous**, meaning they do not all look alike. Two typical cases:
+
+- There are many different kinds of object, and one table per kind would be impractical.
+- The structure is decided by an outside system you do not control, and it may change without notice.
+
+When all records are supposed to look the same, a declared schema is valuable. It documents the structure and enforces it.
+
+### 5.3 Data locality for queries
+
+A document is normally stored as one continuous run of bytes, in JSON or a compact binary variant such as MongoDB's BSON. If the application usually needs the *whole* document, that is a speed advantage: one read fetches everything, where separate tables would need several index lookups.
+
+The advantage has conditions. It helps only when large parts of the document are needed together, since the database generally loads the whole document even to read one field. On an update, the whole document usually has to be written out again. Only a change that leaves the stored size unchanged can be made in place. The practical advice is to keep documents fairly small and avoid updates that make them grow.
+
+Locality is not exclusive to document databases. Google's **Spanner** can store a child table's rows physically inside their parent row. Oracle has a similar feature. The **column-family** idea used by Bigtable, Cassandra and HBase serves the same purpose: keeping related data physically close together.
+
+### 5.4 Convergence
+
+The two families are growing toward each other. PostgreSQL, MySQL and IBM's DB2 can store JSON documents in a column and search inside them. On the other side, document databases have added joins: MongoDB, for example, offers a `$lookup` operation. A database that handles both tables and documents well lets you pick the better fit feature by feature, and that is probably where things are heading.
+
+## 6. Query languages: declarative vs imperative
+
+A **query language** is the language you use to ask a database for data. There are two styles.
+
+An **imperative** language tells the computer which steps to perform and in what order. Most programming languages work this way. Here is an imperative search for all sharks in a list of animals:
 
 ```python
 # imperative: tells the computer which operations to perform, in order
@@ -176,22 +229,28 @@ def get_sharks(animals):
     return sharks
 ```
 
+The function starts with an empty list, visits each animal in turn, tests its family, and appends matches. Every step is spelled out.
+
+A **declarative** language states what result is wanted and leaves the method to the system. SQL is declarative:
+
 ```sql
 -- declarative
 SELECT * FROM animals WHERE family = 'Sharks';
 ```
 
-Advantages of declarative languages:
+This says "all rows of `animals` whose family is Sharks". It does not say whether to scan the table from the top, use an index, or split the work across several processors.
 
-- They are more concise and easier to work with.
-- They **hide implementation details**, so the engine can add indexes, reorder data or change algorithms without breaking queries. The imperative code above promises an order of results. SQL does not, which leaves the engine free to optimise.
-- They **parallelise** well because they specify only the pattern of results, not the algorithm. Imperative code imposes a particular sequence.
+Declarative languages have three advantages:
 
-DDIA makes the point with the web. CSS selectors (`li.selected > p`) are declarative. Doing the same styling imperatively in JavaScript DOM code is longer, and it breaks when the class changes, because the imperative code does not re-run.
+- They are shorter and easier to read.
+- They **hide how the work is done**, so the database can improve without breaking your queries. It can add an index or reorganise its storage, and the same query will run faster. The imperative loop above promises to return animals in list order. SQL makes no such promise unless asked, which leaves the database free to choose.
+- They are easier to run **in parallel**. A description of the desired result puts no restriction on the order of work, so the database can divide it among many processors. Imperative code fixes a sequence.
 
-### 5.1 MapReduce querying
+The same contrast exists on the web. A style rule in CSS such as `li.selected > p` declares which elements should look a certain way. Achieving the same effect with step-by-step JavaScript is longer, and it stops being correct when the page changes, because the steps are not run again.
 
-MapReduce, popularised by Google, sits in between: it is neither fully declarative nor fully imperative. MongoDB historically offered a `mapReduce` function. Here is counting shark sightings per month:
+### 6.1 MapReduce querying
+
+**MapReduce** is a way of processing large amounts of data across many machines, made popular by Google. As a query style it sits between the two: the overall pattern is fixed and declarative, but you supply two small pieces of imperative code. MongoDB used to offer it. This counts shark sightings per month:
 
 ```javascript
 db.observations.mapReduce(
@@ -202,7 +261,11 @@ db.observations.mapReduce(
 );
 ```
 
-`map` and `reduce` must be **pure functions**. They use only their input, have no side effects and do no extra queries, so the framework can run them anywhere, in any order, and retry them. Writing two carefully coordinated JavaScript functions is harder than writing one query, so MongoDB added the declarative **aggregation pipeline**:
+The **map** function is called once per matching document. It produces a pair: a key (the year and month, like `"1995-12"`) and a value (the number of animals seen). The system then gathers together all values that share a key. The **reduce** function is called once per key with the list of its values, and adds them up.
+
+Both must be **pure functions**: they may use only the input handed to them, may not run further queries, and may not change anything outside themselves. That restriction is what lets the system run them on any machine, in any order, and run them again if a machine fails.
+
+Writing two functions that have to fit together is harder than writing one query. So MongoDB added a declarative alternative, the **aggregation pipeline**:
 
 ```javascript
 db.observations.aggregate([
@@ -212,7 +275,9 @@ db.observations.aggregate([
 ]);
 ```
 
-It is SQL-like in expressiveness but written in JSON. The moral: NoSQL systems can end up reinventing SQL in disguise.
+`$match` filters the documents and `$group` gathers them by year and month while summing the animal counts. It can express what SQL can, written as JSON. There is a lesson in that: systems that set out to avoid SQL often end up rebuilding it under another name.
+
+The three stages of MapReduce are easy to act out in a few lines of Python:
 
 ```python-run
 from collections import defaultdict
@@ -232,22 +297,56 @@ for k, v in emitted:
 print({k: sum(vs) for k, vs in sorted(groups.items())})
 ```
 
+- `obs` is a list of four observations.
+- The `emitted` line is the map step: for each shark observation it produces a pair of the first seven characters of the date (`o["ts"][:7]` turns `"1995-12-25"` into `"1995-12"`) and the count.
+- `defaultdict(list)` is a dictionary that creates an empty list the first time a new key is used. The loop puts each value into the list for its key. Grouping by key like this is called the **shuffle**.
+- The last line is the reduce step: for each key, `sum(vs)` adds up its list.
+
+The output is `{'1995-12': 7, '1996-01': 2}`. The two December sightings (3 and 4) were combined, the January one stands alone, and the whale observation was filtered out before the map step.
+
 > [!INTERVIEW]
-> "SQL or NoSQL?" is a poor framing. Answer in terms of **access patterns and relationships**. Self-contained aggregates loaded whole, with a rapidly evolving or heterogeneous schema, point to documents. Many-to-one and many-to-many relationships, ad-hoc queries and strong constraints point to relational. Richly connected data with traversal queries points to a graph. Mention that PostgreSQL's `jsonb` often gives you both.
+> "SQL or NoSQL?" is a poor way to frame the choice. Answer in terms of **how the data is read and how its parts relate**. Self-contained records loaded whole, with a structure that changes often or varies between records, point to documents. Many-to-one and many-to-many relationships, unplanned queries and strict rules about valid data point to relational. Richly connected data that you explore by following links points to a graph. Mention that PostgreSQL's `jsonb` column type often gives you both in one system.
 
-## 6. Pitfalls
+## 7. Pitfalls
 
-- **Assuming "schemaless" means no migration work.** The schema still exists in your code, and old documents must be handled forever or backfilled.
-- **Embedding unbounded lists** (all comments on a post) inside a document. The document grows without limit and every update rewrites it.
-- **Denormalising too early.** Copies drift out of sync. Normalise first, and denormalise for proven read hot paths, which is effectively a cache.
-- **Application-side joins in loops** (the N+1 query problem).
+- **Believing "schemaless" means no migration work.** The schema lives in your code. Old documents must either be handled by that code forever or converted.
+- **Embedding lists that grow without limit**, such as every comment on a post, inside one document. The document keeps growing and each update rewrites all of it.
+- **Denormalising too early.** Copies drift apart. Start normalised, and add copies only for reads you have measured to be slow. Such a copy is in effect a cache.
+- **Joins done in a loop by the application.** Fetching 100 posts and then running one extra query per post for its author is 101 queries where one join would do. This is known as the **N+1 query problem**.
 
-## 7. Summary
+## 8. Summary
 
-- Hierarchical → network → relational: the relational model won by replacing hand-coded access paths with declarative queries and an optimizer.
-- The document model shines for **tree-shaped, self-contained** data with locality. It struggles with **many-to-many** relationships.
-- **Schema-on-read** vs **schema-on-write** is like dynamic vs static typing. Neither is "schemaless".
-- Declarative languages enable optimisation and parallelism. MapReduce is a middle ground, and many NoSQL systems grow SQL-like query languages over time.
+- The history runs hierarchical, then network, then relational. The relational model won by replacing hand-written access paths with declarative queries and an optimizer.
+- The document model is strongest for **tree-shaped, self-contained** data read as a whole. It struggles with **many-to-many** relationships.
+- **Schema-on-read** versus **schema-on-write** parallels dynamic versus static typing. Neither is truly schemaless.
+- Declarative languages leave the database free to optimise and to work in parallel. MapReduce sits in the middle, and many NoSQL systems grow SQL-like languages over time.
+
+## Glossary
+
+- **Data model** - the shape in which a database lets you describe information: tables, documents or a graph.
+- **Relational model / table / row / column** - data as grids; a row is one item, a column is one attribute.
+- **Relation / tuple** - the formal names for a table / a row.
+- **Document** - a self-contained record that can contain lists and nested records.
+- **JSON** - a text format of named values, lists and nested records.
+- **One-to-many / many-to-one / many-to-many** - one item owns several others / several items share one / items on both sides link to several on the other.
+- **Access path** - a hand-coded route through linked records to reach the one you want.
+- **Query optimizer** - the part of a database that decides how to carry out a query.
+- **Index** - an extra structure that speeds up finding rows.
+- **NoSQL** - an umbrella term for non-relational databases.
+- **Polyglot persistence** - using several kinds of database together.
+- **Impedance mismatch** - the awkward fit between objects in code and rows in tables.
+- **ORM (object-relational mapper)** - a library that translates between objects and rows.
+- **Foreign key / document reference** - a stored ID pointing at another row / another document.
+- **Locality** - storing together the data that is used together.
+- **Normalisation / denormalisation** - keeping each fact in one place and referring to it by ID / storing copies of it for faster reads.
+- **Join** - combining rows from two tables through a shared value.
+- **Schema** - a description of the structure data must have.
+- **Schema-on-write / schema-on-read** - structure enforced when data is stored / interpreted when it is read.
+- **Migration** - a change to a schema together with the conversion of existing data.
+- **Declarative / imperative** - stating the result wanted / listing the steps to perform.
+- **MapReduce** - a processing pattern built from a map function that emits key-value pairs and a reduce function that combines the values for each key.
+- **Pure function** - a function that depends only on its input and changes nothing outside itself.
+- **N+1 query problem** - running one query per item in a loop where a single join would do.
 
 ```quiz
 [

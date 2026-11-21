@@ -22,7 +22,7 @@ TRACK = dict(
                 dict(id="reliability-maintainability", title="Reliability and maintainability", file="01-reliability-maintainability.md"),
                 dict(id="scalability-percentiles", title="Scalability: load parameters, percentiles and SLOs", file="02-scalability-percentiles.md"),
             ],
-            problems=["db-percentiles"],
+            problems=["db-percentiles", "db-error-budget"],
         ),
         dict(
             id="data-models",
@@ -32,7 +32,7 @@ TRACK = dict(
                 dict(id="relational-vs-document", title="Relational vs document models", file="03-relational-vs-document.md"),
                 dict(id="graph-models", title="Graph models and query languages", file="04-graph-models.md"),
             ],
-            problems=[],
+            problems=["db-graph-traverse"],
         ),
         dict(
             id="storage",
@@ -43,7 +43,7 @@ TRACK = dict(
                 dict(id="btrees", title="B-trees, write-ahead logs and the LSM vs B-tree trade-off", file="06-btrees.md"),
                 dict(id="olap-column-stores", title="OLTP vs OLAP, warehouses and column-oriented storage", file="07-olap-column-stores.md"),
             ],
-            problems=["db-append-log-kv", "db-sstable-merge", "db-bloom-filter", "db-btree-split"],
+            problems=["db-append-log-kv", "db-sstable-merge", "db-bloom-filter", "db-btree-split", "db-wal-replay", "db-bitmap-rle"],
         ),
         dict(
             id="encoding",
@@ -53,7 +53,7 @@ TRACK = dict(
                 dict(id="encoding-formats", title="Encoding formats and schema evolution", file="08-encoding-formats.md"),
                 dict(id="dataflow-modes", title="Modes of data flow: databases, REST/RPC, message passing", file="09-dataflow-modes.md"),
             ],
-            problems=[],
+            problems=["db-varint-encode", "db-schema-resolve"],
         ),
         dict(
             id="replication",
@@ -64,7 +64,7 @@ TRACK = dict(
                 dict(id="multi-leader-leaderless", title="Multi-leader and leaderless replication, quorums", file="11-multi-leader-leaderless.md"),
                 dict(id="concurrent-writes", title="Detecting concurrent writes: LWW, version vectors, CRDTs", file="12-concurrent-writes.md"),
             ],
-            problems=["db-quorum-read", "db-lww-merge", "db-vector-clock-compare"],
+            problems=["db-quorum-read", "db-lww-merge", "db-sibling-versions", "db-vector-clock-compare"],
         ),
         dict(
             id="partitioning",
@@ -74,7 +74,7 @@ TRACK = dict(
                 dict(id="partitioning-keys", title="Partitioning key-value data and hot spots", file="13-partitioning-keys.md"),
                 dict(id="partitioning-ops", title="Secondary indexes, rebalancing and request routing", file="14-partitioning-ops.md"),
             ],
-            problems=["db-range-router", "db-consistent-hashing"],
+            problems=["db-range-router", "db-consistent-hashing", "db-rebalance-partitions"],
         ),
         dict(
             id="transactions",
@@ -85,7 +85,7 @@ TRACK = dict(
                 dict(id="lost-updates-write-skew", title="Lost updates, write skew and phantoms", file="16-lost-updates-write-skew.md"),
                 dict(id="serializability", title="Serializability: serial execution, 2PL and SSI", file="17-serializability.md"),
             ],
-            problems=["db-mvcc-visibility", "db-write-skew-detect"],
+            problems=["db-mvcc-visibility", "db-lost-update-detect", "db-write-skew-detect"],
         ),
         dict(
             id="distributed-trouble",
@@ -107,7 +107,7 @@ TRACK = dict(
                 dict(id="ordering", title="Ordering, causality, Lamport clocks and total order broadcast", file="22-ordering.md"),
                 dict(id="consensus", title="Distributed transactions, 2PC and consensus", file="23-consensus.md"),
             ],
-            problems=["db-lamport-order", "db-2pc-outcome"],
+            problems=["db-lamport-order", "db-2pc-outcome", "db-raft-commit-index"],
         ),
         dict(
             id="batch",
@@ -117,7 +117,7 @@ TRACK = dict(
                 dict(id="unix-mapreduce", title="From Unix pipes to MapReduce", file="24-unix-mapreduce.md"),
                 dict(id="joins-dataflow", title="Batch joins and dataflow engines", file="25-joins-dataflow.md"),
             ],
-            problems=["db-mapreduce-wordcount"],
+            problems=["db-mapreduce-wordcount", "db-sort-merge-join"],
         ),
         dict(
             id="stream",
@@ -128,7 +128,7 @@ TRACK = dict(
                 dict(id="cdc-event-sourcing", title="Databases and streams: CDC and event sourcing", file="27-cdc-event-sourcing.md"),
                 dict(id="processing-streams", title="Processing streams: time, windows, joins, fault tolerance", file="28-processing-streams.md"),
             ],
-            problems=["db-tumbling-window"],
+            problems=["db-tumbling-window", "db-session-windows"],
         ),
         dict(
             id="future",
@@ -149,7 +149,7 @@ TRACK = dict(
                 dict(id="redis-vector-dbs", title="Redis and vector databases", file="32-redis-vector-dbs.md"),
                 dict(id="choosing-system-design", title="Choosing a database and the system-design playbook", file="33-choosing-system-design.md"),
             ],
-            problems=["db-ivf-search"],
+            problems=["db-sliding-window-limiter", "db-ivf-search"],
         ),
     ],
 )

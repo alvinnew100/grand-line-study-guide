@@ -1,18 +1,30 @@
 # Secondary indexes, rebalancing and request routing
 
-The previous lesson partitioned records by **primary key**. Real applications also need **secondary indexes**, need to **move partitions** as the cluster grows, and need clients to **find** the right node. This lesson covers all three.
+> **Before this lesson:** read [Partitioning key-value data and hot spots](#/lesson/databases/partitioning-keys) for partitions, partition keys, key-range and hash partitioning. Secondary indexes were introduced in [B-trees](#/lesson/databases/btrees), tail latency amplification in [Scalability](#/lesson/databases/scalability-percentiles), and asynchronous updates in [Single-leader replication](#/lesson/databases/leader-follower).
+
+## In plain words
+
+The previous lesson decided which partition each record lives in, based on its key. Three practical questions follow, and this lesson answers them.
+
+1. **How do you search by something other than the key?** The records were divided by ID, and now you want all the red cars.
+2. **What happens when machines are added or removed?** Partitions have to be moved, ideally without moving more data than necessary. This is **rebalancing**.
+3. **How does a client know which machine to ask?** This is **request routing**.
+
+An everyday picture: a library that has outgrown its building and now occupies five. Books are assigned to buildings by catalogue number. (1) A reader wants every book about volcanoes, which could be in any building. Either each building keeps its own subject list and you must ask all five, or there is one combined subject catalogue that someone has to keep correct across five buildings. (2) A sixth building opens. You want to move about a sixth of the books into it, not reshelve the whole collection. (3) A visitor arrives with a catalogue number. Someone has to tell them which building to walk to, and that information must stay correct while books are being moved.
+
+Why this matters for a job: "consistent hashing" is among the most frequently asked system-design topics, and it is the answer to question 2. The local-versus-global index trade-off appears by name in Amazon's DynamoDB and behaves in ways that surprise people who have not studied it. And knowing why `hash(key) % N` is a trap will save you from writing it yourself.
 
 ## 1. Partitioning and secondary indexes
 
-A secondary index does not identify a record uniquely. It is a way of **searching for occurrences of a value**: all actions by user 123, all articles containing the word *hogwash*, all cars whose colour is *red*. Relational databases rely on secondary indexes constantly, and document stores usually have them too. Many key-value stores (HBase, Voldemort) avoided them because of the added complexity, while Riak has started adding them. For search servers like Solr and Elasticsearch they are the entire point.
+A **secondary index** lets you find records by a value that is not their primary key: all orders placed by user 123, all articles containing a certain word, all cars whose colour is red. Unlike a primary key, the value does not identify one record. Many records can share it.
 
-The problem is that secondary indexes **do not map neatly to partitions**. There are two main approaches.
+Relational databases depend on secondary indexes constantly. For search engines such as Elasticsearch they are the entire purpose. Some key-value stores left them out for a long time precisely because of the difficulty described here: a secondary index **does not line up with the partitions**. The records were divided by primary key, and the red cars are scattered across every partition. There are two ways to deal with that.
 
 ### 1.1 Document-partitioned (local) indexes
 
-Example: a used-car website. Each listing has a unique **document id** and is partitioned by that id (0–499 in partition 0, 500–999 in partition 1). You want to filter by `color` and `make`.
+Take a website that sells used cars. Each listing is a document with a unique ID, and the listings are partitioned by that ID: IDs 0 to 499 in partition 0, IDs 500 to 999 in partition 1, and so on. Customers want to filter by colour and by make.
 
-Each partition maintains its **own** secondary index covering **only the documents in that partition**. When a red car is added to partition 0, partition 0 adds its id to its own `color:red` list. A write touches only the partition that holds the document.
+In the first approach, each partition keeps **its own** secondary index, covering **only the documents stored in that partition**. When a red car is added to partition 0, partition 0 adds that car's ID to its own list of red cars. No other partition is involved. Because each index is confined to one partition, it is called a **local index**, or a **document-partitioned index**.
 
 ```mermaid
 flowchart TB
@@ -30,17 +42,19 @@ flowchart TB
   P1 --> M
 ```
 
-Reading is the hard part. There is no reason all red cars would be in one partition, so a query must go to **all partitions** and combine the results. This is **scatter/gather**, and it makes secondary-index reads expensive. Even in parallel, it is prone to **tail latency amplification** (Chapter 1). It is still widely used: MongoDB, Riak, Cassandra, Elasticsearch, SolrCloud and VoltDB all use document-partitioned secondary indexes. The usual advice is to pick a partition key that lets index queries be answered by one partition; with several indexes in one query that cannot always be arranged.
+Writing is cheap: one partition, one index update. Reading is the costly side. Red cars may be in any partition, so a search for red cars has to be sent to **every** partition, and the answers combined. This pattern is called **scatter/gather**. Even when the partitions are asked at the same time, the search is only finished when the slowest partition has replied, so it suffers from the tail latency amplification described in the scalability lesson: the more partitions, the more likely that one of them is having a slow moment.
+
+Despite that cost, local indexes are the common choice. MongoDB, Cassandra, Elasticsearch and others use them. Their makers generally recommend choosing the partition key so that the most frequent searches can be answered by one partition, though that is not always achievable.
 
 ### 1.2 Term-partitioned (global) indexes
 
-Alternatively, build a **global index** covering data in all partitions. It cannot live on one node, because that node would become a bottleneck, so the global index is **partitioned too, but differently from the primary key index**.
+The second approach builds one index that covers the data in *all* partitions: a **global index**. It cannot be kept on a single node, since that node would become a bottleneck and a single point of failure. So the global index is itself partitioned. The important detail is that it is partitioned **differently from the data**.
 
-The entry `color:red` then lists red cars from every partition, and the index itself is split by term: say, colours beginning with *a* to *r* on partition 0 and *s* to *z* on partition 1. The **term** we are looking for determines the index partition, hence *term-partitioned*. You can partition by the term itself (good for range scans such as asking-price ranges) or by a hash of the term (more even load).
+In the car example, the index entry for "colour: red" lists every red car from every data partition. The index is divided by the value being searched for. For instance, colours beginning with a to r go in index partition 0 and colours beginning with s to z in index partition 1. The value being looked up is called a **term** (a word borrowed from text search), and since the term decides which index partition to consult, this is called a **term-partitioned index**. The index can be divided by the term itself, which helps range searches such as a price band, or by a hash of the term, which spreads load more evenly.
 
-- **Reads are efficient.** Instead of scatter/gather over all partitions, a client queries only the partition holding the term.
-- **Writes are slower and more complicated.** One document write may affect **several index partitions**, one for every term in the document.
-- Ideally a write would show up in the index immediately. In a term-partitioned index that would need a **distributed transaction** across all affected partitions, which most databases do not support (Chapter 9). In practice, global secondary index updates are often **asynchronous**: a read shortly after a write may not see the change in the index. Amazon **DynamoDB** global secondary indexes are normally updated within a fraction of a second but can lag more during infrastructure faults. Riak's search and Oracle's data warehouse also offer global indexes.
+- **Reads are efficient.** A search for red cars goes to the one index partition that holds the term "red".
+- **Writes are slower and more involved.** Adding one car updates an entry for its colour, another for its make, another for its price band. These entries may sit in different index partitions on different nodes.
+- **The index may lag behind the data.** Ideally a newly written document would be findable through the index immediately. With a global index that would require all the affected partitions to change together or not at all, which is a **distributed transaction**, a costly mechanism that a later lesson covers and that many databases do not offer. In practice global indexes are usually updated **asynchronously**. A search made straight after a write may not find the new record yet.
 
 | | Local (document-partitioned) | Global (term-partitioned) |
 |---|---|---|
@@ -50,25 +64,27 @@ The entry `color:red` then lists red cars from every partition, and the index it
 | Examples | MongoDB, Cassandra, Elasticsearch | DynamoDB GSIs, Riak Search |
 
 > [!INTERVIEW]
-> In DynamoDB, a **GSI** (global secondary index) is term-partitioned and eventually consistent, while an **LSI** (local secondary index) shares the base table's partition key and supports strongly consistent reads. That is a nice concrete example of this trade-off.
+> Amazon DynamoDB offers both kinds under explicit names. A **global secondary index** (GSI) is term-partitioned and updated asynchronously, so reads through it are eventually consistent. A **local secondary index** (LSI) lives in the same partition as the records it covers and can be read with full consistency. Citing that pair is a concise way to show you understand the trade-off.
 
 ## 2. Rebalancing partitions
 
-Things change over time:
+A cluster does not stay the same for long:
 
-- Query throughput grows, so you add CPUs.
-- Dataset size grows, so you add disks and RAM.
-- A machine fails, and others must take over its responsibilities.
+- More queries arrive, so more processors are needed.
+- The data grows, so more disks and memory are needed.
+- A machine fails, and others must take over what it was doing.
 
-Moving load from one node to another is **rebalancing**. Minimum requirements:
+Each of these means moving data and requests from one node to another. That process is called **rebalancing**. Whatever method is used, it should satisfy three requirements:
 
-- Afterwards, load (storage, reads, writes) should be shared **fairly**.
-- During rebalancing, the database keeps **accepting reads and writes**.
-- **No more data than necessary** moves between nodes, to make rebalancing fast and limit network and disk I/O.
+- Afterwards, storage and request load are shared **fairly** among the nodes.
+- While it is going on, the database **continues to accept reads and writes**.
+- **No more data is moved than necessary**, since moving data is slow and consumes network and disk capacity.
 
 ### 2.1 How not to do it: hash mod N
 
-Why not assign key $k$ to node $hash(k) \bmod N$? Because when $N$ changes, **most keys move**. With `hash(key) = 123456`, 10 nodes put it on node 6, 11 nodes on node 3, and 12 nodes on node 0. Such frequent moves make rebalancing excessively expensive.
+The first idea most people have is this: with $N$ nodes, put key $k$ on node number $hash(k) \bmod N$. The **mod** operation (written `%` in Python) gives the remainder after division, so the result is always a number from 0 to $N-1$. It spreads keys evenly and is trivial to compute.
+
+It has a fatal flaw. When $N$ changes, the remainder changes for almost every key. Take a key whose hash is 123456. With 10 nodes it belongs on node 6, because 123456 divided by 10 leaves 6. With 11 nodes it belongs on node 3. With 12 nodes, on node 0. Adding one node relocates nearly everything.
 
 ```python-run
 import hashlib
@@ -80,11 +96,28 @@ for n_from, n_to in [(10, 11), (10, 20), (100, 101)]:
           f"(ideal: {abs(n_to-n_from)/max(n_to,n_from):.1%})")
 ```
 
+What each part does:
+
+- `h(k)` is a fixed hash: MD5 of the key, first eight bytes as a number.
+- `keys` is 20,000 sample keys.
+- For each change in the number of nodes, `moved` counts the keys whose node number differs before and after: `h(k) % n_from != h(k) % n_to`.
+- The "ideal" figure is the smallest fraction that could possibly have to move. Going from 10 to 11 equal nodes, the new node should end up with one eleventh of the data, about 9.1%, and nothing else needs to move.
+
+```
+mod 10 -> mod 11: 90.7% of keys move (ideal: 9.1%)
+mod 10 -> mod 20: 50.1% of keys move (ideal: 50.0%)
+mod 100 -> mod 101: 99.0% of keys move (ideal: 1.0%)
+```
+
+Adding an eleventh node moves 90.7% of all keys, ten times more than needed. Adding one node to a hundred moves 99%. Only exact doubling behaves well. A method is needed that does not tie a key's location directly to the number of nodes.
+
 ### 2.2 Fixed number of partitions
 
-Set up **far more partitions than nodes** from the start, so that each node holds a number of them. A database on a 10-node cluster might have **1,000 partitions** from the outset, about 100 per node.
+The most common solution adds one level of indirection. Create **many more partitions than there are nodes**, right from the start, and give each node many partitions. A cluster of 10 nodes might be set up with 1,000 partitions, about 100 on each.
 
-A **new node** **takes over a handful of partitions** from each of the others until the load is even again. When a node is removed, the reverse happens. Only **entire partitions** move between nodes. The number of partitions and the assignment of keys to partitions do not change. The only change is the assignment of partitions to nodes. That reassignment is not instant, since transferring data takes time, so the old assignment serves reads and writes in the meantime.
+A key is assigned to a *partition*, for example by `hash(key) % 1000`, and that assignment **never changes**, because the number of partitions never changes. What changes is which node holds which partition.
+
+When a node is added, it **takes a few whole partitions from each existing node** until the load is even again. When a node is removed, its partitions are handed out to the others. Only complete partitions travel between nodes. Copying a partition across the network takes time, so the old node keeps serving it until the copy is finished.
 
 ```mermaid
 flowchart LR
@@ -104,27 +137,35 @@ flowchart LR
   Before --> After
 ```
 
-You can even account for **mismatched hardware** by giving more powerful nodes more partitions. Used by **Riak, Elasticsearch, Couchbase and Voldemort**. Kafka uses the same idea, since topics have a fixed partition count.
+In the diagram there are 20 partitions on 4 nodes, 5 each. When node 4 joins, it takes one partition from each of the others (p4, p9, p14 and p19) and every node ends with 4. Sixteen of the twenty partitions did not move at all.
 
-The drawback: the partition count is normally **chosen once, at setup time**. Choose it high enough to accommodate future growth. Each partition carries management overhead, so do not choose it too high. If partitions are very large, rebalancing and recovery become expensive. If they are too small, they incur too much overhead.
+This approach also copes with unequal hardware: give a more powerful node more partitions. It is used by Riak, Elasticsearch, Couchbase and Voldemort, and Kafka topics work the same way.
+
+The drawback is that the number of partitions is normally **fixed when the database is first set up**. It has to be large enough for future growth, since a cluster cannot usefully have more nodes than partitions. Yet each partition costs some management effort, so an enormous number is wasteful. And a partition's size grows with the total data. If partitions become very large, moving one and recovering one after a failure are slow. If they are tiny, the overhead dominates. Picking the number is a judgment that is hard to make in advance.
 
 ### 2.3 Dynamic partitioning
 
-For **key-range** partitioning, fixed boundaries would be very inconvenient: wrong boundaries could put all data in one partition. Databases such as **HBase** and **RethinkDB** create partitions **dynamically**:
+For databases that partition by key range, fixed boundaries would be a serious problem. A wrong guess could leave all the data in one partition and the rest empty. Such databases, including HBase and RethinkDB, create partitions as they go:
 
-- When a partition grows beyond a configured size (HBase default: 10 GB), it is **split into two** halves, similar to a B-tree page split.
-- A partition that has shrunk past a lower bound after deletions is **merged** with a neighbour.
-- After a split, one half can be moved to another node to balance load.
+- When a partition grows beyond a set size (10 gigabytes by default in HBase), it is **split** into two halves. This resembles the splitting of a full page in a B-tree.
+- When deletions shrink a partition below a lower limit, it is **merged** with a neighbour.
+- After a split, one half can be handed to another node to even out the load.
 
-The partition count thereby **follows the amount of data**. One caveat: a fresh database has **just one partition**, since with no data yet nobody knows where sensible boundaries would be. All writes hit one node while the others sit idle until the first split. HBase and MongoDB allow **pre-splitting**, which configures an initial set of partitions on an empty database, though you need to know the key distribution.
+The number of partitions therefore **follows the amount of data**. Little data means few partitions and little overhead. Lots of data means many partitions, each of bounded size.
 
-Dynamic partitioning also suits hash-partitioned data: From version 2.4 MongoDB offers range and hash partitioning alike, splitting dynamically in both cases.
+There is one catch. A brand-new, empty database has **a single partition**, because with no data there is nothing to suggest where boundaries should go. Until the data grows enough to trigger the first split, every write goes to one node while the others stand idle. To avoid this, HBase and MongoDB let you set up some partitions in advance on an empty database, called **pre-splitting**. That requires knowing roughly how the keys will be distributed.
+
+Dynamic partitioning works with hash partitioning too. MongoDB supports both kinds and splits dynamically in either case.
 
 ### 2.4 Partitioning proportionally to nodes
 
-With dynamic partitioning, the number of partitions is proportional to dataset size. With a fixed count, partition size is proportional to dataset size. A third option, used by **Cassandra** and **Ketama**, makes the number of partitions **proportional to the number of nodes**: a fixed number of partitions *per node*. Cassandra uses 256 by default (`num_tokens`).
+Compare the two methods so far. With a fixed number of partitions, each partition grows as the data grows. With dynamic partitioning, the number of partitions grows as the data grows. In both cases the number of partitions has nothing to do with the number of nodes.
 
-When a new node joins, it **randomly chooses** a fixed number of existing partitions to split, and takes ownership of one half of each split. Randomisation can produce unfair splits, but averaged over many partitions (256 per node) the new node ends up with a fair share. This requires hash-based partitioning, so that boundaries can be picked from the range of hash outputs. It corresponds most closely to Karger's original definition of **consistent hashing**.
+A third method, used by Cassandra, ties the two together: there is a **fixed number of partitions per node**. Cassandra's default is 256. When the data grows and the nodes stay the same, each partition gets bigger. When nodes are added, there are more partitions and each gets smaller again.
+
+When a new node joins, it picks a set of existing partitions **at random**, splits each one in two, and takes one half of each. Any single random split may be uneven. Averaged over 256 of them, the new node ends up with close to a fair share. Choosing boundaries at random requires hash partitioning, since the boundaries are picked from the range of possible hash values. This is the method that best fits the original meaning of **consistent hashing**.
+
+A common way to picture it is a **ring**. Imagine all possible hash values arranged around a circle. Each node places many marks on the circle at pseudo-random positions; each mark is called a **virtual node**, or **vnode**. A key belongs to the node that owns the first mark at or after the key's hash, going clockwise.
 
 ```python-run
 import hashlib, bisect, random
@@ -153,19 +194,36 @@ for v in (1, 16, 256):
     print(f"vnodes={v:<4} load max/min = {spread:4.2f}   adding E moved {moved/len(keys):.1%} of keys (ideal 20%)")
 ```
 
-More virtual nodes give a smoother load distribution, and adding a node moves only about $1/N$ of the keys.
+What each part does:
+
+- `Ring.add(node)` places `vnodes` marks for a node. Each position is the hash of the node's name plus a counter, such as `"A#0"`, `"A#1"`. `bisect.insort` keeps the list of positions sorted, and `self.owner` remembers which node placed each mark.
+- `Ring.lookup(key)` hashes the key and uses `bisect.bisect_right` to find the first mark after that hash. The `% len(self.points)` wraps around to the first mark if the hash is past the last one, which is what makes the list behave like a circle.
+- For 1, 16 and 256 marks per node, the loop builds a ring with nodes A to D and records where each of 20,000 keys lives. `load` counts keys per node. Then node E is added, and `moved` counts the keys whose owner changed.
+- `spread` is the busiest node's key count divided by the least busy node's. A value of 1.0 would be a perfectly even spread.
+
+```
+vnodes=1    load max/min = 41.46   adding E moved 17.4% of keys (ideal 20%)
+vnodes=16   load max/min = 1.68   adding E moved 24.9% of keys (ideal 20%)
+vnodes=256  load max/min = 1.27   adding E moved 17.9% of keys (ideal 20%)
+```
+
+Two things stand out. First, look at the "moved" column: in every case about a fifth of the keys moved when a fifth node joined, which is close to the minimum possible. Compare that with the 90% from `hash mod N`. Second, look at the load column. With one mark per node the spread is terrible, with the busiest node holding 41 times as many keys as the quietest, because four random points do not divide a circle evenly. With 256 marks per node the busiest node holds only 27% more than the quietest. More virtual nodes give a smoother spread.
 
 ### 2.5 Automatic or manual rebalancing?
 
-Fully automatic rebalancing is convenient but **unpredictable**. Rebalancing is expensive because it reroutes requests and moves large amounts of data. Combined with automatic failure detection it can be dangerous. If an overloaded node responds slowly, other nodes may conclude it is dead and rebalance load away from it, which puts *more* load on it, the other nodes and the network, and can cause a **cascading failure**. Many systems sit in between. Couchbase, Riak and Voldemort generate a *suggested* partition assignment automatically but need an administrator to commit it. A human in the loop is slower but prevents operational surprises.
+Should the database rebalance by itself, or wait for an administrator to approve?
+
+Fully automatic rebalancing is convenient and can behave unpredictably. Rebalancing is a heavy operation: requests are rerouted and large amounts of data are copied. Combine that with automatic detection of dead nodes and a dangerous loop becomes possible. Suppose a node is overloaded and slow to respond. The others decide it must be dead and start moving its data elsewhere. That adds load to the struggling node, to the other nodes and to the network, which slows more nodes down, which may then be judged dead in turn. This is a cascading failure, as described in the first lesson.
+
+Many systems therefore take a middle course. Couchbase, Riak and Voldemort work out a suggested new assignment of partitions automatically and wait for an administrator to confirm it. A person in the loop is slower, and prevents surprises.
 
 ## 3. Request routing
 
-Partitions are now spread across nodes. When a client wants to connect, how does it know **which node** to talk to, especially as partitions are rebalanced? This is an instance of **service discovery**. Three approaches:
+The data is now spread over many nodes, and partitions move between nodes from time to time. A client wants to read the key "Foo". Which machine should it connect to? This is one case of the general problem called **service discovery**: finding where on the network something currently lives. There are three broad designs.
 
-1. Clients contact **any node** (through a round-robin load balancer). If that node owns the partition it handles the request. Otherwise it **forwards** the request to the right node, receives the reply and passes it back. Cassandra and Riak use **gossip** so every node knows the partition map.
-2. Send all requests to a **routing tier** first. It determines the node for each request and forwards it. The routing tier handles no requests itself and acts as a **partition-aware load balancer**.
-3. Make **clients aware** of the partitioning and assignment, so they connect directly to the right node with no intermediary.
+1. **Ask any node.** The client contacts whichever node it likes, perhaps through a **load balancer** (a component that spreads incoming connections across machines). If that node holds the partition, it answers. If not, it **forwards** the request to the node that does, waits for the reply, and passes it back to the client.
+2. **Ask a routing tier.** All requests go first to a dedicated layer whose only job is to know which node holds which partition and to forward each request accordingly. It stores no data itself.
+3. **Make the client smart.** The client is given the map of partitions to nodes and connects directly to the right one.
 
 ```mermaid
 flowchart LR
@@ -182,9 +240,9 @@ flowchart LR
   end
 ```
 
-Whichever variant is used, the hard part is the same: how does whoever does the routing **find out** that a partition has moved to another node? All participants must agree, or requests go to the wrong nodes. Agreement is a **consensus** problem (Chapter 9).
+In all three the core difficulty is identical: whoever makes the routing decision has to **learn when a partition has moved**. If different parts of the system hold different ideas of where a partition is, requests go to the wrong place. Getting every participant to agree on a piece of changing information is a consensus problem, the topic of a later lesson.
 
-A common answer is to keep this metadata in a dedicated **coordination service such as ZooKeeper**. Each node registers itself in ZooKeeper, which keeps the authoritative mapping of partitions to nodes. Routing tiers and partition-aware clients **subscribe** to this information, and ZooKeeper notifies them whenever a partition changes owner or a node is added or removed.
+A widely used answer is to keep the map in a separate **coordination service**, the best known being **ZooKeeper**. A coordination service is a small, highly reliable store designed to hold exactly this kind of information about a cluster and to notify interested parties when it changes. Each node registers itself with ZooKeeper. ZooKeeper holds the authoritative map of partitions to nodes. The routing tier, or the smart clients, **subscribe** to that map and are told the moment a partition changes owner or a node joins or leaves.
 
 ```mermaid
 flowchart TB
@@ -197,30 +255,56 @@ flowchart TB
   RT -->|"partition 3 on node 1"| N1
 ```
 
-- **LinkedIn's Espresso** uses **Helix**, which relies on ZooKeeper, for cluster management.
-- **HBase, SolrCloud and Kafka** use ZooKeeper for partition assignment. Kafka has since replaced it with its own Raft-based **KRaft** controller quorum.
-- **MongoDB** has a similar architecture with its own **config server** and **mongos** routing daemons.
-- **Cassandra and Riak** use a **gossip protocol** among nodes to spread cluster-state changes. Requests can go to any node, which forwards them. This adds complexity in the database nodes but avoids depending on an external coordination service.
-- **Couchbase** does not rebalance automatically. It uses a routing tier called *moxi* that learns about routing changes from cluster nodes.
+Real systems differ in the details:
 
-Clients still need the IP addresses of the routing tier or of some nodes. Those change rarely, so **DNS** is usually good enough.
+- **HBase** and **SolrCloud** use ZooKeeper to track partition assignment. **Kafka** did for many years and has since replaced it with a built-in equivalent called KRaft.
+- **MongoDB** has its own equivalent: a set of *config servers* holding the map, and routing processes named *mongos*.
+- **Cassandra** and **Riak** take a different path. Their nodes spread news of changes among themselves using a **gossip protocol**: each node periodically tells a few randomly chosen others what it knows, and information spreads through the cluster the way a rumour does. A client can contact any node, which forwards the request (design 1). This makes the database nodes themselves more complicated and removes the dependency on an outside service.
+
+A client still needs a starting point: the network address of the routing tier, or of at least one node. Those addresses change rarely, so the ordinary internet name system, **DNS** (the service that turns a name such as example.com into a numeric address), is normally enough.
 
 ### 3.1 Parallel query execution
 
-Everything up to here concerned single-key reads and writes, with scatter/gather as the one exception for document-partitioned indexes. That is about the level of access NoSQL stores support. **Massively parallel processing (MPP)** relational databases, often used for analytics, support far more complex queries with joins, filters, grouping and aggregation. The query optimiser breaks a complex query into execution stages and partitions that can run in parallel on different nodes. Queries that scan large parts of the dataset benefit especially. Fast parallel execution of warehouse queries is a specialised topic. Batch processing (Chapter 10) covers some related techniques.
+Almost everything in these two lessons concerned reading or writing a single key, with scatter/gather as the only operation spanning partitions. That is roughly what most NoSQL databases offer. Analytical databases go much further. A **massively parallel processing** (MPP) database accepts a complex query with joins, filters and grouping, and its query optimizer breaks the query into stages that run on many nodes at once. Queries that scan a large share of the data gain the most. The techniques involved are closely related to those in the batch-processing lessons.
 
 ## 4. Pitfalls
 
-- **Using hash mod N** in your own sharding layer, so every resize reshuffles almost everything.
-- **Too few fixed partitions** chosen at setup. You cannot scale beyond one node per partition.
-- **Forgetting that global indexes are async.** A read-after-write through a GSI may miss the new item.
-- **Fully automatic rebalancing plus aggressive failure detection** can cause a cascading failure.
+- **Using `hash(key) % N` in your own sharding code.** Every change in the number of nodes reshuffles almost everything.
+- **Choosing too few fixed partitions.** The cluster cannot grow beyond one node per partition, and the number usually cannot be changed afterwards.
+- **Forgetting that global indexes are updated asynchronously.** A search through a global index immediately after a write may not find the new record.
+- **Fully automatic rebalancing combined with eager failure detection.** A slow node is treated as dead, its load is moved, and the extra work slows others down.
+- **Too few virtual nodes on a hash ring.** The load is spread very unevenly.
 
 ## 5. Summary
 
-- Secondary indexes are **local** (cheap writes, scatter/gather reads) or **global** (single-partition reads, multi-partition and often async writes).
-- Rebalancing strategies: a **fixed number of partitions** (Riak, Elasticsearch, Kafka), **dynamic splitting and merging** (HBase, MongoDB), and **proportional to nodes** with random splits (Cassandra vnodes). Never use hash mod N.
-- Request routing: any node forwards (gossip), a routing tier, or partition-aware clients. Cluster metadata is usually kept consistent by **ZooKeeper** or another consensus system.
+- Secondary indexes in a partitioned database are either **local** (each partition indexes its own records: cheap writes, scatter/gather reads) or **global** (one index partitioned by term: reads touch one partition, writes touch several and are usually asynchronous).
+- Rebalancing strategies: a **fixed number of partitions** moved whole between nodes, **dynamic splitting and merging** as data grows and shrinks, and a number of partitions **proportional to the number of nodes** with random boundaries (consistent hashing with virtual nodes). Never use `hash mod N`.
+- Request routing: any node forwards, a routing tier decides, or the client knows the map. The map itself is kept in agreement by a coordination service such as **ZooKeeper** or spread by **gossip**.
+
+## Glossary
+
+- **Secondary index** - an index for finding records by a value other than the primary key.
+- **Document-partitioned (local) index** - a secondary index kept separately inside each partition, covering only that partition's records.
+- **Scatter/gather** - sending a query to every partition and combining the answers.
+- **Term-partitioned (global) index** - one secondary index covering all data, itself partitioned by the value searched for.
+- **Term** - a value being looked up in an index.
+- **Distributed transaction** - a change to several nodes that must happen on all of them or on none.
+- **Rebalancing** - moving data and load between nodes when the cluster changes.
+- **Mod (`%`)** - the remainder after division.
+- **Fixed number of partitions** - creating many more partitions than nodes up front and moving whole partitions between nodes.
+- **Dynamic partitioning** - splitting partitions that grow too large and merging those that shrink.
+- **Pre-splitting** - setting up initial partitions on an empty database.
+- **Consistent hashing** - placing partition boundaries at random points of the hash range so that adding a node moves only a small share of keys.
+- **Hash ring** - a picture of the hash range as a circle on which nodes place marks.
+- **Virtual node (vnode)** - one of many marks a single node places on the ring.
+- **Request routing** - getting a client's request to the node that holds the relevant partition.
+- **Service discovery** - finding the current network location of a service or partition.
+- **Load balancer** - a component that spreads incoming connections across machines.
+- **Routing tier** - a layer that forwards each request to the right node and stores no data.
+- **Coordination service (ZooKeeper)** - a small, reliable store for cluster information that notifies subscribers of changes.
+- **Gossip protocol** - nodes spreading information by each periodically telling a few others.
+- **DNS** - the internet service that turns names into network addresses.
+- **MPP (massively parallel processing)** - running one complex query across many nodes at once.
 
 ```quiz
 [

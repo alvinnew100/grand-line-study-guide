@@ -1,5 +1,21 @@
 # Distributed transactions, 2PC and consensus
 
+> **Before this lesson:** read [Ordering, causality, Lamport clocks and total order broadcast](#/lesson/databases/ordering) and [Linearizability and the CAP theorem](#/lesson/databases/linearizability). You also need atomicity, commit, abort and locks from [ACID, read committed and snapshot isolation](#/lesson/databases/acid-weak-isolation); two-phase locking from [Serializability](#/lesson/databases/serializability); and majorities, leases, fencing tokens, safety and liveness from [Truth, majorities, fencing tokens](#/lesson/databases/truth-fencing).
+
+## In plain words
+
+**Consensus** means getting several computers to agree on one answer and stick to it, even though some of them may crash and messages between them may be lost or delayed. "Which of us is the leader?" "Did this transaction commit?" "Who gets this username?" Every one of those is a consensus question.
+
+This lesson covers two ways of reaching agreement.
+
+The first is for a transaction that touches several databases at once. An everyday picture: a group of friends is booking a holiday together, and it only goes ahead if *everyone* can come. An organiser phones each friend: "Can you definitely come? Once you say yes, you cannot back out." If all say yes, the organiser writes "GO" in a notebook and phones everyone again to confirm. If anyone says no, the organiser writes "CANCELLED". This is **two-phase commit**. Its weakness is plain to see: suppose the organiser's phone dies straight after the first round of calls. Every friend who said yes is stuck. They promised not to back out, they do not know what was decided, and they cannot book anything else for those dates until the organiser reappears.
+
+The second way removes that single point of weakness. There is no permanent organiser. The group elects one by majority vote, every decision also needs a majority, and if the organiser disappears the group elects another. As long as more than half the group can talk to one another, decisions keep being made, and no two contradictory decisions can ever both pass. This is **fault-tolerant consensus**, and its best-known algorithms are Paxos and Raft.
+
+Why this matters for a job: you will almost never implement these algorithms, but you will rely on them daily, because Kubernetes, Kafka and most modern distributed databases are built on them. Interviewers ask "what happens in two-phase commit if the coordinator crashes?" and "how does Raft prevent two leaders?" because the answers show whether you understand what your infrastructure guarantees and what it does not.
+
+## Agreement is the hard part
+
 Nearly everything hard in distributed data systems reduces to one problem: **getting several nodes to agree on something**. Which node is the leader? Did this transaction commit? Who owns this username? What is the next entry in the log? It sounds as if it should be easy. It is one of the most subtle problems in computing, and many systems have been broken by the belief that a simple scheme would do.
 
 This lesson covers two forms of agreement. The first is **atomic commit**: all participants of a transaction must reach the same verdict, commit or abort. Its standard solution, two-phase commit, is widely deployed and has a serious weakness. The second is **fault-tolerant consensus**, the family of algorithms - Paxos, Raft, Zab, Viewstamped Replication - that overcome that weakness and that power the coordination services modern infrastructure depends on. The goal is not to make you able to implement Raft from memory, but to understand what these protocols guarantee, what they cost, and when to rely on a system that implements them for you.
@@ -8,7 +24,7 @@ This lesson covers two forms of agreement. The first is **atomic commit**: all p
 
 On a single node, atomicity is the job of the storage engine. When asked to commit, the database writes the transaction's changes durably, usually to a write-ahead log, and then appends a **commit record**. If it crashes before the commit record is safely on disk, recovery discards the transaction; if it crashes after, the transaction stands. Everything hinges on one moment on one disk.
 
-Now let one transaction span machines - it updates rows in two partitions, say, or a row and an index entry that are stored on different nodes. Simply sending "commit" to each node and letting each decide alone does not work:
+Now let one transaction span several machines. It might update rows in two partitions, or a row and an index entry that live on different nodes. Suppose the application sends "commit" to each node and lets each one decide for itself. That does not work:
 
 - One node may find a constraint violation and abort while the others commit.
 - Some commit requests may be lost in the network.
@@ -67,6 +83,8 @@ It cannot time out and abort: the coordinator may have decided to commit and tol
 
 The only way forward is for the coordinator to recover, read its log, and tell the participants what was decided. A transaction with no commit record in the coordinator's log is aborted. That is why the coordinator must write the decision to disk *before* sending it out, and why the coordinator's log is as critical as the databases themselves.
 
+The program below runs the protocol for four cases: everyone votes yes, one participant votes no, and two cases where the coordinator crashes after collecting the votes.
+
 ```python-run
 def two_phase_commit(votes, coordinator_crash=None):
     """votes: list of 'yes'/'no'. coordinator_crash: None | 'before_log' | 'after_log'."""
@@ -90,6 +108,24 @@ for votes, crash in ([["yes", "yes", "yes"], None],
           + (f"  <- {stuck} in doubt, holding locks" if stuck else ""))
 ```
 
+What each part does:
+
+- `votes` is the list of answers the participants give in phase 1.
+- `states` is each participant's condition after phase 1. A participant that voted yes is `"prepared"`: it has promised to commit if told to and can no longer abort by its own choice. One that voted no has already aborted.
+- `decision` is commit only if `all` the votes are yes.
+- If the coordinator crashes `"before_log"`, the function returns with no log entry. The decision was never recorded.
+- Otherwise `log = decision` stands for writing the decision to the coordinator's disk: the commit point.
+- If the coordinator crashes `"after_log"`, the decision is on disk but no participant has been told.
+- With no crash, every participant ends as committed or aborted.
+- The `print` line reports the votes, the crash point, the log and the participants' states, and counts how many are stuck in `"prepared"`.
+
+```
+votes=['yes', 'yes', 'yes'] crash=None       log=commit participants=['committed', 'committed', 'committed']
+votes=['yes', 'no', 'yes'] crash=None       log=abort  participants=['aborted', 'aborted', 'aborted']
+votes=['yes', 'yes', 'yes'] crash=after_log  log=commit participants=['prepared', 'prepared', 'prepared']  <- 3 in doubt, holding locks
+votes=['yes', 'yes', 'yes'] crash=before_log log=None   participants=['prepared', 'prepared', 'prepared']  <- 3 in doubt, holding locks
+```
+
 In the last two cases every participant sits in the prepared state. In one of them the decision exists on the coordinator's disk; in the other it does not. The participants cannot tell the difference and must wait in both.
 
 ### Three-phase commit
@@ -98,7 +134,7 @@ Because participants can be stuck waiting, 2PC is called a **blocking** atomic c
 
 ## 2. Distributed transactions in practice
 
-Distributed transactions have a mixed reputation. Some regard them as an essential safety feature; others say they cause operational trouble, kill performance and promise more than they deliver. Many cloud services decline to implement them. Performance reports range up to an order-of-magnitude slowdown, much of it from the extra disk forces needed for crash recovery and the additional network round trips.
+Distributed transactions have a mixed reputation. Some engineers regard them as an essential safety feature. Others say they cause operational trouble, hurt performance badly and promise more than they deliver, and many cloud services choose not to offer them. Reported slowdowns go up to a factor of ten. Much of that cost comes from two sources: each participant and the coordinator must force extra writes onto the disk (with `fsync`) so the protocol survives a crash, and the two phases need extra messages back and forth over the network.
 
 It helps to separate two things that share the name:
 
@@ -119,7 +155,7 @@ If the application process crashes or its machine dies, the coordinator goes wit
 
 ### Why in-doubt transactions hurt: locks
 
-Why is it so bad that a transaction is in doubt? Cannot the rest of the system just carry on?
+Why is a transaction in doubt such a serious matter? Could the rest of the system not carry on and leave it alone?
 
 The trouble is **locking**. A transaction holds row-level locks on everything it modified, to prevent dirty writes; under serialisable isolation with two-phase locking it also holds shared locks on everything it read. Those locks stay in place for as long as the outcome is unknown. So while a transaction is in doubt, its locks stay. If the coordinator is down for 20 minutes, the locks are held for 20 minutes. If its log is lost entirely, they are held **for ever**, or until an administrator intervenes.
 
@@ -189,6 +225,8 @@ Raft was designed to be easier to understand than Paxos, and it is the algorithm
 - The leader appends client commands to its log and sends them to the followers. An entry is **committed** once it is stored on a majority, and then it is applied to the state machine.
 - Because of the voting rule, a newly elected leader always holds every committed entry. It forces followers' logs to match its own, overwriting any uncommitted entries that conflict.
 
+In the last bullet points, a **state machine** means the node's copy of the data together with the rule for changing it: apply the same commands in the same order and you arrive at the same state. The program below models only the voting rule, which is the part that keeps committed data safe.
+
 ```python-run
 class RaftNode:
     def __init__(self, name): self.name, self.term, self.voted_for, self.log = name, 0, {}, []
@@ -218,6 +256,23 @@ print(elect(D, [E, C], 5, term=2), " <- stale log: C refuses, the committed entr
 print(elect(D, [E], 5, term=3),    " <- minority side of a partition can never elect a leader")
 print(elect(B, [A, C, D, E], 5, term=4))
 ```
+
+What each part does:
+
+- A `RaftNode` has a name, the latest term it knows of, a record of whom it voted for in each term, and a log of entries. Each log entry is a pair (term in which it was written, command).
+- `request_vote(voter, candidate, term)` decides whether `voter` gives its vote. It refuses if the term is older than one the voter already knows, or if the voter has already voted for someone else in this term.
+- The helper `last(n)` describes how up to date a node's log is, as a pair: the term of its last entry and the log's length. Python compares pairs left to right, so a later last term wins, and with equal terms the longer log wins. If the candidate's log is behind the voter's, the vote is refused.
+- Otherwise the voter records the vote and returns `True`.
+- `elect` has the candidate ask itself and every node it can reach, counts the votes, and checks for a majority of the whole cluster (`cluster_size // 2` is half, rounded down, so the count must exceed it).
+- The setup gives nodes A, B and C a committed entry from term 1. D and E missed it and have empty logs.
+
+```
+D asks for term 2: 2/5 votes -> no quorum  <- stale log: C refuses, the committed entry cannot be lost
+D asks for term 3: 2/5 votes -> no quorum  <- minority side of a partition can never elect a leader
+B asks for term 4: 5/5 votes -> LEADER
+```
+
+In the first election D can reach E and C. D and E vote for D, but C refuses because D's log lacks the committed entry. Two votes out of five is not a majority. In the second, D can reach only E: a minority cannot elect anyone. In the third, B has the committed entry and can reach everyone, so it wins.
 
 The first line shows the safety argument in action: a node with an incomplete log cannot win, because any majority contains at least one node that has the committed entry and will refuse to vote for it.
 
@@ -266,7 +321,7 @@ flowchart TB
 ```
 
 > [!INTERVIEW]
-> "Why doesn't your service just implement leader election itself?" Because doing so correctly means implementing consensus, and implementations written from scratch have a poor track record. The right move is to rely on ZooKeeper, etcd or Consul. A complete answer mentions the building blocks: a lease obtained by a linearizable compare-and-set, an ephemeral key or session so that the lease disappears when the holder dies, watches so that others notice, and a fencing token from the service's monotonically increasing revision - because the old leader may not know it has been replaced.
+> "Why doesn't your service implement leader election itself?" Because doing so correctly means implementing consensus, and implementations written from scratch have a poor track record. The right move is to rely on ZooKeeper, etcd or Consul. A complete answer names the building blocks: a lease obtained by a linearizable compare-and-set; an ephemeral key or session, so that the lease disappears when its holder dies; watches, so that the other nodes notice; and a fencing token taken from the service's ever-increasing revision number, because the old leader may not know it has been replaced.
 
 ## Pitfalls
 
@@ -289,6 +344,36 @@ flowchart TB
 - These algorithms use **epochs** (terms) with a unique leader per epoch, and **overlapping majority quorums** for electing a leader and for accepting its proposals. Raft adds the rule that only a candidate with an up-to-date log can win.
 - Consensus costs synchronous replication, a majority requirement, mostly static membership, and sensitivity to timeouts.
 - **Coordination services** (ZooKeeper, etcd) package consensus as linearizable operations, ordered transaction ids, sessions with failure detection and change notifications; they are used for leader election, work assignment, service discovery and membership.
+
+## Glossary
+
+- **Consensus** - several nodes agreeing on one value and never going back on it, despite failures.
+- **Atomic commit** - all participants in a transaction reaching the same outcome, commit or abort.
+- **Commit record** - the entry in a log that marks a transaction as committed.
+- **Distributed transaction** - a transaction that involves more than one node or system.
+- **Two-phase commit (2PC)** - an atomic commit protocol with a prepare phase and a commit-or-abort phase.
+- **Coordinator (transaction manager)** - the component that runs 2PC and records the decision.
+- **Participant** - a database node taking part in a distributed transaction.
+- **Prepare** - the first phase, in which each participant promises it can commit.
+- **Commit point** - the moment the coordinator durably records its decision.
+- **In doubt** - the state of a participant that has voted yes and has not yet learned the decision.
+- **Blocking protocol** - a protocol in which a failure can leave participants unable to proceed.
+- **XA** - a standard interface for running 2PC across different products.
+- **Heterogeneous distributed transaction** - one whose participants are different technologies.
+- **Orphaned transaction** - an in-doubt transaction whose coordinator can no longer resolve it.
+- **Heuristic decision** - a participant settling an in-doubt transaction by itself, possibly breaking atomicity.
+- **Single point of failure** - one component whose failure stops everything that depends on it.
+- **Uniform agreement / integrity / validity / termination** - no two nodes decide differently / no node decides twice / the decision was proposed by some node / every working node eventually decides.
+- **Paxos, Raft, Zab, Viewstamped Replication** - the main families of consensus algorithm.
+- **Epoch (term, ballot number, view number)** - a numbered period of leadership; each has at most one leader.
+- **Election timeout** - how long a follower waits without hearing from the leader before starting an election.
+- **Follower / candidate / leader** - the three roles of a node in Raft.
+- **Committed entry** (in Raft) - a log entry stored on a majority of nodes.
+- **State machine** - a node's data together with the rule that the same commands in the same order give the same result.
+- **Coordination service** - a small consensus-based store (ZooKeeper, etcd, Consul) used for locks, leader election and cluster information.
+- **Ephemeral node** - a key in ZooKeeper that is removed automatically when the session that created it ends.
+- **Watch** - a request to be notified when a key changes.
+- **Membership service** - a service by which nodes agree on which members of a cluster are alive.
 
 ```quiz
 [

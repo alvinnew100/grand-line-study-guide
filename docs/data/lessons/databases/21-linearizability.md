@@ -1,5 +1,21 @@
 # Linearizability and the CAP theorem
 
+> **Before this lesson:** you need replication, replication lag and eventual consistency from [Single-leader replication](#/lesson/databases/leader-follower); quorums, read repair and last write wins from [Multi-leader and leaderless replication](#/lesson/databases/multi-leader-leaderless); serializability and snapshot isolation from [Serializability](#/lesson/databases/serializability); and network partitions, leases and majorities from the three lessons ending with [Truth, majorities, fencing tokens](#/lesson/databases/truth-fencing).
+
+## In plain words
+
+A replicated database keeps several copies of the data, and the copies are not always in step. **Linearizability** is the promise that the database will hide this from you completely: it will behave as if there were exactly **one copy**, and every read will see the result of every write that finished before it.
+
+An everyday picture: a football stadium has one scoreboard. The instant a goal is added, everyone looking at it sees the new score, and nobody who looks afterwards can ever see the old one. Now imagine the score is instead shown on fifty separate screens around the ground, each updated a moment apart. Two friends on opposite sides text each other: "It's 2-1!" "No, mine says 1-1." Linearizability means making the fifty screens act like the one scoreboard.
+
+That promise has a price, and the second half of the lesson is about it. Suppose the cable to some of the screens is cut. Those screens have two choices: keep showing the last score they received, which may now be wrong, or go blank until the cable is repaired. They cannot be both up to date and switched on. That choice, between being correct and being available when part of the network is cut off, is the **CAP theorem**.
+
+One word used below: **consensus** is the problem of getting several nodes to agree on something reliably, even when some of them fail. It has its own lesson shortly. Here it is enough to know that algorithms for it exist and that coordination services such as ZooKeeper are built on them.
+
+Why this matters for a job: "strong consistency", "eventual consistency" and "CAP" are among the most used and most misused terms in system design. Interviewers ask about them constantly, and a precise answer stands out. In daily work, knowing which few operations really need the one-copy guarantee (locks, unique usernames, account balances) and which do not is what keeps a system both correct and fast.
+
+## Why eventual consistency is not enough
+
 Replicated databases usually promise **eventual consistency**: stop writing, wait long enough, and all replicas will hold the same data. A better name might be *convergence*. As a guarantee for application developers it is thin. It says nothing about *when* the replicas converge, and until they do, a read may return anything from the newest value to a long-outdated one. You write a value, read it back at once, and get the old one, because the read landed on a different replica.
 
 Bugs caused by such behaviour are miserable to find. Everything works in testing, where there is little concurrency and no faults; the edge cases appear only under load or when the network misbehaves.
@@ -40,9 +56,13 @@ sequenceDiagram
   R-->>C: write ok
 ```
 
+Read the diagram from top to bottom. Client C starts writing 1. While that write is still in progress, client A reads and is shown 1. From that moment the new value has been seen by someone. Client B starts its read after A's has finished, so B must also get 1, even though C has not yet been told that its write is complete.
+
 Add a third operation, `cas(x, v_old, v_new)` - atomic **compare-and-set**: if the current value equals `v_old`, set it to `v_new`, otherwise leave it and report an error. Linearizability then requires that the outcomes of all reads, writes and compare-and-sets be explainable by *some* ordering of those effect points that never goes backwards in time.
 
 It is possible to test for this, at some computational cost, by recording the start time, end time and result of every operation and checking whether a valid sequential ordering exists.
+
+The program below performs that test by brute force on two short recorded histories.
 
 ```python-run
 from itertools import permutations
@@ -74,6 +94,21 @@ bad  = [(0,   10, "write", 1, None),
 print("history 1 linearizable:", linearizable(good))
 print("history 2 linearizable:", linearizable(bad))
 ```
+
+What each part does:
+
+- A history is a list of operations. Each is a tuple: the time it started, the time it ended, whether it was a read or a write, the value written (for a write) and the value returned (for a read).
+- `permutations(range(len(history)))` produces every possible ordering of the operations. The function tries each ordering in turn as a candidate for "the order in which they really took effect".
+- The first check discards any ordering that contradicts real time. If operation `a` had already finished before operation `b` started, then `a` must come before `b`. Operations that overlapped in time may go in either order.
+- The second check replays the ordering against a single value. A write sets the value. A read must have returned exactly the current value, or this ordering is rejected.
+- If any ordering passes both checks, the history is linearizable.
+
+```
+history 1 linearizable: True
+history 2 linearizable: False
+```
+
+In the first history, the two reads that overlap the write see 0 and then 1, which fits the ordering "read 0, write, read 1, read 1". In the second, a read that finished at time 4 saw 1 and a read that started at time 5 saw 0. No ordering can explain that, because the second read came strictly later and would have to see a value that had already been replaced.
 
 The second history is precisely the auction scene: a later read travelling back in time.
 
@@ -119,6 +154,8 @@ Take $n = 3$, $w = 3$, $r = 2$, so $w + r > n$. The value is 0. A writer starts 
 
 The quorum condition was satisfied throughout, yet B saw an older value than A, later in time.
 
+The program below reproduces that case, then shows what repairs it.
+
 ```python-run
 replicas = {"r1": 0, "r2": 0, "r3": 0}
 
@@ -136,6 +173,19 @@ for repair in (False, True):
     print(f"read repair {'on ' if repair else 'off'}: A sees {a}, then B sees {b}",
           "-> not linearizable" if (a, b) == (1, 0) else "-> consistent")
 ```
+
+What each part does:
+
+- `replicas` holds the value on each of three replicas. Because the only values are 0 and 1, the larger value is also the newer one, so `max` picks the newest reply.
+- `quorum_read(names, repair)` reads from the named replicas and returns the newest value among them. With `repair` on, it first writes that newest value back to every replica it contacted, and only then returns. That is read repair done **synchronously**, meaning before the reader gets its answer.
+- In each round the write of 1 has reached only `r1`. Reader A asks `r1` and `r2`. Then reader B asks `r2` and `r3`.
+
+```
+read repair off: A sees 1, then B sees 0 -> not linearizable
+read repair on : A sees 1, then B sees 1 -> consistent
+```
+
+Without repair, A sees the new value and B, reading later, sees the old one. With synchronous repair, A's read pushes the value 1 onto `r2` before returning, so B, which also asks `r2`, finds it.
 
 Dynamo-style quorums can be made linearizable at a price: a reader must perform **read repair synchronously** before returning, and a writer must first read the latest state from a quorum. Even then, only reads and writes are covered. A linearizable compare-and-set cannot be built this way; it requires consensus. It is safest to assume that a leaderless Dynamo-style system does not provide linearizability.
 
@@ -177,7 +227,7 @@ CAP was historically valuable: it encouraged engineers to explore designs that g
 
 Here is the more fundamental point. Few systems drop linearizability mainly for fault tolerance. They drop it for **speed**.
 
-Even memory inside one computer is not linearizable: each CPU core has its own cache and store buffer, and a value written by one core is not immediately visible to another unless a memory barrier is used. Nobody would say the cores are "partitioned"; the designers gave up linearizability to make memory access fast.
+Even the memory inside a single computer is not linearizable. A modern processor has several cores, and each keeps a small private store of recently used values so that it can work faster. A value changed by one core is not instantly visible to the others unless the program specifically asks for that. Nobody would say the cores have been cut off from each other by a network fault. The designers gave up the one-copy behaviour for a different reason: to make memory access fast.
 
 There is a proven result behind this: a linearizable read or write cannot be faster than **some multiple of how unpredictable the network delay is**. Where delays vary widely - as they do in most networks - linearizable operations will inevitably be slow. Weaker consistency models can be much faster, and for latency-sensitive systems that trade-off matters every single day, not only when a cable is cut. Extensions of CAP such as PACELC make this explicit: during a **p**artition choose between **a**vailability and **c**onsistency; **e**lse, between **l**atency and **c**onsistency.
 
@@ -201,6 +251,26 @@ There is a proven result behind this: a linearizable read or write cannot be fas
 - It is required for **locks and leader election**, for **uniqueness and similar hard constraints**, and wherever a **second communication channel** makes staleness observable.
 - **Consensus** provides it; **single-leader** replication can, with care; **multi-leader** cannot; **leaderless** quorums generally do not.
 - Its costs are **unavailability** of disconnected replicas during a network partition - the content of the **CAP theorem** - and, more pervasively, **higher latency** in normal operation, which is the usual reason systems choose weaker models.
+
+## Glossary
+
+- **Eventual consistency (convergence)** - if writes stop, all replicas end up with the same data, with no promise about when.
+- **Linearizability** - the system behaves as if there were one copy of the data and every operation took effect at a single instant; also called strong, atomic, immediate or external consistency.
+- **Recency guarantee** - a promise that reads return the most recent value.
+- **Register** - one item in a database that can be read and written, such as a key or a row.
+- **Compare-and-set (cas)** - changing a value only if it currently equals an expected value, as one indivisible step.
+- **History** - a record of the operations performed, with their start times, end times and results.
+- **Strict serializability** - serializability and linearizability together.
+- **Consensus** - several nodes reliably agreeing on something despite failures.
+- **Coordination service** - a small, highly reliable store (ZooKeeper, etcd) offering linearizable operations for locks and leader election.
+- **Uniqueness constraint** - a rule that a value, such as a username, may be used only once.
+- **Cross-channel timing dependency** - a second route by which information travels, which can reveal that a read was stale.
+- **Synchronous read repair** - updating stale replicas during a read, before the result is returned.
+- **Network partition** - a fault that cuts some nodes off from others.
+- **Availability (in CAP)** - every request to a working node receives a response.
+- **CAP theorem** - when a network partition occurs, a system must choose between linearizability and availability.
+- **CP / AP** - informal labels for systems that choose consistency / availability during a partition.
+- **PACELC** - an extension of CAP: during a partition choose availability or consistency; otherwise choose low latency or consistency.
 
 ```quiz
 [

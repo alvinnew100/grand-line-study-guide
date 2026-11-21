@@ -1,6 +1,20 @@
 # From Unix pipes to MapReduce
 
-Every system discussed so far in this track answers questions on demand: a request arrives, the database looks something up or changes something, a reply goes back within milliseconds. A large part of real data work does not look like that at all. Building a search index, training a recommendation model, computing last month's invoices, or producing the table that a dashboard reads - these jobs take a huge pile of existing data and grind through all of it, with nobody waiting on the other end of a socket.
+> **Before this lesson:** you should know what derived data and a system of record are ([Reliability and maintainability](#/lesson/databases/reliability-maintainability)); throughput versus response time ([Scalability](#/lesson/databases/scalability-percentiles)); the merge of sorted files in an LSM-tree ([Log-structured storage](#/lesson/databases/log-structured)); the map and reduce idea ([Relational vs document models](#/lesson/databases/relational-vs-document)); and hash partitioning ([Partitioning key-value data](#/lesson/databases/partitioning-keys)). No experience with the Unix command line is assumed.
+
+## In plain words
+
+**Batch processing** means taking a large, fixed pile of data and working through all of it in one go, to produce some new data. Nobody is waiting for an instant answer. The job runs for minutes or hours, and what matters is that it finishes and that the result is right.
+
+An everyday picture: a factory assembly line. Raw material goes in at one end. It passes through a series of stations, each doing one small job: cut, drill, paint, pack. Each station takes what the previous one produced and hands its own output to the next. No station needs to know anything about the others, only what shape of part arrives and what shape must leave. If a part is spoiled at one station, that station does it again from a fresh piece. The raw material in the warehouse is never altered.
+
+This lesson shows that picture twice. First on one computer, as a chain of small command-line programs. Then on thousands of computers, as **MapReduce**. The point of the lesson is that the second is the first made bigger, and that the same few habits make both work: small single-purpose steps, a common format between steps, and input that is never modified.
+
+Why this matters for a job: data engineering is largely batch processing. Nightly reports, search indexes, recommendation models and data-warehouse loads are all batch jobs. Even if you only ever use newer tools such as Spark or SQL engines, they are built on the ideas here, and "walk me through what happens between map and reduce" remains a standard interview question.
+
+## A different kind of work
+
+Every system discussed so far in this track answers questions on demand: a request arrives, the database looks something up or changes something, and a reply goes back within milliseconds. A large part of real data work does not look like that at all. Building a search index, training a recommendation model, computing last month's invoices, or producing the table that a dashboard reads: these jobs take a huge pile of existing data and grind through all of it, with no user waiting for a reply.
 
 This is **batch processing**, and it is the first topic of the part of the track that deals with *derived data*: datasets that are computed from other datasets. A useful distinction to carry through the remaining lessons:
 
@@ -30,6 +44,8 @@ grep ' /product/' access.log |   # keep only product page requests
   head -n 5                      # top five
 ```
 
+For readers who have not used a command line: each of these lines runs one small program. The symbol `|` is a **pipe**. It connects two programs so that whatever the first one prints becomes the input of the second. The **shell** is the program that reads the commands you type and starts the programs. The text after each `#` is a comment explaining that step. So the access log flows through six programs in turn, each doing one thing, and the last one prints five lines.
+
 Nobody would call this elegant, yet it has remarkable properties. It was written in a minute. Each stage can be tested on its own by cutting the pipeline short. It handles a multi-gigabyte file without complaint. And changing the question - top clients instead of top pages, errors only, a different day - means editing one stage.
 
 ### Two ways to count, and why it matters
@@ -40,6 +56,8 @@ The same answer could come from a ten-line script that walks the file once and i
 - The **sort** approach never needs the whole dataset in memory. A good `sort` implementation reads a chunk, sorts it, writes it to a temporary file, repeats, and finally merges the sorted chunks - sequential I/O throughout, and it can use several CPU cores. Once the data is sorted, counting is a single pass that only ever remembers the current key.
 
 That second technique - sort chunks, then merge - is the same one LSM-trees use for their segments, and as we will see it is the heart of MapReduce.
+
+The program below counts page requests both ways.
 
 ```python-run
 import heapq, itertools
@@ -60,6 +78,22 @@ counts = [(len(list(group)), key) for key, group in itertools.groupby(merged)]
 print("sort :", sorted(counts, reverse=True)[:3])
 ```
 
+What each part does:
+
+- `paths` is twelve requested pages.
+- `Counter(paths)` is the hash-table approach. It builds a dictionary from each distinct path to its count. `most_common(3)` returns the three largest.
+- For the sort approach, the list is cut into chunks of four, and each chunk is sorted. A sorted chunk is called a **run**. On a real system each run would be written to a temporary file.
+- `heapq.merge(*runs)` merges the sorted runs into one sorted sequence. It does this lazily: it looks only at the front item of each run and hands out the smallest, one at a time, so the whole dataset is never in memory together.
+- `itertools.groupby(merged)` collects neighbouring equal items into groups. Because the stream is sorted, all copies of a path are next to each other. `len(list(group))` is the count for that path.
+
+```
+hash : [('/product/7', 4), ('/product/2', 3), ('/product/9', 2)]
+runs : [['/cart', '/product/2', '/product/7', '/product/7'], ['/product/2', '/product/4', '/product/7', '/product/9'], ['/product/1', '/product/2', '/product/7', '/product/9']]
+sort : [(4, '/product/7'), (3, '/product/2'), (2, '/product/9')]
+```
+
+Both methods agree: page 7 was requested four times, page 2 three times, page 9 twice. The middle line shows the three sorted runs before merging.
+
 ## 2. Why the Unix approach works so well
 
 The pipeline above is a small demonstration of a design philosophy that Unix's creators articulated in the 1970s and that has aged very well. Compressed into four habits:
@@ -73,7 +107,7 @@ Three concrete mechanisms make that philosophy practical.
 
 ### A uniform interface
 
-Programs can only be combined freely if they agree on how to exchange data. In Unix the agreement is minimal: everything is a **file descriptor** delivering an ordered sequence of bytes, and by convention the bytes are lines of text. A file on disk, a network socket, a terminal and the output of another process all look the same. That is why `sort` can be placed after `cut` although neither was written with the other in mind.
+Programs can be combined freely only if they agree on how to exchange data. In Unix the agreement is minimal: everything a program reads or writes is treated as an ordered sequence of bytes, and by convention those bytes are lines of text. A file on disk, a network connection, the keyboard and screen, and the output of another program all look the same to the program using them. That is why `sort` can be placed after `cut`, although neither was written with the other in mind.
 
 It is easy to underestimate how unusual this is. Most software cannot be connected to other software without an export step, an API client or a custom adapter. Even databases that share a data model make it hard to move data between them.
 
@@ -81,7 +115,7 @@ The weakness of the convention is that "a line of text" carries no structure. Ev
 
 ### Logic separated from wiring
 
-A typical filter reads **standard input** and writes **standard output**. It neither knows nor cares what those are connected to. The decision - a file, a pipe to the next program, the screen - is made by whoever launches it. This is loose coupling in its purest form: the program holds the logic, the shell holds the plumbing. You can replace the input by a test file or insert your own program in the middle of someone else's pipeline without modifying anything.
+A typical command-line program reads from **standard input** and writes to **standard output**. These are two ready-made channels that every program is given when it starts. By default standard input is the keyboard and standard output is the screen. The program neither knows nor cares what they are really connected to. That decision (a file, a pipe to the next program, the screen) is made by whoever starts the program. This is loose coupling in its purest form: the program holds the logic and the shell holds the wiring. You can substitute a test file for the input, or insert a program of your own into the middle of someone else's pipeline, without changing any of the programs.
 
 The limit of the model is its shape: one input, one output. Programs that need several inputs or outputs fall back on file names given as arguments, and pipes do not extend across machines.
 
@@ -117,9 +151,9 @@ flowchart TB
   NN --- D4
 ```
 
-- A daemon on every machine, the **DataNode**, offers the local disks to the cluster.
-- A central **NameNode** keeps the directory: which blocks belong to which file, and which machines hold each block.
-- Files are cut into large **blocks** (128 MB is typical), and each block is stored on several machines - commonly three copies, or an erasure-coded form that tolerates losses with less overhead. When a disk or a whole machine dies, the missing copies are re-created elsewhere from the survivors.
+- On every machine runs a background program called the **DataNode**, which offers that machine's disks to the cluster.
+- One central program, the **NameNode**, keeps the directory: which blocks make up each file, and which machines hold each block.
+- A file is cut into large **blocks** (128 megabytes is typical). Each block is stored on several machines, commonly three. When a disk or a whole machine dies, the lost copies are made again on other machines from the copies that survive. (A more space-efficient alternative to plain copies, called erasure coding, stores extra check data from which lost blocks can be rebuilt.)
 
 The result behaves like one enormous disk whose capacity grows by adding machines, and that survives routine hardware failure. Deployments with thousands of nodes and hundreds of petabytes exist. Because the storage machines also have CPUs, computation can be scheduled *where the data already is*.
 
@@ -141,6 +175,8 @@ The contract of the two functions:
 - **reduce** is called once per distinct key. It receives that key and an iterator over every value emitted for it by any mapper, and it may emit output records.
 
 Because mappers are stateless and independent, the framework can run any number of them at once. Because all values of a key are delivered to one reducer call, the reducer can aggregate without coordination.
+
+The program below is a complete MapReduce job in miniature: two map tasks, two reduce tasks, and the routing between them.
 
 ```python-run
 from collections import defaultdict
@@ -179,6 +215,23 @@ for r, data in enumerate(reducer_inputs):
     out = [kv for key in sorted(data) for kv in reduce_fn(key, data[key])]
     print(f"part-{r:05d}:", out)
 ```
+
+What each part does:
+
+- `log` is seven lines of a web server's access log, split into a list of lines.
+- `map_fn(line)` splits a line into its four fields and, if the path is a product page, emits the pair `(path, 1)`. The keyword `yield` hands back a value and lets the function continue, so one call can produce zero, one or many pairs. A function written this way is called a **generator**.
+- `reduce_fn(key, values)` receives one path with all the 1s emitted for it and yields the path with their sum.
+- `partition(key)` decides which reduce task a key goes to. It adds up the key's bytes and takes the remainder after dividing by the number of reducers. The exact formula does not matter. What matters is that the same key always gives the same answer.
+- `splits` divides the input between two map tasks. `reducer_inputs` is one dictionary per reduce task, mapping each key to the list of its values.
+- The triple loop is the map phase and the routing: for every line, for every pair the map function emits, append the value to the right reducer's list for that key.
+- The final loop is the reduce phase. Each reduce task goes through its keys in sorted order and calls the reduce function for each.
+
+```
+part-00000: [('/product/7', 3), ('/product/9', 1)]
+part-00001: [('/product/2', 2)]
+```
+
+Page 7 appears in both halves of the input, so both map tasks emitted pairs for it. Both sent them to reduce task 0, which is why the count of 3 is complete. The `/cart` request was filtered out by the map function.
 
 Each reducer writes its own output file, which is why the result of a MapReduce job is a *directory* of `part-` files.
 
@@ -244,6 +297,8 @@ Several things grew up around this limitation:
 
 Writing every intermediate result to replicated storage, and starting each job only after its predecessor has completely finished, is robust but slow. That cost is what dataflow engines such as Spark and Flink were designed to remove - the subject of the next lesson.
 
+The program below chains two jobs to answer the top-pages question.
+
 ```python-run
 # Two chained "jobs": (1) count per path, (2) order by count. Job 2 only sees job 1's output.
 from itertools import groupby
@@ -262,6 +317,19 @@ print("job 1 output directory:", job1_output)
 job2_output = run_job(job1_output, lambda kv: [(-kv[1], kv[0])], lambda k, vs: [(v, -k) for v in vs])
 print("job 2 output, top 3   :", job2_output[:3])
 ```
+
+What each part does:
+
+- `run_job(records, map_fn, reduce_fn)` is a whole MapReduce job in three lines. It applies the map function to every record, sorts all the emitted pairs (the shuffle), groups neighbouring pairs with the same key, and calls the reduce function once per group.
+- Job 1 maps each path to `(path, 1)` and reduces by summing. Its output is one `(path, count)` pair per page. A `lambda` is a small unnamed function written in one line.
+- Job 2 takes job 1's output as its input. Its map function swaps each pair around and negates the count, emitting `(-count, path)`. The framework sorts by key in ascending order, so the most negative key, which is the largest count, comes first. Its reduce function swaps the pair back.
+
+```
+job 1 output directory: [('/p/2', 2), ('/p/4', 1), ('/p/7', 4), ('/p/9', 2)]
+job 2 output, top 3   : [('/p/7', 4), ('/p/2', 2), ('/p/9', 2)]
+```
+
+Job 1's output is sorted by path, because path was its key. To get it sorted by count, a second shuffle with a different key was needed, and that is a second job.
 
 ## 7. What carried over from Unix, and what did not
 
@@ -294,8 +362,36 @@ The last-but-one row is the important regression, and the reason MapReduce is ra
 - Counting by **hash table** needs memory for every distinct key; **sorting and merging** scales beyond memory using sequential I/O.
 - A **distributed file system** stores large replicated blocks on ordinary machines and lets computation run next to the data.
 - **MapReduce** asks for two functions: a stateless **map** that emits key-value pairs and a **reduce** that sees all values of one key. The framework's **shuffle** partitions by key hash, sorts, and merges.
-- Tasks that fail are simply **rerun**, which is safe because inputs are immutable and outputs are only published on success.
+- Tasks that fail are **rerun**, which is safe because inputs are immutable and outputs are only published on success.
 - Complex computations are **workflows** of many jobs glued together by schedulers and higher-level languages; materialising every intermediate result is MapReduce's main inefficiency.
+
+## Glossary
+
+- **Batch processing** - running a computation over a large, fixed set of input data to produce new data.
+- **System of record** - the store where a fact is first written and is authoritative.
+- **Derived dataset** - data computed from other data, which can be rebuilt if lost.
+- **Throughput** - the amount of work completed per unit of time.
+- **Shell** - the program that reads typed commands and starts other programs.
+- **Pipe (`|`)** - a connection that feeds one program's output into another's input.
+- **Standard input / standard output** - the default input and output channels every program is given.
+- **Uniform interface** - one shared way of exchanging data, so any program can be connected to any other.
+- **Immutable** - never modified after being written.
+- **Run** - a sorted chunk of data, to be merged with others.
+- **External sort** - sorting data larger than memory by sorting chunks and merging them.
+- **Distributed file system (HDFS)** - a file system that stores files as replicated blocks spread over many machines.
+- **NameNode / DataNode** - the program holding the directory of blocks / the program on each machine that stores blocks.
+- **Block** - a large fixed-size piece of a file.
+- **MapReduce** - a framework that runs a user's map and reduce functions over files on a cluster.
+- **Map function** - called once per input record; emits key-value pairs.
+- **Reduce function** - called once per key, with all the values emitted for that key.
+- **Generator (`yield`)** - a Python function that can hand back several values one at a time.
+- **Shuffle** - partitioning map output by key, sorting it and delivering it to the reduce tasks.
+- **Map task / reduce task** - one running instance of the map / reduce function over part of the data.
+- **Data locality** - running a computation on the machine that already stores its input.
+- **Speculative execution** - starting a second copy of a slow task and using whichever finishes first.
+- **Workflow** - a chain of batch jobs where each reads the output of earlier ones.
+- **Workflow scheduler** - a tool that starts each job when the jobs it depends on have succeeded.
+- **Materialise** - to write an intermediate result out in full.
 
 ```quiz
 [

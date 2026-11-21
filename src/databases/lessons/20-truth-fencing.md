@@ -1,5 +1,19 @@
 # Truth, majorities, fencing tokens and Byzantine faults
 
+> **Before this lesson:** read [Partial failures and unreliable networks](#/lesson/databases/networks-faults) and [Unreliable clocks and process pauses](#/lesson/databases/clocks-pauses). You need: timeout, network partition, heartbeat, lease, process pause and garbage collection. Quorums and split brain come from the replication lessons ([Single-leader replication](#/lesson/databases/leader-follower), [Multi-leader and leaderless replication](#/lesson/databases/multi-leader-leaderless)).
+
+## In plain words
+
+The last two lessons showed that a machine in a distributed system can be wrong about almost everything: whether its messages arrived, what time it is, and even whether it has been frozen for the past minute. This lesson is about how to build something trustworthy when no single participant can be trusted to know the truth, including the truth about itself.
+
+An everyday picture: a committee whose members sit in separate rooms and communicate by notes passed under the doors. One member's door jams. He can still read the notes coming in, but his own never get out. The others, hearing nothing from him, vote to replace him as chairman. From inside his room, he still feels like the chairman. Who is right? The committee has to be, because it is the only body that can act. That is the first idea of this lesson: **what is true is decided by a majority vote, not by any individual**.
+
+Now suppose the door comes unstuck and the old chairman walks to the bank with the committee's chequebook. He sincerely believes he is still authorised. The only thing that can stop him is the bank teller, who checks a list and says "your authority was number 33, and I have already served number 34". That is the second idea: a **fencing token**, a number that lets the place where the damage would happen refuse anyone whose authority is out of date.
+
+Why this matters for a job: any time a design includes "only one server does X at a time" (one leader, one holder of a lock, one scheduled job), these two ideas are what make it safe. "Is a lock in Redis safe?" is a well-known interview question whose answer is in section 3. The lesson also gives you the vocabulary (safety, liveness, system model) in which the guarantees of every distributed database are stated.
+
+## What a node can know
+
 The two preceding lessons took away most of what a program normally relies on. Messages may be lost or arbitrarily delayed. Clocks disagree. A process may be frozen at any instruction and wake up later without noticing. Put together, these facts lead to an unsettling conclusion: **a node in a distributed system cannot be sure of anything beyond its own local state**. All it can do is draw inferences from the messages it receives - or does not receive.
 
 This lesson asks how correct systems can be built on such thin ground. The answers come in three layers. First, *who decides what is true*: not any single node, but a quorum. Second, *how do we stop a node that is wrong about itself* from doing damage: fencing tokens. Third, *how do we reason rigorously* about algorithms in such an environment: system models, and the distinction between safety and liveness. Along the way we look at the far nastier case of nodes that lie on purpose.
@@ -24,6 +38,8 @@ That includes decisions about who is dead. If a quorum declares a node dead, it 
 
 Why more than half? Because **two majorities of the same set always share at least one member**, so there cannot be two disjoint groups each believing it has the authority to decide. With three nodes, one failure is tolerated; with five, two. The system keeps working with a minority of nodes down, and it stays safe, since a minority can never decide alone.
 
+The program below checks the overlap claim by listing every possible majority for several cluster sizes.
+
 ```python-run
 from itertools import combinations
 
@@ -40,6 +56,21 @@ for n in (3, 4, 5, 7):
 # A network split of 5 nodes into {0,1} and {2,3,4}
 side_a, side_b = {0, 1}, {2, 3, 4}
 print("side A can decide:", len(side_a) > 5 // 2, "| side B can decide:", len(side_b) > 5 // 2)
+```
+
+What each part does:
+
+- `n // 2 + 1` is the smallest number that is more than half of `n`. The `//` operator divides and rounds down, so for 5 nodes it gives 2 + 1 = 3.
+- `combinations(range(n), need)` produces every way of choosing `need` nodes out of `n`. `majorities(n)` returns all of them as sets.
+- `all(a & b for a in ms for b in ms)` takes every pair of majorities and checks that the two sets have at least one node in common. (`a & b` is the set of shared members, and an empty set counts as false.)
+- The last two lines model a network fault that divides five nodes into a group of two and a group of three, and ask which group is big enough to decide.
+
+```
+n=3: majority size 2, tolerates 1 failures, every pair of majorities overlaps: True
+n=4: majority size 3, tolerates 1 failures, every pair of majorities overlaps: True
+n=5: majority size 3, tolerates 2 failures, every pair of majorities overlaps: True
+n=7: majority size 4, tolerates 3 failures, every pair of majorities overlaps: True
+side A can decide: False | side B can decide: True
 ```
 
 Note that four nodes tolerate no more failures than three - an even cluster size buys nothing. And in a split, at most one side can have a majority.
@@ -61,7 +92,7 @@ If such a node carries on acting as leader, and other parts of the system accept
 3. The lease expires. Client 2 obtains it and starts writing.
 4. Client 1 wakes up, still convinced that its lease is valid, and writes too.
 
-Two writers, one file, corrupted data. The lock service did nothing wrong, and neither did client 2. Client 1's belief was simply out of date, and nothing checked it.
+Two writers, one file, damaged data. The lock service did nothing wrong, and neither did client 2. Client 1's belief was out of date, and nothing checked it. A node like client 1, which has been replaced and does not know it, is often called a **zombie**.
 
 ## 3. Fencing tokens
 
@@ -90,6 +121,8 @@ sequenceDiagram
 
 Client 1 never learns in advance that it was paused. It finds out when the storage service turns its request away - and that is enough. Correctness no longer depends on timeouts being right, on clocks, or on the client's good behaviour.
 
+The program below runs that scenario twice, first with a storage service that accepts anything and then with one that checks tokens.
+
 ```python-run
 class LockService:
     def __init__(self): self.token, self.holder = 0, None
@@ -116,9 +149,29 @@ for fencing in (False, True):
     print("stored:", [d for _, d in store.log])
 ```
 
+What each part does:
+
+- `LockService.grant(client)` raises its counter by one, records the new holder, and returns the counter. That number is the fencing token.
+- `Storage.write` is the resource. With fencing on, it compares the token on the request with the highest token it has accepted so far and refuses anything lower. Otherwise it remembers the new highest token and stores the data.
+- In the loop, client 1 is granted the lease (token 1). The lease is then granted to client 2 (token 2), standing for client 1's lease having expired during a pause.
+- Client 2 writes first. Then client 1, the zombie, wakes up and writes with its old token.
+
+```
+--- fencing off
+accept client-2 (token 2)
+accept client-1 (token 1)
+stored: ['v2 of the file', 'stale v1 of the file']
+--- fencing on
+accept client-2 (token 2)
+REJECT client-1 (token 1 < 2)
+stored: ['v2 of the file']
+```
+
+Without fencing, the stale write lands on top of the valid one. With fencing, the storage service turns it away, and the stored data is what the rightful holder wrote.
+
 Practical notes:
 
-- If **ZooKeeper** is the lock service, the transaction id `zxid` or a node's version `cversion` can be used as the token; both are guaranteed to increase monotonically. An **etcd** revision or a consensus term number serve equally well.
+- The token has to come from a service that can number its grants reliably. Coordination services such as **ZooKeeper** and **etcd** (small, highly reliable stores used for locks and cluster information) number every change they make with a counter that only goes up, and that number can serve as the token.
 - The resource itself must take part in the check. It is **not sufficient for clients to check their own lock status**. For a resource that does not understand tokens you may be able to smuggle one in - for instance, include it in a file name, or use a conditional write - but some check on the server side is unavoidable.
 - This is another case of a general principle: a service should not assume its clients are well behaved. The people who run a service and the people who write its clients often have different priorities, so services protect themselves.
 
@@ -143,7 +196,7 @@ In the kind of systems this track is about - databases and services inside your 
 - They do not help against **software bugs**: if every node runs the same code, the same bug affects all of them. One would need several independent implementations.
 - They do not help against **attackers** either: an attacker who compromises one node can usually compromise the rest in the same way. Authentication, access control, encryption and firewalls remain the main defences.
 
-Clients on the public internet are another matter. A web browser or a mobile app is under the user's control and may send anything. That is why servers validate and sanitise input. But the usual model there is simply that the server is the authority and decides what is allowed - no Byzantine agreement required.
+Clients on the public internet are another matter. A web browser or a mobile app is under its user's control and may send anything at all. That is why servers check every input they receive and reject or clean up anything unexpected. But the usual arrangement there is that the server is the single authority and decides what is allowed. No agreement among untrusted parties is needed.
 
 ### Weak forms of lying
 
@@ -152,6 +205,8 @@ Even when nodes are assumed honest, cheap precautions against accidental "lies" 
 - **Checksums** in the application protocol. Packets are occasionally corrupted in ways that slip past the checksums of TCP and Ethernet, for example through buggy network equipment or faulty memory.
 - **Input validation.** Check that values from users lie within sensible ranges and limit the size of strings, so malformed input cannot exhaust memory or trigger undefined behaviour. Internal services can be less paranoid, but basic sanity checks are still wise.
 - **Several time sources.** An NTP client that consults multiple servers, estimates their errors and discards the ones that disagree with the majority is robust against one badly configured server.
+
+The program below shows two of these precautions.
 
 ```python-run
 import zlib, statistics
@@ -170,6 +225,23 @@ trusted = [o for o in offsets if abs(o - med) < 50]
 print("naive mean offset :", round(statistics.mean(offsets), 1), "ms")
 print("after outlier drop:", round(statistics.mean(trusted), 2), "ms using", len(trusted), "servers")
 ```
+
+What each part does:
+
+- `zlib.crc32(payload)` computes a checksum of the message: a number that depends on every byte. The sender transmits the message together with its checksum.
+- `corrupted` imitates damage on the way: one digit of the amount has changed, while the checksum that travels with it is still the original.
+- The loop recomputes the checksum of what arrived and compares it with the one that was sent.
+- `offsets` is the clock correction, in milliseconds, suggested by each of five time servers. One of them is wrong by an hour.
+- `statistics.median(offsets)` is the middle value, which one wild value cannot drag far. `trusted` keeps only the servers within 50 milliseconds of the median.
+
+```
+intact    checksum ok: True
+corrupted checksum ok: False
+naive mean offset : 720000.3 ms
+after outlier drop: 0.42 ms using 4 servers
+```
+
+The damaged message is caught, because its bytes no longer match the checksum. In the second half, averaging all five servers would move the clock by twelve minutes. Dropping the one that disagrees with the rest leaves a correction of under half a millisecond.
 
 ## 5. System models
 
@@ -222,7 +294,7 @@ flowchart LR
 
 A system model is a simplification, and reality has a habit of stepping outside it. Algorithms in the crash-recovery model assume that data on stable storage survives a crash. What if the disk is corrupted, or a firmware bug makes it lose data, or a misconfiguration wipes it? Quorum algorithms assume a node remembers what it previously stored and promised. A node that "forgets" breaks the quorum condition, and with it the algorithm's correctness.
 
-A theoretical description can simply declare such things impossible. An implementation cannot. It may still need code for the supposedly impossible case, even if all that code does is log an error and exit, so that a human can clean up. That is the difference between computer science and software engineering.
+A theoretical description can declare such things impossible and move on. An implementation cannot. It may still need code for the supposedly impossible case, even if all that code does is record an error and stop, so that a person can sort things out. That is the difference between computer science and software engineering.
 
 None of this makes models useless. On the contrary, they are how we tame the overwhelming complexity of real systems into a set of faults we can reason about. **Proving an algorithm correct shows that it always satisfies its properties within the model** - a real implementation can still have bugs, but the proof is an excellent first step, and theoretical analysis regularly uncovers problems that would stay hidden for years in a running system, striking only when an unusual combination of circumstances defeats an assumption. Analysis and testing are both needed.
 
@@ -244,6 +316,27 @@ None of this makes models useless. On the contrary, they are how we tame the ove
 - **Byzantine faults** are arbitrary or malicious behaviour. Tolerating them matters in aerospace and between mutually distrusting parties; ordinary data-centre systems assume honest nodes, and use checksums, validation and redundant time sources against accidental corruption.
 - **System models** state assumptions about timing (synchronous, partially synchronous, asynchronous) and node failures (crash-stop, crash-recovery, Byzantine). Partial synchrony with crash-recovery matches most real systems.
 - **Safety** properties must never be violated; **liveness** properties may hold only under conditions. Proofs within a model are valuable, and implementations must still handle what the model rules out.
+
+## Glossary
+
+- **Quorum** - the minimum number of nodes that must agree for a decision to count.
+- **Absolute majority** - more than half of all the nodes.
+- **Zombie** - a node that still acts as leader or lock holder after the system has replaced it.
+- **Lock service** - a service that grants exclusive rights (locks or leases) to one client at a time.
+- **Lease** - a lock that expires after a set time unless renewed.
+- **Fencing token** - a number that increases with every grant of a lock; the resource rejects any request with a token lower than one it has seen.
+- **Resource** - the thing being protected, such as a storage service, which every write must pass through.
+- **ZooKeeper / etcd** - coordination services often used as lock services.
+- **Byzantine fault** - a node behaving arbitrarily, including sending false or contradictory messages.
+- **Byzantine fault-tolerant** - still correct when some nodes behave in that way.
+- **Checksum** - a number computed from data, used to detect that the data has been damaged.
+- **Input validation** - checking that incoming values are well formed and within sensible limits.
+- **System model** - a precise statement of the faults and timing an algorithm is allowed to assume.
+- **Synchronous / partially synchronous / asynchronous model** - delays always bounded / usually bounded with occasional exceptions / no timing assumptions at all.
+- **Crash-stop / crash-recovery** - a failed node never returns / a failed node may return with its disk contents but without its memory.
+- **Stable storage** - storage whose contents survive a crash, such as a disk.
+- **Safety property** - a guarantee that nothing bad ever happens.
+- **Liveness property** - a guarantee that something good eventually happens.
 
 ```quiz
 [

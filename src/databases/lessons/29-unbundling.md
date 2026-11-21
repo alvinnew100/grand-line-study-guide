@@ -1,5 +1,21 @@
 # Data integration and unbundling databases
 
+> **Before this lesson:** this lesson draws on most of the track. The essentials are: system of record and derived data ([From Unix pipes to MapReduce](#/lesson/databases/unix-mapreduce)); dual writes, change data capture and event logs ([Databases and streams](#/lesson/databases/cdc-event-sourcing)); stream-table joins, event time and exactly-once processing ([Processing streams](#/lesson/databases/processing-streams)); distributed transactions ([Distributed transactions, 2PC and consensus](#/lesson/databases/consensus)); and total versus causal order ([Ordering](#/lesson/databases/ordering)).
+
+## In plain words
+
+Earlier lessons each looked at one tool: a storage engine, a replication method, a message broker. A real system uses five or ten of them together, and holds the same information in several at once: a database for the official record, a search engine for finding things, a cache for speed, a warehouse for reports. **Data integration** is the work of keeping all those copies in agreement.
+
+An everyday picture: a restaurant chain's central kitchen. It has a master recipe book. From that book come the printed menus, the allergen charts, the ordering sheets for suppliers and the training cards for staff. Chaos follows if someone corrects a menu directly and nobody updates the allergen chart. Order follows from one rule: **every change is made in the master book, and everything else is reprinted from it.** If a menu is found to be wrong, you do not argue about which copy is right. You fix the book, or the printing process, and reprint.
+
+This lesson applies that rule to data systems. Pick one place where each fact is first written (the **system of record**). Treat every other copy as **derived data** that is produced from an ordered log of changes and can be rebuilt at any time.
+
+The lesson's second idea is a way of looking at this. Inside a single database, the engine already keeps indexes and saved query results in step with the tables automatically. If separate systems are connected by a log of changes, the whole collection behaves like one very large database whose parts have been pulled apart. That view is called **unbundling the database**.
+
+Why this matters for a job: senior system-design interviews are mostly about this lesson's subject, which is how the pieces fit together and what happens between them when something fails. In practice, most production incidents in data systems occur in the connections: a cache that disagrees with the database, an index that silently missed a day of updates.
+
+## From single mechanisms to whole systems
+
 Up to this point each lesson has examined one mechanism in isolation: a storage engine, a replication scheme, a transaction protocol, a batch or stream processor. Real systems are never one mechanism. They are five or ten of them wired together, and most production incidents do not happen *inside* a component - they happen in the wiring: the cache that disagrees with the database, the index that silently missed a day of updates, the report that double-counted after a retry.
 
 This lesson zooms out. It asks how to assemble specialised tools into one system that behaves coherently, and it proposes a way of thinking that makes the wiring itself principled: treat the whole organisation's data infrastructure as **one big database, taken apart**. A conventional database internally maintains indexes, materialised views and replicas in sync with its tables. If we use a log to do the same job between *separate* systems, we get those features at a scale and variety that no single product offers. This idea is known as **unbundling the database**, or the database turned inside out.
@@ -18,6 +34,8 @@ Every data-processing technique in this track is a trade-off. Log-structured eng
 | Sub-millisecond lookups | In-memory cache |
 | Similarity search for ML | Vector index |
 | Notifications and async work | Message broker |
+
+Two terms in that table may be new. An **inverted index** is the structure behind keyword search: for each word, a list of the documents that contain it. A **vector index** finds items that are *similar* to a given item, where each item is represented as a list of numbers. Both get more attention in the final module of this track.
 
 The moment the same information lives in more than one of these, you have a **data integration** problem: each copy must be kept consistent with the others, and somebody must be able to say which copy is right when they differ.
 
@@ -84,6 +102,8 @@ Stream processing reflects new input in derived views quickly. Batch processing 
 
 Without reprocessing, schema changes are limited to simple things like adding an optional field. With it, you can restructure a dataset into an entirely different model. And you can do it **gradually**: keep the old view, build the new one alongside as a second independently derived view, shift a small fraction of users to it, compare, and proceed - with the old view still there if you have to go back. A railway analogy helps: when nineteenth-century lines needed to change track gauge, engineers laid a third rail so that trains of both gauges could run during the transition, then removed the old rail. Dual-running derived views is the third rail. Every step being reversible is what gives you the confidence to move quickly.
 
+The program below builds two different views from one log of events.
+
 ```python-run
 events = [
     {"user": "ana", "action": "view",  "item": "book"},
@@ -111,6 +131,20 @@ def view_v2(log):                       # new idea, months later: conversion per
 print("v1 (still serving):", view_v1(events))
 print("v2 (built from the same history, no migration of v1):", view_v2(events))
 ```
+
+What each part does:
+
+- `events` is a log of six things users did: viewing or buying an item.
+- `view_v1(log)` is the original read model. It goes through the log and counts purchases per user.
+- `view_v2(log)` is a new idea added later: for each item, what fraction of views led to a purchase. It keeps two dictionaries, `seen` and `bought`. The line starting `target =` picks which of the two to update for each event. The last line divides purchases by views for every item that was viewed.
+- Both functions are run over the same, unmodified list.
+
+```
+v1 (still serving): {'ana': 1, 'ben': 1}
+v2 (built from the same history, no migration of v1): {'book': 0.5, 'lamp': 0.5}
+```
+
+Each item was viewed twice and bought once, so each has a conversion of 0.5.
 
 The second view did not exist when the events were recorded, and it needs information (views that did not lead to a purchase) which a "current state" table of purchases would never have kept.
 
@@ -146,6 +180,8 @@ Features a database bundles and their unbundled counterparts:
 
 Viewed like this, the dataflow across an organisation looks like one enormous database in which batch and stream processors and ETL jobs play the role of the subsystems that keep indexes and views up to date.
 
+The program below is a database reduced to its essentials: a log, and views that are computed from it.
+
 ```python-run
 class TinyDB:
     """A 'database' that is nothing but a log plus derived views registered on it."""
@@ -177,6 +213,21 @@ db.write({"id": 4, "city": "Lima", "amount": 1})
 print(db.view("idx_city"))
 print(db.view("sum_city"))
 ```
+
+What each part does:
+
+- `TinyDB` holds a list `log` of every record written and a dictionary `views`.
+- `create_view(name, apply, initial)` registers a view. `initial()` creates its empty state. The loop then replays every record already in the log through the `apply` function. This catching-up step is called a **backfill**. The view is then stored so that later writes can update it.
+- `write(rec)` appends the record to the log and passes it to every registered view's `apply` function.
+- `by_city` maintains a secondary index: for each city, the list of record IDs. `totals` maintains a materialised view: for each city, the sum of amounts.
+- The script writes two records, creates the index, writes a third record, creates the totals view, and writes a fourth.
+
+```
+{'Oslo': [1, 3], 'Lima': [2, 4]}
+{'Oslo': 35, 'Lima': 21}
+```
+
+The index was created after records 1 and 2 already existed, yet it contains them, because of the backfill. The totals view was created after three records and is still correct for all four: Oslo is 30 + 5 and Lima is 20 + 1.
 
 An index and a materialised view are the same construct here: a function folded over the log, backfilled on creation and updated on write. Replace the in-process loop by a durable log and independent consumers, and you have the unbundled architecture.
 
@@ -232,6 +283,8 @@ flowchart LR
 
 A full-text index does a moderate amount of work on write (update the postings lists) so that a read only has to intersect a few lists. With no index, writes would be free and every read would scan every document. At the other extreme you could precompute results for every possible query - reads become instant and the write path becomes impossibly expensive. Caching the results of the most frequent queries is a point in between. **Indexes, caches and materialised views all shift the boundary**: more work on write buys less work on read.
 
+The program below measures the trade-off for a keyword search over 20,000 small documents.
+
 ```python-run
 import time, random
 random.seed(0)
@@ -256,6 +309,22 @@ lookup = time.perf_counter() - t
 print("same answer:", hits_scan == hits_idx, "|", len(hits_idx), "hits")
 print(f"scan per query {scan*1e3:.1f} ms | index build {build*1e3:.1f} ms once | indexed query {lookup*1e3:.3f} ms")
 ```
+
+What each part does:
+
+- `docs` maps each of 20,000 document IDs to a list of 40 random word numbers.
+- Option A does no preparation. To answer "which documents contain both word 7 and word 99?", it checks every document.
+- Option B first builds an inverted index: for each word, the set of documents containing it. `index.setdefault(w, set()).add(d)` adds document `d` to the set for word `w`, creating the set if needed. Answering the query is then one set intersection, `index[7] & index[99]`.
+- `time.perf_counter()` is read before and after each step to time it.
+
+Typical output (the times depend on your computer):
+
+```
+same answer: True | 121 hits
+scan per query 7.3 ms | index build 180.5 ms once | indexed query 0.103 ms
+```
+
+Both methods find the same 121 documents. Building the index costs about as much as 25 scans, and it is paid once. After that each query is around 70 times faster. Whether that is a good bargain depends on how many queries there are for each write, which is exactly the question of where to put the boundary.
 
 ### Extending the write path to the device
 
@@ -285,6 +354,28 @@ The same reasoning can be turned onto reads. A read request may be sent through 
 - A database's indexes, views and replicas are derived data kept in sync internally; **unbundling** applies the same pattern across systems, with logs as the uniform interface. Federation unifies reads; unbundling unifies writes.
 - Indexes, caches and materialised views move the boundary between the **write path** and the **read path**; that boundary can extend to the end-user device through pushed change streams.
 
+## Glossary
+
+- **Data integration** - keeping several representations of the same data consistent with one another.
+- **System of record** - the one place where a fact is first written and is authoritative.
+- **Derived data** - data produced from other data by a repeatable transformation.
+- **Inverted index** - for each word, the list of documents containing it.
+- **Vector index** - a structure for finding items similar to a given item.
+- **State machine replication** - getting identical state everywhere by applying the same ordered inputs with deterministic processing.
+- **Distributed transaction** - a change to several systems that commits on all or on none.
+- **Log-based derivation** - each system applying an ordered log of changes at its own pace.
+- **Total order / causal order** - every pair of events ordered / only causes ordered before their effects.
+- **Reprocessing** - running historical data through new code to build a new view.
+- **Lambda architecture** - running a fast stream pipeline and a slower, corrected batch pipeline side by side.
+- **Unbundling the database** - providing a database's internal features (indexes, views, replication) across separate systems joined by logs.
+- **Backfill** - bringing a new view up to date by replaying existing data.
+- **Federated database (polystore)** - one query interface over many underlying stores.
+- **Loose coupling** - components that depend little on each other's availability or internals.
+- **Write path** - the work done when data arrives.
+- **Read path** - the work done when a query arrives.
+- **Materialised view** - a stored, precomputed query result.
+- **Push** - the server sending changes to a client without being asked.
+
 ```quiz
 [
   {"q": "What is the main advantage of deriving a search index from the database's change log instead of having the application write to both?",
@@ -294,7 +385,7 @@ The same reasoning can be turned onto reads. A read request may be sent through 
   {"q": "Compared with distributed transactions, integrating systems through an asynchronous event log:",
    "options": ["Gives stronger timing guarantees and worse fault isolation", "Gives weaker timing guarantees, since derived systems lag, but contains faults so one slow consumer does not stall the others", "Cannot tolerate consumer crashes", "Requires all systems to use the same storage engine"],
    "answer": 1,
-   "explain": "Atomic commit couples the participants' availability. With a log, a failed consumer simply falls behind and catches up later."},
+   "explain": "Atomic commit couples the participants' availability. With a log, a failed consumer falls behind and catches up later."},
   {"q": "Which situation makes a single total order of all events impractical?",
    "options": ["A single-node database with one writer", "Multiple partitions or regions, each with its own leader", "A table with a secondary index", "A nightly batch job"],
    "answer": 1,

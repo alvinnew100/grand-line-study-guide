@@ -1,5 +1,23 @@
 # Aiming for correctness and doing the right thing
 
+> **Before this lesson:** read [Data integration and unbundling databases](#/lesson/databases/unbundling). You also need idempotence and idempotency keys ([Modes of data flow](#/lesson/databases/dataflow-modes)); transactions, constraints and isolation ([ACID, read committed and snapshot isolation](#/lesson/databases/acid-weak-isolation)); exactly-once processing ([Processing streams](#/lesson/databases/processing-streams)); event logs ([Databases and streams](#/lesson/databases/cdc-event-sourcing)); and system models ([Truth, majorities, fencing tokens](#/lesson/databases/truth-fencing)).
+
+## In plain words
+
+A program that only answers questions can be restarted after a mistake and nothing is lost. A program that stores data is different, because its mistakes stay. A customer charged twice remains charged twice until somebody notices and puts it right.
+
+This lesson is about getting the *whole* system right, and not only each part. Its central observation is that a chain of individually reliable parts can still produce a wrong result.
+
+An everyday picture: you post a cheque to pay a bill. The postal service is reliable, the bank is reliable, and the company's accounts department is careful. But the envelope seems to go missing, so you post a second cheque. Then the first one turns up. Every organisation did its job correctly, and you have paid twice. No amount of extra care inside the post office could have prevented it. The only place it can be prevented is at the two ends: you write an invoice number on the cheque, and the company refuses to accept two payments for the same invoice number.
+
+That idea, that some guarantees can only be made by the two ends of a conversation and never by the middle, is called the **end-to-end argument**. The invoice number is the **idempotency key** you met earlier.
+
+The lesson then asks two broader questions. Which rules does a business truly need enforced at the instant of each write, and which can be checked afterwards and put right with an apology? And, in the last section, a question of a different kind: what do the systems we build do to the people whose data is in them?
+
+Why this matters for a job: "how do you make this payment endpoint safe to retry?" is a very common practical interview question. The distinction between data that is briefly out of date and data that is permanently wrong shapes every design discussion about consistency. And engineers are increasingly expected to reason about privacy and fairness, not only speed.
+
+## Mistakes that last
+
 A stateless service that crashes can be restarted and nothing of value is lost. A system that stores data is different: its mistakes last. A double-charged card, a lost order or a merged pair of accounts stays wrong until a person notices and repairs it - and often no one notices for a long time.
 
 For decades the standard tool for building correct stateful applications has been the transaction: atomicity, isolation and durability. Earlier lessons showed that this foundation is less solid than it looks. Weak isolation levels are the default in most databases and are easy to misunderstand; many distributed stores have dropped multi-object transactions altogether; and even a perfectly serialisable database cannot protect you from an application that uses it wrongly.
@@ -25,6 +43,8 @@ The money moves twice.
 ### Operation identifiers
 
 The repair must cover the whole path. The client generates a unique identifier for the *operation* - a UUID created when the form is first shown, or a hash of the relevant form fields - and sends it with every attempt. The server records the identifier in the same transaction as the effect, protected by a uniqueness constraint. A second attempt with the same identifier hits the constraint and is recognised as a repeat.
+
+The program below uses SQLite, a small SQL database included with Python, to show the technique.
 
 ```python-run
 import sqlite3, uuid
@@ -54,6 +74,24 @@ print(transfer(str(uuid.uuid4()), "alice", "bob", 40), "<- a retry with a fresh 
 print(dict(db.execute("SELECT id, balance FROM accounts")))
 ```
 
+What each part does:
+
+- `sqlite3.connect(":memory:")` creates a temporary database held in memory. The script creates two tables: `accounts`, and `requests`, in which `request_id` is the primary key. A primary key must be unique, so the database will refuse a second row with the same request ID.
+- Inside `transfer`, the block `with db:` is one transaction: everything in it is committed together, or, if an error occurs, none of it takes effect.
+- The first statement in the transaction inserts the request ID. The next two move the money. The `?` marks are placeholders that the database fills in from the values given alongside.
+- If the request ID is already present, the insert fails with an `IntegrityError`. The transaction is abandoned before any money moves, and the function reports a duplicate.
+- The script generates one ID, calls `transfer` twice with it (a retry after a lost response), then calls it once more with a newly generated ID.
+
+```
+applied
+duplicate ignored
+{'alice': 60, 'bob': 40}
+applied <- a retry with a fresh id would pay twice
+{'alice': 20, 'bob': 80}
+```
+
+After the first two calls, 40 has moved once. The third call carries a different ID, so the database has no way to connect it with the earlier request, and another 40 moves. The protection works only if the client reuses the same ID for a retry.
+
 The `requests` table is doing two jobs: it suppresses duplicates, and it is an **event log** of what was asked for - the balances could be derived from it. Payment APIs call this identifier an *idempotency key*.
 
 ### The general principle
@@ -65,7 +103,7 @@ It applies beyond duplicates:
 - **Integrity checks.** Ethernet, TCP and TLS all have checksums, yet they cannot catch corruption caused by a bug in the sending or receiving software, or by the disk the data rests on. Only a checksum computed at the origin and verified at the final destination covers the whole path.
 - **Encryption.** Wi-Fi encryption protects against people listening to the radio, TLS against the network in between, but only end-to-end encryption protects against a compromised server.
 
-Lower-level reliability features are still worth having - they greatly reduce how often the higher layer has to deal with a problem. They are just not sufficient. Transactions are a wonderful abstraction that collapses many failure modes into commit or abort, and the lesson here is not to discard them but to recognise that the application has to carry certain safeguards (like the request id) through from end to end.
+Reliability features in lower layers are still worth having, because they greatly reduce how often the higher layer has to deal with a problem. But they are not sufficient alone. Transactions are a wonderful abstraction that reduces many kinds of failure to two outcomes, commit or abort. The lesson here is not to discard them. It is to recognise that the application has to carry certain safeguards, such as the request ID, all the way from one end to the other.
 
 > [!INTERVIEW]
 > "How do you make this POST endpoint safe to retry?" Expected answer: the client supplies an idempotency key; the server stores it atomically with the effect under a unique constraint (or stores the response against the key and replays it); the key has a defined scope and expiry. Bonus: mention that the retry may arrive *while* the first attempt is still running, so the insert of the key must come first and act as a lock.
@@ -103,6 +141,23 @@ for p, log in enumerate(partitions):
         taken.add(key)
         print(f"partition {p}: {rid} {name:<6} -> {outcome}")
 ```
+
+What each part does:
+
+- `requests` is five attempts to claim a username. Note that request `r4` asks for "Kiwi" with a capital letter.
+- Each request is routed to a partition chosen from the lower-case form of the name. Converting to a standard form before comparing is called **normalising**. Without it, "kiwi" and "Kiwi" could be sent to different partitions and both be accepted.
+- Each partition is then processed by itself, one request at a time, in the order the requests appear in its log. `taken` is the set of names this partition has already granted.
+- A name not yet in `taken` is granted. A name already there is rejected.
+
+```
+partition 1: r1 kiwi   -> ok
+partition 1: r3 kiwi   -> REJECTED
+partition 1: r4 Kiwi   -> REJECTED
+partition 2: r2 mango  -> ok
+partition 2: r5 mango  -> REJECTED
+```
+
+All three requests for the name kiwi, in whatever spelling, landed in the same partition, where the first won and the others were refused. No communication between partitions was needed.
 
 ### Operations that span partitions
 
@@ -186,6 +241,8 @@ Event-based systems are easier to audit. The user's input is recorded as an immu
 
 Checking integrity at the ends of a pipeline - is what comes out consistent with what went in? - covers every disk, network, service and algorithm in between, which is the end-to-end argument once more.
 
+The program below shows two kinds of audit on a small ledger of transfers.
+
 ```python-run
 import hashlib, json
 
@@ -221,6 +278,23 @@ derived_store = balances(log)
 print("recomputation still matches (the edit was consistent):", derived_store == balances(log))
 print("hash chain detects tampering:", chain(log)[-1] != published_head)
 ```
+
+What each part does:
+
+- `chain(events)` computes a **hash chain**. A hash is a fixed-length fingerprint of some data: change the data even slightly and the fingerprint changes completely. Here each event's hash is computed from the event *together with the previous hash*. The final hash therefore depends on every event in the list and on their order.
+- `balances(events)` derives each party's balance from the log by subtracting from the sender and adding to the receiver.
+- `published_head` is the final hash of the original log, given to an outside party such as an auditor. `derived_store` stands for the database that users query.
+- Audit 1 recomputes the balances from the log and compares them with the stored ones. Audit 2 adds up all balances. Every transfer subtracts and adds the same amount, so the sum must be zero.
+- Then someone alters the amount of the second event and rebuilds the derived store to match.
+
+```
+derived view intact: True
+sum of balances: 0
+recomputation still matches (the edit was consistent): True
+hash chain detects tampering: True
+```
+
+The third line is the instructive one. After the dishonest edit, the log and the derived store still agree with each other, so recomputing finds nothing wrong. Only the hash chain, compared with the fingerprint that was published earlier, reveals that history was changed.
 
 Cryptographic tools generalise the last step: **Merkle trees** let you prove efficiently that a record is contained in a dataset, and transparency logs (as used for TLS certificates) make an append-only log publicly verifiable. Building auditability into ordinary data systems, at acceptable performance cost, is an area that deserves more attention than it gets.
 
@@ -270,6 +344,29 @@ Practical habits that follow: collect only what the feature needs (**data minimi
 - Separate **timeliness** (up to date; violations heal) from **integrity** (uncorrupted; violations persist). Dataflow systems relax the first and protect the second. Many business constraints can be handled by **compensating** afterwards.
 - Hardware and software fail in ways the system model ignores, so **audit**: verify backups, recompute derived data, and use immutable, hash-verifiable event logs for traceability.
 - Data systems affect people. Consider **bias**, **accountability** and **feedback loops** in predictive systems, and treat personal data with restraint: minimise, limit purpose, expire, and give individuals control.
+
+## Glossary
+
+- **End-to-end argument** - some guarantees can be made correctly only by the two endpoints of a communication, not by the layers in between.
+- **Idempotent** - having the same effect whether performed once or several times.
+- **Operation identifier (idempotency key, request ID)** - a unique ID the client creates for one intended operation and reuses on every retry.
+- **Uniqueness constraint** - a rule that a value may appear only once.
+- **Single decision point** - one place through which all conflicting requests pass, so one of them can be chosen.
+- **Normalising** - converting values to a standard form before comparing them.
+- **Deduplication** - recognising and ignoring repeats.
+- **Timeliness** - users see an up-to-date state; a violation is temporary.
+- **Integrity** - the data is not corrupted, lost or contradictory; a violation is permanent until repaired.
+- **Compensating transaction** - a later action that corrects the effect of an earlier one, such as a refund or an apology.
+- **Coordination-avoiding system** - a design that preserves integrity without synchronous coordination between nodes.
+- **System model** - the assumptions made about what can go wrong.
+- **Auditing** - checking that data is still intact and correct.
+- **Hash** - a fixed-length fingerprint of data that changes completely if the data changes.
+- **Hash chain** - a sequence of hashes in which each covers the one before, so no earlier item can be altered unnoticed.
+- **Merkle tree** - a tree of hashes that allows efficient proof that an item belongs to a dataset.
+- **Bias** (in predictive systems) - a model reproducing unfair patterns from the data it learned from.
+- **Feedback loop** - a system's output changing the conditions that produce its future input.
+- **Data minimisation** - collecting only the data a feature needs.
+- **GDPR** - the European Union's General Data Protection Regulation.
 
 ```quiz
 [

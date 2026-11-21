@@ -1,5 +1,23 @@
 # Choosing a database and the system-design playbook
 
+> **Before this lesson:** this is the closing lesson and it uses the whole track. If any of these are unfamiliar, revisit the lesson named: percentiles and estimation ([Scalability](#/lesson/databases/scalability-percentiles)); replication lag ([Single-leader replication](#/lesson/databases/leader-follower)); quorums ([Multi-leader and leaderless replication](#/lesson/databases/multi-leader-leaderless)); partition keys and hot spots ([Partitioning key-value data](#/lesson/databases/partitioning-keys)); isolation levels ([ACID](#/lesson/databases/acid-weak-isolation)); linearizability ([Linearizability](#/lesson/databases/linearizability)); logs and change data capture ([Databases and streams](#/lesson/databases/cdc-event-sourcing)); and the practical lessons on [PostgreSQL](#/lesson/databases/postgres-indexes) and [Redis and vector databases](#/lesson/databases/redis-vector-dbs).
+
+## In plain words
+
+Everything so far explained how individual tools work. This lesson is about **choosing** among them and **presenting a design**: going from a loose description ("build a messaging feature") to a concrete plan with numbers, and being clear about what the plan gives up.
+
+An everyday picture: an architect asked to design a house does not begin by picking a brand of brick. They ask how many people will live there, what the ground is like, what the budget is and what the local weather does. Then they do some arithmetic on loads and spans. Only then do they choose materials, and for each choice they can say what it costs and what would make them choose differently. A database decision works the same way. The questions come first: what will be read and written, how often, how much, and what must never go wrong. The product name comes last.
+
+The lesson has three parts:
+
+1. A method for choosing storage from the **workload**, meaning the pattern of reads and writes the system must serve.
+2. A repeatable **playbook** for a design conversation, with the quick arithmetic that supports it.
+3. Three **worked designs** from machine-learning engineering that bring the track's ideas together.
+
+Why this matters for a job: the system-design interview is a standard stage in hiring for backend, data and ML engineering roles at large technology companies, and this lesson is a direct preparation for it. The same seven steps are also the headings of the design document you will write at work before building anything substantial.
+
+## From knowledge to decisions
+
 This closing lesson turns the previous thirty-two into a way of making decisions. In an interview it is the question "design a system that does X". At work it is the design document you write before building a feature. In both cases nobody expects you to recite how an LSM-tree compacts. They want to see that you can go from vague requirements to a concrete design, name the trade-offs you are making, and explain what would cause you to change your mind.
 
 The lesson has three parts: a method for **choosing storage** from access patterns, a repeatable **playbook** for system-design conversations with the arithmetic that supports it, and three **worked designs** from the ML engineering world that pull the track's ideas together.
@@ -88,6 +106,8 @@ You cannot choose between one node and a hundred without numbers. Estimation in 
 | One relational primary on good hardware | thousands to low tens of thousands of simple writes per second |
 | `float32` embedding with 768 dimensions | about 3 kB |
 
+The function below turns a few assumptions about usage into the numbers a design needs.
+
 ```python-run
 def estimate(daily_active_users, writes_per_user, reads_per_user, bytes_per_record,
              years=3, peak_factor=5, replication=3):
@@ -110,7 +130,27 @@ for k, v in estimate(20_000_000, 15, 150, 300).items():
     print(f"{k:<45}{v}")
 ```
 
+What each part does:
+
+- The function takes the number of daily active users, how many records each writes and reads per day, and the size of one record. The remaining inputs have default values: keep data for 3 years, assume the busiest moment is 5 times the average, and keep 3 copies of everything.
+- `writes_day` and `reads_day` are daily totals. Dividing by 86,400, the number of seconds in a day, gives average rates per second.
+- `raw` is the total bytes written over the retention period: daily writes times record size times 365 days times the number of years.
+- The returned dictionary holds average and peak rates, the read-to-write ratio, and storage in terabytes (dividing bytes by $10^{12}$), both raw and after multiplying by the number of copies and adding 30% for indexes.
+- The call models a messaging feature: 20 million users a day, each sending 15 messages and reading 150, at 300 bytes a message.
+
+```
+avg writes/s                                 3472
+peak writes/s                                17361
+avg reads/s                                  34722
+peak reads/s                                 173611
+read:write                                   10:1
+raw storage TB                               98.55
+with replication + 30% index overhead TB     384.35
+```
+
 Read the output as an engineer: a few thousand writes per second on average and well over ten thousand at peak is beyond a comfortable single relational primary, and roughly a hundred terabytes of raw data will not sit on one machine - so this workload needs partitioning. Run the same function with 200,000 daily users and the answer is "one PostgreSQL instance, and stop worrying".
+
+The next program answers three follow-up questions: how many partitions, what a quorum setting tolerates, and what availability to expect from components combined.
 
 ```python-run
 import math
@@ -136,6 +176,24 @@ def parallel(a, k): return 1 - (1 - a) ** k
 print(f"3 services at 99.9% in series: {series(0.999, 0.999, 0.999):.4%}")
 print(f"2 redundant replicas of a 99% component: {parallel(0.99, 2):.4%}")
 ```
+
+What each part does:
+
+- `shards_needed` works out the number of partitions (shards) twice: once from the write rate and once from the data size. `headroom=0.5` means each node is planned to run at half its capacity, leaving room for growth and failures. The larger of the two numbers wins, and the function also reports which limit was the deciding one. `math.ceil` rounds up.
+- `quorum(n, w, r)` restates the rule from the replication lessons: reads and writes overlap when `w + r > n`, writes survive `n - w` unavailable nodes, and reads survive `n - r`.
+- `series(*a)` multiplies availabilities. When a request needs every component to work, the chances multiply. `parallel(a, k)` handles `k` redundant copies: the system fails only if all of them fail, which has probability `(1 - a)` to the power `k`.
+
+```
+shards: (99, 'storage')
+(3, 2, 2) {'overlap (w + r > n)': True, 'tolerates node failures for writes': 1, 'tolerates node failures for reads': 1}
+(3, 1, 1) {'overlap (w + r > n)': False, 'tolerates node failures for writes': 2, 'tolerates node failures for reads': 2}
+(5, 3, 3) {'overlap (w + r > n)': True, 'tolerates node failures for writes': 2, 'tolerates node failures for reads': 2}
+(3, 3, 1) {'overlap (w + r > n)': True, 'tolerates node failures for writes': 0, 'tolerates node failures for reads': 2}
+3 services at 99.9% in series: 99.7003%
+2 redundant replicas of a 99% component: 99.9900%
+```
+
+The first line says 99 shards, and that storage, not write rate, is the limiting factor: the peak write rate alone would need only 7. The quorum lines show the trade-off between settings. The setting (3, 1, 1) tolerates the most failures and gives up the overlap, while (3, 3, 1) has fast reads and cannot accept a write if any node is down.
 
 Three dependencies that are each "three nines" give you less than three nines overall; redundancy is how you get it back.
 
@@ -212,6 +270,21 @@ for card, ts, label in labelled:
           "| leaky latest value =", history[card][-1][1])
 ```
 
+What each part does:
+
+- `history` is the offline store. For each card it holds a sorted list of pairs (time the value became valid, feature value).
+- `as_of(card, ts)` finds the latest value whose time is at or before `ts`. `bisect.bisect_right(rows, (ts, float("inf")))` uses binary search to count how many pairs have a time up to and including `ts`. Subtracting 1 gives the position of the last such pair. If there is none, the function returns `None`.
+- `labelled` is four past transactions, each with a card, a time and a known outcome. For each, the loop prints the feature value as it stood at that time, and beside it the card's most recent value, which is what a careless join would use.
+
+```
+card1 250 fraud avg_amount_feature = 35.5 | leaky latest value = 80.0
+card1 90 ok avg_amount_feature = None | leaky latest value = 80.0
+card2 400 ok avg_amount_feature = 12.0 | leaky latest value = 12.0
+card1 300 ok avg_amount_feature = 80.0 | leaky latest value = 80.0
+```
+
+For the transaction at time 250, the correct value is 35.5, the one that became valid at time 200. For the transaction at time 90, no feature value existed yet, and the honest answer is `None`.
+
 The "leaky" column is what a naive join against the *current* feature table gives: for the transaction at time 250 it would use a value computed at time 300 - information from the future. A model trained that way looks excellent offline and disappoints in production. This is the time-dependent join problem from the stream-processing lesson appearing as **training-serving skew**.
 
 **Failure thinking.** If the stream processor falls behind, features go stale: monitor consumer lag and expose feature age to the model service. If the online store loses a node, features are rebuilt from the log and the offline store, because it is derived data. If the online store is unreachable, the model falls back to default values and the decision is flagged.
@@ -262,6 +335,33 @@ The pattern in all three designs is the same: a small, well-defined system of re
 - Deep dives reuse this track: replication mode and lag anomalies, partitioning and hot keys, isolation levels and invariants, where linearizability is needed, caching, logs versus queues and idempotent consumers.
 - ML systems apply the same ideas: **feature stores** separate online and offline paths and need **point-in-time** joins; **RAG** retrieval is a derived, eventually consistent index with filtering and evaluation; **experiment tracking** splits metadata, time series and artefacts.
 - A design is judged by how clearly its **trade-offs** and **failure behaviour** are stated, not by how many components it has.
+
+## Glossary
+
+- **Workload** - the pattern of reads and writes a system must serve.
+- **Access pattern** - a particular way the data is read or written, such as lookup by key or scan by date range.
+- **Invariant** - a rule about the data that must always hold.
+- **Distributed SQL** - a relational database that spreads data over many nodes and still offers transactions.
+- **Wide-column store** - a key-value store in which each row can hold many named columns, such as Cassandra or Bigtable.
+- **Data lake / lakehouse** - large files of raw or lightly structured data in cheap bulk storage / the same with table features such as schemas and transactions added.
+- **Time-series database** - a database specialised for measurements stamped with times.
+- **CRUD** - create, read, update, delete: the basic operations on records.
+- **Source of truth (system of record)** - the one store that is authoritative for a fact.
+- **Derived store** - a store filled from the source of truth, which can be rebuilt.
+- **Back-of-envelope estimate** - quick, approximate arithmetic to find the order of magnitude.
+- **Peak factor** - how many times higher the busiest load is than the average.
+- **Shard** - a partition.
+- **Headroom** - spare capacity deliberately left unused.
+- **Availability in series / in parallel** - every component must work / at least one redundant copy must work.
+- **Load balancer** - a component that spreads requests across servers.
+- **Deep dive** - examining one part of a design in detail.
+- **Feature store** - a system that computes and serves the input values (features) used by machine-learning models.
+- **Online store / offline store** - the fast store read at prediction time / the historical store used to build training data.
+- **Point-in-time join** - matching each training example with the feature values that existed at its own time.
+- **Training-serving skew** - a model seeing different data in training from what it sees in production.
+- **RAG (retrieval-augmented generation)** - a language model answering with the help of documents fetched by similarity search.
+- **Chunking** - cutting documents into passages before embedding them.
+- **Artefact** - a file produced by a training run, such as a saved model.
 
 ```quiz
 [

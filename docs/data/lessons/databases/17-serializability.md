@@ -1,5 +1,25 @@
 # Serializability: serial execution, 2PL and SSI
 
+> **Before this lesson:** read [ACID, read committed and snapshot isolation](#/lesson/databases/acid-weak-isolation) and [Lost updates, write skew and phantoms](#/lesson/databases/lost-updates-write-skew). You need: transaction, commit, abort, lock, snapshot isolation, MVCC, write skew, phantom and premise. Partitions come from [Partitioning key-value data](#/lesson/databases/partitioning-keys), and tail latency from [Scalability](#/lesson/databases/scalability-percentiles).
+
+## In plain words
+
+The last two lessons listed the bugs that appear when transactions overlap, and a different patch for each. **Serializable isolation** is the level at which the list is empty. It promises that however the transactions overlapped in reality, the final result is one that could have come from running them strictly one after another. If each transaction is correct when run alone, any mixture of them is correct.
+
+An everyday picture: a shop with one fitting room. There are three ways to make sure two customers never end up in it together.
+
+1. **One customer in the shop at a time.** Nothing can clash, and the queue outside is long. This is **serial execution**.
+2. **A lock on the fitting-room door.** Anyone may enter the shop, but whoever wants the room must wait until it is free, and keeps it until they leave. People sometimes block each other. This is **two-phase locking**.
+3. **No lock, and a check at the till.** Everyone moves freely. At the till, the cashier checks whether anything a customer relied on was changed by someone who paid before them. If so, that customer has to start their shopping again. This is **serializable snapshot isolation**.
+
+All three guarantee a correct outcome. They differ in who pays and how: by queueing, by waiting, or by starting over.
+
+One term before going on. A **thread** is one sequence of instructions being carried out by a processor. A program with several threads does several things at once; a **single-threaded** program does one thing at a time.
+
+Why this matters for a job: choosing an isolation level is a design decision with real consequences, and "why not make everything serializable?" is a classic interview question. To answer it you need to know what each of the three methods costs. You will also meet their side effects in production: deadlock errors, "could not serialize access" errors, and requests that mysteriously wait.
+
+## Why a stronger guarantee is worth having
+
 The last two lessons catalogued the ways concurrent transactions can go wrong under weak isolation: read skew, lost updates, write skew, phantoms. Each has its own workaround, each workaround has to be remembered in every code path, and there is no tool that will tell you whether your application as a whole is safe at a given level. That is an uncomfortable way to build software.
 
 **Serializable isolation** removes the catalogue. It guarantees that, although transactions may actually run at the same time, the end result is identical to the result of *some* execution in which they ran one at a time, in a row. If each transaction is correct when run alone, any mix of them is correct together. All race conditions are excluded by construction.
@@ -29,9 +49,15 @@ Traditional transactions are conversations: the application sends a query, looks
 
 Serial engines therefore refuse interactive multi-statement transactions. The application must hand over the **complete transaction logic as a stored procedure**; the database executes it in one go, with all data in memory, without ever waiting for the client.
 
+A **stored procedure** is a piece of program code that is kept inside the database and run there. The application does not send statements one by one. It sends a single request, "run procedure X with these inputs", and the database does all the reading, deciding and writing by itself.
+
 Stored procedures earned a poor reputation in the past: each vendor had its own awkward language, the code lived inside the database where it was hard to version, test and monitor, and one badly written procedure could slow down every application sharing the server. Modern systems soften this by using ordinary languages - Java or Groovy in VoltDB, Clojure in Datomic, Lua in Redis.
 
 If procedures are deterministic, they also provide a neat replication method: instead of shipping data changes, run the same procedure in the same order on every replica.
+
+A procedure is **deterministic** if it always produces the same result from the same inputs and the same starting data: no random numbers, no reading of the clock.
+
+The program below is a serial database in a few lines, used on the administrator example from the previous lesson.
 
 ```python-run
 import random, time
@@ -56,9 +82,22 @@ def give_up_admin(data, workspace, user):
 
 db = SerialDB({(12, "mira"): "admin", (12, "tom"): "admin"})
 db.submit(give_up_admin, 12, "mira")
-db.submit(give_up_admin, 12, "tom")              # "concurrent" request simply runs second
+db.submit(give_up_admin, 12, "tom")              # the "concurrent" request runs second
 print(db.run())
 print(db.data)
+```
+
+What each part does:
+
+- `SerialDB` holds the data in a dictionary and a queue of submitted procedures.
+- `submit` adds a procedure and its arguments to the queue. Nothing runs yet.
+- `run` takes the queued procedures one at a time and calls each with the data. Each one finishes completely before the next begins. That loop is the whole of the concurrency control.
+- `give_up_admin` is the stored procedure. It lists the administrators of the workspace, refuses if fewer than two remain, and otherwise changes this user's role to member.
+- Two requests are submitted, one from Mira and one from Tom, as if they had arrived at the same moment.
+
+```
+['mira: ok', 'tom: refused, last admin']
+{(12, 'mira'): 'member', (12, 'tom'): 'admin'}
 ```
 
 The write-skew example from the previous lesson cannot occur: the second procedure runs after the first has finished and sees one remaining admin.
@@ -98,6 +137,8 @@ The name comes from the two phases: locks are acquired as the transaction procee
 
 With so many locks held, two transactions can easily each hold what the other needs. The database detects such **deadlocks** and aborts one of the transactions, which the application must retry.
 
+A **deadlock** is exactly that situation: transaction A is waiting for a lock that B holds, while B is waiting for a lock that A holds. Neither can ever proceed unless something outside intervenes. The part of the database that hands out locks is called the **lock manager**, and it is the one that notices the cycle and breaks it.
+
 ```mermaid
 sequenceDiagram
   participant A as Txn A
@@ -113,12 +154,14 @@ sequenceDiagram
   L-->>A: lock on row 2 granted
 ```
 
+Read the diagram from the top. A takes a shared lock on row 1 and B takes one on row 2. Then A asks for row 2 exclusively and must wait for B. B asks for row 1 exclusively and must wait for A. The lock manager sees that each is waiting for the other, aborts B, and A can go on.
+
 ### 2.2 The price
 
 2PL is used by the serializable level of MySQL InnoDB and SQL Server and by DB2's repeatable read. It is correct, and it is slow in a particular way:
 
 - Acquiring and releasing locks costs CPU, but the real loss is **concurrency**: any two transactions that might conflict are forced to wait for one another.
-- Nothing bounds the waiting. One transaction that reads a large part of a table, or simply takes a long time, holds up a queue of others behind it. **Tail latencies are unstable**: the 99th percentile can be terrible even when the median is fine.
+- Nothing limits how long the waiting lasts. One transaction that reads a large part of a table, or that takes a long time for any other reason, holds up a queue of others behind it. **Tail latencies are unstable**: the 99th percentile of response time can be terrible even when the median is fine.
 - Deadlocks are much more frequent than under weaker levels, and each one throws away work.
 
 ### 2.3 Locking things that are not there yet
@@ -139,6 +182,8 @@ Checking every write against every active predicate is expensive, so real system
 - Or lock all bookings in the relevant time range across all machines, via an index on the time columns.
 
 A writer that wants to insert a conflicting booking has to update that same part of the index, meets the lock and waits. A coarser lock blocks a few transactions that did not really conflict, but it has far lower overhead. If no suitable index exists, the database falls back to locking the whole table.
+
+The program below is a tiny lock manager, used on the same two administrators.
 
 ```python-run
 class LockManager:
@@ -168,6 +213,23 @@ lm.release_all("tom")                                         # victim chosen, t
 print("after aborting tom, mira upgrade:", lm.acquire("mira", "idx:workspace=12", "X"))
 ```
 
+What each part does:
+
+- `self.locks` maps each locked object to a pair: the mode (`"S"` for shared, `"X"` for exclusive) and the set of transactions holding it.
+- `acquire(txn, obj, mode)` returns `True` if the lock is granted and `False` if the transaction would have to wait. If nobody holds the lock, or only this same transaction does, it is granted (and becomes exclusive if exclusive was asked for). If the request is for shared and the lock is held shared, the transaction joins the holders. In every other case the answer is "wait".
+- `release_all(txn)` removes a transaction from every lock it holds, which is what happens at commit or abort.
+- The script has both transactions take a shared lock on the part of the index that covers workspace 12, standing for "I have read the list of administrators". Each then asks to upgrade to exclusive in order to change a row in that range.
+
+```
+mira S-lock on index range workspace=12: True
+tom  S-lock on index range workspace=12: True
+mira upgrade to X: False (waits for tom)
+tom  upgrade to X: False (waits for mira) -> deadlock
+after aborting tom, mira upgrade: True
+```
+
+Both shared locks are granted, since readers do not block readers. Neither upgrade is granted, because each is blocked by the other's shared lock. That is a deadlock. Once Tom's transaction is aborted and its locks released, Mira's upgrade succeeds. Tom's retry will then count one administrator and refuse.
+
 The skew is prevented - at the cost of a deadlock and a retry. That is 2PL in miniature: always safe, sometimes painful.
 
 ## 3. Serializable snapshot isolation
@@ -183,6 +245,8 @@ SSI is **optimistic**: let transactions proceed without blocking, and check at c
 Optimistic schemes do badly under heavy contention, since many transactions abort and their retries add load to a system that is already struggling. With spare capacity and moderate contention they do well, because most transactions never wait for anything. Contention can often be reduced with commutative atomic operations - concurrent increments of a counter do not conflict if nobody reads the value in the same transaction.
 
 As the name says, SSI builds on snapshot isolation: every read comes from a consistent snapshot. On top of that it adds a mechanism to detect serialisation conflicts among writes.
+
+Three words in that passage deserve a definition. **Mutual exclusion** means allowing only one party at a time to use something. **Contention** is the degree to which transactions compete for the same data: high contention means many of them want the same rows at the same moment. Operations are **commutative** if they give the same result in either order, as two additions to a counter do.
 
 ### 3.2 The outdated premise
 
@@ -205,6 +269,8 @@ The other order: Tom reads the admin list, and *afterwards* Mira writes to it.
 Here the database uses the same index-range information as 2PL, with a different purpose. When a transaction reads through an index entry, the database notes that fact. When another transaction later writes into that range, it looks up which transactions have recently read it. It does **not** block. The note acts as a **tripwire**: the reader is informed that what it read may have changed.
 
 Both Mira and Tom are thus told that their reads have been affected by the other's write. The first to commit succeeds. When the second tries to commit, the conflicting write has been committed, so it is aborted.
+
+The program below is a much simplified SSI engine, applied once more to Mira and Tom.
 
 ```python-run
 class SSI:
@@ -238,6 +304,22 @@ db.begin("tom")                                                     # retry sees
 admins = [u for u, r in db.read("tom", ["mira", "tom"]).items() if r == "admin"]
 print("tom retry sees admins =", admins, "-> request refused by application")
 print(db.committed)
+```
+
+What each part does:
+
+- `self.committed` is the committed data. `self.clock` counts commits. `self.history` records, for each commit, its commit number and the set of keys it wrote.
+- `begin(name)` starts a transaction. It notes the current commit number as its start time, copies the committed data as its snapshot, and creates an empty set of keys read and an empty dictionary of pending writes.
+- `read` returns values from the snapshot and adds the keys to the transaction's `reads` set. This is the "note" of section 3.4: the database remembers what the transaction's decision depended on.
+- `write` stores the new value in the transaction's private `writes`. Nothing is visible to others yet.
+- `commit` is where the check happens. A transaction with no writes commits at once. Otherwise the database looks through the history for any commit that happened *after this transaction started* and wrote a key that *this transaction read*. If it finds one, the premise is out of date and the transaction is aborted. If not, the writes are applied and added to the history.
+- The script starts both transactions, has each read both administrators' roles and, seeing two, write its own demotion. Then Mira commits, Tom tries to commit, and Tom retries.
+
+```
+mira: commit
+tom: ABORT - premise changed by a concurrent commit to ['mira']
+tom retry sees admins = ['tom'] -> request refused by application
+{'mira': 'member', 'tom': 'admin'}
 ```
 
 Nobody waited for a lock. The conflict was detected at commit, one transaction was aborted, and on retry it saw the truth.
@@ -279,6 +361,31 @@ Nobody waited for a lock. The conflict was detected at commit, one transaction w
 - **Two-phase locking** uses shared and exclusive locks held until the end of the transaction, so readers and writers block each other; **predicate** or **index-range locks** prevent phantoms. It is correct but suffers from deadlocks and unstable latency.
 - **SSI** is optimistic: transactions run on snapshots without blocking, the database tracks reads and detects when a transaction's **premise** has been invalidated by a concurrent write, and aborts it at commit. Performance depends on the abort rate.
 - All three need the application to tolerate aborts; the choice depends on contention, transaction length and scale.
+
+## Glossary
+
+- **Serializable isolation (serializability)** - the result of overlapping transactions equals the result of running them one at a time in some order.
+- **Thread / single-threaded** - one sequence of instructions being executed / doing only one thing at a time.
+- **Serial execution** - really running one transaction at a time.
+- **Interactive transaction** - a transaction in which the application sends statements one by one and waits for each result.
+- **Stored procedure** - transaction logic stored in the database and run there in one go.
+- **Deterministic** - always giving the same result from the same inputs and starting data.
+- **Two-phase locking (2PL)** - readers take shared locks, writers take exclusive locks, and all locks are held until the transaction ends.
+- **Shared / exclusive lock** - a lock many readers may hold together / a lock only one transaction may hold.
+- **Lock upgrade** - changing a held shared lock to exclusive.
+- **Lock manager** - the part of the database that grants and tracks locks.
+- **Deadlock** - two or more transactions each waiting for a lock another holds.
+- **Predicate lock** - a lock on a search condition, covering rows that match it now or in the future.
+- **Index-range lock (next-key lock)** - a cheaper, broader substitute for a predicate lock, attached to a range of an index.
+- **Pessimistic concurrency control** - preventing conflicts by making transactions wait.
+- **Optimistic concurrency control** - letting transactions run freely and aborting one if a conflict is found at commit.
+- **Mutual exclusion** - allowing only one party at a time to use something.
+- **Contention** - how much transactions compete for the same data.
+- **Commutative** - giving the same result in either order.
+- **Serializable snapshot isolation (SSI)** - snapshot isolation plus detection of transactions whose premise has become outdated.
+- **Premise** - what a transaction read and based its decision on.
+- **Serialisation failure** - the error a database returns when it aborts a transaction to preserve serializability.
+- **Abort rate** - the fraction of transactions that have to be aborted and retried.
 
 ```quiz
 [

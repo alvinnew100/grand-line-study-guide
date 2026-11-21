@@ -1,8 +1,26 @@
 # Processing streams: time, windows, joins, fault tolerance
 
-The last two lessons explained how events get from A to B and where streams come from. Now we look at what you *do* with a stream once you have it. In outline a stream processor is just like a batch job - read input, transform, write output, without modifying the input - but one property changes everything: **the input never ends**.
+> **Before this lesson:** read [Message brokers and partitioned logs](#/lesson/databases/brokers-logs) and [Databases and streams: CDC and event sourcing](#/lesson/databases/cdc-event-sourcing) for events, offsets, at-least-once delivery, changelogs and log compaction. Batch joins come from [Batch joins and dataflow engines](#/lesson/databases/joins-dataflow), idempotence from [Modes of data flow](#/lesson/databases/dataflow-modes), and atomic commit from [Distributed transactions, 2PC and consensus](#/lesson/databases/consensus).
 
-That one fact breaks several assumptions we relied on in batch processing. You cannot sort an infinite dataset, so sort-merge joins are out. You cannot wait for the input to finish before emitting results, so "the answer" becomes something that is continuously revised. And you cannot simply rerun the job from the beginning after a crash if it has been running for three years. This lesson works through how real systems (Flink, Kafka Streams, Spark Structured Streaming, Beam/Dataflow) handle these problems: reasoning about **time**, chopping the stream into **windows**, **joining** streams with other streams and with tables, and recovering from failures without double counting.
+## In plain words
+
+**Stream processing** means computing results from events as they arrive, without waiting for the data to be complete, because it never will be. A stream processor is a program that reads one or more never-ending streams of events and continuously produces output: counts per minute, alerts, enriched events, up-to-date tables.
+
+An everyday picture: counting cars on a road. A batch job is handed yesterday's video and counts the cars in it. A stream processor stands at the roadside with a clicker, writes down a total at the end of every minute, and never goes home. That raises questions the batch job never had to face:
+
+- **Which minute does a car belong to?** The minute it passed, or the minute you noticed it? If you looked away for three minutes and then counted everything at once, the two answers differ a great deal.
+- **When is a minute finished?** A report from a second observer further up the road might arrive late. How long do you wait before writing the total down?
+- **What if you drop the clipboard?** You need to pick up again without counting any car twice or missing one.
+
+Those three questions are the three main topics of this lesson: **time**, **windows** and **fault tolerance**. A fourth topic, **joins**, covers combining one stream with another stream or with a table.
+
+Why this matters for a job: real-time dashboards, fraud detection, live recommendations and the features fed to machine-learning models are all stream processing, built with tools such as Flink, Kafka Streams and Spark Structured Streaming. Interviewers who ask you to "design a real-time metric" are listening for whether you distinguish event time from processing time and whether you know what "exactly once" really means.
+
+## Batch processing with no end
+
+The last two lessons explained how events get from one program to another and where streams come from. This one looks at what is done with a stream once you have it. In outline a stream processor resembles a batch job: read input, transform it, write output, never modify the input. One property changes everything: **the input never ends**.
+
+That one fact breaks several assumptions that batch processing relied on. An endless dataset cannot be sorted, so sort-merge joins are out. You cannot wait for the input to finish before producing results, so "the answer" becomes something that is continuously revised. And a job that has been running for three years cannot be restarted from the beginning after a crash. This lesson works through how real systems (Flink, Kafka Streams, Spark Structured Streaming, Beam) deal with these problems: reasoning about **time**, cutting the stream into **windows**, **joining** streams with other streams and with tables, and recovering from failures without counting anything twice.
 
 ## 1. What stream processors are used for
 
@@ -30,6 +48,8 @@ Streaming frameworks are tempted to take a shortcut and use the processor's own 
 
 Delays between the two have many causes: queueing, network faults, a consumer restart, backlog after an outage, a mobile device that was offline, or a deliberate replay of old data. And delay leads to **out-of-order** arrival.
 
+The program below shows the difference between the two kinds of time. Events are produced at a perfectly steady ten per second, and the consumer is switched off for three seconds in the middle.
+
 ```python-run
 # A steady 10 events/s. The consumer is down from t=3 to t=6, then catches up quickly.
 events = [(sec + i / 10, None) for sec in range(10) for i in range(10)]     # (event_time, _)
@@ -48,6 +68,26 @@ for et, _ in events:
 print("sec  by_event_time  by_processing_time")
 for s in range(10):
     print(f"{s:>3}  {by_event.get(s, 0):>13}  {by_proc.get(s, 0):>18}")
+```
+
+What each part does:
+
+- `events` is 100 events, ten in each of ten seconds. The first element of each pair is the event time.
+- `processing_time(event_time)` says when the processor handles an event. Normally that is a hundredth of a second after it happened. Events from seconds 3 to 5 arrived while the consumer was down, so they are all handled in a quick burst shortly after second 6.
+- The loop counts every event twice: once in the bucket for the second it *happened* (`by_event`), and once in the bucket for the second it was *processed* (`by_proc`). `int(et)` drops the fractional part, giving the whole second.
+
+```
+sec  by_event_time  by_processing_time
+  0             10                  10
+  1             10                  10
+  2             10                  10
+  3             10                   0
+  4             10                   0
+  5             10                   0
+  6             10                  40
+  7             10                  10
+  8             10                  10
+  9             10                  10
 ```
 
 The true rate was constant. Measured by processing time it shows three silent seconds followed by a spike of forty - an artefact of the consumer's restart that looks exactly like a traffic anomaly. Any alerting or model feature built on that number is wrong.
@@ -98,6 +138,8 @@ Subtracting 2 from 3 estimates the device clock's offset (network delay is negli
 
 A hopping window can be implemented cheaply by computing tumbling windows of the hop size and combining adjacent ones. Sessions are the tricky ones: an out-of-order event can bridge two sessions that had already been considered separate, so the engine has to **merge** window state.
 
+The program below works out window membership for single events and then groups events into sessions.
+
 ```python-run
 events = sorted([("u1", 2), ("u1", 7), ("u1", 31), ("u1", 34), ("u2", 5), ("u1", 12), ("u2", 50), ("u2", 58)])
 
@@ -121,9 +163,24 @@ def sessions(evts, gap):
 print("sessions(gap=10):", sessions(events, 10))
 ```
 
+What each part does:
+
+- `events` is a list of (user, timestamp) pairs.
+- `tumbling(ts, size)` finds the one window an event belongs to. `ts // size * size` rounds the timestamp down to a multiple of the window size, which is the window's start. For timestamp 34 and size 10 the window is 30 to 40.
+- `hopping(ts, size, hop)` lists every overlapping window that contains the timestamp. Windows start at multiples of `hop`. The function finds the earliest start whose window still reaches `ts`, then steps forward by `hop` up to `ts`.
+- `sessions(evts, gap)` goes through each user's events in time order. If an event comes within `gap` of the end of that user's current session, the session is extended and its count raised. Otherwise a new session `[start, end, count]` begins.
+
+```
+t=34 tumbling(10): [(30, 40)]
+t=34 hopping(20, 10): [(20, 40), (30, 50)]
+sessions(gap=10): {'u1': [[2, 12, 3], [31, 34, 2]], 'u2': [[5, 5, 1], [50, 58, 2]]}
+```
+
+An event at time 34 is in one tumbling window and in two hopping windows (20 divided by 10). User `u1` has two sessions: events at 2, 7 and 12 are each within 10 of the previous one, and then there is a long gap before 31 and 34.
+
 ## 4. Stream joins
 
-Enriching and correlating are just as necessary for unbounded data as for bounded data, but since new events can show up at any time, joins need state and rules about time. Three kinds are worth distinguishing.
+Combining records from different sources is as necessary for endless data as for finite data. Because new events can turn up at any time, a stream join has to keep state and needs rules about time. Three kinds are worth telling apart.
 
 ### Stream-stream join (window join)
 
@@ -136,6 +193,8 @@ The operator keeps **state** for both streams: recent events indexed by the join
 Example: every activity event carries a user id, and you want to attach the user's country and plan. Calling the user database for each event would be slow and would overload it. Instead, keep a **local copy** of the table inside the stream processor - an in-memory hash table or a local embedded index - and look up each event there.
 
 This is the streaming twin of the broadcast hash join in batch. The difference is that the stream job runs for ever, so the local copy must be kept current: the processor subscribes to the table's **changelog** (via CDC) and applies updates as they come. Seen that way, a stream-table join is really a stream-stream join in which one side has an infinitely long window ("back to the beginning of time") and newer records overwrite older ones.
+
+The program below performs a stream-table join on a single merged input.
 
 ```python-run
 # One merged, ordered input: profile changes (table changelog) and activity events
@@ -157,6 +216,21 @@ for kind, user, payload in log:
         print(f"{user} {payload:<11} plan_at_event_time={plan}")
 ```
 
+What each part does:
+
+- `log` is one ordered sequence containing two kinds of record: profile changes (the table's changelog) and click events.
+- `table` is the processor's local copy of the profile table, starting empty.
+- For a profile record, the loop stores the new profile under the user's ID. That keeps the local copy current.
+- For a click, it looks the user up in the local copy. `table.get(user, {})` returns an empty dictionary if the user is unknown, and `.get("plan", "UNKNOWN")` then supplies a default.
+
+```
+u1 /pricing    plan_at_event_time=free
+u1 /dashboard  plan_at_event_time=pro
+u9 /home       plan_at_event_time=UNKNOWN
+```
+
+The same user gets a different answer for each click, because the profile changed between them. And the click from `u9` arrived before any profile for `u9`, so the join found nothing. The order of records decided every result.
+
 ### Table-table join (materialised view maintenance)
 
 Example: a social timeline. Maintaining each user's home timeline means joining the stream of posts with the stream of follow relationships. When someone posts, the post is added to all their followers' timelines; when someone follows a new account, that account's recent posts are added; unfollows and deletions remove entries. The operator maintains a materialised view of the join between two tables, and each change on either side produces a change to the view.
@@ -172,7 +246,7 @@ This matters whenever the correct answer depends on the state "as of then". When
 
 ## 5. Fault tolerance
 
-A failed batch task is simply rerun; its partial output is discarded and replaced, so the result looks as if every record was processed exactly once even though some were physically processed more than once. This principle - visible effects happen once despite retries - is usually called **exactly-once semantics**; *effectively-once* describes it more honestly.
+A failed batch task is run again. Its partial output is discarded and replaced, so the result looks as if every record had been processed exactly once, even though some were physically processed more than once. This principle, that the visible effects happen once despite retries, is usually called **exactly-once semantics**. The name *effectively-once* describes it more honestly.
 
 In streaming we cannot wait for the job to finish before making output visible, because it never finishes. Several techniques fill the gap.
 
@@ -194,6 +268,8 @@ That sounds like distributed transactions, and it is - but kept inside one frame
 The alternative needs no transactions. An **idempotent** operation has the same effect whether you perform it once or several times. Setting a key to a fixed value is idempotent; incrementing a counter is not.
 
 A non-idempotent operation can often be made idempotent with a little metadata. Each message from a log-based broker has a persistent, monotonically increasing offset. If the consumer stores the offset of the last applied message *together with* the value it writes, it can recognise a redelivered message and skip it.
+
+The program below delivers five deposits with random duplicates and applies them in two ways.
 
 ```python-run
 import random
@@ -218,6 +294,20 @@ for off, amt in delivered:
 
 print("true total 180 | naive:", naive, "| idempotent:", store["balance"])
 ```
+
+What each part does:
+
+- `deposits` is five amounts, each paired with its offset in the log (0 to 4).
+- The first loop builds `delivered`, the sequence the consumer really receives. Each message is delivered once, and with a 50% chance delivered a second time, standing for redelivery after a crash.
+- `naive` adds up every delivered amount, duplicates included.
+- `store` holds a balance together with the offset of the last message applied. The second loop skips any message whose offset is not greater than `last_offset`. Otherwise it writes the new balance and the new offset together, as one update.
+
+```
+deliveries: [0, 0, 1, 2, 2, 3, 4]
+true total 180 | naive: 300 | idempotent: 180
+```
+
+Messages 0 and 2 were each delivered twice. Adding everything up gives 300. Remembering the last applied offset gives the correct 180.
 
 Relying on idempotence carries assumptions: after a restart the same messages must be replayed in the same order (a log-based broker gives you this), processing must be deterministic, and no other node may update the same value concurrently. When failing over from one processing node to another, **fencing** (see the fencing-token lesson) may be needed so that a node wrongly believed dead does not keep writing.
 
@@ -268,6 +358,34 @@ sequenceDiagram
 - Windows come as **tumbling**, **hopping**, **sliding** and **session** variants.
 - Joins need state: **stream-stream** (both sides buffered within a window), **stream-table** (local copy of the table kept fresh by its changelog), **table-table** (maintaining a materialised view). Their results can depend on cross-stream ordering unless you version the data.
 - Fault tolerance combines **checkpoints or micro-batches** with **atomic commit** of state, output and offsets, or with **idempotent** writes; operator state is rebuilt from snapshots or changelogs.
+
+## Glossary
+
+- **Stream processing** - continuously computing results from a never-ending sequence of events.
+- **Operator** - one processing step that reads streams and produces streams.
+- **Materialised view** - a stored result of a query, kept up to date as its inputs change.
+- **Complex event processing (CEP)** - searching a stream for a declared pattern of events.
+- **Event time** - when an event happened, according to the device or service where it occurred.
+- **Processing time** - when the stream processor handles the event.
+- **Out-of-order events** - events that arrive in a different order from the one in which they happened.
+- **Window** - a bounded slice of a stream over which something is computed.
+- **Watermark** - the processor's estimate that no more events older than a certain time will arrive.
+- **Straggler (late event)** - an event that arrives after its window was declared complete.
+- **Tumbling window** - fixed-length windows that do not overlap.
+- **Hopping window** - fixed-length windows that overlap, each starting a fixed step after the last.
+- **Sliding window** - all events within a given interval of one another.
+- **Session window** - a group of one key's events with no gap longer than a timeout.
+- **Stream-stream join** - matching events from two streams that occur within a time window of each other.
+- **Stream-table join (enrichment)** - attaching information from a table to each event, using a local copy of the table.
+- **Changelog** - the stream of changes to a table.
+- **Table-table join** - maintaining a materialised view of the join of two changing tables.
+- **Slowly changing dimension** - reference data that changes over time, where old events need the old values.
+- **Exactly-once (effectively-once) semantics** - the visible effects of each event happen once, even if it is processed more than once.
+- **Micro-batching** - processing a stream as a series of very small batches.
+- **Checkpoint** - a saved, consistent copy of all operator state and input positions.
+- **Sink** - an external system that a stream processor writes its output to.
+- **Idempotent** - having the same effect whether applied once or several times.
+- **Fencing** - preventing a node that was wrongly thought dead from continuing to write.
 
 ```quiz
 [

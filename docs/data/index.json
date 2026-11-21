@@ -69,7 +69,7 @@
   "sources": [
    "Goodrich, Tamassia & Goldwasser, Data Structures and Algorithms in Python (Wiley, 2013), ch. 3-15"
   ],
-  "words": 134871,
+  "words": 139537,
   "modules": 13,
   "lessons": 38,
   "problems": 33
@@ -194,7 +194,7 @@
    "SQLite documentation (window functions, WITH clause, EXPLAIN QUERY PLAN)",
    "PostgreSQL and MySQL reference manuals (dialect notes)"
   ],
-  "words": 122292,
+  "words": 127405,
   "modules": 20,
   "lessons": 39,
   "problems": 93
@@ -212,10 +212,10 @@
    "Apache Kafka documentation (kafka.apache.org/documentation)",
    "Malkov & Yashunin, Efficient and robust approximate nearest neighbor search using HNSW graphs (2016)"
   ],
-  "words": 170794,
+  "words": 170797,
   "modules": 13,
   "lessons": 33,
-  "problems": 18
+  "problems": 31
  },
  {
   "id": "redis",
@@ -309,7 +309,7 @@
    "FastAPI official documentation — https://fastapi.tiangolo.com/",
    "Pydantic v2 documentation — https://docs.pydantic.dev/"
   ],
-  "words": 72946,
+  "words": 97489,
   "modules": 12,
   "lessons": 29,
   "problems": 18
@@ -471,7 +471,7 @@
    "Forsgren, Humble & Kim, Accelerate / DORA State of DevOps research (four key metrics)",
    "Official docs: GitHub Actions, GitLab CI/CD, Docker, Kubernetes, Terraform, Argo CD, Argo Rollouts, OpenFeature, Semantic Versioning, Conventional Commits, trunkbaseddevelopment.com"
   ],
-  "words": 138447,
+  "words": 138449,
   "modules": 18,
   "lessons": 38,
   "problems": 22
@@ -490,7 +490,7 @@
   "words": 116580,
   "modules": 14,
   "lessons": 33,
-  "problems": 7
+  "problems": 23
  },
  {
   "id": "networking",
@@ -537,10 +537,10 @@
    "martinfowler.com (MonolithFirst, StranglerFigApplication, CircuitBreaker, Consumer-Driven Contracts)",
    "microservices.io (Saga, Transactional Outbox)"
   ],
-  "words": 33924,
+  "words": 132831,
   "modules": 18,
   "lessons": 36,
-  "problems": 32
+  "problems": 35
  },
  {
   "id": "web-security",
@@ -604,7 +604,7 @@
   "sources": [
    "Tanenbaum & Bos, Modern Operating Systems, 4th ed., ch. 1–12"
   ],
-  "words": 153034,
+  "words": 153037,
   "modules": 12,
   "lessons": 33,
   "problems": 33
@@ -621,7 +621,7 @@
    "Chip Huyen, AI Engineering (O'Reilly) — background for deep learning and system design",
    "Goodfellow, Bengio & Courville, Deep Learning — background for the maths and optimisers"
   ],
-  "words": 68753,
+  "words": 80257,
   "modules": 10,
   "lessons": 26,
   "problems": 25
@@ -640,7 +640,7 @@
    "Sculley et al., Hidden Technical Debt in Machine Learning Systems (NeurIPS 2015)",
    "Official docs: MLflow, DVC, Docker, Kubernetes, KServe, GitHub Actions, Prometheus, Evidently, Feast, Airflow, Prefect, BentoML, Ray Serve, vLLM, Hugging Face"
   ],
-  "words": 95487,
+  "words": 97442,
   "modules": 13,
   "lessons": 37,
   "problems": 17
