@@ -1,12 +1,22 @@
 # Working with web APIs
 
-Much of the world's live data — weather, maps, prices, public transport, code repositories, your own bank account — is not in files you download once but behind **web APIs**: addresses a program can call to ask a specific question and receive a structured answer. Learning to use them turns Python into a tool that can talk to almost any service on the internet, and it is the mirror image of what you will do in the FastAPI track, where you *build* such services.
+> **Before this lesson:** you need dictionaries, lists and functions ([Decisions and dictionaries](#/lesson/python/py-start-decisions-dicts), [User input, while loops and functions](#/lesson/python/py-start-input-functions)), `try`/`except` ([Files, errors and tests](#/lesson/python/py-start-files-tests), with more depth in [Exceptions](#/lesson/python/py-exceptions)), JSON ([Files, pathlib, JSON and CSV](#/lesson/python/py-files-json-csv)) and a small class ([Classes: modelling things with objects](#/lesson/python/py-start-classes)). The previous project lesson, [Data visualisation](#/lesson/python/py-proj-dataviz), shows what to do with the data once you have it. Every web term is explained from scratch below.
 
-Network calls cannot be made from inside this page, so the calls themselves are shown as static code using the **requests** library, while everything that happens *after* the response arrives — parsing, validating, summarising — runs live on realistic sample payloads. That split is also how well-designed API code is organised.
+## In plain words
+
+Much of the world's live data (weather, maps, prices, train times, code repositories, your own bank account) is not sitting in a file you download once. It lives on computers elsewhere on the internet, and you get it by asking. A **web API** is the agreed way of asking: an address your program can call with a specific question, which sends back a structured answer that a program can read.
+
+The classic comparison is a restaurant. You do not walk into the kitchen and cook; you read the **menu** (the API's documentation), tell the **waiter** your order in the agreed way (your program sends a request), and the waiter brings back your dish (the response). You never need to know how the kitchen works inside. If you order something that is not on the menu, the waiter tells you so, and that answer is also part of the agreement.
+
+Why this matters for a job: almost every modern program talks to other services. A shop's website calls a payment service, a phone app calls its company's servers, a data pipeline pulls figures from a statistics office. Knowing how to call an API carefully (with timeouts, error handling and respect for the service's limits) is an everyday skill, and interviews regularly ask about HTTP status codes, retries and keeping secret keys safe. It is also the mirror image of building such services yourself, as you would in the FastAPI track.
+
+Network calls cannot be made from inside this page, so the calls themselves are shown as static code using the **requests** library, the most popular Python package for this. Everything that happens *after* the answer arrives (reading it, checking it, summarising it) runs live on realistic sample answers. That split is also how well-designed API code is organised.
 
 ## What a web API is
 
-**API** stands for *application programming interface*: an agreed way for one program to use another. A **web API** makes that agreement over HTTP, the same protocol your browser speaks. Your program is the **client**; it sends a **request** to a **server**, which sends back a **response**.
+**API** stands for *application programming interface*: an agreed way for one program to use another. A **web API** makes that agreement over **HTTP** (HyperText Transfer Protocol), the same set of rules your web browser uses to fetch pages. A **protocol** is a set of rules for how two programs talk.
+
+The two sides have names. Your program is the **client**: it sends a **request**. The computer that answers is the **server**: it sends back a **response**.
 
 ```mermaid
 sequenceDiagram
@@ -18,9 +28,11 @@ sequenceDiagram
   C->>C: parse JSON, extract what is needed
 ```
 
+Read the diagram from top to bottom: the client asks for three stations in Porto, the server looks up the data, answers "200 OK" with the data attached, and the client then picks out what it needs.
+
 ### Anatomy of a request
 
-Take this address (an invented service, used throughout the lesson):
+A **URL** (Uniform Resource Locator) is a web address. Take this one, for an invented tide-measuring service used throughout the lesson:
 
 ```
 https://api.tidewatch.example/v1/stations?city=porto&limit=3
@@ -33,7 +45,9 @@ https://api.tidewatch.example/v1/stations?city=porto&limit=3
 | path | `/v1/stations` | which **resource** on that server (`v1` is the API version) |
 | query string | `?city=porto&limit=3` | parameters refining the request: `key=value` pairs joined by `&` |
 
-A specific address an API answers on is called an **endpoint**. A request also has a **method** saying what you want to do with the resource:
+A few words from the table: **HTTPS** is HTTP with **encryption**, which scrambles the data in transit so that nobody between you and the server can read or alter it. A **resource** is one kind of thing the API offers, such as stations or readings. Including a version number such as `v1` in the path lets the service change its format later (in a `v2`) without breaking programs written for `v1`.
+
+A specific address an API answers on is called an **endpoint**. Every request also has a **method** saying what you want to do with the resource:
 
 | Method | Purpose | Has a body? |
 |---|---|---|
@@ -42,11 +56,11 @@ A specific address an API answers on is called an **endpoint**. A request also h
 | `PUT` / `PATCH` | replace / partly update | yes |
 | `DELETE` | remove | usually not |
 
-and **headers**: extra labelled information such as which format you accept, who you are (`User-Agent`), and your credentials (`Authorization`).
+The **body** is data sent along with a request (or a response), such as the details of a new item to create. A request also carries **headers**: extra labelled pieces of information, such as which format you accept (`Accept`), which program is asking (`User-Agent`), and your credentials (`Authorization`).
 
 ### Anatomy of a response
 
-The server answers with a **status code**, headers of its own, and usually a **body** — for APIs, almost always JSON text.
+The server answers with a **status code** (a three-digit number summarising the outcome), headers of its own, and usually a body. For APIs, the body is almost always **JSON** (JavaScript Object Notation), text that looks much like Python dictionaries and lists.
 
 | Code | Meaning | What your program should do |
 |---|---|---|
@@ -58,11 +72,11 @@ The server answers with a **status code**, headers of its own, and usually a **b
 | `429 Too Many Requests` | you hit the rate limit | wait, then retry more slowly |
 | `500`–`503` | the server failed or is overloaded | retry later, with increasing pauses |
 
-The first digit tells the story: **2xx** worked, **4xx** means the client did something wrong, **5xx** means the server did.
+The first digit tells the story: **2xx** means it worked, **4xx** means the client (you) did something wrong, **5xx** means the server did. A **rate limit**, behind code 429, is a cap on how many requests you may make in a period of time.
 
 ## Calling an API with requests
 
-`requests` is the de-facto standard HTTP library for Python (`python -m pip install requests`). A complete, careful call looks like this:
+`requests` is the standard choice for HTTP in Python. Install it on your own computer with `python -m pip install requests`. A complete, careful call looks like this:
 
 ```python
 import requests
@@ -81,14 +95,23 @@ data = response.json()                                 # parse the JSON body int
 print(type(data), list(data))
 ```
 
+**Reading this code line by line**
+
+- `url` is the endpoint without its query string. `params` holds the query parameters as a dictionary; `requests` will turn it into `?city=porto&limit=3`.
+- `headers` says "I want JSON back" and names the program making the call, which lets the service's operators contact or identify you.
+- `requests.get(...)` sends a GET request and waits for the answer, which comes back as a `Response` object. `timeout=10` means "give up if the server has not answered within 10 seconds".
+- `response.status_code` is the number, such as 200; `response.headers` is a dictionary-like object of the response headers.
+- `raise_for_status()` does nothing for a successful status and raises an exception (`requests.HTTPError`) for any 4xx or 5xx status.
+- `response.json()` **parses** the body, meaning it reads the JSON text and builds the matching Python dictionaries and lists.
+
 Four habits are packed into those lines:
 
 1. **Pass parameters as a dictionary** (`params=`), never by gluing strings together. The library encodes spaces, accents and symbols correctly.
-2. **Always set a timeout.** Without one, a server that never answers will hang your program for ever.
-3. **Check the status** — `raise_for_status()` turns error responses into exceptions so that they cannot be mistaken for data.
+2. **Always set a timeout.** `requests` has no timeout by default, so a server that never answers would hang your program for ever.
+3. **Check the status.** `raise_for_status()` turns error responses into exceptions so that they cannot be mistaken for data.
 4. **Then parse** with `.json()`.
 
-Sending data uses the other methods; `json=` converts a dictionary into a JSON body and sets the right header:
+Sending data uses the other methods. `json=` converts a dictionary into a JSON body and sets the right header for you:
 
 ```python
 new_reading = {"station": "PRT-02", "height_m": 2.41, "taken_at": "2026-07-04T06:00:00Z"}
@@ -97,7 +120,9 @@ response = requests.post("https://api.tidewatch.example/v1/readings",
 print(response.status_code)                            # 201 if it was created
 ```
 
-What `params=` does can be seen with the standard library alone, which also offers `urllib.request` for simple calls when you cannot install anything:
+Here a new tide reading is sent to the `readings` resource with POST. If the server accepts it, it answers `201 Created`. The timestamp `2026-07-04T06:00:00Z` is in the ISO 8601 format: date, a `T`, the time, and `Z` meaning UTC (Coordinated Universal Time, the world reference clock).
+
+What `params=` does can be seen with the standard library alone. (The standard library also offers `urllib.request` for simple calls when you cannot install anything.)
 
 ```python-run
 from urllib.parse import urlencode, urlsplit, parse_qs
@@ -112,9 +137,15 @@ print(parts.scheme, "|", parts.netloc, "|", parts.path)
 print(parse_qs(parts.query))                  # and decoded again on the other side
 ```
 
+**Reading this code line by line**
+
+- `urlencode` turns a dictionary into a query string. URLs may only contain a limited set of characters, so anything else is **percent-encoded**: written as `%` followed by the byte's number in hexadecimal. The space becomes `+`, `ã` becomes `%C3%A3` (its two bytes in the UTF-8 encoding), and the comma becomes `%2C`.
+- `urlsplit` takes a URL apart: the scheme `https`, the `netloc` (network location, the host) and the path.
+- `parse_qs` decodes the query string back into a dictionary. Each value is a list, because a parameter may legally appear more than once. The name comes back as `são joão`, unchanged by the round trip.
+
 ## Exploring a response
 
-An API's documentation tells you what comes back, but you should still **look** before writing code against it. Here is the kind of body our stations endpoint might return, and the exploration routine to apply to any unfamiliar payload: top-level keys first, then one level down at a time.
+An API's documentation tells you what comes back, but you should still **look** before writing code against it. The data in a response body is often called the **payload**. Here is the kind of payload our stations endpoint might return, and a routine you can apply to any unfamiliar one: look at the top-level keys first, then go one level down at a time.
 
 ```python-run
 import json
@@ -143,13 +174,22 @@ print(sorted(first))
 print(json.dumps(first, indent=2)[:260], "...")   # 3. pretty-print to read the nesting
 ```
 
-`json.dumps(obj, indent=2)` is the best exploration tool there is: the indentation makes the structure obvious. Saving a real response to a file once (`Path("sample.json").write_text(response.text)`) lets you develop the rest of your program offline, without calling the API on every run — polite to the service and much faster for you.
+**Reading this code line by line**
 
-## Extracting what you need — defensively
+- `body` is the JSON text a server might send. Notice `null`, JSON's word for "no value", which becomes `None` in Python.
+- `json.loads(body)` parses the text, exactly as `response.json()` would.
+- Step 1 prints the type and the top-level keys: a `dict` with `total_count`, `next_page` and `items`. So the answer is a wrapper around a list of records, plus information about further pages.
+- `data["total_count"]` says 37 stations exist in total, but `items` holds only 3: this is one page of results.
+- Step 2 takes the first record and prints its keys in sorted order: `id`, `latest`, `location`, `name`, `operator`, `sensors`.
+- Step 3, `json.dumps(first, indent=2)`, turns the record back into JSON text with two spaces of indentation per level, which makes the nesting easy to read: `location` and `latest` are dictionaries inside the record, `sensors` is a list. The `[:260]` only shortens the printout.
 
-Real payloads have **optional** fields: keys that are sometimes absent, and values that are sometimes `null` (which becomes `None` in Python). Station three above has no latest reading; station two has no operator. Code written against the first record alone — `item["latest"]["height_m"]` — crashes on the third with `TypeError: 'NoneType' object is not subscriptable`.
+`json.dumps(obj, indent=2)` is the best exploration tool there is, because indentation makes the structure visible. Saving a real response to a file once (`Path("sample.json").write_text(response.text)`) lets you develop the rest of your program **offline** (without a network connection), instead of calling the API on every run. That is polite to the service and much faster for you.
 
-Write one function that converts a raw record into the clean, flat shape *your* program wants, and make it tolerant:
+## Extracting what you need, defensively
+
+Real payloads have **optional** fields: keys that are sometimes absent, and values that are sometimes `null`. Station three above has no latest reading; station two has no operator. Code written by looking only at the first record, such as `item["latest"]["height_m"]`, crashes on the third with `TypeError: 'NoneType' object is not subscriptable` ("you tried to use `[...]` on `None`").
+
+The cure is to write one function that converts a raw record into the clean, flat shape *your* program wants, and to make it tolerant of gaps. Writing code that expects things to go wrong like this is called programming **defensively**.
 
 ```python-run
 import json
@@ -192,11 +232,21 @@ highest = max(with_reading, key=lambda s: s["height_m"])
 print("highest tide:", highest["name"], "| average:", round(sum(s["height_m"] for s in with_reading) / len(with_reading), 2))
 ```
 
-The idiom `raw.get("latest") or {}` deserves a second look: `get` returns `None` both when the key is missing and when its value is `null`, and `or {}` replaces either with an empty dictionary, on which a further `.get` is safe. Everything downstream then works with a predictable shape, and knowledge about the API's quirks lives in exactly one function. (Pydantic models, introduced in the typing module and used throughout FastAPI, do this validation declaratively.)
+**Reading this code line by line**
+
+- The sample now has four records: a complete one, one with a `null` operator, one with no reading and no `operator` key at all, and one so broken it has no `id`.
+- `to_station` first rejects records missing the fields that identify a station, returning `None`.
+- `raw.get("latest") or {}` is the key idiom. `dict.get(key)` returns `None` when the key is missing, instead of raising `KeyError`. The value may also *be* `None` (from JSON `null`). In both cases `None` is falsy, so `or {}` replaces it with an empty dictionary, on which a further `.get` is always safe.
+- The returned dictionary is flat and predictable: `height_m` is a number or `None`, `operator` is a name or `"unknown"` (the second argument to `get` is the default), and `has_wind` is `True` or `False`. `raw.get("sensors", [])` supplies an empty list if the key is missing.
+- The list comprehension runs `to_station` on every record and keeps only the results that are not `None`.
+- The output reports `3 usable of 4 records`, then one line per station. Ribeira Quay's operator shows as `unknown` and Afurada Pier shows `no reading`, with no crash.
+- The last part keeps only stations with a reading, finds the highest with `max(..., key=...)`, and computes the average: Foz Lighthouse, 2.09.
+
+Everything downstream now works with a predictable shape, and all knowledge about the API's quirks lives in exactly one function. (Pydantic models, introduced in the typing module and used throughout FastAPI, do this checking by declaring the expected shape.)
 
 ## Pagination: getting all the pages
 
-APIs rarely return thousands of records in one response. They return a **page**, plus a way to get the next one — a page number, an offset, or a ready-made `next` link. Your code loops until there is no next page.
+APIs rarely return thousands of records in one response. They return one **page** of results plus a way to get the next one: a page number, an **offset** (how many records to skip), or a ready-made `next` link. Splitting results like this is called **pagination**. Your code loops until there is no next page.
 
 ```python
 def fetch_all(url, params, max_pages=50):
@@ -213,7 +263,9 @@ def fetch_all(url, params, max_pages=50):
     return items
 ```
 
-The logic can be exercised here by replacing the network with a pretend server — a function that returns pages:
+Each pass fetches one page, adds its items to the collection with `extend`, and moves `url` to the `next_page` link. The parameters are set to `None` because the next link already includes them. The loop stops when there is no next link, or after `max_pages` pages as a safety limit in case a buggy service keeps sending links for ever.
+
+The logic can be exercised here by replacing the network with a pretend server, a function that returns pages:
 
 ```python-run
 def fake_server(page, per_page=4, total=10):
@@ -236,11 +288,17 @@ everything = fetch_all(fake_server)
 print(len(everything), [item["id"] for item in everything])
 ```
 
-Passing the page-fetching function in as an argument is what makes `fetch_all` testable without a network — the same dependency-injection idea used in the testing lessons.
+**Reading this code line by line**
+
+- `fake_server(page)` pretends to hold 10 records, 4 per page. Page 1 gives ids 1 to 4, page 2 gives 5 to 8, page 3 gives 9 and 10. `next_page` is the next page number, or `None` after the last page.
+- This `fetch_all` receives the page-fetching function as its argument, `get_page`, instead of calling the network itself.
+- The output, `10 [1, 2, ..., 10]`, shows that all three pages were collected in order.
+
+Passing the page-fetching function in as an argument is what makes `fetch_all` testable without a network. Supplying a part from outside instead of hard-wiring it is called **dependency injection**, and the testing lessons use the same idea.
 
 ## Keys, limits and good manners
 
-**Authentication.** Many APIs require an **API key** or token that identifies you, usually sent in a header:
+**Authentication.** Many APIs need to know who is calling, which is called **authentication**. Usually you register and receive an **API key** or **token**, a long secret string that identifies you, and send it in a header:
 
 ```python
 import os
@@ -251,11 +309,13 @@ headers = {"Authorization": f"Bearer {api_key}"}
 response = requests.get("https://api.tidewatch.example/v1/me", headers=headers, timeout=10)
 ```
 
-A key is a password. **Never** write it in source code or commit it to Git — bots scan public repositories for leaked keys within minutes. Keep it in an environment variable (or a `.env` file listed in `.gitignore`) and read it at run time.
+`os.environ` is a dictionary of **environment variables**, named values that the operating system passes to every program it starts. You set the variable once in your terminal or system settings, and the code reads it without the secret ever appearing in the source. `Bearer` is the standard word in front of a token in the `Authorization` header.
 
-**Rate limits.** Services cap how many requests you may make per minute or per day, and tell you so in the documentation and often in response headers. Exceed the cap and you receive `429`. Stay well under it: request only what you need, **cache** results you have already fetched, and pause between calls when looping.
+A key is a password. **Never** write it in source code or commit it to Git: automated programs scan public repositories for leaked keys within minutes. Keep it in an environment variable (or in a `.env` file listed in `.gitignore`) and read it at run time.
 
-**Retries with back-off.** Networks fail. A robust client retries *temporary* failures — timeouts, `429`, `5xx` — a few times, waiting longer each time, and gives up on *permanent* ones (`400`, `401`, `404`) at once, because repeating a wrong request cannot help.
+**Rate limits.** Services cap how many requests you may make per minute or per day, and say so in their documentation and often in response headers. Exceed the cap and you receive `429`. Stay well under it: request only what you need, **cache** results you have already fetched (keep a copy so you do not ask again), and pause between calls when looping.
+
+**Retries with back-off.** Networks fail. A robust client **retries** temporary failures (timeouts, `429`, `5xx`) a few times, waiting longer each time, and gives up on permanent ones (`400`, `401`, `404`) at once, because repeating a wrong request cannot help. Doubling the wait after each failure is called **exponential back-off**; it gives an overloaded server room to recover instead of hammering it.
 
 ```python-run
 def should_retry(status):
@@ -282,7 +342,15 @@ except RuntimeError as error:
     print("gave up immediately:", error)
 ```
 
-**Handling failure in requests.** The library raises specific exceptions, all descended from `requests.RequestException`:
+**Reading this code line by line**
+
+- `should_retry` says yes for 429 and for any 5xx status (`500 <= status < 600` is a chained comparison).
+- `call_with_retries` takes a function `send` that performs one attempt and returns `(status, body)`. It also takes a `sleep` function; the default does nothing, so the demo does not really wait. Real code would pass `time.sleep`. This is dependency injection again: the test controls both the "network" and the "clock".
+- In the loop, a status below 400 is success: return the body. A permanent failure, or the last allowed attempt, raises a `RuntimeError`. Otherwise the delay is `base_delay * 2 ** (attempt - 1)`: 1, 2, 4 seconds and so on.
+- `answers` is an iterator of scripted results: 503, then 429, then success. `lambda: next(answers)` hands out one per call. The output shows two waits (1 s and 2 s) and then `{'ok': True}`.
+- The second call always returns 404, a permanent error, so the function gives up on the first attempt without waiting.
+
+**Handling failure in requests.** The library raises specific exceptions, all descended from `requests.RequestException`, so you can react to each kind of failure differently:
 
 ```python
 try:
@@ -299,11 +367,13 @@ except ValueError:
     print("The answer was not valid JSON.")
 ```
 
-When you make many calls to the same host, create a `requests.Session()` and call `session.get(...)`: it reuses the connection (faster) and remembers headers you set once.
+`Timeout` means no answer arrived in time; `ConnectionError` means the server could not be reached at all; `HTTPError` comes from `raise_for_status()` and carries the response, so you can report its status code; `ValueError` covers a body that is not valid JSON (the JSON decoding error is a subclass of `ValueError`).
+
+When you make many calls to the same host, create a `requests.Session()` and call `session.get(...)`. A session reuses the network connection between calls, which is faster, and remembers headers you set once.
 
 ## Structuring an API client
 
-Put all of this together and a pattern emerges. Keep three layers apart:
+An **API client** is the part of your program that talks to one particular service. Put everything above together and a pattern emerges. Keep three layers apart:
 
 ```mermaid
 flowchart LR
@@ -311,7 +381,7 @@ flowchart LR
   B --> C["Use: summarise, chart, store"]
 ```
 
-Only the first layer touches the network, so only it needs the internet to test; the second and third are pure functions over dictionaries, testable with saved sample payloads. A complete miniature — the transport is injected, so the same code runs here against canned data and in production against `requests`:
+Only the first layer, the **transport**, touches the network, so only it needs the internet to test. The second and third are pure functions over dictionaries, testable with saved sample payloads. Here is a complete miniature. The transport is injected, so the same code runs here against canned data and in production against `requests`:
 
 ```python-run
 import json
@@ -359,15 +429,25 @@ for name, height in sorted(client.heights("porto").items(), key=lambda kv: -kv[1
     print(f"{name:<15} {'#' * round(height * 10)} {height}")
 ```
 
-In real use you would construct it with a function that calls `requests.get(BASE_URL + path, params=params, timeout=10)`, checks the status and returns `response.json()`. The parsing and summarising code would not change by a single character.
+**Reading this code line by line**
+
+- `SAMPLE` plays the part of the server: a dictionary from path to the payload that path would return.
+- `TideClient.__init__` stores the injected `fetch` function and an empty cache.
+- `_get(path, **params)` is the transport-plus-cache layer. `**params` collects keyword arguments into a dictionary. The cache key combines the path with the parameters, sorted and turned into a tuple so that the key is **hashable** (usable as a dictionary key). Only on a cache miss does it call `fetch`. The leading underscore marks `_get` as internal to the class.
+- `heights(city)` is the parsing layer: it walks the items, uses the safe `or {}` idiom, and returns a clean `{name: height}` dictionary.
+- `fake_fetch` records each call in the `calls` list, so we can see how often the "network" was used.
+- The first two prints show the same heights, and `network calls made: 1`: the second request was answered from the cache.
+- The last loop is the "use" layer: a small text bar chart, highest first.
+
+In real use you would construct the client with a function that calls `requests.get(BASE_URL + path, params=params, timeout=10)`, checks the status and returns `response.json()`. The parsing and summarising code would not change by a single character.
 
 From here, the data-visualisation lesson takes over: the clean dictionaries your client produces are exactly what a Matplotlib or Plotly chart consumes.
 
 ## Reading API documentation
 
-Every API is different in detail, and its documentation is the contract. Look for five things: the **base URL** and version; how to **authenticate**; the list of **endpoints** with their parameters; an **example response** for each; and the **rate limits**. Many services describe their API in a machine-readable *OpenAPI* document rendered as an interactive page where you can try calls in the browser — FastAPI generates such a page for your own APIs automatically.
+Every API is different in detail, and its documentation is the contract. Look for five things: the **base URL** (the common start of every endpoint) and version; how to **authenticate**; the list of **endpoints** with their parameters; an **example response** for each; and the **rate limits**. Many services describe their API in a machine-readable **OpenAPI** document, displayed as an interactive page where you can try calls in the browser. FastAPI generates such a page for your own APIs automatically.
 
-Before writing code, try a `GET` endpoint in your browser's address bar or with a command-line tool such as `curl`. Seeing the raw response once saves a great deal of guessing.
+Before writing code, try a `GET` endpoint in your browser's address bar or with **curl**, a command-line tool that sends HTTP requests and prints the response. Seeing the raw response once saves a great deal of guessing.
 
 ## Common mistakes
 
@@ -382,15 +462,51 @@ Before writing code, try a `GET` endpoint in your browser's address bar or with 
 | odd characters or broken URLs | query string built by hand instead of `params=` |
 | a leaked key | it was committed to a repository — revoke it immediately and create a new one |
 
+To **revoke** a key is to cancel it in the service's settings, so that it stops working even if someone else has a copy.
+
 > [!TIP]
 > Save one real response from each endpoint you use into a `samples/` folder and write your parsing functions and their tests against those files. You can then work on a train with no connection, your tests run in milliseconds, and when the API changes its format you will know exactly which assumption broke.
 
 > [!INTERVIEW]
 > Expect questions such as: What happens when you type a URL (DNS lookup, connection, HTTP request and response)? What do 200, 401, 404, 429 and 500 mean? Difference between GET and POST? Why are timeouts and retries with back-off necessary, and which errors should not be retried? How do you keep API keys out of source control? How would you test code that depends on a third-party API? (Inject the transport and use recorded sample responses.)
 
+For the first question: **DNS** (the Domain Name System) is the internet's directory service. It turns a host name such as `api.tidewatch.example` into the numeric address of the server, after which your computer opens a connection to that address, sends the HTTP request and reads the response.
+
 ## Summary
 
-A web API answers HTTP requests — method, URL, parameters, headers — with a status code and usually a JSON body. With `requests`: pass `params=` and `timeout=`, call `raise_for_status()`, then `.json()`. Explore payloads top-down, convert raw records to clean ones in a single tolerant function, follow pagination to the end, keep keys in the environment, respect rate limits, cache, and retry only temporary failures. Separate transport from parsing so that most of your code can be tested without a network.
+A web API answers HTTP requests (method, URL, parameters, headers) with a status code and usually a JSON body. With `requests`: pass `params=` and `timeout=`, call `raise_for_status()`, then `.json()`. Explore payloads from the top down, convert raw records to clean ones in a single tolerant function, follow pagination to the end, keep keys in the environment, respect rate limits, cache, and retry only temporary failures. Separate transport from parsing so that most of your code can be tested without a network.
+
+## Glossary
+
+- **API (application programming interface)** - an agreed way for one program to use another.
+- **Web API** - an API offered over HTTP at web addresses.
+- **HTTP / HTTPS** - the protocol of the web / the same protocol over an encrypted connection.
+- **Client / server** - the program that asks / the program that answers.
+- **Request / response** - the message the client sends / the message the server returns.
+- **URL** - Uniform Resource Locator, a web address: scheme, host, path and query string.
+- **Endpoint** - one specific address an API answers on.
+- **Resource** - one kind of thing an API offers, such as stations.
+- **Query string** - the `?key=value&...` part of a URL, carrying parameters.
+- **Method** - the action requested: GET, POST, PUT, PATCH, DELETE.
+- **Header** - a labelled piece of extra information on a request or response.
+- **Body / payload** - the data carried by a request or response.
+- **Status code** - the three-digit number summarising a response: 2xx success, 4xx client error, 5xx server error.
+- **JSON** - a text format for nested dictionaries and lists; `null` becomes `None`.
+- **Parse** - read text in a format and build the matching data structures.
+- **Timeout** - the longest time to wait for an answer before giving up.
+- **Percent-encoding** - writing characters that are not allowed in URLs as `%` plus their byte values.
+- **Defensive programming** - writing code that expects and tolerates missing or bad data.
+- **Pagination** - splitting a large result into pages fetched one at a time.
+- **Dependency injection** - passing a component, such as the network call, in from outside so it can be replaced in tests.
+- **Authentication / API key** - proving who is calling / the secret string used to do so.
+- **Environment variable** - a named value the operating system passes to programs.
+- **Rate limit** - a cap on requests per period of time.
+- **Cache** - a stored copy of a result, reused instead of asking again.
+- **Exponential back-off** - waiting twice as long after each failed attempt before retrying.
+- **Session** - a `requests` object that reuses connections and shared headers.
+- **Transport layer** - the part of a client that sends requests and receives responses.
+- **OpenAPI** - a standard machine-readable description of an HTTP API.
+- **DNS** - the Domain Name System, which turns host names into server addresses.
 
 ```quiz
 [

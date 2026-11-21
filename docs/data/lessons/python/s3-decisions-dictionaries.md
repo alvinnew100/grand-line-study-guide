@@ -1,6 +1,14 @@
 # Decisions and dictionaries
 
-So far your programs have done the same thing every time they run. Two ideas change that. With **`if` statements** a program can examine a situation and choose what to do — charge a different price, skip a bad value, show a warning. With **dictionaries** it can store facts under meaningful labels and look them up instantly, the way you find a word in a real dictionary. By the end of this lesson you will combine both with the lists and loops you already know to model small pieces of the real world.
+> **Before this lesson:** you should be able to make lists, index them, loop over them with `for` and indent a loop body correctly, as taught in [Lists and loops](#/lesson/python/py-start-lists-loops). Variables, strings, string methods such as `strip()` and `lower()`, and f-strings come from [First steps](#/lesson/python/py-start-first-steps).
+
+## In plain words
+
+So far your programs have done the same thing every time they run. Two ideas change that. With **`if` statements** a program can examine a situation and choose what to do: charge a different price, skip a bad value, show a warning. With **dictionaries** it can store facts under meaningful labels and look them up instantly, the way you find a word in a real dictionary.
+
+Two everyday pictures. A decision is a fork in a footpath with a signpost: "if it is raining, take the covered path; otherwise take the river path". You check the condition and go one way. A dictionary is a row of labelled drawers: you do not count along to drawer number 7, you go straight to the drawer marked "spoons".
+
+Why this matters for a job: every real program makes decisions (is the password correct? is the basket empty? is this value valid?), and dictionaries are among the most used tools in all of Python. Coding interviews lean on them heavily, because a dictionary can answer "have I seen this before?" or "how many times does this occur?" instantly instead of by searching a whole list. By the end of this lesson you will combine both with the lists and loops you already know to model small pieces of the real world.
 
 ## Questions with yes/no answers
 
@@ -163,7 +171,7 @@ print(f"A latte costs {prices['oat latte']:.2f}")
 print(len(prices), "items on the menu")
 ```
 
-Curly braces surround the dictionary; inside, each pair is written `key: value`, and pairs are separated by commas. You look a value up with square brackets, just like indexing a list — except that what goes inside the brackets is the key rather than a position. (Inside the f-string the key uses single quotes because the string itself uses double quotes.)
+Curly braces surround the dictionary; inside, each pair is written `key: value`, and pairs are separated by commas. You look a value up with square brackets, as when indexing a list, except that what goes inside the brackets is the key rather than a position. (Inside the f-string the key uses single quotes because the string itself uses double quotes.)
 
 ### Adding, changing and removing
 
@@ -175,7 +183,7 @@ plant["indoors"] = True
 print(plant)
 
 plant["height_cm"] = plant["height_cm"] + 4     # change a value: it grew
-plant["room"] = "kitchen"                       # a new key simply adds a pair
+plant["room"] = "kitchen"                       # a new key adds a new pair
 del plant["indoors"]                            # remove a pair
 print(plant)
 ```
@@ -229,7 +237,7 @@ for drink in sorted(prices):                 # keys in alphabetical order
     print(drink, end="  ")
 print()
 
-print(list(prices.values()))                 # just the values
+print(list(prices.values()))                 # only the values
 print("cheapest:", min(prices.values()), "| total:", sum(prices.values()))
 ```
 
@@ -385,7 +393,7 @@ Extend it: let a returned book increase `copies`; refuse to lend more than two b
 
 1. Store a number. Print whether it is positive, negative or zero, and — separately — whether it is even or odd.
 2. Given a list of usernames, print a special greeting for `"admin"` and a normal one for everyone else; print "No users yet" if the list is empty.
-3. Make a dictionary of five rivers and the countries they run through. Print a sentence for each; then print just the countries, each once.
+3. Make a dictionary of five rivers and the countries they run through. Print a sentence for each; then print only the countries, each once.
 4. Count how many times each letter appears in the word `"bookkeeper"`, using a dictionary, and print the letters in alphabetical order with their counts.
 5. Build a list of three dictionaries describing pets (name, kind, age). Print the name of the oldest pet.
 6. Turn marks into grades: 90 and above is "A", 75–89 "B", 60–74 "C", anything lower "try again". Check the boundaries.
@@ -397,6 +405,27 @@ Extend it: let a returned book increase `copies`; refuse to lend more than two b
 - A dictionary maps keys to values: `d[key]` looks up (missing key → `KeyError`), `d.get(key, default)` looks up safely, `d[key] = value` adds or changes, `del d[key]` removes.
 - Loop with `for key, value in d.items()`; use `sorted(d)` for ordered keys and `set(...)` for distinct values.
 - Nest lists and dictionaries to model layered information, and read nested lookups left to right.
+
+## Glossary
+
+- **Condition** - an expression that is either `True` or `False`, used to make a decision.
+- **Boolean (`bool`)** - the type of the two values `True` and `False`.
+- **Comparison operators** - `==`, `!=`, `<`, `>`, `<=`, `>=`, which compare two values.
+- **Logical operators** - `and`, `or` and `not`, which combine or flip conditions.
+- **Membership test** - `in` / `not in`, asking whether a value is in a collection or text.
+- **`if` / `elif` / `else`** - choose one block to run: the first whose condition is true, or `else` if none is.
+- **Branch** - one of the alternative blocks in an `if` statement.
+- **Truthiness** - how a value counts in a condition: empty containers, empty strings, zero and `None` count as false.
+- **Dictionary** - a collection of key-value pairs written `{key: value, ...}`.
+- **Key / value** - the label used to look something up / what is stored under it.
+- **KeyError** - the error raised when you look up a key that is not in the dictionary.
+- **`get`** - a dictionary method that returns a fallback value instead of raising `KeyError`.
+- **`items()`** - a dictionary method that gives each key-value pair, for looping.
+- **Set** - a collection that holds each value at most once.
+- **Tally** - a count of how often each thing occurs, often kept in a dictionary.
+- **Nesting** - placing lists and dictionaries inside each other.
+- **`None`** - Python's "nothing here" value, checked with `is None`.
+- **Boundary value** - a value exactly on the edge between two cases, such as 15 in "under 15".
 
 ```quiz
 [

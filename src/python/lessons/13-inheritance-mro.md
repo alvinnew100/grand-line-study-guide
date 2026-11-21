@@ -1,115 +1,127 @@
 # Inheritance, MRO and super
 
-Inheritance lets a new class (the **subclass**, child or derived class) reuse and specialise an existing one (the **superclass**, parent or base class). Python supports single and multiple inheritance, and resolves "which method runs?" with a precise algorithm called C3 linearisation, exposed as the **method resolution order** (MRO). This lesson explains overriding, `super()`, the MRO, mixins, and when to prefer composition instead.
+> **Before this lesson:** read [Classes and instances](#/lesson/python/py-classes) first. You should know what a class, an instance, `self`, `__init__` and an attribute lookup (instance first, then class) are. `**kwargs` and keyword-only parameters come from [Functions and arguments](#/lesson/python/py-functions-args).
+
+## In plain words
+
+**Inheritance** lets you define a new class by saying "it is like that existing class, except for these differences". The new class automatically has everything the existing one has, and you write only what is new or different.
+
+Think of job descriptions. A company has a description for "employee": has a badge, gets paid monthly, may book holidays. The description for "manager" does not repeat all that. It says "a manager is an employee who also approves holidays, and whose pay is worked out differently". Anyone handling a manager can treat them as an employee, because a manager *is an* employee.
+
+Some vocabulary, used throughout: the existing class is the **base class** (also called parent or superclass); the new one is the **subclass** (child, derived class). Replacing one of the parent's methods with your own version is **overriding** it. The built-in function `super()` lets the subclass call the parent's version from inside its own.
+
+Python also allows a class to have *several* base classes at once (**multiple inheritance**). That raises a question: if two parents both have a method with the same name, which one runs? Python answers with a fixed search order for each class, called the **MRO** (method resolution order).
+
+Why this matters for a job: every framework you will use (Django, pytest, the standard library's own error types) asks you to subclass its classes. Interviewers ask about the MRO, the "diamond problem" and what `super()` really does. And knowing when *not* to inherit, and to build an object out of other objects instead (**composition**), is one of the clearest signs of design experience.
 
 ## Single inheritance
 
-Goodrich (§2.4.1) extends the `CreditCard` class with a `PredatoryCreditCard` that charges a fee on rejected charges and applies monthly interest. The subclass inherits everything, **overrides** `charge`, and **extends** with a new method:
+Start with one base class. The example reuses the idea of a water tank from the previous lesson. `MeteredTank` is a tank whose owner pays for the water delivered: it inherits everything from `WaterTank`, **overrides** `fill` to add the billing, and **extends** the class with a new method.
 
 ```python-run
-class CreditCard:
-    def __init__(self, customer, limit):
-        self._customer = customer
-        self._limit = limit
-        self._balance = 0
-    def get_balance(self):
-        return self._balance
-    def charge(self, price):
-        if price + self._balance > self._limit:
+class WaterTank:
+    def __init__(self, owner, capacity):
+        self._owner = owner
+        self._capacity = capacity
+        self._level = 0
+    def level(self):
+        return self._level
+    def fill(self, litres):
+        if self._level + litres > self._capacity:
             return False
-        self._balance += price
+        self._level += litres
         return True
 
-class PredatoryCreditCard(CreditCard):
-    OVERLIMIT_FEE = 5
+class MeteredTank(WaterTank):
+    CALLOUT_FEE = 5                           # charged when a delivery is refused
 
-    def __init__(self, customer, limit, apr):
-        super().__init__(customer, limit)     # let the parent initialise its part
-        self._apr = apr
+    def __init__(self, owner, capacity, price_per_litre):
+        super().__init__(owner, capacity)     # let the parent initialise its part
+        self._price = price_per_litre
+        self._owed = 0.0
 
-    def charge(self, price):                  # override
-        success = super().charge(price)       # reuse the parent's logic
-        if not success:
-            self._balance += self.OVERLIMIT_FEE
-        return success
+    def fill(self, litres):                   # override
+        accepted = super().fill(litres)       # reuse the parent's logic
+        self._owed += litres * self._price if accepted else self.CALLOUT_FEE
+        return accepted
 
-    def process_month(self):                  # extension
-        if self._balance > 0:
-            self._balance *= (1 + self._apr) ** (1 / 12)
+    def bill(self):                           # extension
+        return round(self._owed, 2)
 
-c = PredatoryCreditCard("Brook", 100, 0.0825)
-print(c.charge(90), c.charge(50), round(c.get_balance(), 2))
-c.process_month()
-print(round(c.get_balance(), 2))
-print(isinstance(c, CreditCard), issubclass(PredatoryCreditCard, CreditCard))
+t = MeteredTank("Brook", 100, 0.25)
+print(t.fill(90), t.fill(50), t.level(), t.bill())
+print(isinstance(t, WaterTank), issubclass(MeteredTank, WaterTank))
 ```
 
-Key ideas:
+**Reading this code line by line**
 
-- **Overriding**: define a method with the same name; lookup finds the subclass's version first.
-- **Extending**: call `super().method(...)` to run the parent's version as part of yours.
-- **`isinstance(obj, Base)`** is true for subclass instances — the "is-a" relationship. Prefer `isinstance` over `type(obj) == Base`, which breaks for subclasses.
-- Every class ultimately inherits from `object`, which supplies defaults for `__repr__`, `__eq__`, `__hash__`, `__init__` and more.
+- `class MeteredTank(WaterTank):` names the base class in parentheses. `MeteredTank` now has `level` and `fill` without writing them.
+- Its `__init__` takes one more argument than the parent's. The first thing it does is `super().__init__(owner, capacity)`, which runs the parent's initialiser so that `_owner`, `_capacity` and `_level` get set. Then it adds its own two attributes.
+- `fill` has the same name as a parent method, so it overrides it: for a `MeteredTank`, this version is found first. Inside, `super().fill(litres)` calls the parent's version to do the real work and reports whether the water fitted. The override then adds the cost of the water, or a fixed fee if the delivery was refused.
+- `bill` is a new method that the parent does not have.
+- `CALLOUT_FEE` is a class attribute, read through `self`.
+
+The output is `True False 90 27.5`: 90 litres accepted (22.50 owed), 50 litres refused (5.00 fee), level still 90. The second line prints `True True`: the object counts as a `WaterTank`, and the class is a subclass of it.
+
+The ideas in that example, stated generally:
+
+- **Overriding**: define a method with the same name as one in the parent. Attribute lookup reaches the subclass before the parent, so the subclass's version is found first.
+- **Extending**: inside the override, call `super().method(...)` to run the parent's version as one step of yours.
+- **`isinstance(obj, Base)`** is true for instances of subclasses as well. This is the "is-a" relationship. Prefer `isinstance` to `type(obj) == Base`, which is false for subclass instances.
+- Every class inherits, directly or indirectly, from the built-in class `object`, which supplies default versions of `__repr__`, `__eq__`, `__hash__`, `__init__` and others.
 
 ### Dynamic dispatch
 
-When a parent method calls `self.something()`, the lookup starts at the *actual* type of `self`. So a base class can define a template algorithm and let subclasses fill in steps — the **template method pattern**. Goodrich's numeric progressions (§2.4.2) are a textbook example:
+When a method written in the parent calls `self.something()`, the search for `something` starts at the *actual* class of the object, not at the class where the calling method is written. Choosing the method at run time according to the object's real class is called **dynamic dispatch**.
+
+This makes a useful design possible. The base class writes the overall procedure once and calls small helper methods for the steps; each subclass replaces only the helpers. The small replaceable methods are called **hooks**, and the design is known as the **template method pattern**. Here a base class knows how to export rows of data as text, and subclasses decide what a header and a line look like:
 
 ```python-run
-class Progression:
-    def __init__(self, start=0):
-        self._current = start
-    def _advance(self):                 # hook for subclasses
-        self._current += 1
-    def __iter__(self):
-        return self
-    def __next__(self):
-        if self._current is None:
-            raise StopIteration
-        answer = self._current
-        self._advance()                 # dispatches to the subclass's version
-        return answer
-    def first(self, n):
-        return [next(self) for _ in range(n)]
+class Exporter:
+    """export() is written once; subclasses supply the pieces."""
+    def export(self, rows):
+        lines = [self._header(rows[0])]
+        for row in rows:
+            lines.append(self._line(row))     # dispatches to the subclass's version
+        return "\n".join(lines)
+    def _header(self, first_row):             # hook with a default
+        return " ".join(first_row)
+    def _line(self, row):                     # hook with a default
+        return " ".join(str(v) for v in row.values())
 
-class ArithmeticProgression(Progression):
-    def __init__(self, increment=1, start=0):
-        super().__init__(start)
-        self._increment = increment
-    def _advance(self):
-        self._current += self._increment
+class CsvExporter(Exporter):
+    def _header(self, first_row):
+        return ",".join(first_row)
+    def _line(self, row):
+        return ",".join(str(v) for v in row.values())
 
-class GeometricProgression(Progression):
-    def __init__(self, base=2, start=1):
-        super().__init__(start)
-        self._base = base
-    def _advance(self):
-        self._current *= self._base
+class MarkdownExporter(Exporter):
+    def _header(self, first_row):
+        return "| " + " | ".join(first_row) + " |\n|" + "---|" * len(first_row)
+    def _line(self, row):
+        return "| " + " | ".join(str(v) for v in row.values()) + " |"
 
-class FibonacciProgression(Progression):
-    def __init__(self, first=0, second=1):
-        super().__init__(first)
-        self._prev = second - first
-    def _advance(self):
-        self._prev, self._current = self._current, self._prev + self._current
+class ShoutingCsvExporter(CsvExporter):
+    def _line(self, row):
+        return super()._line(row).upper()
 
-print(Progression().first(5))
-print(ArithmeticProgression(5).first(5))
-print(GeometricProgression(3).first(5))
-print(FibonacciProgression(4, 6).first(6))
+rows = [{"name": "ana", "age": 31}, {"name": "ben", "age": 25}]
+for cls in (Exporter, CsvExporter, MarkdownExporter, ShoutingCsvExporter):
+    print(cls.__name__)
+    print(cls().export(rows))
 ```
 
-`first` and `__next__` are written once in the base; each subclass only describes how to advance.
+`export` exists only in `Exporter`. When it runs on a `CsvExporter`, the calls `self._header(...)` and `self._line(...)` find the `CsvExporter` versions, because the search starts at the object's own class; the output is comma-separated. On a `MarkdownExporter` the same `export` produces a table with `|` separators. `ShoutingCsvExporter` inherits from `CsvExporter`, overrides one hook, and inside it calls `super()._line(row)` to get the normal line before converting it to capitals. Four output formats, one copy of the procedure.
 
 ## Multiple inheritance and the MRO
 
-A class can list several bases: `class C(A, B):`. Python then needs a rule for which base to search first. The rule is the **C3 linearisation**, and its result is the class's `__mro__`: a list in which
+A class may name several base classes: `class C(A, B):`. Python then needs a rule for which base to search first when a name is looked up. The rule is an algorithm called **C3 linearisation** ("linearisation" because it arranges the whole family of classes in one line). Its result is stored on the class as `__mro__`, the method resolution order: a list in which
 
 1. a class always appears before its bases,
 2. the order of bases in each class statement is preserved (left before right),
 3. every class appears exactly once.
 
-Attribute lookup walks the MRO left to right.
+Looking up an attribute means walking through this list from left to right and taking the first class that has it.
 
 ```python-run
 class A:
@@ -125,7 +137,7 @@ print([k.__name__ for k in D.__mro__])
 print(D().hello())
 ```
 
-This is the **diamond**: `D` inherits from `B` and `C`, which both inherit from `A`. The MRO is `D, B, C, A, object` — note that `A` comes *after* both `B` and `C`, so `A` isn't consulted until all its children have been.
+`B` and `C` both inherit from `A`, and `D` inherits from both of them. Drawn as a picture (below), the four classes form a **diamond**, which is why the question "which `hello` does `D` get?" is called the diamond problem. Python's answer is the printed MRO: `D, B, C, A, object`. `D` has no `hello` of its own, so the first class in the list that has one, `B`, wins and the program prints `B`. Note that `A` comes *after* both `B` and `C`: a parent is not consulted until all of its children in the family have been.
 
 ```mermaid
 classDiagram
@@ -135,7 +147,7 @@ classDiagram
   C <|-- D
 ```
 
-If no consistent order exists, Python refuses to create the class:
+If the three rules cannot all be satisfied, Python refuses to create the class:
 
 ```python-run
 class X: pass
@@ -146,9 +158,11 @@ except TypeError as e:
     print("TypeError:", e)
 ```
 
+`class Z(X, Y)` asks for `X` to be searched before `Y` (the order written). But `Y` is a subclass of `X`, and a class must come before its bases, so `Y` must come before `X`. Both cannot hold, and Python reports `Cannot create a consistent method resolution order`.
+
 ## What `super()` really does
 
-`super()` does **not** mean "my parent class". It means "the **next class in the MRO of the instance's type**, after the current class". In single inheritance that's the parent; in multiple inheritance it may be a sibling.
+`super()` does **not** mean "my parent class". It means "the **next class after the current one in the MRO of the object's own class**". With a single base class that is the parent. With multiple inheritance it may be a *sibling*, a class the current one knows nothing about.
 
 ```python-run
 class Base:
@@ -174,11 +188,13 @@ Child()
 print([k.__name__ for k in Child.__mro__])
 ```
 
-`Left.__init__` calls `super().__init__()`, which goes to `Right` — not `Base` — because the instance is a `Child` whose MRO is `Child, Left, Right, Base, object`. Each `__init__` runs exactly once. This **cooperative** behaviour works only if every class in the chain calls `super()`. If `Left` called `Base.__init__(self)` directly, `Right.__init__` would be skipped.
+The printed order is `Child`, `Left`, `Right`, `Base`. Look at the step from `Left` to `Right`. `Left` was written as a subclass of `Base`, yet its `super().__init__()` went to `Right`. The reason: the object is a `Child`, whose MRO is `Child, Left, Right, Base, object`, and "the next class after `Left`" in that list is `Right`.
+
+The result is that each `__init__` runs exactly once, although `Base` is reachable by two routes. This arrangement is called **cooperative** inheritance, and it works only if every class in the chain calls `super()`. Had `Left` called `Base.__init__(self)` directly, `Right.__init__` would have been skipped.
 
 ### Cooperative signatures
 
-When classes in a hierarchy need different constructor arguments, the convention is to accept `**kwargs`, consume what you need, and pass the rest along:
+A practical problem follows: the classes in such a chain usually need different arguments, and none of them knows which class comes next. The convention is that each `__init__` accepts keyword arguments, takes out the ones it needs, and passes all the rest along with `**kwargs`:
 
 ```python-run
 class Named:
@@ -200,9 +216,11 @@ p = Pirate(name="Brook", age=90, bounty=383_000_000)
 print(vars(p))
 ```
 
+`Pirate(...)` receives three keyword arguments. `Pirate.__init__` takes `bounty` and passes the rest on; `Named.__init__` (next in the MRO) takes `name`; `Aged.__init__` takes `age`; by the time the chain reaches `object`, nothing is left over. The final dictionary shows all three attributes. The bare `*` in each header makes the parameters keyword-only, which is what keeps this scheme safe.
+
 ## Mixins
 
-A **mixin** is a small class providing one extra capability, designed to be combined with others through multiple inheritance. It typically has no `__init__` state and relies on methods/attributes of the host class.
+A **mixin** is a small class that provides one extra ability and is meant to be combined with other classes through multiple inheritance. It normally has no data of its own and no `__init__`; it relies on the attributes of whatever class it is mixed into.
 
 ```python-run
 import json
@@ -224,11 +242,11 @@ s = Song("Binks' Sake", 96)
 print(s, s.to_json())
 ```
 
-Mixins conventionally go to the **left** of the main base class so their methods take priority.
+`ReprMixin` supplies a `__repr__` that works for any class, by reading the instance's attributes with `vars(self)`. `JsonMixin` supplies a method that turns those attributes into JSON text (a common data format). `Song` gains both abilities by listing the two mixins as bases. By convention mixins are written to the **left** of the main base class, so that their methods come earlier in the MRO and take priority.
 
 ## Composition over inheritance
 
-Inheritance models "is-a". Many relationships are actually "has-a": a `Car` *has* an `Engine`; it isn't one. **Composition** — holding another object as an attribute and delegating to it — is usually more flexible: you can swap the component at runtime, avoid fragile deep hierarchies, and expose only what you choose.
+Inheritance expresses "is-a". Many relationships are really "has-a": a `Car` *has* an `Engine`; it is not one. **Composition** means keeping another object as an attribute and passing work on to it (passing work on is called **delegation**). It is usually the more flexible design: the component can be exchanged while the program runs, there is no deep family tree to keep in your head, and you expose only the operations you choose.
 
 ```python-run
 class Engine:
@@ -246,7 +264,11 @@ class Car:
 print(Car(Engine()).start(), Car(ElectricEngine()).start())
 ```
 
-Rule of thumb: inherit when the subclass truly is a specialised kind of the base and should be usable anywhere the base is (the **Liskov substitution principle**); otherwise compose. Subclassing built-ins like `dict` or `list` is a common trap — their C implementations often don't call your overridden methods (e.g., `dict.update` ignores your `__setitem__`). Subclass `collections.UserDict`/`UserList` or the ABCs in `collections.abc` instead.
+The `Car` class does not care what kind of engine it holds, as long as the engine has a `start` method. The same `Car` code prints `car goes vroom` and `car goes hum`.
+
+Rule of thumb: inherit when the subclass really is a special kind of the base and can be used anywhere the base is expected without surprises (this requirement is the **Liskov substitution principle**); otherwise compose.
+
+Subclassing built-in types such as `dict` or `list` is a common trap. Their methods are written in C and often call each other internally without going through your overrides; `dict.update`, for example, ignores an overridden `__setitem__` (the special method behind `d[k] = v`). Subclass `collections.UserDict` / `UserList`, which are written in Python for this purpose, or the base classes in `collections.abc`.
 
 ```python-run
 class LoudDict(dict):
@@ -267,16 +289,18 @@ u["a"] = "x"; u.update(b="y")
 print(u)
 ```
 
+`LoudDict` is supposed to store every value in capitals. Direct assignment works, but `update` slips past the override: the output is `{'a': 'X', 'b': 'y'}`. The `UserDict` version routes every way of writing through `__setitem__` and prints `{'a': 'X', 'b': 'Y'}`.
+
 ## Polymorphism and duck typing
 
-Polymorphism means one interface, many implementations. In Python you don't need a shared base class for it — any object with the right methods works (duck typing). Inheritance is just one way to *share code*; it isn't required to *share an interface*. Abstract base classes and `typing.Protocol` (later lessons) let you make those interfaces explicit.
+**Polymorphism** means that code written against one interface works with many different implementations: `export`, `start` and `hello` above each did different things depending on the object. In Python, polymorphism does not require a shared base class. Any object with the right methods will do (duck typing). Inheritance is one way to *share code*; it is not needed in order to *share an interface*. Abstract base classes and `typing.Protocol`, covered in later lessons, let you write such interfaces down.
 
 > [!INTERVIEW]
-> "Explain the MRO / diamond problem in Python." — Python computes a C3 linearisation (`Cls.__mro__`) so each class appears once, children before parents, and base order is preserved. `super()` delegates to the next class in the *instance's* MRO, which enables cooperative multiple inheritance where every `__init__` runs exactly once. Follow-up: "composition vs inheritance?" — prefer composition for has-a relationships and to avoid brittle hierarchies.
+> "Explain the MRO and the diamond problem in Python." Python computes a C3 linearisation (`Cls.__mro__`) in which each class appears once, children come before parents, and the written order of bases is kept. `super()` passes the call to the next class in the MRO of the *object's* class, which makes cooperative multiple inheritance possible: every `__init__` runs exactly once. Follow-up: "composition or inheritance?" Prefer composition for has-a relationships and to avoid brittle family trees.
 
 ## Computing the MRO by hand
 
-The C3 rule is: *the linearisation of a class is the class itself, followed by a merge of the linearisations of its bases and the list of bases*. The merge repeatedly takes the first **head** (first element of some list) that does not appear in the **tail** (everything after the first element) of any other list, and removes it everywhere. If no such head exists, the hierarchy is inconsistent.
+You can compute an MRO on paper. The C3 rule reads: *the linearisation of a class is the class itself, followed by a merge of the linearisations of its bases and the list of those bases*. The merge works on several lists at once. Call the first item of a list its **head** and the rest its **tail**. Repeatedly take the first head that does not appear in the tail of any list, append it to the result, and remove it from every list. If at some point no head qualifies, the family of classes is inconsistent.
 
 Worked example for `class D(B, C)` with `B(A)` and `C(A)` (writing `o` for `object`):
 
@@ -291,7 +315,7 @@ L[D] = D + merge(B A o,  C A o,  B C)
 L[D] = D B C A o
 ```
 
-The step where `A` is rejected is the whole point: `A` may not appear until every class that inherits from it (`C` here) has been placed. Here is the algorithm in runnable form, checked against Python's own answer:
+The step where `A` is rejected is the heart of the algorithm: `A` may not be placed until every class that inherits from it (here `C`) has been placed. Here is the algorithm as a runnable function, checked against Python's own answer:
 
 ```python-run
 def c3(cls):
@@ -322,11 +346,11 @@ for k in (D, E, F):
     print(k.__name__, [c.__name__ for c in mine], mine == list(k.__mro__))
 ```
 
-`E(C, B)` gives `E C B A object`: swapping the base order swaps the priority. A class `G(D, E)` would be impossible, because `D` demands B-before-C and `E` demands C-before-B.
+Each printed line ends in `True`: the hand-written function agrees with `__mro__`. `E(C, B)` gives `E C B A object`; swapping the order of the bases swaps their priority. A class `G(D, E)` could not exist, because `D` requires B before C and `E` requires C before B.
 
 ## `super()` with and without arguments
 
-Inside a method, zero-argument `super()` is shorthand for `super(CurrentClass, self)`: "start looking in the MRO of `type(self)` *after* `CurrentClass`". The compiler makes this work by giving every method that mentions `super` a hidden closure cell named `__class__`. Knowing the explicit form lets you see — and occasionally control — where the search begins:
+Inside a method, `super()` with no arguments is shorthand for `super(CurrentClass, self)`: "search the MRO of `type(self)`, starting *after* `CurrentClass`". Python makes the short form work by quietly giving every method that mentions `super` a hidden closure variable named `__class__`. Knowing the long form lets you see, and occasionally choose, where the search begins:
 
 ```python-run
 class Base:
@@ -343,15 +367,17 @@ print(super(Mid, x).who())           # start after Mid   -> skips Mid entirely
 print(Leaf.who.__closure__ is not None, "__class__" in Leaf.who.__code__.co_freevars)
 ```
 
-`super()` also works for class methods and properties, and for any method — not just `__init__`. A subclass `__eq__`, `__repr__` or `save()` that extends the parent's behaviour should call `super()` the same way.
+The normal call prints `Leaf > Mid > Base`. `super(Leaf, x).who()` starts after `Leaf` and so runs `Mid`'s version: `Mid > Base`. `super(Mid, x).who()` starts after `Mid` and reaches `Base` directly. The last line confirms the hidden `__class__` variable.
+
+`super()` is not only for `__init__`. It works in any method, in class methods and in properties. A subclass's `__eq__`, `__repr__` or `save()` that builds on the parent's behaviour should call `super()` in the same way.
 
 ## Debugging inheritance
 
-- **"Which implementation actually runs?"** Print `type(obj).__mro__`, then find the first class in it that defines the method: `next(c for c in type(obj).__mro__ if "name" in vars(c))`. `inspect.getsource(obj.method)` shows the winner's code.
+- **"Which version of the method really runs?"** Print `type(obj).__mro__`, then find the first class in it that defines the method: `next(c for c in type(obj).__mro__ if "name" in vars(c))`. `inspect.getsource(obj.method)` shows the winning code.
 - **`AttributeError` for an attribute the parent sets**: the subclass defined `__init__` and never called `super().__init__(...)`.
-- **`TypeError: object.__init__() takes exactly one argument`**: in a cooperative chain, some class passed leftover keyword arguments all the way up to `object`. Each class must consume its own arguments before forwarding `**kwargs`.
-- **A parent method "ignores" the subclass's data**: name-mangled attributes (`__x`) are private to the class that defined them; use a single underscore for attributes subclasses should see.
-- **An overriding method is never called**: its name or signature doesn't match (a typo creates a *new* method instead of overriding). Type checkers support `@typing.override` (3.12+) to catch this.
+- **`TypeError: object.__init__() takes exactly one argument`**: in a cooperative chain, some class passed leftover keyword arguments all the way up to `object`. Each class must take out its own arguments before forwarding `**kwargs`.
+- **A parent method "ignores" the subclass's data**: name-mangled attributes (`__x`) belong to the class that defined them; use a single underscore for attributes that subclasses should see.
+- **An overriding method is never called**: its name does not match the parent's. A typo creates a *new* method and overrides nothing. Type checkers support the marker `@typing.override` (Python 3.12+) to catch this.
 
 ```python-run
 class Animal:
@@ -363,6 +389,8 @@ print(d.speak())
 print([c.__name__ for c in type(d).__mro__ if "speak" in vars(c)], sorted(n for n in vars(Dog) if not n.startswith("_")))
 ```
 
+`Dog` meant to override `speak` but spelled it `speek`, so `d.speak()` still prints the parent's `...`. The second line shows how to find out: only `Animal` defines `speak`, and `Dog`'s own names are `['speek']`.
+
 ## Inheritance, mixins, composition, protocols: choosing
 
 | Mechanism | Relationship | Coupling | Use when |
@@ -372,19 +400,40 @@ print([c.__name__ for c in type(d).__mro__ if "speak" in vars(c)], sorted(n for 
 | Composition | has-a | loose: only the component's public interface | reusing behaviour, swapping implementations, limiting the exposed API |
 | Protocol / duck typing | behaves-like | none | callers only need certain methods; no shared code required |
 
-A useful test before subclassing: *would every method of the parent make sense on the child, forever?* A `Stack` that inherits from `list` fails it immediately — `insert(0, x)` breaks the stack discipline. If the answer is no, compose.
+A useful test before subclassing: *would every method of the parent make sense on the child, now and in the future?* A `Stack` that inherits from `list` fails at once, since `insert(0, x)` breaks the rule that a stack is changed only at the top. If the answer is no, compose.
 
 ## Pitfalls recap
 
-- Forgetting to call `super().__init__()` in a subclass initialiser — parent attributes never get set.
-- Calling `Parent.__init__(self)` directly in a multiple-inheritance hierarchy — breaks cooperation.
-- Using `type(x) == Base` instead of `isinstance`.
-- Deep inheritance chains that are hard to follow; prefer composition.
-- Subclassing `dict`/`list` and expecting all methods to route through your overrides.
+- Forgetting to call `super().__init__()` in a subclass initialiser, so the parent's attributes are never set.
+- Calling `Parent.__init__(self)` directly where multiple inheritance is involved, which breaks the cooperative chain.
+- Using `type(x) == Base` where `isinstance` is meant.
+- Deep chains of inheritance that are hard to follow; prefer composition.
+- Subclassing `dict` or `list` and expecting every method to go through your overrides.
 
 ## Summary
 
-Subclasses inherit attributes and methods, override them, and extend them, using `super()` to reuse parent behaviour. Python resolves lookups along the C3 MRO, which handles diamonds and enables cooperative multiple inheritance. Mixins add focused capabilities; composition is often the better tool for has-a relationships.
+A subclass inherits attributes and methods, may override them, and may extend them, using `super()` to reuse the parent's behaviour. Python resolves every lookup along the C3 MRO, which settles the diamond case and makes cooperative multiple inheritance work. Mixins add one focused ability each; composition is often the better tool when the relationship is has-a.
+
+## Glossary
+
+- **Inheritance** - defining a class as a variation of an existing class, whose attributes and methods it receives.
+- **Base class (parent, superclass)** - the class being inherited from.
+- **Subclass (child, derived class)** - the class that inherits.
+- **Override** - to define in a subclass a method with the same name as one in the parent.
+- **`super()`** - an object that passes a method call to the next class in the MRO.
+- **`object`** - the built-in class at the root of every class's family tree.
+- **Dynamic dispatch** - choosing which method runs from the object's actual class, at run time.
+- **Hook** - a small method intended to be overridden by subclasses.
+- **Template method pattern** - a base-class method that fixes a procedure and calls hooks for its steps.
+- **Multiple inheritance** - a class having more than one base class.
+- **MRO (method resolution order)** - the ordered list of classes searched for an attribute; `Cls.__mro__`.
+- **C3 linearisation** - the algorithm that computes the MRO.
+- **Diamond** - a family in which a class inherits from two classes that share a common base.
+- **Cooperative inheritance** - every class calling `super()` so that each method in the chain runs once.
+- **Mixin** - a small class adding one ability, meant to be combined with others.
+- **Composition / delegation** - holding another object as an attribute / passing work on to it.
+- **Polymorphism** - one interface, many implementations.
+- **Liskov substitution principle** - a subclass instance must be usable wherever the base class is expected.
 
 ```quiz
 [
@@ -405,4 +454,4 @@ Subclasses inherit attributes and methods, override them, and extend them, using
 ]
 ```
 
-> **Source:** Goodrich, Tamassia & Goldwasser, *Data Structures and Algorithms in Python*, §2.4 (Inheritance: extending CreditCard, numeric progressions) and §2.5.2 (Name Resolution and Dynamic Dispatch); Python docs, *Tutorial* §9.5 "Inheritance", *Library Reference* `super()`, and "The Python 2.3 Method Resolution Order".
+> **Source:** Goodrich, Tamassia & Goldwasser, *Data Structures and Algorithms in Python*, §2.4 (Inheritance) and §2.5.2 (Name Resolution and Dynamic Dispatch), restated in original wording with new examples; Python docs, *Tutorial* §9.5 "Inheritance", *Library Reference* `super()`, and "The Python 2.3 Method Resolution Order".

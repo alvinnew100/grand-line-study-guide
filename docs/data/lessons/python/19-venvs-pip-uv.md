@@ -1,21 +1,35 @@
 # Virtual environments, pip, uv and project layout
 
-"It works on my machine" is usually a dependency problem: a different Python version, a different version of some library, or a package installed globally that another project silently relies on. This lesson covers the tooling that makes Python projects reproducible — virtual environments, `pip`, `pyproject.toml`, lock files and the modern all-in-one tool `uv` — and a project layout you can use for everything from a script to a FastAPI service.
+> **Before this lesson:** read [Modules, packages and imports](#/lesson/python/py-imports) first: you need `import`, `sys.path` and the `site-packages` folder. You should be able to open a terminal, change folder and run `python some_file.py`, as described in [First steps](#/lesson/python/py-start-first-steps). No experience with installing packages is assumed.
 
-Nothing here runs in the browser (it's about your terminal), so the examples are shell commands. Type them yourself in a scratch directory; ten minutes of practice beats an hour of reading.
+## In plain words
+
+Almost every real Python program uses code written by other people: a library for talking to web sites, one for databases, one for testing. A piece of outside code that your program needs in order to run is called a **dependency**. Dependencies are published in numbered **versions**, and a program written for version 2 of a library may break with version 1 or version 3.
+
+That creates an everyday problem. Your computer has several projects on it, and they need different versions of the same libraries. Your colleague's computer, and the server that will finally run the program, must end up with exactly the versions you tested with. "It works on my machine" is almost always this problem.
+
+Think of cooking in a shared kitchen with one spice rack. If one cook swaps the mild paprika for the hot one, every other cook's recipe changes without warning. The remedy is for each recipe to have its own labelled box of ingredients, and a shopping list precise enough that anybody can assemble an identical box.
+
+In Python the private box is called a **virtual environment**: a folder that holds the libraries of one project only. The tool that fetches libraries is **pip**. The shopping list is a file called `pyproject.toml`, and the exact, tested list of every item is a **lock file**. A newer tool, **uv**, does all of these jobs in one program.
+
+Why this matters for a job: you cannot contribute to any professional Python project without doing this on your first day. Interviewers ask "what is a virtual environment and why use one?" and "how do you make a build reproducible?". And a large share of the "my import does not work" problems that beginners meet are environment problems, not code problems.
+
+Nothing in this lesson runs in the browser, because it is about your own terminal (the text window where you type commands). The examples are therefore commands, shown in grey boxes; a line beginning with `#` is a comment. Type them yourself in a scratch folder: ten minutes of practice is worth more than an hour of reading.
 
 ## The problem: one interpreter, many projects
 
-When you `pip install requests`, the package lands in a `site-packages` directory belonging to *one specific Python interpreter*. If every project shares that one directory:
+The program called `python` that runs your code is the **interpreter**. When you type `pip install requests`, the downloaded package is placed in a folder named `site-packages` that belongs to *one particular interpreter*. If every project on the machine shares that one folder:
 
-- Project A needs `pydantic 1.x`, project B needs `pydantic 2.x` — they cannot both be satisfied.
+- Project A needs version 1 of the library `pydantic` and project B needs version 2. Only one version can be installed in a folder, so they cannot both be satisfied.
 - Upgrading a library for one project breaks another.
-- You can't tell which of the 200 installed packages a given project actually needs.
-- On Linux/macOS you risk breaking tools the operating system itself runs on the system Python (modern distros now refuse with an "externally-managed-environment" error, PEP 668).
+- Nobody can tell which of the 200 installed packages a given project really needs.
+- On Linux and macOS, the operating system runs some of its own tools on the system's Python, and installing into it can break them. Recent systems refuse outright with an "externally-managed-environment" error.
 
 ## Virtual environments
 
-A **virtual environment** (venv) is a directory containing its own `site-packages` and a small config pointing to a base interpreter. Activating it puts its `bin/` (or `Scripts\`) first on your `PATH`, so `python` and `pip` refer to the environment. Each project gets its own.
+A **virtual environment** (often shortened to venv) is a folder containing its own `site-packages` and a small settings file that points to an installed Python, the *base interpreter*. Each project gets one.
+
+**Activating** an environment changes one thing in your terminal session. Your terminal finds programs by searching a list of folders called **`PATH`**; activation puts the environment's folder of programs (`bin/` on macOS and Linux, `Scripts\` on Windows) at the front of that list. From then on, typing `python` or `pip` runs the environment's own copies.
 
 ```bash
 # create (convention: a .venv folder in the project root)
@@ -33,7 +47,9 @@ python -m pip install requests
 deactivate                         # leave it
 ```
 
-What's inside:
+What the commands do, in order: `python -m venv .venv` runs the standard `venv` module and creates the environment in a folder named `.venv` (a common convention; the leading dot hides it in file listings). One of the three `activate` lines, depending on your system, switches the terminal over. `python -c "..."` runs one line of Python; it prints `sys.prefix`, which now points into `.venv`. `python -m pip install requests` installs a library into the environment only. `deactivate` switches back.
+
+What the folder contains:
 
 ```
 .venv/
@@ -42,12 +58,12 @@ What's inside:
   lib/python3.12/site-packages/    # this environment's packages
 ```
 
-Key facts:
+Facts worth remembering:
 
-- A venv is **not** a copy of Python; it's a thin layer on top of a base interpreter. Delete the folder and it's gone — it's disposable and should be re-creatable from your dependency files.
-- **Never commit `.venv/`** — add it to `.gitignore`. Commit the files that describe it instead.
-- Activation is a convenience. You can always call the environment's interpreter directly: `.venv/bin/python script.py`.
-- How Python knows it's in a venv: `sys.prefix != sys.base_prefix`.
+- A venv is **not** a copy of Python. It is a thin layer on top of a base interpreter. Delete the folder and it is gone; it is disposable, and you should always be able to recreate it from the files that list your dependencies.
+- **Never put `.venv/` under version control.** (Version control, usually the tool Git, records the history of a project's files and shares them with a team.) List `.venv/` in the file `.gitignore`, and commit the files that describe the environment.
+- Activation is a convenience. You can always run the environment's interpreter by its path: `.venv/bin/python script.py`.
+- Python itself can tell that it is running in a venv: `sys.prefix != sys.base_prefix`.
 
 ```mermaid
 flowchart LR
@@ -66,7 +82,7 @@ flowchart LR
 
 ## pip
 
-`pip` installs packages from the **Python Package Index** (PyPI) or other sources. Prefer `python -m pip ...` so you're certain which interpreter's pip you're using.
+`pip` is Python's package installer. By default it downloads from the **Python Package Index** (PyPI, at pypi.org), the public collection of several hundred thousand published packages. Prefer the spelling `python -m pip ...` to plain `pip ...`: it guarantees that the pip you are running belongs to the `python` you are running.
 
 ```bash
 python -m pip install requests                 # latest
@@ -82,6 +98,8 @@ python -m pip show requests                    # metadata + dependencies
 python -m pip freeze > requirements.txt        # exact versions of everything
 ```
 
+Reading down the list: install the newest version; install one exact version; install any version within a range; install a package together with optional extra features (the name in square brackets); install everything listed in a file; install the project in the current folder in *editable* mode (explained below); upgrade pip itself; remove a package; list what is installed; show details of one package; and write the exact version of everything installed into a file.
+
 ### Version specifiers (PEP 440)
 
 | Specifier | Meaning |
@@ -92,11 +110,11 @@ python -m pip freeze > requirements.txt        # exact versions of everything
 | `~=2.1.3` | `>=2.1.3, <2.2.0` |
 | `!=2.1.4` | exclude a broken release |
 
-Most packages follow **semantic versioning**: `MAJOR.MINOR.PATCH` — breaking change, new feature, bug fix. It's a promise, not a guarantee.
+Most packages follow **semantic versioning**: a version has three numbers, `MAJOR.MINOR.PATCH`. The first changes when existing code may break, the second when features are added compatibly, the third for bug fixes. It is a promise made by the authors, not a guarantee.
 
 ### Wheels and sdists
 
-Packages are distributed as **wheels** (`.whl` — pre-built, fast, may contain compiled code for your platform) or **sdists** (source archives that must be built on install). When a wheel exists for your platform and Python version, pip uses it; otherwise it builds from source, which may require a compiler.
+A package is published in one or both of two forms. A **wheel** (a file ending `.whl`) is ready to install: it is fast, and any parts written in C are already compiled for your kind of machine. An **sdist** ("source distribution") is the source code, which must be built on your machine during installation. When a wheel exists for your system and Python version, pip uses it; otherwise it builds from the sdist, which may require a C compiler to be installed.
 
 ## Declaring dependencies
 
@@ -110,16 +128,16 @@ uvicorn[standard]>=0.29
 pydantic>=2.6
 ```
 
-It mixes two different things, though:
+One file like this ends up doing two different jobs, though:
 
-- **Abstract dependencies** — what your code needs directly, with loose ranges ("fastapi 0.110 or newer").
-- **Concrete, locked dependencies** — the exact version of *every* package, including transitive ones, that was tested together (`pip freeze` output).
+- **Abstract dependencies**: what your own code needs directly, with loose ranges ("fastapi 0.110 or newer").
+- **Concrete, locked dependencies**: the exact version of *every* package that was tested together. That includes **transitive** dependencies, the packages your dependencies depend on. This is what `pip freeze` prints.
 
-You want both: loose ranges to express intent, and a **lock file** for reproducible installs.
+You want both: loose ranges to state what you intend, and a **lock file** so that an installation can be repeated exactly.
 
 ### pyproject.toml
 
-`pyproject.toml` is the modern, standard place for project metadata and tool configuration (PEP 518/621):
+`pyproject.toml` is the modern, standard place for a project's description and for the settings of its tools. TOML is a simple file format of `[sections]` and `key = value` lines.
 
 ```toml
 [project]
@@ -150,11 +168,13 @@ testpaths = ["tests"]
 line-length = 100
 ```
 
-`pip install -e ".[dev]"` installs your project in **editable** mode (code changes take effect without reinstalling) along with the `dev` extras. Tools like pytest, ruff, mypy and black all read their settings from `[tool.*]` tables here, replacing a zoo of config files.
+Reading the file from the top: `[project]` gives the name, version and the oldest Python that is supported, and `dependencies` lists the abstract dependencies. `[project.optional-dependencies]` defines a named group, `dev`, of tools needed only while developing. `[project.scripts]` asks for a command named `grandline` to be created that runs the function `main` in `grandline_api/cli.py`. `[build-system]` names the tool that packages the project. The `[tool.*]` sections hold settings for individual tools.
+
+`pip install -e ".[dev]"` installs your project in **editable** mode together with the `dev` group. Editable means the environment points at your source folder, so changes to the code take effect without reinstalling. Tools such as pytest (testing), ruff (style checking), mypy (type checking) and black (formatting) all read their settings from this one file, where each used to need a configuration file of its own.
 
 ## uv: the fast all-in-one tool
 
-`uv` (from Astral, the makers of ruff) is a single fast binary that replaces `pip`, `venv`, `pip-tools`, `pipx` and `pyenv` for most workflows. It has become the default choice for new projects.
+`uv` (made by Astral, the company behind ruff) is one fast program that does the work of `pip`, `venv` and several other tools: `pip-tools` (locking), `pipx` (installing command-line tools) and `pyenv` (installing Python versions). It has become the usual choice for new projects.
 
 ```bash
 uv init myproject            # scaffold: pyproject.toml, README, .python-version, main.py
@@ -172,15 +192,17 @@ uvx ruff check .             # run a tool in a throwaway environment (like pipx)
 uv pip install -r requirements.txt   # pip-compatible interface, just much faster
 ```
 
-The important ideas:
+Each line's comment says what it does. The ideas that matter:
 
-- **`uv.lock`** records the exact resolved version and hash of every package for every platform. Commit it. Anyone running `uv sync` gets the identical environment.
-- **`uv run`** means you rarely activate anything: it ensures the environment matches the lock file, then runs the command in it.
-- It's fast because of a global cache, parallel downloads and a resolver written in Rust.
+- **`uv.lock`** is the lock file. It records the exact version of every package, direct and transitive, together with a **hash** of each file (a fingerprint that proves the download is the same file as before). Commit it. Anyone who runs `uv sync` gets an identical environment.
+- **`uv run`** means you rarely activate anything. It first makes sure the environment matches the lock file and then runs your command inside it.
+- Working out a set of versions that satisfies every requirement at once is called **resolving**. uv does it quickly, helped by a shared download cache, parallel downloads and a resolver written in the Rust language.
 
-Other tools you'll meet in existing codebases: **Poetry** and **PDM** (similar project managers with their own lock files), **pip-tools** (`pip-compile` turns `requirements.in` into a pinned `requirements.txt`), **conda/mamba** (also manages non-Python libraries; common in data science), **pipx** (installs CLI apps in isolated environments), **pyenv** (manages Python versions).
+Other tools you will meet in existing projects: **Poetry** and **PDM** (similar project managers with their own lock files); **pip-tools** (its `pip-compile` command turns a loose `requirements.in` into a pinned `requirements.txt`); **conda** and **mamba** (which also manage non-Python libraries and are common in data science); **pipx** (installs command-line programs, each in its own environment); **pyenv** (installs and switches Python versions).
 
 ## A sane project layout
+
+A layout that works for anything from a small tool to a web service:
 
 ```
 grandline-api/
@@ -207,15 +229,15 @@ grandline-api/
     └── test_items.py
 ```
 
-Why the **`src/` layout**? With the package under `src/`, the project root isn't accidentally importable, so tests run against the *installed* package (editable install), catching packaging mistakes like forgotten files. The simpler **flat layout** (package directory at the root) is fine for small projects.
+Why put the package inside a `src/` folder? If the package sat in the project's top folder, Python would find it there whenever you ran something from that folder, whether or not the project was properly installed. With the **`src/` layout**, tests can only import the *installed* package (installed in editable mode), which exposes packaging mistakes such as a file left out. The simpler **flat layout**, with the package folder at the top level, is fine for small projects.
 
 Guidelines:
 
-- One top-level package named after the project (underscores, lowercase).
-- Tests mirror the package structure in a separate `tests/` directory.
-- Configuration comes from **environment variables** (optionally loaded from a git-ignored `.env` file), never hard-coded secrets.
-- Keep `main.py`/`cli.py` thin: parse input, call functions that live in importable, testable modules.
-- A single-file script can declare its dependencies inline (PEP 723) and be run with `uv run script.py`:
+- One top-level package named after the project, in lowercase with underscores.
+- Tests in a separate `tests/` folder that mirrors the package's structure.
+- Settings come from **environment variables**: named values that the operating system passes to a program when it starts. They may be loaded from a file called `.env` that is kept out of version control. Never write passwords or keys into the code.
+- Keep `main.py` or `cli.py` thin: read the input, then call functions that live in importable, testable modules.
+- A single-file script can declare its own dependencies in a special comment at the top, and `uv run script.py` will install them into a temporary environment:
 
 ```python
 # /// script
@@ -228,12 +250,14 @@ print(httpx.get("https://example.com").status_code)
 
 ## Reproducibility checklist
 
-1. Pin the Python version (`requires-python`, `.python-version`).
+**Reproducible** means that anyone, on any machine, at any later date, gets the same result. The steps:
+
+1. Fix the Python version (`requires-python`, and a `.python-version` file).
 2. Declare direct dependencies with sensible ranges in `pyproject.toml`.
 3. Commit a lock file (`uv.lock`, `poetry.lock`, or a compiled `requirements.txt`).
-4. In CI and Docker, install **from the lock file** (`uv sync --frozen`, or `pip install -r requirements.txt` with hashes).
-5. Never install into the system Python; one environment per project.
-6. Separate dev tools (pytest, linters) from runtime dependencies.
+4. On automated build servers (continuous integration, CI) and in Docker container images, install **from the lock file**: `uv sync --frozen`, or `pip install -r requirements.txt` with hashes.
+5. Never install into the system's Python; one environment per project.
+6. Keep development tools (pytest, style checkers) separate from the dependencies needed to run the program.
 
 ## Troubleshooting
 
@@ -247,11 +271,34 @@ print(httpx.get("https://example.com").status_code)
 | PowerShell refuses to run `Activate.ps1` | Execution policy; run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`, or skip activation and use `uv run` / `.venv\Scripts\python`. |
 
 > [!INTERVIEW]
-> "What is a virtual environment and why use one?" — an isolated `site-packages` tied to a base interpreter, so each project has its own dependency versions without touching the system Python. "requirements.txt vs pyproject.toml vs lock file?" — pyproject declares metadata and abstract dependencies; a lock file pins the full resolved set for reproducibility; requirements.txt can play either role. "How do you make builds reproducible?" — pinned Python version + committed lock file + install from the lock in CI/Docker.
+> "What is a virtual environment and why use one?" A private `site-packages` folder tied to a base interpreter, so that each project has its own versions of its dependencies and nothing touches the system's Python. "requirements.txt, pyproject.toml, lock file?" `pyproject.toml` declares the project and its abstract dependencies; a lock file pins the complete resolved set so that installs can be repeated; `requirements.txt` can play either part. "How do you make builds reproducible?" A fixed Python version, a committed lock file, and installing from the lock in CI and Docker.
 
 ## Summary
 
-Use one virtual environment per project (`python -m venv` or let `uv` create it). Declare dependencies in `pyproject.toml`, lock them, commit the lock file, and never commit the environment itself. `pip` installs packages; `uv` does that plus environments, locking, Python versions and running tools, much faster. Put your code in a package (ideally under `src/`), tests in `tests/`, configuration in the environment.
+Use one virtual environment per project (`python -m venv`, or let `uv` create it). Declare dependencies in `pyproject.toml`, lock them, commit the lock file, and never commit the environment itself. `pip` installs packages; `uv` does that and also manages environments, locking, Python versions and running tools, much faster. Put your code in a package (ideally under `src/`), tests in `tests/`, and settings in environment variables.
+
+## Glossary
+
+- **Dependency** - outside code that a project needs in order to run.
+- **Transitive dependency** - a dependency of one of your dependencies.
+- **Interpreter** - the `python` program that runs Python code.
+- **`site-packages`** - the folder where an interpreter's installed packages live.
+- **Virtual environment (venv)** - a folder with its own `site-packages`, layered on a base interpreter.
+- **Activate** - to put an environment's programs first on `PATH` for the current terminal session.
+- **`PATH`** - the list of folders the terminal searches for programs.
+- **pip** - Python's package installer.
+- **PyPI** - the Python Package Index, the public repository of packages.
+- **Version specifier** - a rule such as `>=2.0,<3.0` saying which versions are acceptable.
+- **Semantic versioning** - the `MAJOR.MINOR.PATCH` numbering convention.
+- **Wheel / sdist** - a ready-to-install package file / a source archive that must be built.
+- **`pyproject.toml`** - the standard file describing a project, its dependencies and its tool settings.
+- **Lock file** - a file listing the exact version (and hash) of every package in a tested environment.
+- **Hash** - a fingerprint computed from a file, used to check it has not changed.
+- **Editable install** - an install that points at your source folder, so edits take effect at once.
+- **uv** - a fast tool that combines installing, environments, locking and running.
+- **Environment variable** - a named value the operating system passes to a program.
+- **Reproducible** - giving the same result on any machine at any time.
+- **CI (continuous integration)** - servers that automatically build and test each change.
 
 ```quiz
 [

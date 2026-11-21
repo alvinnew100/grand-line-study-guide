@@ -1,14 +1,26 @@
 # Debugging and logging
 
-A test tells you *that* something is wrong; debugging finds out *why*. Beginners debug by staring and guessing. Experienced engineers debug like scientists: reproduce, read the evidence, form a hypothesis, test it, narrow down. This lesson covers the evidence Python gives you (tracebacks), the instruments (print, `breakpoint()`/pdb, `logging`, assertions), and a method that works when you have no idea what's going on.
+> **Before this lesson:** you need exceptions and tracebacks from [Exceptions](#/lesson/python/py-exceptions) and tests from [Testing with pytest](#/lesson/python/py-pytest). The list of classic bugs near the end refers back to most earlier lessons of this track, in particular [Objects, names, types and mutability](#/lesson/python/py-objects-names) and [Functions and arguments](#/lesson/python/py-functions-args).
+
+## In plain words
+
+A **bug** is a mistake in a program that makes it behave differently from what was intended. **Debugging** is the work of finding out *why* it behaves that way and putting it right. A failing test tells you *that* something is wrong; debugging tells you what.
+
+Think of a doctor. A poor doctor glances at the patient and prescribes whatever cured the previous one. A good doctor asks about the symptoms, examines the evidence, forms an idea of the cause, orders a test that would confirm or rule out that idea, and only then treats. And the treatment is aimed at the illness, not at the symptom.
+
+Beginners debug the first way: stare at the code, change something, run it, change something else. Experienced programmers debug the second way: make the problem happen reliably, read the evidence, form one definite guess (a **hypothesis**), check it with an experiment, and narrow the search until the cause is cornered.
+
+This lesson covers the evidence Python hands you (the traceback), the instruments (`print`, the debugger, assertions, and **logging**, which means recording what a program does while it runs), and a method that works even when you have no idea what is going on.
+
+Why this matters for a job: professional programmers spend more time reading and debugging code than writing it, most of it code written by others. Interviewers ask "how would you debug this?", and in live coding they watch what you do when your first attempt fails. A calm, systematic method is worth more than raw speed.
 
 ## Reading a traceback
 
-A traceback is the most useful piece of debugging information, and many people don't read it. Read **bottom-up**:
+The **traceback** is the report Python prints when an exception is not handled. It is the single most useful piece of evidence, and many people do not read it. Read it from the **bottom up**:
 
-1. The **last line** names the exception type and message — *what* went wrong.
-2. The frame just above it is *where* it was raised.
-3. Earlier frames show *how execution got there* (who called whom). The interesting frame is often the deepest one that is **your** code, not the library's.
+1. The **last line** names the type of the exception and its message: *what* went wrong.
+2. The entry directly above it shows the line that raised it: *where*.
+3. The entries further up show *how the program got there*: which function called which. The entry to look at first is usually the lowest one that is in **your** code, not in a library.
 
 ```python-run
 import traceback
@@ -25,7 +37,7 @@ except ZeroDivisionError:
     traceback.print_exc(limit=5, file=__import__("sys").stdout)
 ```
 
-Reading it: `ZeroDivisionError: division by zero` (what) in `average` at `sum(values) / len(values)` (where), called from the comprehension in `report` (how). Hypothesis: some group has an empty list. Since Python 3.11, tracebacks even underline the exact sub-expression with `~~~^^^`.
+Run it and read the output from the bottom. `ZeroDivisionError: division by zero` is the *what*. The entry above shows the *where*: the line `return sum(values) / len(values)` in `average`. Further up is the *how*: `average` was called from the comprehension in `report`. From this a first guess follows directly: one of the groups has an empty list, so `len(values)` was 0. Since Python 3.11 the traceback even marks the exact part of the line that failed, with `~~~^^^` underneath.
 
 ### Common exceptions decoded
 
@@ -43,7 +55,7 @@ Reading it: `ZeroDivisionError: division by zero` (what) in `average` at `sum(va
 | `IndentationError` / `TabError` | mixed tabs and spaces |
 | `RuntimeError: dictionary changed size during iteration` | mutating while looping |
 
-Chained tracebacks ("During handling of the above exception, another exception occurred" / "The above exception was the direct cause...") list the **original** error first — start there.
+Sometimes two tracebacks are printed, joined by "During handling of the above exception, another exception occurred" or "The above exception was the direct cause of the following exception". The **original** error is the first one; start there.
 
 ## A method for debugging
 
@@ -59,18 +71,18 @@ flowchart TD
   G --> H["6. Add a regression test; look for the same bug elsewhere"]
 ```
 
-1. **Reproduce** it deterministically, with the smallest input you can. A bug you can't reproduce you can't confirm fixed. Capture it as a failing test.
-2. **Read** the message. Really.
-3. **Hypothesise**: "I think `vals` is empty for group b." State what you'd expect to observe if it's true.
-4. **Experiment** to confirm or kill the hypothesis — one change at a time.
-5. **Bisect** when lost: cut the problem in half. Comment out half the pipeline, feed half the input, check the midpoint value. `git bisect` does the same across commits to find which change introduced a bug.
-6. **Fix the root cause**, add the test, and ask "where else did we make this assumption?"
+1. **Reproduce** it: find a way to make the bug happen every time, with the smallest input you can. A bug you cannot reproduce is a bug you cannot confirm as fixed. Capture the reproduction as a failing test.
+2. **Read** the message. Really read it.
+3. **Hypothesise**: state one definite guess, such as "I think `vals` is empty for group b", and say what you would expect to see if it were true.
+4. **Experiment** to confirm or refute the guess, changing one thing at a time.
+5. **Bisect** when you are lost: cut the problem in half. Disable half of the processing steps, feed in half of the input, look at the value in the middle. Whichever half still shows the bug, halve that again. The tool `git bisect` does the same across the saved versions of a project, to find the change that introduced a bug.
+6. **Fix the cause**, not the symptom; add the test; and ask "where else did we make the same assumption?"
 
-Also: check your assumptions (is the code you're editing the code that's running? is the right virtualenv active? is the file saved?), and explain the problem aloud to a rubber duck — articulating it often reveals the gap.
+Two more habits. Check your assumptions: is the code you are editing really the code that is running? Is the right virtual environment active? Is the file saved? And explain the problem aloud, step by step, to a colleague or to an object on your desk (programmers call this *rubber-duck debugging*). Putting it into words very often reveals the gap.
 
 ## Print debugging, done properly
 
-`print` is a perfectly good tool when used deliberately:
+`print` is a perfectly good instrument when used with a purpose: to check a specific guess at a specific place.
 
 ```python-run
 def merge_intervals(intervals):
@@ -87,7 +99,9 @@ def merge_intervals(intervals):
 print(merge_intervals([[1, 3], [8, 10], [2, 6], [9, 12]]))
 ```
 
-Tips: use `f"{expr=}"` (3.8+) to label values; print `repr()` to reveal hidden whitespace and types (`'42'` vs `42`); print `type(x)` and `len(x)`; write to stderr (`print(..., file=sys.stderr)`) to keep it separate from program output; and remove the prints afterwards — or use logging, which you can leave in.
+The function merges overlapping ranges such as `[1, 3]` and `[2, 6]`. The `print` at the top of the loop shows, on every pass, the range being processed and the result so far. `f"{start=}"` prints both the name and the value (`start=1`), which saves typing labels. Reading the four printed lines, you can follow the algorithm step by step and check each step against what you expected.
+
+Tips: label values with `f"{expr=}"` (Python 3.8+). Print `repr()` of a value to make hidden spaces and the type visible (`'42'` is not `42`). Print `type(x)` and `len(x)`. Send debugging output to the error stream with `print(..., file=sys.stderr)` to keep it apart from the program's real output. And take the prints out afterwards, or use logging, which can stay in the code.
 
 ```python-run
 value = "42 "
@@ -97,9 +111,11 @@ print(repr(value), repr(other), type(value).__name__, type(other).__name__)
 print(f"{value.strip() == str(other)=}")
 ```
 
+Printed plainly, the two values look almost alike. `repr` shows the truth: one is the string `'42 '` with a trailing space, the other the integer `42`. This is the classic reason why an equality test or a dictionary lookup fails "although the values are the same".
+
 ## The debugger: `breakpoint()` and pdb
 
-A debugger pauses the program and lets you inspect **everything** at that moment, step line by line, and try expressions — far more powerful than guessing which prints you'll need. Put `breakpoint()` where you want to stop (it calls `pdb.set_trace()` by default):
+A **debugger** is a tool that pauses a running program at a line you choose and lets you look at *every* variable at that moment, run the program on one line at a time, and try out expressions. That is far more powerful than guessing in advance which prints you will need. The place where the program pauses is a **breakpoint**. Python's built-in debugger is called **pdb**, and the built-in function `breakpoint()` starts it:
 
 ```python
 def checkout(cart, coupon):
@@ -109,7 +125,7 @@ def checkout(cart, coupon):
     return subtotal - discount
 ```
 
-Essential pdb commands:
+When the program reaches that line it stops and shows a `(Pdb)` prompt in the terminal, where you type short commands. (This needs a keyboard and a terminal, so it cannot be demonstrated on this page.) The essential commands:
 
 | Command | Action |
 |---|---|
@@ -127,19 +143,19 @@ Essential pdb commands:
 | `!stmt` | execute a Python statement |
 | `q` | quit |
 
-Other ways in:
+The list of functions currently in the middle of being called is the **call stack**; `w`, `u` and `d` let you look at it and move through it. Other ways of getting into the debugger:
 
-- `python -m pdb script.py` — start under the debugger; on an uncaught exception it enters **post-mortem** mode at the crash site.
-- `pytest --pdb` — drop into pdb at the failing assertion; `pytest --trace` to start each test in the debugger.
-- `python -i script.py` — run, then land in a REPL with all globals available.
-- `PYTHONBREAKPOINT=0` disables all `breakpoint()` calls; `PYTHONBREAKPOINT=ipdb.set_trace` swaps in a nicer debugger.
-- IDE debuggers (VS Code, PyCharm) offer the same operations with a GUI: click in the gutter to set breakpoints, hover for values, watch expressions, conditional breakpoints. Learn the four keys: continue, step over, step into, step out.
+- `python -m pdb script.py` runs a script under the debugger from the start. If an exception goes unhandled, the debugger opens at the point of the crash with all variables intact; inspecting a program after it has failed is called **post-mortem** debugging.
+- `pytest --pdb` opens pdb at a failing assertion; `pytest --trace` starts each test in the debugger.
+- `python -i script.py` runs the script and then leaves you at an interactive prompt with all its variables available.
+- The environment variable `PYTHONBREAKPOINT=0` switches off every `breakpoint()` call; `PYTHONBREAKPOINT=ipdb.set_trace` substitutes a more comfortable debugger.
+- Editors such as VS Code and PyCharm offer the same operations with the mouse: click beside a line to set a breakpoint, hover over a variable to see its value, watch expressions, and set conditional breakpoints. Learn the four actions: continue, step over, step into, step out.
 
-Never commit a stray `breakpoint()` — it will hang a server waiting for input. Linters (ruff rule `T100`) catch it.
+Never leave a forgotten `breakpoint()` in code that is shared with others: a server that reaches it stops and waits for keyboard input that will never come. Code-checking tools catch it (in ruff, rule `T100`).
 
 ## Assertions as executable assumptions
 
-`assert` documents what must be true at a point in the code and fails loudly when it isn't — turning a mysterious wrong answer three functions later into an immediate, local error.
+An `assert` states something that must be true at one point in the code and fails loudly when it is not. That turns a mysterious wrong answer three functions later into an immediate error at the place where the assumption was broken.
 
 ```python-run
 def binary_search(a, target):
@@ -161,11 +177,13 @@ except AssertionError as e:
     print("AssertionError:", e)
 ```
 
-Use assertions for programmer errors and invariants; use exceptions for conditions that can legitimately happen (bad user input, missing files). Assertions vanish under `python -O`.
+The first `assert` checks the condition the whole algorithm relies on, that the input is sorted. The second checks an **invariant**, something that must hold on every pass of the loop. With a sorted list the search returns position 2. With an unsorted list, a wrong answer would have come back quietly; with the assertion it fails at once with the message `input must be sorted`.
+
+Use assertions for mistakes by the programmer and for invariants. Use exceptions for situations that can legitimately arise, such as bad user input or a missing file. Remember that Python removes all assertions when it is started with the `-O` option.
 
 ## logging
 
-For anything longer-lived than a one-off script, replace prints with the `logging` module: messages have **levels**, timestamps and origins; you can route them to files or services; and you can turn detail up or down without touching code.
+For anything that lives longer than a throwaway script, replace prints with the standard `logging` module. A log message has a **level** that says how important it is, and can carry the time and the place it came from. Messages can be sent to the screen, to a file or to a monitoring service. And the amount of detail can be turned up or down with one setting, without touching the code that produces the messages.
 
 | Level | Use for |
 |---|---|
@@ -205,13 +223,22 @@ process({"id": 4, "qty": 1, "price": 1})
 log.warning("only warnings and above are shown now")
 ```
 
-Good practice:
+**Reading this code**
 
-- One logger per module: `logger = logging.getLogger(__name__)`. Logger names form a hierarchy (`shop.orders` is a child of `shop`), so levels and handlers can be set per subtree.
-- **Libraries** only create loggers and log; the **application** configures handlers/format once at startup (`basicConfig` or `logging.config.dictConfig`).
-- Pass arguments (`log.info("user %s", uid)`) rather than pre-formatting with f-strings — formatting is skipped if the level is disabled, and aggregators group identical templates.
-- `log.exception(...)` inside an `except` block records the traceback. Never swallow exceptions silently.
-- Don't log secrets or personal data. In services, prefer structured (JSON) logs with request IDs.
+- `logging.basicConfig(...)` configures logging once: show messages from `DEBUG` upwards, in a format with the level, the logger's name, the line number and the message, on the standard output.
+- `logging.getLogger("shop.orders")` returns a **logger**, the object through which a module writes messages. In a real module the name is `__name__`.
+- `log.debug("processing %s", order)` gives a message template and the values separately. The text is put together only if the message is really going to be shown.
+- `log.warning(...)` reports something unexpected that the code has handled; `log.exception(...)`, used inside an `except` block, records the message at `ERROR` level *together with the full traceback*.
+
+The three orders produce a `DEBUG` line each, a `WARNING` for the zero quantity, and an `ERROR` with a traceback for the order that has no price. The last three lines raise the threshold for all loggers whose names start with `shop` to `WARNING`: the fourth order is now processed in silence, and only the warning appears.
+
+Good practice with logging:
+
+- One logger per module: `logger = logging.getLogger(__name__)`. The names form a tree (`shop.orders` is a child of `shop`), so levels and destinations can be set for a whole branch at once.
+- A **library** only creates loggers and writes to them. The **application** decides, once, at start-up, where messages go and how they look (`basicConfig` or `logging.config.dictConfig`). The objects that deliver messages to a destination are called **handlers**.
+- Pass the values as arguments (`log.info("user %s", uid)`) and do not build the text yourself with an f-string. The formatting is then skipped when the level is switched off, and log-collecting tools can group messages with the same template.
+- `log.exception(...)` in an `except` block records the traceback. Never swallow an exception in silence.
+- Do not log passwords, keys or personal data. In services, prefer structured logs (one JSON object per message) that include an identifier for the request.
 
 ## More instruments
 
@@ -238,24 +265,26 @@ print([n for n in dir("text") if n.startswith("is")][:6])
 print(vars(type("Point", (), {"x": 1, "y": 2})()), type(area).__name__)
 ```
 
+Three quick ways of asking Python about an object: `inspect.signature` and `inspect.getdoc` show a function's parameters and docstring; `dir(x)` lists the names available on an object (here, the string methods beginning with `is`); `vars(x)` shows an object's own attributes as a dictionary.
+
 ## Classic Python bugs to suspect first
 
-When behaviour is "impossible", check this list — every item appeared earlier in this track:
+When a program's behaviour seems impossible, go through this list first. Every item was covered earlier in this track:
 
-1. **Mutable default argument** accumulating state across calls.
-2. **Aliasing**: two names for one list/dict; `[[0] * n] * m`; a shallow copy sharing inner lists.
-3. **Late-binding closures** in loops (`lambda: i`).
-4. **Exhausted iterators**: second pass over a generator/`map`/`zip` yields nothing.
-5. **`is` vs `==`**, or truthiness treating `0`/`""` as missing.
+1. A **mutable default argument** that keeps data from one call to the next.
+2. **Aliasing**: two names for one list or dictionary; `[[0] * n] * m`; a shallow copy that shares inner lists.
+3. **Late-binding closures** created in a loop (`lambda: i`).
+4. **Exhausted iterators**: the second pass over a generator, `map` or `zip` produces nothing.
+5. **`is` where `==` was meant**, or a truthiness test that treats `0` or `""` as missing.
 6. **In-place methods returning `None`** (`x = x.sort()`).
-7. **Integer vs float division**, floating-point equality.
-8. **Shadowed names**: a variable called `list`, `id`, `sum`, or a file called `random.py`.
-9. **Modifying a collection while iterating** over it.
-10. **Stale state**: wrong interpreter, unsaved file, cached `.pyc`, an old process still running, code imported once in a REPL.
+7. **Division**: `/` versus `//`, and comparing floats for equality.
+8. **Shadowed names**: a variable called `list`, `id` or `sum`, or a file called `random.py`.
+9. **Changing a collection while looping** over it.
+10. **Stale state**: the wrong Python, an unsaved file, an old process still running, a module imported once in an interactive session and edited since.
 
 ## Worked example: hunting a bug
 
-A function should return the running balance after each transaction but gives odd results on its second use:
+A function should return the running balance after each transaction, and it gives strange results the second time it is used:
 
 ```python-run
 def running_balance(transactions, history=[]):
@@ -269,7 +298,7 @@ print(running_balance([10, -3]))
 print(running_balance([5]))            # expected [5] — got [10, 7, 12] !?
 ```
 
-*Reproduce*: two calls in a row. *Evidence*: the second result contains the first call's numbers. *Hypothesis*: `history` persists between calls — a mutable default. *Test*:
+Apply the method. *Reproduce*: two calls in a row are enough. *Evidence*: the second result contains the numbers of the first call. *Hypothesis*: the list `history` survives from one call to the next, which is what a mutable default does. *Experiment*: look at the stored default after a call.
 
 ```python-run
 def running_balance(transactions, history=[]):
@@ -294,12 +323,37 @@ assert running_balance_fixed([5], [10, 7]) == [10, 7, 12]
 print("fixed and covered by tests")
 ```
 
+The experiment is the first print: after one call, `running_balance.__defaults__` contains `[1]`. The default list has grown, which confirms the guess. The fixed version uses `None` as the default, creates a new list on each call, and also copies a list passed in by the caller so as not to change it. The three assertions at the end are the regression tests: the original example, the case that used to fail, and the case with an existing history.
+
 > [!INTERVIEW]
-> "How do you debug a problem in production / code you didn't write?" Describe the method: reproduce (ideally as a failing test), read the traceback and logs, form a hypothesis, narrow down by bisection, inspect state with a debugger or targeted logging, fix the root cause, add a regression test. In a live-coding interview, *narrate* this process when your code fails a case — walking through a small input by hand is exactly the dry-run skill interviewers assess.
+> "How do you debug a problem in production, or in code you did not write?" Describe the method: reproduce it (ideally as a failing test), read the traceback and the logs, form a hypothesis, narrow down by bisection, inspect the state with a debugger or targeted logging, fix the cause, add a regression test. In a live-coding interview, *say this process aloud* when your code fails a case. Walking through a small input by hand is exactly the skill being assessed.
 
 ## Summary
 
-Read tracebacks bottom-up. Debug systematically: reproduce, hypothesise, experiment, bisect, fix the cause, add a test. Use `print(f"{x=}")` and `repr` for quick looks, `breakpoint()`/pdb for deep inspection, assertions for invariants, and `logging` (levels, per-module loggers, `log.exception`) for anything that outlives the debugging session.
+Read tracebacks from the bottom up. Debug systematically: reproduce, hypothesise, experiment, bisect, fix the cause, add a test. Use `print(f"{x=}")` and `repr` for quick looks, `breakpoint()` and pdb for deep inspection, assertions for invariants, and `logging` (levels, one logger per module, `log.exception`) for everything that should outlive the debugging session.
+
+## Glossary
+
+- **Bug** - a mistake that makes a program behave differently from what was intended.
+- **Debugging** - finding and removing the cause of a bug.
+- **Traceback** - the report of an unhandled exception: its type, message and the chain of calls leading to it.
+- **Reproduce** - to make a bug happen reliably, on demand.
+- **Hypothesis** - one definite, testable guess about the cause.
+- **Bisect** - to halve the search space repeatedly until the cause is isolated.
+- **Root cause** - the underlying mistake, as opposed to its visible symptom.
+- **Regression test** - a test added for a fixed bug so that it cannot come back unnoticed.
+- **Debugger** - a tool that pauses a program and lets you inspect and step through it.
+- **Breakpoint** - a place where the debugger pauses the program.
+- **pdb** - Python's built-in command-line debugger.
+- **Step over / step into** - run the next line as a whole / go inside the function it calls.
+- **Call stack** - the chain of function calls in progress.
+- **Post-mortem debugging** - inspecting a program at the point where it crashed.
+- **Assertion** - an `assert` statement checking that an assumption holds.
+- **Invariant** - a condition that must always be true at a given point.
+- **Logging** - recording messages about what a program is doing as it runs.
+- **Log level** - the importance of a message: DEBUG, INFO, WARNING, ERROR, CRITICAL.
+- **Logger / handler** - the object a module writes messages to / the object that delivers them to a destination.
+- **Rubber-duck debugging** - explaining a problem aloud in order to spot the flaw.
 
 ```quiz
 [
@@ -322,4 +376,4 @@ Read tracebacks bottom-up. Debug systematically: reproduce, hypothesise, experim
 ]
 ```
 
-> **Source:** Goodrich, Tamassia & Goldwasser, *Data Structures and Algorithms in Python*, §2.2.4 (Testing and Debugging); Python docs, *Library Reference* `pdb`, `logging` (and the *Logging HOWTO*), `traceback`, `inspect`, and built-in `breakpoint()`.
+> **Source:** Goodrich, Tamassia & Goldwasser, *Data Structures and Algorithms in Python*, §2.2.4 (Testing and Debugging), restated in original wording with new examples; Python docs, *Library Reference* `pdb`, `logging` (and the *Logging HOWTO*), `traceback`, `inspect`, and built-in `breakpoint()`.

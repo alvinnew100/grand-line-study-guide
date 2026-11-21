@@ -1,13 +1,29 @@
 # Testing with pytest
 
-Code without tests works only by coincidence and stays working only by luck. Automated tests let you change code confidently, document intended behaviour with executable examples, and catch regressions in seconds instead of in production. **pytest** is the de-facto standard test framework for Python: tests are plain functions, checks are plain `assert` statements, and a small set of powerful features — fixtures, parametrisation, markers — covers nearly everything.
+> **Before this lesson:** you should have written a first `assert` and a first test as in [Files, errors and tests: programs you can rely on](#/lesson/python/py-start-files-tests). You need exceptions ([Exceptions](#/lesson/python/py-exceptions)), decorators ([Decorators and functools](#/lesson/python/py-decorators)), context managers and generators with `yield` ([Context managers and contextlib](#/lesson/python/py-context-managers)), and how to install a tool into a project ([Virtual environments, pip, uv and project layout](#/lesson/python/py-envs)).
+
+## In plain words
+
+A **test** is a small piece of code that runs another piece of code and checks that the result is what it should be. "Call the discount function with 200 and 25, and check that the answer is 150." A collection of such checks that the computer can run by itself, in seconds, as often as you like, is an **automated test suite**.
+
+Think of the pre-flight checklist that pilots go through. No pilot trusts memory or a feeling that "it worked yesterday". The same list of concrete checks is carried out before every flight, and the plane leaves only if every item passes. A test suite is that checklist for a program, run before every change is accepted.
+
+Tests buy three things. You can change code without fear, because a broken behaviour shows up at once (a bug that reappears in something that used to work is called a **regression**). Each test is a precise, executable example of how the code is meant to behave. And mistakes are found in seconds at your desk, not days later by a customer.
+
+**pytest** is the standard testing tool of the Python world. With it a test is a plain function, a check is a plain `assert` statement, and a few powerful features cover almost everything else.
+
+Why this matters for a job: every professional team expects changes to arrive with tests, and testing is a standard interview topic ("how would you test this?", "what is a fixture?", "how do you test code that calls an external service?"). During live coding, listing the unusual inputs you would test is one of the easiest ways to make a good impression.
 
 > [!NOTE]
-> pytest is a command-line tool, so most examples here are shown as files plus terminal output. Install it in your project with `uv add --dev pytest` (or `pip install pytest`) and try them. A few runnable snippets below show the underlying ideas in the browser.
+> pytest is a program you run in a terminal, so most examples here are shown as files together with the output you would see. Install it into a project with `uv add --dev pytest` (or `pip install pytest`) and try them. A few boxes with a Run button demonstrate the ideas underneath, here in the page.
 
 ## Why test, and what
 
-Goodrich (§2.2.4) distinguishes **testing** — experimentally checking correctness on a representative set of inputs — from **debugging** — tracking down the cause once a test fails. Good test inputs cover the **special cases** where code tends to break: empty collections, a single element, all-equal elements, already-sorted and reverse-sorted input, boundaries (0, −1, maximum sizes), and invalid input. The classic levels:
+Two activities are worth keeping apart. **Testing** is checking, by running the code on chosen inputs, that it behaves correctly. **Debugging**, the subject of the next lesson, is finding the cause once a test has failed.
+
+The skill in testing lies in choosing the inputs. Typical inputs are not enough; code tends to break on the unusual ones, called **edge cases**: an empty collection, a single item, all items equal, input already sorted or sorted backwards, values at a limit (0, −1, the maximum size), and invalid input.
+
+Tests also differ in how much of the system they exercise. The usual three levels:
 
 | Level | Tests | Speed | Share of a healthy suite |
 |---|---|---|---|
@@ -17,6 +33,8 @@ Goodrich (§2.2.4) distinguishes **testing** — experimentally checking correct
 
 ## Your first test
 
+Here is a small function, kept in its own module:
+
 ```python
 # src/shop/pricing.py
 def apply_discount(price: float, percent: float) -> float:
@@ -24,6 +42,8 @@ def apply_discount(price: float, percent: float) -> float:
         raise ValueError("percent must be between 0 and 100")
     return round(price * (1 - percent / 100), 2)
 ```
+
+And here is a file of tests for it. By convention tests live in a separate `tests` folder:
 
 ```python
 # tests/test_pricing.py
@@ -41,6 +61,14 @@ def test_invalid_percent_raises():
         apply_discount(100, 150)
 ```
 
+**Reading the test file**
+
+- Each test is an ordinary function whose name starts with `test_`.
+- Each contains an `assert`: a statement that does nothing if its condition is true and raises `AssertionError` if it is false. A test **passes** if the function finishes without raising an error and **fails** otherwise.
+- The third test checks that a wrong call is *rejected*. `with pytest.raises(ValueError, match="...")` passes only if the block raises a `ValueError` whose message contains the given text.
+
+Typing `pytest` in the project folder finds and runs them:
+
 ```
 $ pytest
 ========================= test session starts =========================
@@ -50,11 +78,11 @@ tests/test_pricing.py ...                                        [100%]
 ========================== 3 passed in 0.02s ==========================
 ```
 
-**Discovery rules**: pytest collects files named `test_*.py` or `*_test.py`, functions named `test_*`, and methods named `test_*` inside classes named `Test*` (no `__init__`). No base class, no boilerplate.
+Each dot is a passed test. How did pytest know what to run? By its **discovery rules**: it collects files named `test_*.py` or `*_test.py`, functions in them named `test_*`, and methods named `test_*` inside classes named `Test*`. There is nothing to register and no special class to inherit from.
 
 ### Plain `assert`, rich failure output
 
-pytest rewrites `assert` statements so that failures show the values involved:
+When an `assert` fails, plain Python would only say "AssertionError". pytest rewrites your `assert` statements behind the scenes, so that a failure shows the values involved:
 
 ```
     def test_apply_discount_reduces_price():
@@ -63,14 +91,14 @@ E       assert 150.0 == 140
 E        +  where 150.0 = apply_discount(200, 25)
 ```
 
-For containers and long strings you get a diff. Compare floats with `pytest.approx`:
+The report says that the call returned 150.0 while the test expected 140. For lists, dictionaries and long strings pytest shows exactly where the two sides differ. Floats should not be compared with `==` (recall `0.1 + 0.2`); use `pytest.approx`:
 
 ```python
 assert 0.1 + 0.2 == pytest.approx(0.3)
 assert [0.1 + 0.2, 1 / 3] == pytest.approx([0.3, 0.3333], abs=1e-3)
 ```
 
-The essence of a test runner is tiny — find functions named `test_*`, call them, report which raised. This toy version runs here:
+A **test runner** is the program that finds tests, runs them and reports. Its core idea is small: find the functions named `test_*`, call each one, and note which raised an error. This toy version runs here:
 
 ```python-run
 import math
@@ -112,7 +140,11 @@ def run_tests(namespace):
 run_tests(dict(globals()))
 ```
 
+`run_tests` goes through a dictionary of names, calls every function whose name starts with `test_`, and counts a pass when nothing was raised and a failure when an `AssertionError` was. The output shows three `PASS` lines and one `FAIL`, for the test whose expectation is deliberately wrong, with its message. pytest does the same job with far better reports.
+
 ## Anatomy of a good test: Arrange, Act, Assert
+
+A readable test has three parts, often remembered as **Arrange, Act, Assert**:
 
 ```python
 def test_cart_total_includes_tax():
@@ -125,11 +157,11 @@ def test_cart_total_includes_tax():
     assert total == 24
 ```
 
-One behaviour per test; a descriptive name (`test_<what>_<condition>_<expected>`); no logic (loops/ifs) in tests; independent of other tests and of execution order.
+Guidelines: test one behaviour per test; give it a descriptive name (`test_<what>_<condition>_<expected>`); keep logic such as loops and `if`s out of tests; and make every test independent of the others and of the order in which they run.
 
 ## Parametrisation
 
-When the same check applies to many inputs, don't copy-paste — parametrise. Each case becomes its own test with its own pass/fail line.
+When the same check applies to many inputs, do not copy the test; **parametrise** it. The decorator `@pytest.mark.parametrize` takes the names of the test's parameters and a list of value sets, and runs the test once for each set. Each run is reported as a separate test with its own pass or fail.
 
 ```python
 import pytest
@@ -154,11 +186,11 @@ def test_rejects_out_of_range(bad):
         apply_discount(100, bad)
 ```
 
-This is table-driven testing: the test logic is written once, and edge cases are one line each.
+The first test runs five times, once per row; `pytest.param(..., id="free-item")` gives one row a readable name in the report. The second runs three times with three invalid percentages. This style is called table-driven testing: the logic is written once, and each further edge case costs one line.
 
 ## Fixtures
 
-A **fixture** is a function that provides something a test needs — an object, a database connection, a temp directory, a configured client. A test requests a fixture simply by **naming it as a parameter**; pytest calls the fixture and injects the result (dependency injection).
+Most tests need something prepared before they can start: an object in a known state, a database connection, a temporary folder. A **fixture** is a function that provides such a thing. A test asks for a fixture by **naming it as a parameter**. pytest sees the parameter name, calls the fixture function of that name, and passes the result in. Being handed what you need from outside is the dependency injection of the earlier OOP lesson.
 
 ```python
 import pytest
@@ -178,9 +210,13 @@ def test_remove(cart):
     assert cart.total() == 0          # each test gets a FRESH cart
 ```
 
+Both tests have a parameter called `cart`, so pytest calls the `cart` fixture for each of them. Each test receives a *new* cart, which is why the second test can remove an item without affecting the first.
+
 ### Setup and teardown with `yield`
 
-Code after `yield` runs after the test — even if the test fails:
+Preparing what a test needs is called **setup**; cleaning up afterwards is **teardown**. A fixture that must clean up uses `yield` in place of `return`:
+
+The code before `yield` is the setup, the yielded value is what the test receives, and the code after `yield` runs when the test has finished, whether it passed or failed.
 
 ```python
 @pytest.fixture
@@ -191,7 +227,7 @@ def db():
     conn.close()                       # teardown
 ```
 
-It's the same shape as `@contextmanager`. The idea in runnable form:
+This is the same shape as a `@contextmanager` generator. The idea in a form that runs here:
 
 ```python-run
 from contextlib import contextmanager
@@ -214,14 +250,16 @@ def test_insert():
 test_insert()
 ```
 
+The output shows the order: setup, the body of the test, teardown.
+
 ### Scope, sharing and built-ins
 
-- `@pytest.fixture(scope="function")` (default) — fresh per test. Other scopes: `"class"`, `"module"`, `"session"` — create once and share, for expensive resources. Shared fixtures must not be mutated by tests.
-- Fixtures can request other fixtures, forming a dependency graph.
-- Put shared fixtures in **`tests/conftest.py`**; pytest finds them automatically, no import needed.
-- `autouse=True` applies a fixture to every test in scope.
+- A fixture's **scope** says how often it is created. The default, `scope="function"`, makes a new one for every test. The other scopes, `"class"`, `"module"` and `"session"`, create it once and share it, which suits things that are expensive to set up. A shared fixture must not be changed by the tests that use it.
+- A fixture can itself ask for other fixtures in its parameters.
+- Put fixtures that several test files share into **`tests/conftest.py`**. pytest finds that file automatically; no import is needed.
+- `autouse=True` applies a fixture to every test in its scope without it being asked for.
 
-Built-in fixtures you'll use constantly:
+pytest comes with fixtures of its own. The ones you will use constantly:
 
 | Fixture | Gives you |
 |---|---|
@@ -246,6 +284,8 @@ def test_greets(capsys):
     assert capsys.readouterr().out == "Hello, Brook!\n"
 ```
 
+The first test writes into a temporary folder that pytest creates and later removes. The second sets an environment variable for the duration of one test; `monkeypatch` undoes the change afterwards. The third checks what a function printed.
+
 ## Testing exceptions and warnings
 
 ```python
@@ -259,17 +299,17 @@ def test_deprecated_call_warns():
         old_api()
 ```
 
-If the block doesn't raise, the test fails — the mistake a hand-written `try/except` test often makes (forgetting the "should have raised" branch).
+`excinfo.value` is the exception that was caught, so its message can be checked too. If the block does *not* raise, the test fails. A hand-written `try` / `except` test easily gets that wrong, by forgetting the "it should have raised" branch.
 
 ## Test doubles: mocks, fakes and monkeypatching
 
-Unit tests shouldn't hit the network, real clocks, or production databases. Replace such dependencies with stand-ins:
+A unit test should not send requests over the network, depend on the real time of day, or touch a real database: such tests are slow and fail for reasons that have nothing to do with your code. The remedy is to replace those dependencies with stand-ins, known collectively as **test doubles**:
 
-- **Fake**: a simple working implementation (in-memory repository).
-- **Stub**: returns canned answers.
-- **Mock**: records how it was called so you can assert on interactions.
+- **Fake**: a simple but working replacement, such as a "database" that is a dictionary in memory.
+- **Stub**: an object that returns fixed, prepared answers.
+- **Mock**: an object that records how it was called, so the test can check the calls afterwards.
 
-The easiest route is designing for it — pass dependencies in (dependency injection), then hand the test a fake:
+The easiest way is to design for it: let a class receive its helpers as arguments, and hand the test a stand-in.
 
 ```python-run
 from unittest.mock import Mock
@@ -307,7 +347,13 @@ m.side_effect = [1, ValueError("boom")]
 print(m(), m.call_count)
 ```
 
-When you can't inject, patch the name **where it is looked up**:
+- `Signup` receives a `mailer` and a `clock` from outside.
+- `Mock()` creates an object that accepts any method call and records it. After `service.register(...)`, the test asks `mailer.send.assert_called_once_with(...)`: was `send` called exactly once, with exactly these arguments? No email is sent anywhere.
+- The clock is replaced by a lambda returning a fixed time, which makes the result predictable.
+- The second test checks that a bad address raises an error *and* that no mail was sent.
+- The last lines show two more features of `Mock`: `side_effect` set to a list makes successive calls return (or raise) the listed items; `call_count` counts the calls.
+
+When the code does not accept its helper as an argument, the test can swap a name temporarily, which is called **patching** (or monkeypatching). The rule is to patch the name **in the module that uses it**:
 
 ```python
 # shop/weather.py does:  import requests ... requests.get(url)
@@ -318,9 +364,13 @@ def test_forecast(monkeypatch):
     assert forecast("Lisbon") == 21
 ```
 
-`unittest.mock.patch("shop.weather.requests.get")` does the same as a context manager/decorator. Over-mocking is a smell: tests that mirror the implementation line by line break on every refactor and prove little. Prefer fakes and real objects where cheap.
+Here `forecast` would normally call a real weather service through `requests.get`. For the duration of the test, that function is replaced by a lambda returning a prepared answer. `unittest.mock.patch("shop.weather.requests.get")` does the same as a context manager or decorator.
+
+A warning: mocking too much is a sign of trouble. A test that mirrors the implementation line by line breaks at every reorganisation of the code and proves little. Prefer fakes and real objects where they are cheap.
 
 ## Markers, selection and useful flags
+
+A **marker** is a label attached to a test with a decorator. Some markers are built in, and you can invent your own:
 
 ```python
 @pytest.mark.slow
@@ -336,6 +386,8 @@ def test_fork(): ...
 def test_rounding_edge(): ...
 ```
 
+`slow` is a home-made label; `skip` and `skipif` leave a test out (always, or under a condition); `xfail` says "this is expected to fail for now". The command line then selects what to run:
+
 | Command | Effect |
 |---|---|
 | `pytest -q` / `-v` | quieter / one line per test |
@@ -349,7 +401,7 @@ def test_rounding_edge(): ...
 | `pytest -n auto` | run in parallel (plugin `pytest-xdist`) |
 | `pytest --cov=shop --cov-report=term-missing` | coverage (plugin `pytest-cov`) |
 
-Register custom markers and defaults in `pyproject.toml`:
+Home-made markers and default options are declared in `pyproject.toml`:
 
 ```toml
 [tool.pytest.ini_options]
@@ -358,11 +410,11 @@ addopts = "-q --strict-markers"
 markers = ["slow: long-running tests"]
 ```
 
-**Coverage** measures which lines ran during tests. It finds untested code; it does not prove tested code is correct. 100% coverage with weak assertions is worthless; ~80–90% with meaningful assertions is a common, sensible target.
+**Coverage** measures which lines of your code were executed while the tests ran. It finds code that no test touches. It does not prove that the tested code is correct: 100% coverage with weak checks is worthless. Around 80 to 90% with meaningful assertions is a common and sensible target.
 
 ## Testing async code and FastAPI (preview)
 
-With the `pytest-asyncio` (or `anyio`) plugin, tests can be coroutines:
+A **plugin** is an add-on package that extends pytest. With the `pytest-asyncio` (or `anyio`) plugin, a test can be a coroutine and use `await`:
 
 ```python
 import pytest
@@ -373,7 +425,7 @@ async def test_fetch_user():
     assert user.name == "Luffy"
 ```
 
-FastAPI ships a `TestClient` that calls your app in-process — no server needed:
+The web framework FastAPI provides a `TestClient` that sends pretend requests straight to your application inside the test process, so no server has to be started:
 
 ```python
 from fastapi.testclient import TestClient
@@ -389,11 +441,11 @@ def test_read_item():
 
 ## Test-driven development in one paragraph
 
-**Red → Green → Refactor**: write a small failing test that states the next behaviour; write the simplest code that makes it pass; clean up with the tests as a safety net. Whether or not you practise strict TDD, writing the test *while the design is still soft* yields code that is easier to test — smaller functions, injected dependencies, fewer hidden globals. And whenever you fix a bug, first write a test that reproduces it: it proves the fix and prevents the regression.
+**Test-driven development** (TDD) reverses the usual order, in a three-step cycle called **red, green, refactor**: write a small test for the next piece of behaviour and watch it fail; write the simplest code that makes it pass; then tidy the code, with the tests as a safety net. Whether or not you follow it strictly, writing tests *while the design can still change* leads to code that is easier to test: smaller functions, helpers passed in as arguments, fewer hidden global variables. And whenever you fix a bug, first write a test that reproduces it. That test proves the fix and keeps the bug from coming back.
 
 ## unittest and doctest
 
-The standard library has `unittest` (xUnit style: classes deriving from `TestCase`, `self.assertEqual(...)`, `setUp`/`tearDown`) and `doctest` (runs examples embedded in docstrings). pytest runs both kinds, so legacy suites migrate gradually.
+Python's standard library has two older testing tools. `unittest` follows the style of Java's JUnit: tests are methods of a class that inherits from `TestCase`, checks are method calls such as `self.assertEqual(a, b)`, and `setUp` / `tearDown` methods prepare and clean up. `doctest` runs the examples written in docstrings and checks that the output shown there is what really comes out. pytest can run both kinds, so an old test suite can be moved over gradually.
 
 ```python-run
 import doctest
@@ -412,21 +464,48 @@ def slugify(title):
 print(doctest.testmod())
 ```
 
+The docstring contains two examples in the form of an interactive session: a line starting with `>>>` and the expected result below it. `doctest.testmod()` runs them and reports `TestResults(failed=0, attempted=2)`.
+
 > [!INTERVIEW]
-> Expect: "How do you test code that calls an external API?" (inject the client and use a fake, or patch where the name is looked up; test the real integration separately). "What's a fixture?" (reusable setup/teardown injected by parameter name, with scopes). "How do you test that an exception is raised?" (`with pytest.raises(E, match=...)`). "What does parametrize do?" And when live-coding, proactively listing edge cases — empty input, one element, duplicates, negatives, large input — is what interviewers want to hear.
+> Expect: "How do you test code that calls an external service?" (pass the client in and use a fake, or patch the name where it is looked up; test the real connection separately). "What is a fixture?" (reusable setup and teardown, injected by parameter name, with scopes). "How do you test that an exception is raised?" (`with pytest.raises(E, match=...)`). "What does parametrize do?" And in live coding, listing the edge cases unprompted (empty input, one item, duplicates, negatives, large input) is what interviewers hope to hear.
 
 ## Pitfalls recap
 
-- Tests that depend on each other or on execution order (shared mutable state, module-scoped fixtures mutated by tests).
-- Asserting nothing (a test that can't fail), or asserting implementation details instead of behaviour.
+- Tests that depend on each other or on the order they run in (shared mutable data, or widely scoped fixtures that tests modify).
+- Asserting nothing, so the test cannot fail; or asserting how the code works inside when its behaviour is what matters.
 - `assert a == b` with floats; use `pytest.approx`.
-- Patching the wrong target — patch the name in the module that *uses* it.
-- Real network/time/randomness in unit tests → flaky tests. Inject clocks, seed RNGs.
-- Naming a file `utils_tests.py` or a function `check_x` — pytest won't collect it.
+- Patching the wrong target; patch the name in the module that *uses* it.
+- Real network access, time or randomness in unit tests, which gives tests that sometimes pass and sometimes fail (**flaky** tests). Pass clocks in, and fix the seeds of random generators.
+- Naming a file `utils_tests.py` or a function `check_x`: pytest will not collect it.
 
 ## Summary
 
-pytest discovers `test_*` functions and gives detailed failure reports for plain `assert`s. Use `parametrize` for tables of cases, fixtures (with `yield` teardown, scopes and `conftest.py`) for setup, `pytest.raises` for errors, `monkeypatch`/mocks/fakes to isolate dependencies, and markers plus CLI flags to select what runs. Cover the edge cases, keep tests fast and independent, and write a failing test before fixing any bug.
+pytest discovers `test_*` functions and gives detailed failure reports for plain `assert` statements. Use `parametrize` for tables of cases; fixtures (with `yield` teardown, scopes and `conftest.py`) for setup; `pytest.raises` for errors; `monkeypatch`, mocks and fakes to isolate dependencies; and markers with command-line options to select what runs. Cover the edge cases, keep tests fast and independent, and write a failing test before fixing any bug.
+
+## Glossary
+
+- **Test** - code that runs other code and checks the result.
+- **Test suite** - the full collection of a project's tests.
+- **`assert`** - a statement that raises `AssertionError` when its condition is false.
+- **Pass / fail** - a test finishing without an error / raising one.
+- **Regression** - a bug in something that used to work.
+- **Edge case** - an unusual input at the limits of what the code must handle.
+- **Unit / integration / end-to-end test** - testing one piece alone / several pieces together / the whole system.
+- **Test runner** - the program that finds tests, runs them and reports; here, pytest.
+- **Test discovery** - finding tests by naming convention (`test_*.py`, `test_*`).
+- **Arrange, Act, Assert** - the three parts of a test: prepare, do, check.
+- **Parametrise** - run one test function with many sets of inputs.
+- **Fixture** - a function providing something a test needs, requested by parameter name.
+- **Setup / teardown** - preparation before a test / cleanup after it.
+- **Scope** - how long a fixture lives: per test, class, module or session.
+- **`conftest.py`** - the file where shared fixtures are placed.
+- **Test double** - a stand-in for a real dependency: a fake, a stub or a mock.
+- **Mock** - a stand-in that records how it was called.
+- **Patching (monkeypatching)** - temporarily replacing a name or attribute during a test.
+- **Marker** - a label attached to a test with `@pytest.mark...`.
+- **Coverage** - the share of code lines executed by the tests.
+- **TDD** - test-driven development: write the failing test first.
+- **Flaky test** - a test that passes or fails unpredictably.
 
 ```quiz
 [
@@ -449,4 +528,4 @@ pytest discovers `test_*` functions and gives detailed failure reports for plain
 ]
 ```
 
-> **Source:** Goodrich, Tamassia & Goldwasser, *Data Structures and Algorithms in Python*, §2.2.4 (Testing and Debugging); pytest documentation ("Get Started", "How to use fixtures", "How to parametrize", "How to monkeypatch"); Python docs, *Library Reference* `unittest.mock` and `doctest`.
+> **Source:** Goodrich, Tamassia & Goldwasser, *Data Structures and Algorithms in Python*, §2.2.4 (Testing and Debugging), restated in original wording with new examples; pytest documentation ("Get Started", "How to use fixtures", "How to parametrize", "How to monkeypatch"); Python docs, *Library Reference* `unittest.mock` and `doctest`.

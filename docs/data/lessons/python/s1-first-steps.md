@@ -1,6 +1,14 @@
 # First steps: running Python, values, names and text
 
-This module is for you if you have never written a program. No prior knowledge is assumed: we start from "what is a program?" and move in small steps, and every idea comes with a box you can run and change right here in the page. Please do change things. Programming is learned with your fingers, in the same way swimming is learned in water — reading alone won't do it.
+> **Before this lesson:** nothing at all. This is the very first lesson of the Python track, written for someone who has never programmed. You need only this page: every example runs in your browser, so there is nothing to install yet. The next lesson, [Lists and loops](#/lesson/python/py-start-lists-loops), builds on this one.
+
+## In plain words
+
+Programming means writing instructions that a computer follows. Think of a recipe card: "boil the water, add the tea leaves, wait three minutes, pour". A recipe is a list of steps in order, written precisely enough that someone else can follow it without asking you questions. A program is the same thing for a computer, except that the computer is far more literal than any cook. It follows exactly what is written, never what you meant.
+
+This module is for you if you have never written a program. No prior knowledge is assumed: we start from "what is a program?" and move in small steps, and every idea comes with a box you can run and change right here in the page. Please do change things. Programming is learned with your fingers, in the same way swimming is learned in water; reading alone won't do it.
+
+Why this matters for a job: Python is one of the most widely used programming languages in the world, in web development, data analysis, automation, science and machine learning, and it is a common choice for coding interviews because it is short to write and easy to read. Everything later in this track, up to interview-level topics, rests on the basics in this lesson.
 
 By the end of this lesson you will be able to run Python, store information under names, work with text and numbers, leave notes for human readers, and make sense of your first error messages.
 
@@ -21,13 +29,13 @@ Try it: change the text, add a third `print` line, replace `+` with `*` (multipl
 
 ## Three ways to run Python
 
-On this site, code runs in your browser. On your own computer you would first install Python from python.org (on Windows, tick the option that adds Python to your PATH during installation) and then use it in one of these ways:
+On this site, code runs in your browser. On your own computer you would first install Python from python.org (on Windows, tick the option that adds Python to your PATH during installation; PATH is the list of folders where the system looks for programs you type by name) and then use it in one of these ways. A **terminal** (also called a command prompt or shell) is a window where you type commands as text instead of clicking.
 
 | Way | What it looks like | Good for |
 |---|---|---|
-| **Interactive prompt** (the REPL) | type `python` (or `python3` on macOS/Linux) in a terminal; a `>>>` prompt appears and each line you type runs immediately | quick experiments, checking how something behaves |
+| **Interactive prompt** (the REPL, short for Read-Eval-Print Loop: it reads a line, evaluates it, prints the result, and loops) | type `python` (or `python3` on macOS/Linux) in a terminal; a `>>>` prompt appears and each line you type runs immediately | quick experiments, checking how something behaves |
 | **Script file** | save code in a file ending in `.py`, then run `python my_program.py` in a terminal opened in that folder | real programs you want to keep |
-| **Editor with a Run button** | an editor such as VS Code with its Python extension: write, press Run, see the output in a panel below | everyday work; it also colours your code and flags mistakes as you type |
+| **Editor with a Run button** | an editor such as VS Code (Visual Studio Code) with its Python extension: write, press Run, see the output in a panel below | everyday work; it also colours your code and flags mistakes as you type |
 
 All three use the same **interpreter**: the program called `python` that reads your text and performs it. When something does not work on your machine, the usual suspects are: the terminal is open in a different folder than the file; the file was not saved; or the command is `python3` rather than `python` on your system. Typing `python --version` tells you whether Python is reachable at all.
 
@@ -179,7 +187,7 @@ Three details worth knowing early:
 
 1. Ordinary division `/` always gives a float, even when it divides evenly: `8 / 2` is `4.0`.
 2. The remainder operator `%` is more useful than it looks: `number % 2` is `0` for even numbers and `1` for odd ones.
-3. Floats are stored in binary, so some results carry a tiny error in the far decimal places. This is true in nearly every programming language, not a Python fault. Round when you display.
+3. Floats are stored in binary (a number system that uses only the digits 0 and 1), and many decimal fractions such as 0.1 have no exact binary form, so some results carry a tiny error in the far decimal places. This is true in nearly every programming language, not a Python fault. Round when you display.
 
 ```python-run
 print(0.1 + 0.2)                 # not exactly 0.3
@@ -263,6 +271,8 @@ for label, code in experiments.items():
         print(f"{label:<28} -> {type(error).__name__}: {error}")
 ```
 
+You do not need to understand every line of this demo yet. Each experiment is a small piece of Python code stored as text; `exec(code)` runs that text as if it were a program, and the `try`/`except` catches the error so that the next experiment can still run. Each output line shows a label, the error's type and its message.
+
 | Error | What it means | Usual fix |
 |---|---|---|
 | `NameError` | a name is unknown | check spelling and case; define it earlier |
@@ -276,7 +286,7 @@ A `SyntaxError` is special: Python reads the whole file before running anything,
 
 1. Read the last line of the traceback. What kind of error? What does it say?
 2. Go to the line number it mentions. Look at that line and the one above.
-3. Not obvious? Add `print(...)` lines just before it to display the values involved, and their `type(...)`.
+3. Still unclear? Add `print(...)` lines immediately before it to display the values involved, and their `type(...)`.
 4. Change **one** thing, run again, and observe. Random multiple changes make things worse.
 5. Still stuck? Copy the last line of the error into a search engine — thousands of people have met the same message.
 
@@ -335,6 +345,27 @@ Short exercises to do in any run box above (or your own editor):
 - Integers and floats support `+ - * / // % **`; `/` always produces a float. Convert between text and numbers with `int`, `float` and `str`.
 - Comments begin with `#` and explain the *why*.
 - Read tracebacks from the bottom: error type, message, then the line. `NameError`, `TypeError`, `SyntaxError` and `ValueError` cover most early mistakes.
+
+## Glossary
+
+- **Program** - a list of instructions, in a text file, that a computer carries out from top to bottom.
+- **Programming language** - the set of rules for writing those instructions; Python is one.
+- **Interpreter** - the program called `python` that reads your code and carries it out.
+- **Terminal** - a window where you type commands as text.
+- **REPL** - Read-Eval-Print Loop, the interactive `>>>` prompt that runs each line as you type it.
+- **Script** - a program saved in a `.py` file.
+- **Function** - a named action, such as `print` or `len`, that you call with parentheses.
+- **Variable** - a name tied to a value with `=`, which can be re-tied later.
+- **Assignment** - the `=` statement that ties a name to a value.
+- **String** - a piece of text, written inside quotation marks.
+- **Method** - an action that belongs to a value, called with a dot: `name.upper()`.
+- **f-string** - a string with `f` before the quote, whose `{...}` parts are replaced by values.
+- **Escape sequence** - a backslash code inside a string, such as `\n` (new line) or `\t` (tab).
+- **Integer (`int`) / float** - a whole number / a number with a decimal point.
+- **Conversion** - turning a value into another type with `int()`, `float()` or `str()`.
+- **Comment** - text after `#` that Python ignores; a note for human readers.
+- **Traceback** - the report Python prints when a program fails, showing where and why.
+- **NameError, TypeError, SyntaxError, ValueError** - an unknown name; the wrong kind of value; text that breaks Python's grammar; the right kind of value with unacceptable content.
 
 ```quiz
 [

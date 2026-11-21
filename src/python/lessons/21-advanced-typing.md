@@ -1,10 +1,21 @@
 # Generics, Protocol, TypedDict and Pydantic
 
-The previous lesson covered everyday annotations. This one covers the tools that let you type *reusable* code precisely: **generics** (functions and classes that work for any type while keeping track of which one), **Protocols** (static duck typing), **TypedDict** (typed dictionaries for JSON-shaped data), and a preview of **Pydantic**, which turns type hints into runtime validation and powers FastAPI.
+> **Before this lesson:** read [Type hints and mypy](#/lesson/python/py-type-hints) first. You need annotations, unions, `Any`, narrowing and the idea of a static type checker. Duck typing and abstract base classes come from [Properties, dataclasses, ABCs and composition](#/lesson/python/py-properties-dataclasses), and decorators from [Decorators and functools](#/lesson/python/py-decorators).
+
+## In plain words
+
+The previous lesson covered the hints you write every day. This one covers the tools for describing *reusable* code precisely. There are four, and each answers one question.
+
+- **Generics**: "this function works for a list of anything, and what comes out is the same kind of thing that went in." A vending machine is generic: it does not care which drinks are loaded, but if you loaded cola, cola is what comes out. Writing that link down lets the checker keep track of the type.
+- **Protocols**: "I accept any object that can do X; I do not care what class it is." A job advert that says "must be able to drive", not "must be a graduate of this particular driving school".
+- **TypedDict**: "this dictionary has exactly these keys, with these value types." A paper form with named boxes, as opposed to a blank sheet.
+- **Pydantic**: a popular library that takes the same kind of hints and *really checks the data while the program runs*. This is the guard at the door who inspects what arrives from outside.
+
+Why this matters for a job: these appear in the headers of nearly every modern library, so you need to read them even if you seldom write them. FastAPI, one of the most used web frameworks, is built on Pydantic. Interviewers ask "what is a Protocol and how does it differ from an abstract base class?" and "what does a TypeVar do?". The lesson ends with a look at what these constructs are while the program runs, which is how frameworks make use of them.
 
 ## Generics with TypeVar
 
-Suppose `first` returns the first element of a list. Annotating it `list[Any] -> Any` throws away information: the checker no longer knows that `first([1, 2])` is an `int`. A **type variable** links the input and output types:
+Suppose a function `first` returns the first item of a sequence. If you annotate it as taking `Sequence[Any]` and returning `Any`, information is thrown away: the checker no longer knows that `first([1, 2])` is an `int`, so it cannot catch `first([1, 2]).upper()`. A **type variable** is a placeholder that stands for "some type, to be worked out at each call". Using the same placeholder in the parameter and in the return type links the two:
 
 ```python-run
 from typing import TypeVar
@@ -20,9 +31,9 @@ s = first("abc")            # checker infers str
 print(n + 1, s.upper())
 ```
 
-Each call *solves* `T`: for `first([1, 2, 3])`, `T = int`, so the return type is `int`.
+`T = TypeVar("T")` creates the placeholder (the name is passed as a string too, for technical reasons). In the header, `Sequence[T]` and `-> T` say: whatever the items are, that is what is returned. At each call the checker works out what `T` must be. For `first([1, 2, 3])` it is `int`, so `n + 1` is accepted; for `first("abc")` it is `str`, so `s.upper()` is accepted. A function or class written with type variables is called **generic**.
 
-Python 3.12 added a lighter syntax (PEP 695) that declares the type parameter inline. Both spellings mean the same; you'll see the `TypeVar` form in most existing code:
+Python 3.12 added a lighter spelling that declares the placeholder in square brackets after the function name. Both mean the same; most existing code uses the `TypeVar` form.
 
 ```python
 def first[T](items: Sequence[T]) -> T:      # Python 3.12+
@@ -31,8 +42,10 @@ def first[T](items: Sequence[T]) -> T:      # Python 3.12+
 
 ### Bounds and constraints
 
-- **Bound**: `TypeVar("T", bound=Base)` — `T` must be `Base` or a subclass. Lets you call `Base`'s methods while preserving the precise type.
-- **Constraints**: `TypeVar("T", int, str)` — `T` must be exactly one of the listed types.
+A plain `T` can stand for any type at all, so the function body may not assume anything about it. Two ways of restricting it:
+
+- **Bound**: `TypeVar("T", bound=Base)` says `T` must be `Base` or a subclass of it. The body may then use `Base`'s methods, and the exact type is still preserved for the caller.
+- **Constraints**: `TypeVar("T", int, str)` says `T` must be exactly one of the listed types.
 
 ```python-run
 from typing import TypeVar
@@ -52,11 +65,13 @@ def dedupe(items: Iterable[H]) -> list[H]:
 print(dedupe([3, 1, 3, 2, 1]), dedupe("mississippi"))
 ```
 
-For "anything that supports `<`", the idiom is a Protocol bound (see below).
+`dedupe` removes repeated items while keeping the first of each. It puts items into a set, which works only for hashable items, so the type variable is bound to `Hashable`. A checker would reject `dedupe([[1], [1]])`, a list of unhashable lists, while still knowing that `dedupe([3, 1, 3])` returns a `list[int]`. The output is `[3, 1, 2] ['m', 'i', 's', 'p']`.
+
+For "any type that supports `<`" the usual solution is to bind the variable to a Protocol, shown further down.
 
 ## Generic classes
 
-A container class that works for any element type is generic in that type:
+A class can be generic too. A container that works for items of any type is generic in the type of its items:
 
 ```python-run
 from typing import Generic, TypeVar
@@ -84,15 +99,17 @@ ints.push(1); ints.push(2)
 print(ints.pop() + 10, len(ints), Stack[str])
 ```
 
-In 3.12+: `class Stack[T]:`. Built-in `list[int]`, `dict[str, int]` are generic classes of exactly this kind.
+Inheriting from `Generic[T]` declares that `Stack` has one type parameter. Inside the class, `T` is used wherever "the item type" is meant. The variable `ints` is annotated `Stack[int]`, and from then on the checker knows that `push` takes an `int` and `pop` returns one; the commented line shows the error a string would cause. (While the program runs, nothing stops it. More on that under "What exists at runtime?".)
+
+In Python 3.12 and later the header can be written `class Stack[T]:`. The built-in `list[int]` and `dict[str, int]` are generic classes of exactly this kind.
 
 ### Variance in one paragraph
 
-Is a `list[int]` acceptable where a `list[float]` is expected? **No** — the function could append `1.5` to your list of ints. Mutable containers are **invariant**. Read-only types like `Sequence[int]` and `Iterable[int]` are **covariant** (fine where `Sequence[float]` is expected). `Callable` is **contravariant** in its arguments. If mypy complains that `list[Dog]` isn't `list[Animal]`, change the parameter to `Sequence[Animal]`.
+**Variance** is the question of when a container of one type may stand in for a container of a related type. Is a `list[int]` acceptable where a `list[float]` is expected? **No**: the function receiving it could append `1.5` to your list of integers. Containers that can be changed are **invariant**: only the exact type will do. Read-only types such as `Sequence[int]` and `Iterable[int]` are **covariant**: they are accepted where `Sequence[float]` is expected, because nothing can be put into them. `Callable` is **contravariant** in its argument types, meaning the relationship runs the other way round. The practical rule: if mypy complains that `list[Dog]` is not a `list[Animal]`, change the parameter to `Sequence[Animal]`.
 
 ## Protocol: static duck typing
 
-Python code traditionally relies on duck typing: "if it has a `.read()` method, I can use it". `typing.Protocol` lets you write that expectation as a type. A class satisfies a protocol **structurally** — just by having the right methods and attributes — with no inheritance required.
+Python code has always relied on duck typing: "if it has a `.read()` method, I can use it". `typing.Protocol` lets you write that expectation down as a type. A class satisfies a protocol **structurally**, that is, by having the right methods and attributes. It does not inherit from the protocol and need not know that the protocol exists.
 
 ```python-run
 from typing import Protocol, runtime_checkable
@@ -125,17 +142,21 @@ import io
 print(isinstance(io.StringIO(), SupportsClose), isinstance(3, SupportsClose))
 ```
 
-Why it matters:
+- `Speaker` is the protocol: anything with a `name` that is a string and a `speak()` method returning a string. The bodies are `...`, because a protocol only describes.
+- `Dog` and `Robot` do not mention `Speaker` anywhere. Both have the required members, so a checker accepts both as arguments of `introduce`.
+- The second half shows an optional extra. Decorating a protocol with `@runtime_checkable` allows `isinstance` tests against it while the program runs: an in-memory file has a `close` method (`True`), the integer 3 does not (`False`).
 
-- You can describe types you don't own (third-party classes, built-ins) without subclassing them.
-- It keeps code decoupled: the consumer defines the small interface it needs ("interface segregation").
-- It's the natural type for dependency injection and test fakes.
+Why protocols matter:
 
-`@runtime_checkable` permits `isinstance` checks, but they only verify that the members *exist*, not their signatures.
+- You can describe types you do not own (classes from other libraries, built-ins) without subclassing them.
+- The code stays loosely connected: the *user* of an object states the small interface it needs, and any class that fits may be supplied.
+- It is the natural type for dependency injection and for the fakes used in tests (see the lesson on properties, dataclasses and composition).
 
-**ABC vs Protocol**: an ABC is *nominal* (you must inherit or register) and can enforce implementation at instantiation time and share code; a Protocol is *structural* and purely for static checking (plus the shallow runtime check above).
+A caution about `@runtime_checkable`: the `isinstance` test only verifies that members with those *names* exist. It does not look at their parameters or return types.
 
-A common Protocol-bounded generic — "anything comparable":
+**ABC or Protocol?** An abstract base class is *nominal*: a class must name it as a base (or be registered). In return it can refuse to create incomplete objects and can share code. A Protocol is *structural* and exists for the static checker (plus the shallow run-time test above).
+
+Protocols and type variables combine well. Here is the "anything that can be compared" case promised above:
 
 ```python-run
 from typing import Protocol, TypeVar, Any
@@ -157,9 +178,11 @@ def smallest(items: Iterable[C]) -> C:
 print(smallest([3, 1, 2]), smallest(["pear", "apple"]), smallest([(2, "b"), (1, "z")]))
 ```
 
+`SupportsLessThan` describes any type that has `__lt__`, the method behind `<`. The type variable `C` is bound to it, so `smallest` accepts numbers, strings and tuples alike, and the checker knows that the result has the same type as the items.
+
 ## TypedDict: typed dictionaries
 
-JSON arrives as dicts with known string keys and differently-typed values. `dict[str, Any]` tells the checker nothing; `TypedDict` describes the shape while the runtime value remains a plain `dict`.
+Data from the outside world very often arrives as JSON (a text format for nested lists and dictionaries, covered in the files lesson), which Python turns into dictionaries with known string keys and values of various types. The hint `dict[str, Any]` tells a checker nothing about such data. `TypedDict` describes the exact keys and the type of each value, while the object itself remains a plain `dict`.
 
 ```python-run
 from typing import TypedDict, NotRequired
@@ -182,21 +205,23 @@ u: User = {"id": 1, "name": "Nami", "address": {"city": "Cocoyasi", "zip": "0001
 print(label(u), type(u).__name__, u.get("email"))
 ```
 
-No validation happens at runtime — `TypedDict` is purely static. Compare the three "record" options:
+`User` requires `id`, `name` and `address`; `email` is marked `NotRequired`, so the key may be missing; and `address` is itself a typed dictionary. The comment inside `label` shows what a checker catches: a misspelled key. The printed type name is `dict`, and `u.get("email")` is `None`.
+
+Nothing is validated while the program runs: `TypedDict` is purely for the static checker. Compare the three ways of describing a record:
 
 | | Runtime type | Validates at runtime | Use when |
 |---|---|---|---|
 | `TypedDict` | plain `dict` | no | typing existing dict/JSON-shaped data |
 | `@dataclass` | your class | no (unless you add it) | internal domain objects |
-| Pydantic `BaseModel` | your class | **yes**, with coercion | data crossing a trust boundary (HTTP, files, env) |
+| Pydantic `BaseModel` | your class | **yes**, with coercion | data arriving from outside your program (web requests, files, settings) |
 
 ## A few more advanced tools
 
-- **`ParamSpec`** — captures a callable's whole parameter list, so decorators can preserve signatures.
-- **`@overload`** — declare several signatures for one function (e.g., `str` in → `str` out, `bytes` in → `bytes` out).
-- **`TypeGuard` / `TypeIs`** — user-defined narrowing functions.
-- **`Annotated[T, metadata]`** — attach extra information to a type; FastAPI and Pydantic use it heavily (`Annotated[int, Field(gt=0)]`).
-- **`Self`** — "the type of the current class", for fluent methods and alternative constructors.
+- **`ParamSpec`** stands for a function's *entire parameter list*, so that a decorator can state "my wrapper takes exactly what the original takes".
+- **`@overload`** declares several signatures for one function (for example: `str` in gives `str` out, `bytes` in gives `bytes` out).
+- **`TypeGuard` / `TypeIs`** let you write your own narrowing functions.
+- **`Annotated[T, metadata]`** attaches extra information to a type without changing it. FastAPI and Pydantic rely on it: `Annotated[int, Field(gt=0)]` is "an int, with the rule that it must be greater than 0".
+- **`Self`** means "the class this method belongs to", for methods that return their own object.
 
 ```python-run
 import functools, time
@@ -226,9 +251,11 @@ def buy(qty: Positive) -> None: ...
 print(get_type_hints(buy, include_extras=True))
 ```
 
+The `timed` decorator from the decorators lesson, now with types. `Callable[P, R]` in, `Callable[P, R]` out says that the decorated function keeps its exact parameters `P` and return type `R`; inside, `*args: P.args, **kwargs: P.kwargs` ties the wrapper's arguments to the same parameter list. Without `ParamSpec`, every decorated function would look to the checker like "takes anything". The last lines show `Annotated`: the metadata string travels with the type and can be read back with `get_type_hints(..., include_extras=True)`.
+
 ## Pydantic preview
 
-Pydantic is a third-party library (`uv add pydantic`) that reads the annotations on a class and **enforces them at runtime**: it parses input data, coerces compatible values, validates constraints, and raises a detailed `ValidationError` otherwise. FastAPI uses Pydantic models for request bodies, responses and settings — so this is a preview of what's coming.
+Pydantic is a third-party library (installed with `uv add pydantic` or `pip install pydantic`). It reads the annotations on a class and **enforces them while the program runs**. Given input data, it converts values that can sensibly be converted (the text `"1.50"` to the float 1.5; this is called **coercion**), checks any extra rules, and raises a detailed `ValidationError` if the data does not fit. FastAPI uses Pydantic models for the data it receives and sends. The library is not available on this page, so the next block is shown, not run:
 
 ```python
 from pydantic import BaseModel, Field, ValidationError
@@ -255,7 +282,9 @@ data = Item.model_validate({"name": "Meat", "price": 12})        # from a dict
 data = Item.model_validate_json('{"name": "Meat", "price": 12}') # from JSON text
 ```
 
-The essence — validation driven by annotations — fits in a few lines of standard-library Python. This toy version runs here and shows there is no magic involved:
+A class becomes a model by inheriting from `BaseModel`. Creating an `Item` validates the data: the price given as text is converted, and the bad second item is rejected with a list of everything wrong with it. `model_dump()` and `model_validate()` convert between models and plain dictionaries or JSON text.
+
+The core idea, validation driven by annotations, fits in a few lines of standard-library Python. The toy version below does run here, and shows that nothing mysterious is involved:
 
 ```python-run
 from typing import get_type_hints
@@ -297,14 +326,18 @@ except ValidationError as e:
     print("ValidationError:", e)
 ```
 
-In FastAPI, declaring `def create(item: Item)` on a route is enough for the framework to parse the JSON body, validate it against the model, return a 422 with error details when it's invalid, and document the schema in OpenAPI — all from the type hints.
+`MiniModel.__init__` reads the annotations of the class with `get_type_hints` and walks through them. A field that was not supplied takes the class-level default if there is one and is otherwise recorded as an error. A supplied value is kept if it already has the right type; if not, the type itself is called to convert it (`float("1.50")`), and a failed conversion is recorded as an error. At the end, all errors are reported together.
+
+The first call prints `Item({'name': 'Cola', 'price': 1.5, 'qty': 1})`: the price was converted and the default quantity filled in. The second reports three problems at once: `name` missing, `price` not a float, `qty` not an int.
+
+In FastAPI, writing `def create(item: Item)` for a web address is enough for the framework to read the incoming JSON, validate it against the model, answer with a 422 error and the details when it is invalid, and publish a description of the expected data, all driven by the type hints.
 
 > [!INTERVIEW]
-> "What's a Protocol and how does it differ from an ABC?" — structural (duck) typing checked statically vs nominal inheritance enforced at runtime. "What is a TypeVar for?" — to relate types within a signature (same `T` in and out) so generic code keeps precise types. "TypedDict vs dataclass vs Pydantic?" — static-only dict shape vs plain class vs runtime-validated model. "How does FastAPI use type hints?" — it inspects annotations to parse, validate (via Pydantic) and document request/response data.
+> "What is a Protocol and how does it differ from an ABC?" Structural (duck) typing checked statically, versus nominal inheritance enforced at run time. "What is a TypeVar for?" To relate types within one signature (the same `T` in and out), so that generic code keeps exact types. "TypedDict, dataclass or Pydantic?" A dictionary shape for the static checker only; a plain class; a model validated at run time. "How does FastAPI use type hints?" It inspects the annotations to read, validate (through Pydantic) and document the data of each request and response.
 
 ## What exists at runtime?
 
-Typing constructs are ordinary objects, and it helps to know which of them leave a trace when the program runs. Generic aliases such as `list[int]` are real objects that remember their parameters; the *instances* you create from them do not — this is called **type erasure**:
+The typing constructs are ordinary Python objects, and it helps to know which of them leave a trace while the program runs. An expression such as `list[int]` or `Box[int]` is a real object that remembers its parameters. The *instances* created through it do not remember them. This loss is called **type erasure**:
 
 ```python-run
 from typing import Generic, TypeVar, get_origin, get_args, get_type_hints, Optional, Protocol
@@ -331,9 +364,15 @@ except TypeError as e:
     print("TypeError:", e)
 ```
 
-`get_type_hints`, `get_origin` and `get_args` are the tools frameworks use to walk annotations: FastAPI sees `user_id: int` and converts the path segment; Pydantic sees `list[str] | None` and builds a validator for "list of strings or null". You cannot ask `isinstance(x, list[int])`, because checking element types would mean scanning the whole container — libraries that want that check do the scan themselves.
+- `Box[int]` prints as an object of its own; `get_origin` returns the class it was made from (`Box`) and `get_args` the parameters (`(int,)`).
+- `Box[int]("not an int")` is accepted when run: the parameter is not checked, and the resulting object is a plain `Box`.
+- The same two functions take apart `dict[str, list[int]]` and show that `Optional[int]` and `int | None` are the same union.
+- `get_type_hints(handler)` returns each parameter's annotation as a real object.
+- `isinstance([1, 2], list[int])` is refused with a `TypeError`.
 
-Here is that idea in miniature: a validator that recursively follows an annotation, which is conceptually what Pydantic compiles from your model:
+`get_type_hints`, `get_origin` and `get_args` are what frameworks use to walk through annotations. FastAPI sees `user_id: int` and converts that part of the web address to an integer; Pydantic sees `list[str] | None` and builds a check for "a list of strings, or nothing". Python refuses `isinstance(x, list[int])` because checking the item types would mean examining every item; a library that wants that check has to go through the items itself.
+
+Here is that idea in miniature: a function that follows an annotation recursively and checks a value against it. In spirit, this is what Pydantic builds from your model.
 
 ```python-run
 from typing import get_origin, get_args, Union
@@ -361,15 +400,17 @@ for value, hint in checks:
     print(f"{value!r:<16} {str(hint):<24} {conforms(value, hint)}")
 ```
 
+`conforms` takes the hint apart with `get_origin` and `get_args`. For a union it tries each alternative; for a list it checks the container and then every item against the item type; likewise for dictionaries and fixed-length tuples; for a plain class it falls back to `isinstance`. The printed table shows `True` for `[1, 2, 3]` as `list[int]`, `False` for `[1, "2"]`, `True` for the nested dictionary, and so on.
+
 ## Reading checker errors on generics
 
 Three messages account for most of the confusion with advanced typing:
 
-- **`Argument 1 has incompatible type "list[Dog]"; expected "list[Animal]"`** — invariance. Mypy even adds a note suggesting `Sequence`. Fix the *parameter* annotation (accept `Sequence[Animal]` or `Iterable[Animal]`), not the call site.
-- **`Value of type variable "T" cannot be "str"`** — the argument violates the TypeVar's bound or constraints; check what `bound=` demands.
-- **`"Robot" is missing following "Speaker" protocol member: name`** (or "incompatible signature") — structural mismatch; the note lists exactly which member differs. Remember that attribute *types* and method signatures must match, not just names.
+- **`Argument 1 has incompatible type "list[Dog]"; expected "list[Animal]"`** is invariance. Mypy adds a note suggesting `Sequence`. Change the *parameter's* annotation (accept `Sequence[Animal]` or `Iterable[Animal]`), not the call.
+- **`Value of type variable "T" cannot be "str"`**: the argument breaks the type variable's bound or constraints. Look at what `bound=` requires.
+- **`"Robot" is missing following "Speaker" protocol member: name`** (or "incompatible signature"): the class does not fit the protocol, and the note says exactly which member differs. Attribute *types* and method signatures must match, not only the names.
 
-When inference is unclear, insert `reveal_type(expr)`; the checker prints what it deduced and you can see where precision was lost (usually at an `Any` or an unannotated function).
+When it is unclear what the checker has worked out, insert `reveal_type(expr)`. It prints the type it deduced, and you can see where precision was lost, which is usually at an `Any` or at a function without annotations.
 
 ## Choosing among the tools
 
@@ -384,19 +425,39 @@ When inference is unclear, insert `reveal_type(expr)`; the checker prints what i
 | "must inherit from my base and share code" | ABC |
 | "validate untrusted input at runtime" | Pydantic model |
 
-How far to go? Precise types pay off most at **module boundaries** and in **library code** that many callers use; inside a short private function, inference already does the work. If an annotation takes longer to write than the function, simplify it — a readable `Callable[..., Any]` with a comment beats a wall of nested generics nobody maintains.
+How far should you go? Precise types pay off most at the **edges of a module**, in functions other code calls, and in **library code** with many users. Inside a short private function, inference already does the work. If an annotation takes longer to write than the function it describes, make it simpler: a readable `Callable[..., Any]` with a comment is better than a wall of nested generics that nobody maintains.
 
 ## Pitfalls recap
 
-- Using `Any` where a `TypeVar` would preserve the type.
-- Expecting `TypedDict` or dataclasses to validate data at runtime.
-- `list[Child]` passed where `list[Parent]` is expected (invariance) — accept `Sequence[Parent]`.
-- `@runtime_checkable` isinstance checks only test member *presence*.
-- Reusing one `TypeVar` for unrelated things: within a signature, the same variable must resolve to one type.
+- Using `Any` where a `TypeVar` would keep the type.
+- Expecting `TypedDict` or dataclasses to validate data while the program runs.
+- Passing `list[Child]` where `list[Parent]` is expected (invariance); accept `Sequence[Parent]`.
+- `isinstance` against a `@runtime_checkable` protocol tests only that the members *exist*.
+- Reusing one `TypeVar` for unrelated things: within one signature, the same variable must stand for one type.
 
 ## Summary
 
-`TypeVar` and `Generic` (or 3.12's bracket syntax) describe functions and classes that work uniformly over types. `Protocol` types duck-typed interfaces structurally. `TypedDict` types JSON-shaped dicts. `ParamSpec`, `Annotated` and `Self` cover decorators, metadata and fluent APIs. Pydantic turns the same annotations into runtime parsing and validation — the foundation of FastAPI.
+`TypeVar` and `Generic` (or the bracket syntax of Python 3.12) describe functions and classes that work in the same way for many types. `Protocol` gives duck-typed interfaces a structural type. `TypedDict` describes dictionaries shaped like JSON. `ParamSpec`, `Annotated` and `Self` cover decorators, metadata and methods returning their own object. Pydantic turns the same annotations into reading and validation at run time, which is the foundation of FastAPI.
+
+## Glossary
+
+- **Generic** - written to work with many types while keeping track of which one is in use.
+- **Type variable (`TypeVar`)** - a placeholder for a type, worked out by the checker at each use.
+- **Bound / constraints** - a rule that a type variable must be a subtype of a given type / exactly one of several types.
+- **`Generic[T]`** - the base class that makes a class generic in `T`.
+- **Variance** - the rules for when `X[A]` may be used where `X[B]` is expected.
+- **Invariant / covariant / contravariant** - only the exact type fits / subtypes fit / supertypes fit.
+- **Protocol** - a type defined by required methods and attributes, satisfied without inheritance.
+- **Structural / nominal typing** - matching by shape / matching by declared base class.
+- **`@runtime_checkable`** - allows `isinstance` tests against a protocol (names only).
+- **`TypedDict`** - a description of a dictionary's keys and value types, for the static checker only.
+- **`ParamSpec`** - a placeholder for a whole parameter list, used to type decorators.
+- **`Annotated`** - a type with extra metadata attached.
+- **Pydantic** - a third-party library that validates and converts data at run time from annotations.
+- **Coercion** - converting a value to the expected type, such as `"1.50"` to `1.5`.
+- **Validation** - checking that data fits the declared types and rules.
+- **Type erasure** - instances not remembering the type parameters they were created with.
+- **`get_origin` / `get_args`** - functions that take a generic type apart at run time.
 
 ```quiz
 [

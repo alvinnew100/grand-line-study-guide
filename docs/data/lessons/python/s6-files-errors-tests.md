@@ -1,10 +1,18 @@
 # Files, errors and tests: programs you can rely on
 
-A program that forgets everything when it ends, falls over at the first unexpected input, and has only ever been checked by eye is a toy. This last lesson of the on-ramp covers the three skills that turn it into something dependable: **reading and writing files** so that data outlives the program, **handling errors** so that a missing file or a mistyped number does not end in a crash, and **writing tests** so that you know — rather than hope — that your code works, today and after every future change.
+> **Before this lesson:** you need functions with parameters and `return` ([User input, while loops and functions](#/lesson/python/py-start-input-functions)), dictionaries ([Decisions and dictionaries](#/lesson/python/py-start-decisions-dicts)) and basic classes with `__init__` and methods ([Classes: modelling things with objects](#/lesson/python/py-start-classes)). Reading a traceback comes from [First steps](#/lesson/python/py-start-first-steps).
+
+## In plain words
+
+A program that forgets everything when it ends, falls over at the first unexpected input, and has only ever been checked by eye is a toy. This last lesson of the on-ramp covers the three skills that turn it into something dependable: **reading and writing files** so that data outlives the program, **handling errors** so that a missing file or a mistyped number does not end in a crash, and **writing tests** so that you know, rather than hope, that your code works, today and after every future change.
+
+An everyday comparison: a careful cook keeps a notebook of recipes so nothing is forgotten between days (files), has a plan for when an ingredient is missing instead of abandoning the meal (error handling), and tastes each dish before it leaves the kitchen (testing). None of these makes the cooking itself different; all of them make the results reliable.
+
+Why this matters for a job: real programs live on data stored in files and databases, they must cope with bad input without crashing, and professional teams will not accept code without tests. "How would you test this function?" and "what happens if the file is missing?" are standard interview follow-ups, and writing a test first when you fix a bug is a habit employers look for.
 
 ## Reading a file
 
-Programs find files through **paths**. Python's `pathlib` module provides a `Path` class that represents a location on disk and knows how to read from it.
+Programs find files through **paths**: a path is the address of a file, made of the folders that lead to it and the file's own name. Python's `pathlib` module provides a `Path` class that represents a location on disk and knows how to read from it.
 
 ```python
 from pathlib import Path
@@ -14,9 +22,9 @@ contents = path.read_text(encoding="utf-8")
 print(contents)
 ```
 
-`read_text` returns the whole file as one string. A bare file name is looked for in the folder the program is run from — the usual reason for a "file not found" surprise is that the terminal is in a different folder from the one you think. Passing `encoding="utf-8"` says how the bytes on disk translate into characters; stating it explicitly means accented letters and symbols come out the same on every computer.
+`read_text` returns the whole file as one string. A bare file name is looked for in the folder the program is run from — the usual reason for a "file not found" surprise is that the terminal is in a different folder from the one you think. Passing `encoding="utf-8"` says how the bytes on disk translate into characters (UTF-8 is the standard encoding that can represent every character in every language); stating it explicitly means accented letters and symbols come out the same on every computer.
 
-So that the examples can run in this page, each one first creates its file in a temporary folder:
+So that the examples can run in this page, each one first creates its file in a temporary folder. `tempfile.mkdtemp()` makes a fresh, empty folder and returns its location, so the demos never touch a real file:
 
 ```python-run
 from pathlib import Path
@@ -185,7 +193,7 @@ One missing file no longer stops the whole run. Whether to tell the user (as her
 
 ## Remembering data between runs: JSON
 
-To save a list or a dictionary, you need to turn it into text and back. **JSON** is a simple, universal text format for exactly that; nearly every programming language can read it. Python's `json` module converts in both directions:
+To save a list or a dictionary, you need to turn it into text and back. **JSON** (JavaScript Object Notation) is a simple, universal text format for exactly that; nearly every programming language can read it. Python's `json` module converts in both directions:
 
 ```python-run
 from pathlib import Path
@@ -342,7 +350,7 @@ for name, func in list(globals().items()):
 print(passed, "passed")
 ```
 
-(With real pytest the last test is written more neatly as `with pytest.raises(ValueError): apply_discount(50, 150)`.)
+How the imitation works: `globals()` returns a dictionary of every name defined at the top level of the program, so the loop can find each function whose name starts with `test_` and call it. A test that finishes counts as a pass; one that raises `AssertionError` is reported as a failure. Note also `raise ValueError(...)` inside `apply_discount`: `raise` lets your own code signal an error, exactly as Python's built-in functions do. (With real pytest the last test is written more neatly as `with pytest.raises(ValueError): apply_discount(50, 150)`.)
 
 ### What should you test?
 
@@ -357,7 +365,7 @@ Give each test a long, descriptive name. When it fails six months from now, the 
 
 ### Testing a class, and sharing set-up with a fixture
 
-Testing a class means creating an object, calling its methods, and asserting on the results. Several tests usually need the same starting object; rather than building it in every test, pytest lets you write a **fixture** — a function that prepares something tests need. A test asks for a fixture simply by naming it as a parameter.
+Testing a class means creating an object, calling its methods, and asserting on the results. Several tests usually need the same starting object; rather than building it in every test, pytest lets you write a **fixture** — a function that prepares something tests need. A test asks for a fixture by naming it as a parameter, and pytest supplies it. (`@pytest.fixture` is a **decorator**, a line starting with `@` placed above a function to give it extra behaviour; here it marks the function as a fixture.)
 
 ```python
 # test_basket.py
@@ -490,6 +498,27 @@ Files, JSON, exceptions (both handled and raised), small single-purpose function
 - `json.dumps` / `json.loads` turn lists and dictionaries into text and back, so data can outlive the program.
 - Refactor into small functions with one job each.
 - A test calls code with known input and asserts on the result. With pytest: files and functions named `test_...`, plain `assert`, fixtures for shared set-up. Test typical cases, boundaries, empty inputs and invalid inputs.
+
+## Glossary
+
+- **Path** - the address of a file or folder; in Python, a `Path` object from `pathlib`.
+- **Relative / absolute path** - a location starting from the current folder / the full location from the top of the disk.
+- **Encoding (UTF-8)** - the rule for turning characters into bytes on disk; UTF-8 is the universal standard.
+- **`read_text` / `write_text`** - read a whole file into a string / replace a file's contents with a string.
+- **Append mode** - opening a file with `"a"` so that writing adds to the end.
+- **`with` block** - a block that guarantees a file is closed afterwards, whatever happens inside.
+- **Exception** - an object Python creates when an instruction cannot be carried out.
+- **`try` / `except` / `else`** - attempt risky code / handle a named kind of error / run only if nothing went wrong.
+- **`raise`** - signal an error from your own code.
+- **`pass`** - the statement that does nothing; used where Python requires a block.
+- **JSON** - JavaScript Object Notation, a text format for lists and dictionaries; `json.dumps` writes it, `json.loads` reads it.
+- **Refactoring** - restructuring code into clearer pieces without changing what it does.
+- **Test** - code that calls your code with known input and checks the result.
+- **`assert`** - a statement that raises `AssertionError` if its condition is false.
+- **pytest** - the standard Python testing tool; it runs every `test_` function in every `test_` file.
+- **Fixture** - in pytest, a function that prepares something tests need, supplied fresh to each test.
+- **Decorator** - a line starting with `@` above a function that gives it extra behaviour.
+- **Boundary / edge case** - an input at the limit of what is allowed, such as zero or an empty list.
 
 ```quiz
 [

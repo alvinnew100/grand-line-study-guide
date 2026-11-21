@@ -1,10 +1,20 @@
 # Modules, packages and imports
 
-A single file gets you surprisingly far, but real programs are split into **modules** (files) grouped into **packages** (directories), and they lean on thousands of third-party packages. Understanding exactly what `import` does — where Python looks, when code runs, what gets cached — saves hours of "ModuleNotFoundError" and "circular import" debugging, and is a prerequisite for structuring a FastAPI service or any other project.
+> **Before this lesson:** you should have run a Python file from a terminal and used a first `import`, as in [First steps](#/lesson/python/py-start-first-steps). You need namespaces and scope from [Scope, closures and lambdas](#/lesson/python/py-scope-closures) and functions and classes from the earlier modules of this track.
+
+## In plain words
+
+A small program fits in one file. A real one would be thousands of lines long, so it is split into many files, and it also uses code written by other people. The statement that connects all these pieces is `import`.
+
+Three words describe the pieces. A **module** is one file of Python code. A **package** is a folder of modules. A **library** is an informal word for a package (or a set of them) that somebody published for others to use.
+
+Think of a workshop. You do not forge every tool yourself. Tools hang on the wall, each in its place, and when you need the drill you walk over and take it. `import math` is "fetch the `math` toolbox so that I can use what is in it". This lesson explains what happens in that moment: where Python goes looking for the toolbox, what it does the first time it finds it, and why it does not fetch it a second time.
+
+Why this matters for a job: two of the most common beginner errors, `ModuleNotFoundError` and "circular import", come from not knowing these rules, and hours are lost to them. Laying out a project with several files and folders, the first task in any real job, is impossible without understanding imports. Interviewers ask "what happens when you import a module?" and "what is `if __name__ == '__main__':` for?".
 
 ## Modules
 
-A **module** is a `.py` file. Its name is the filename without the extension; its top-level names (functions, classes, variables) become attributes of the module object.
+A **module** is a `.py` file. Its name is the file name without the `.py`. Everything defined at the top level of the file (functions, classes, variables) becomes an **attribute** of the module, reached with a dot.
 
 ```python
 # geometry.py
@@ -26,7 +36,7 @@ import geometry
 print(geometry.circle_area(2), geometry.PI2)
 ```
 
-We can't create files in this in-browser sandbox as easily as on your machine, but we can simulate one to see the mechanics:
+In the second file, `import geometry` makes the name `geometry` refer to a **module object**, and `geometry.circle_area` reaches into it. This page runs code in your browser, where creating several files is awkward, so the next demo builds a module by hand, in the way the import system does internally:
 
 ```python-run
 import sys, types
@@ -46,12 +56,19 @@ import brook as b2
 print(brook.shout(), b2 is brook, brook.__name__)
 ```
 
+- `source` is the text of a pretend file called `brook.py`.
+- `types.ModuleType("brook")` creates an empty module object, and `exec(source, mod.__dict__)` runs the text with the module's namespace as the place where its names are stored. The message in the parentheses is printed now, once.
+- `sys.modules["brook"] = mod` records the module in `sys.modules`, a dictionary of every module loaded so far.
+- `import brook` now finds the name in that dictionary and uses the existing module. Nothing is printed: the body does not run a second time. `import brook as b2` gives the same object under another name.
+
+The last line prints `YOHOHO! True brook`.
+
 ### What `import x` does
 
-1. Look in the cache **`sys.modules`**. If `x` is there, reuse it.
-2. Otherwise **find** it by asking each finder on `sys.meta_path`; for ordinary files that means searching the directories in **`sys.path`** in order.
-3. **Load** it: create a module object, put it in `sys.modules`, then **execute the file top to bottom** in the module's namespace.
-4. **Bind** the name `x` in the importing scope.
+1. Look in the **cache**, the dictionary `sys.modules`. (A cache is a store of results kept so that work need not be repeated.) If `x` is there, reuse it and skip to step 4.
+2. Otherwise **find** it. Python asks a list of *finders*; for ordinary files this means searching, in order, the folders listed in **`sys.path`**.
+3. **Load** it: create a module object, put it into `sys.modules`, and then **run the file from top to bottom** inside the module's namespace.
+4. **Bind** the name `x`, in the code that wrote the `import`, to the module object.
 
 ```mermaid
 flowchart TD
@@ -63,11 +80,11 @@ flowchart TD
   D --> F
 ```
 
-Consequences:
+Three consequences follow from these steps:
 
-- Module code runs **once per process**, no matter how many files import it. Modules are effectively singletons — a module-level variable is shared global state.
-- Imports are just assignments at runtime; you can import inside functions (delaying cost or avoiding cycles).
-- A module is registered in `sys.modules` *before* its body finishes — that's what makes circular imports half-work (see below).
+- A module's code runs **once per process** (one running program), however many files import it. A module is in effect a single shared object, and a variable at the top level of a module is shared by everything that imports it.
+- An import is an ordinary statement that assigns a name while the program runs. You may write one inside a function, to delay its cost or to avoid a cycle.
+- A module is recorded in `sys.modules` *before* its body has finished running. That detail is what makes circular imports half-work, as shown below.
 
 ### `sys.path`: where Python looks
 
@@ -78,10 +95,12 @@ for p in sys.path[:5]:
 print(sys.builtin_module_names[:5], "... are compiled into the interpreter")
 ```
 
-`sys.path` is built from: the script's directory (or the current directory for `python -m` / the REPL), the `PYTHONPATH` environment variable, the standard library directories, and the active environment's `site-packages` (where pip installs things).
+The loop prints the first few folders Python searches. The last line names a few modules that are not files at all: they are compiled into the Python program itself.
+
+`sys.path` is put together when Python starts, from these sources in this order: the folder of the script you ran (or the current folder for `python -m` and the interactive prompt); the folders named in the environment variable `PYTHONPATH`, if set; the folders of the standard library; and the `site-packages` folder of the active environment, which is where the installer `pip` puts third-party packages (the next lesson covers environments).
 
 > [!WARNING]
-> **Name shadowing**: because the script's directory comes first, a file named `random.py`, `json.py`, `email.py` or `test.py` next to your script hides the standard-library module of the same name. The symptom is a baffling `AttributeError: module 'random' has no attribute 'randint'`. Check `random.__file__`.
+> **Name shadowing**: the script's own folder comes first, so a file of yours named `random.py`, `json.py`, `email.py` or `test.py` hides the standard-library module with the same name. The symptom is a baffling `AttributeError: module 'random' has no attribute 'randint'`. Print `random.__file__` to see which file was really loaded.
 
 ### Import forms
 
@@ -93,9 +112,9 @@ print(sys.builtin_module_names[:5], "... are compiled into the interpreter")
 | `from pkg.mod import f as h` | `h` | |
 | `from pkg.mod import *` | all public names | avoid; pollutes the namespace and hides origins |
 
-`from m import *` imports the names listed in `m.__all__` if defined, otherwise every name not starting with an underscore. Define `__all__` to declare a module's public API.
+The star form `from m import *` imports the names listed in a variable `m.__all__` if the module defines one, and otherwise every name that does not start with an underscore. Defining `__all__` is how a module states which names are meant for outsiders, its public **API** (application programming interface: the set of names other code is expected to use).
 
-A subtle point: `from config import DEBUG` binds your own name to the current object. If `config.DEBUG` is later *reassigned*, your copy doesn't follow. Access `config.DEBUG` through the module when the value can change.
+One subtle point. `from config import DEBUG` ties a name *of your own* to the object that `config.DEBUG` refers to at that moment. If `config.DEBUG` is later re-tied to a different object, your name does not follow. When a value may change, reach it through the module, as `config.DEBUG`.
 
 ```python-run
 import math, json as j
@@ -104,9 +123,11 @@ from os.path import join, splitext
 print(math.tau, j.dumps([1]), C("aab"), splitext("a/b.tar.gz"), join("a", "b"))
 ```
 
+The demo uses each form: a plain import, an import under a shorter name (`json as j`), and names taken out of modules (`Counter as C`, `deque`, `join`, `splitext`).
+
 ## `__name__` and the main guard
 
-Every module has a `__name__`. When a file is run directly (`python tool.py`), its `__name__` is `"__main__"`; when imported, it's the module's name. Hence the idiom:
+Every module has a variable `__name__`, set by Python. When a file is run directly (`python tool.py`), its `__name__` is the special string `"__main__"`. When the same file is imported, `__name__` is the module's name, `"tool"`. That difference gives the standard idiom, often called the **main guard**:
 
 ```python
 def main():
@@ -116,7 +137,7 @@ if __name__ == "__main__":
     main()
 ```
 
-This lets one file be both an importable library and a runnable script, and prevents side effects (running the program, starting servers) at import time. It is **mandatory** with `multiprocessing` on Windows and macOS, where child processes re-import the main module.
+The `if` is true only when the file is the program being run. So one file can serve two purposes: other files can import its functions without anything else happening, and running it directly starts the program. It also keeps side effects, such as starting a server, from happening merely because somebody imported the file. The guard is **required** with the `multiprocessing` module on Windows and macOS, where each helper process imports the main file again.
 
 ```python-run
 print(__name__)
@@ -124,9 +145,11 @@ import json
 print(json.__name__, json.__file__.endswith(".py"))
 ```
 
+On this page each runnable box is the program being run, so the first line prints `__main__`. The imported module reports its own name, `json`.
+
 ## Packages
 
-A **package** is a directory of modules, normally containing an `__init__.py`:
+A **package** is a folder of modules, normally containing a file called `__init__.py`:
 
 ```
 shop/
@@ -138,13 +161,15 @@ shop/
         tax.py
 ```
 
-- `import shop.pricing.tax` imports `shop`, then `shop.pricing`, then `shop.pricing.tax`, running each `__init__.py` once.
-- `__init__.py` can be empty, or re-export a convenient API: `from .models import Product`, so users write `from shop import Product`.
-- A directory without `__init__.py` can still be imported as a **namespace package** (PEP 420) — a feature meant for splitting one package across locations; for ordinary projects always add `__init__.py` to avoid surprises with tools.
+- `import shop.pricing.tax` imports `shop`, then `shop.pricing`, then `shop.pricing.tax`, running each `__init__.py` once on the way.
+- `__init__.py` may be empty. It may also gather the most useful names in one convenient place, for example `from .models import Product`, so that users can write `from shop import Product`.
+- A folder without `__init__.py` can still be imported, as a so-called **namespace package**, a feature designed for splitting one package over several locations. For ordinary projects always add `__init__.py`; some tools behave unexpectedly without it.
 
 ### Absolute and relative imports
 
 Inside `shop/pricing/tax.py`:
+
+An **absolute import** spells out the full path from the top-level package. A **relative import** starts with dots and is read from the current file's position: one dot means "the package this file is in", two dots "the package above".
 
 ```python
 from shop.models import Product        # absolute: from the top-level package
@@ -153,22 +178,22 @@ from .discounts import apply           # relative: name from sibling
 from ..models import Product           # relative: up one package
 ```
 
-Relative imports work only inside packages, and they depend on the module's `__package__`. That's why running a file *inside* a package directly fails:
+Relative imports work only inside a package, because Python has to know which package the file belongs to. That is why running a file that sits *inside* a package directly fails:
 
 ```
 $ python shop/pricing/tax.py
 ImportError: attempted relative import with no known parent package
 ```
 
-Run it as a module from the project root instead: `python -m shop.pricing.tax`. PEP 8 recommends absolute imports for clarity, with explicit relative imports acceptable inside a package.
+Run it as a module from the project's top folder: `python -m shop.pricing.tax`. The style guide PEP 8 recommends absolute imports for clarity and accepts explicit relative imports within a package.
 
 ### `python -m`
 
-`python -m name` locates `name` on `sys.path` and runs it as `__main__` with the current directory on the path. It's how you run package modules and tools tied to a specific interpreter: `python -m pip install ...`, `python -m venv .venv`, `python -m pytest`, `python -m http.server`. A package becomes runnable with `-m` if it contains `__main__.py`.
+`python -m name` finds the module `name` on `sys.path` and runs it as the main program, with the current folder on the search path. It is the way to run a module that lives inside a package, and the way to run a tool with one particular Python: `python -m pip install ...`, `python -m venv .venv`, `python -m pytest`, `python -m http.server`. A package can itself be run with `-m` if it contains a file named `__main__.py`.
 
 ## Circular imports
 
-`a.py` imports `b`, and `b.py` imports `a`. With plain `import a` / `import b` this often works, because each module is in `sys.modules` (partially initialised) by the time the other asks for it. It breaks when one side does `from a import something` before `a` has defined `something`:
+A **circular import** is when `a.py` imports `b` and `b.py` imports `a`. With plain `import a` and `import b` this often works, because each module is already in `sys.modules`, half-finished, by the time the other one asks for it. It breaks when one side writes `from a import something` at a moment when `a` has not yet reached the line that defines `something`:
 
 ```
 ImportError: cannot import name 'something' from partially initialized module 'a'
@@ -177,16 +202,16 @@ ImportError: cannot import name 'something' from partially initialized module 'a
 
 Fixes, in order of preference:
 
-1. **Restructure**: move the shared pieces into a third module both import (cycles usually signal tangled responsibilities).
-2. Import the module, not the name (`import a` and use `a.something` at call time).
-3. Import inside the function that needs it (deferred import).
-4. For type hints only: `from typing import TYPE_CHECKING` and import under `if TYPE_CHECKING:` with string/deferred annotations.
+1. **Restructure**: move the shared pieces into a third module that both import. A cycle usually means two files have tangled responsibilities.
+2. Import the module, not the name: write `import a` and use `a.something` later, when the function is called.
+3. Put the import inside the function that needs it (a *deferred* import).
+4. If the import is needed only for type hints: `from typing import TYPE_CHECKING` and place the import under `if TYPE_CHECKING:`.
 
 ## Reloading, caching and bytecode
 
-- Python compiles each module to bytecode and caches it in `__pycache__/name.cpython-312.pyc`, recompiling when the source changes. It speeds up *loading*, not execution. Don't commit `__pycache__`.
-- Because of `sys.modules`, editing a file and re-running `import` in a live REPL does nothing. Use `importlib.reload(module)` (with caveats: existing objects keep old classes) or restart.
-- `importlib.import_module("pkg.mod")` imports by string name — the basis of plugin systems.
+- Python translates each module into **bytecode**, its compact internal form, and stores the result in a folder named `__pycache__` (for example `__pycache__/name.cpython-312.pyc`), translating again when the source file changes. This shortens *loading*; it does not make the code run faster. Do not put `__pycache__` under version control.
+- Because of `sys.modules`, editing a file and typing `import` again at a live interactive prompt does nothing. Use `importlib.reload(module)` (with care: objects created earlier keep their old classes) or restart Python.
+- `importlib.import_module("pkg.mod")` imports a module whose name is given as a string. Plugin systems are built on it.
 
 ```python-run
 import importlib, importlib.util, sys
@@ -195,9 +220,11 @@ print(m.__name__, "collections.abc" in sys.modules, len(sys.modules) > 50)
 print(importlib.util.find_spec("json").origin.endswith("__init__.py"))
 ```
 
+The first line imports by name and confirms that the module is now in the cache, among many others that Python loaded for its own use. The second asks where `json` *would* be loaded from without importing it: its origin is an `__init__.py`, which tells you `json` is a package.
+
 ## The standard library at a glance
 
-"Batteries included": before reaching for pip, check the stdlib. A map of the modules this track uses:
+Python's motto is "batteries included": a great deal comes with it. Before installing something, check whether the standard library already has it. A map of the modules this track uses:
 
 | Area | Modules |
 |---|---|
@@ -210,7 +237,7 @@ print(importlib.util.find_spec("json").origin.endswith("__init__.py"))
 | Concurrency | `threading`, `multiprocessing`, `concurrent.futures`, `asyncio`, `queue` |
 | Dev tools | `typing`, `logging`, `unittest`, `pdb`, `timeit`, `cProfile`, `argparse` |
 
-Goodrich (§1.11) highlights `math`, `random`, `collections`, `copy`, `heapq`, `os`, `re`, `sys`, `time` and `array` as the ones used throughout the book, and discusses pseudo-random number generation: `random` uses the Mersenne Twister, a deterministic generator you can make reproducible with `random.seed(n)` — fine for simulations, **not** for security (use `secrets`).
+One of these deserves a note here. The `random` module produces **pseudo-random** numbers: numbers that look random but are computed by a fixed procedure (an algorithm called the Mersenne Twister) from a starting value, the **seed**. Calling `random.seed(n)` with the same `n` gives the same sequence every time, which is exactly what you want for a repeatable simulation or test. It is **not** suitable for passwords or security tokens; for those use the `secrets` module.
 
 ```python-run
 import random, secrets
@@ -220,12 +247,14 @@ deck = list(range(5)); random.shuffle(deck); print(deck)
 print(len(secrets.token_hex(16)))
 ```
 
+With the seed fixed at 42, this demo prints the same "random" die roll, letter, sample and shuffled list every time you run it. `secrets.token_hex(16)` produces 32 unpredictable hexadecimal characters.
+
 > [!INTERVIEW]
-> "What happens when you import a module?" — check `sys.modules`; else find via `sys.path`, create the module, cache it, execute its code once, bind the name. "What is `if __name__ == '__main__'` for?" — run code only when the file is executed as a script, not when imported. "How do you fix a circular import?" — restructure, import the module instead of names, or defer the import. "Difference between a module and a package?" — file vs directory of modules (with `__init__.py`).
+> "What happens when you import a module?" Check `sys.modules`; if it is not there, find it through `sys.path`, create the module, cache it, run its code once, and bind the name. "What is `if __name__ == '__main__'` for?" To run code only when the file is executed as a script, not when it is imported. "How do you fix a circular import?" Restructure, import the module and not its names, or defer the import. "Module versus package?" A file versus a folder of modules (with `__init__.py`).
 
 ## Seeing the import system at work
 
-A module object is little more than a namespace dict plus some metadata, and the *spec* records how it was found. These attributes are the first things to print when an import behaves strangely:
+A module object is little more than a dictionary of names plus some descriptive data. Its **spec** (`__spec__`) records how it was found. These are the first things to print when an import behaves strangely:
 
 ```python-run
 import json, sys, collections.abc
@@ -240,9 +269,9 @@ print(json.__name__, sorted(k for k in vars(json) if not k.startswith("_"))[:6])
 print(json.loads is sys.modules["json"].loads, "json.decoder" in sys.modules)
 ```
 
-`json` is a *package* (its origin is an `__init__.py`), `collections.abc` is a submodule inside a package, and `sys` is built into the interpreter (no file at all). Importing `json` also imported `json.decoder`, because the package's `__init__` asked for it.
+The table printed shows that `json` is a *package* (its origin is an `__init__.py`), that `collections.abc` is a module inside a package, and that `sys` is built into Python and has no file. The last line shows that importing `json` also imported `json.decoder`, because the package's `__init__.py` asked for it.
 
-The "bound at import time" behaviour of `from ... import` can be demonstrated directly:
+The earlier warning about `from ... import` copying a reference can be shown directly:
 
 ```python-run
 import sys, types
@@ -258,7 +287,9 @@ cfg.DEBUG = True                    # rebinding the attribute on the module...
 print(cfg.DEBUG, DEBUG)             # ...does not affect the name we imported earlier
 ```
 
-And the partially-initialised-module mechanics behind circular imports, simulated with two in-memory modules:
+A hand-made module `config` has `DEBUG = False`. The program imports the module as `cfg` and also takes the name `DEBUG` out of it. Changing `cfg.DEBUG` to `True` afterwards prints `True False`: the module's attribute changed, and the separately imported name still refers to the old value.
+
+The half-finished module behind circular imports can be simulated with two modules built in memory:
 
 ```python-run
 import sys, types
@@ -278,36 +309,56 @@ mod_a.VALUE = "a is ready"           # ... and only then does a's next line exec
 print("  afterwards:", sys.modules["mod_b"].mod_a.VALUE)
 ```
 
-`import mod_a` inside `b` succeeded — the module object exists — but its attributes weren't there yet. With `from mod_a import VALUE`, that same moment would have raised the "partially initialized module" `ImportError`. Deferring the *use* of the attribute until call time is what makes `import module` cycles survivable.
+The output is `while b loads, mod_a has VALUE: False`, then `afterwards: a is ready`. `import mod_a` inside `b` succeeded, because the module object already existed, but the attribute was not there yet. Had `b` written `from mod_a import VALUE`, that same moment would have raised the "partially initialized module" `ImportError`. Postponing the *use* of the attribute until a function is called is what lets `import module` cycles survive.
 
 ## Debugging imports: a checklist
 
-1. **Which interpreter is running?** `python -c "import sys; print(sys.executable)"`. A surprising number of `ModuleNotFoundError`s are the wrong virtual environment.
-2. **Which file was actually imported?** `print(module.__file__)`. If it points into your project instead of `site-packages` or the standard library, a local file is shadowing it.
-3. **Where is Python looking?** `print(sys.path)`. Remember that the first entry depends on *how* you launched: the script's directory for `python path/to/script.py`, the current directory for `python -m package.module`.
-4. **Is the package importable from the project root?** Run with `-m` from the root, or install the project in editable mode (`pip install -e .` / `uv sync`) so that it is on `sys.path` everywhere — never patch `sys.path` by hand in application code.
-5. **Trace it:** `python -v script.py` logs every import; `python -X importtime script.py` shows how long each one takes, which is how you find the import that makes your CLI start slowly.
-6. **`ImportError: cannot import name X`**: the module was found but has no such name — a typo, a version mismatch of a third-party library, or a circular import.
+1. **Which Python is running?** `python -c "import sys; print(sys.executable)"`. A surprising number of `ModuleNotFoundError`s are caused by the wrong virtual environment.
+2. **Which file was really imported?** `print(module.__file__)`. If it points into your project when you expected `site-packages` or the standard library, a file of yours is shadowing it.
+3. **Where is Python looking?** `print(sys.path)`. Remember that the first entry depends on *how* you started the program: the script's folder for `python path/to/script.py`, the current folder for `python -m package.module`.
+4. **Can the package be imported from the project's top folder?** Run with `-m` from there, or install the project in editable mode (`pip install -e .` or `uv sync`) so that it is on `sys.path` everywhere. Do not patch `sys.path` by hand in application code.
+5. **Trace it:** `python -v script.py` logs every import; `python -X importtime script.py` shows how long each one takes, which is how you find the import that makes a command-line tool slow to start.
+6. **`ImportError: cannot import name X`**: the module was found but contains no such name. The cause is a typo, a different version of a third-party library than you expected, or a circular import.
 
 ## Designing a package's public surface
 
-- Decide what is public and re-export it from `__init__.py` (`from .models import Product`), list it in `__all__`, and prefix everything else with an underscore. Users then depend on `shop.Product`, and you remain free to reorganise internal modules.
-- Keep `__init__.py` light: every `import shop.anything` executes it, so heavy imports there slow down the whole package and invite cycles.
-- Let dependencies point one way — for example `routers → services → models` — and never back. Layers that only import "downwards" cannot form a cycle.
-- No work at import time beyond definitions: opening connections, reading files or parsing arguments at module level makes the module hard to test and slow to import. Put it in a function called from `main()`.
+- Decide what is public, import it into `__init__.py` (`from .models import Product`), list it in `__all__`, and give everything else a leading underscore. Users then depend on `shop.Product`, and you stay free to reorganise the modules inside.
+- Keep `__init__.py` light. Every `import shop.anything` runs it, so heavy imports there slow the whole package down and invite cycles.
+- Let dependencies point one way, for example `routers → services → models`, and never back. Layers that only import "downwards" cannot form a cycle.
+- Do no work at import time beyond definitions. Opening connections, reading files or parsing arguments at the top level of a module makes it slow to import and hard to test. Put such work in a function called from `main()`.
 
 ## Pitfalls recap
 
-- Naming your file after a stdlib or third-party module (`random.py`, `requests.py`).
-- Running a file inside a package directly instead of `python -m package.module`.
-- Heavy work or side effects at import time (slow startup, surprising behaviour in tests).
+- Naming your file after a standard-library or third-party module (`random.py`, `requests.py`).
+- Running a file inside a package directly; use `python -m package.module`.
+- Heavy work or side effects at import time (slow start, surprises in tests).
 - `from module import *`.
-- Expecting `from config import X` to track later reassignment of `config.X`.
-- Mutable module-level state shared across everything that imports it.
+- Expecting `from config import X` to follow a later reassignment of `config.X`.
+- Mutable data at module level, shared by everything that imports the module.
 
 ## Summary
 
-Modules are files executed once and cached in `sys.modules`; packages are directories of modules initialised by `__init__.py`. Python finds them via `sys.path`. Prefer absolute imports, guard script code with `if __name__ == "__main__":`, run package modules with `python -m`, and break cycles by restructuring.
+A module is a file that is run once and cached in `sys.modules`; a package is a folder of modules, initialised by its `__init__.py`. Python finds both through `sys.path`. Prefer absolute imports, guard script code with `if __name__ == "__main__":`, run modules inside packages with `python -m`, and break cycles by restructuring.
+
+## Glossary
+
+- **Module** - one `.py` file; also the object that `import` creates from it.
+- **Package** - a folder of modules, normally with an `__init__.py`.
+- **Library** - published code meant to be imported by other programs.
+- **Standard library** - the modules that come with Python.
+- **Third-party package** - a package written by others and installed separately, usually with pip.
+- **`sys.modules`** - the cache: a dictionary of all modules already loaded.
+- **`sys.path`** - the list of folders Python searches for modules.
+- **`site-packages`** - the folder where installed third-party packages live.
+- **Shadowing** - a file of yours hiding a library module of the same name.
+- **`__name__` / main guard** - a module's name, `"__main__"` when run directly / the test `if __name__ == "__main__":`.
+- **`__init__.py`** - the file run when a package is first imported.
+- **Absolute / relative import** - written from the top-level package / written with leading dots from the current package.
+- **`python -m`** - run a module by its import name.
+- **Circular import** - two modules that import each other.
+- **Bytecode / `__pycache__`** - Python's compiled internal form of a module / the folder where it is stored.
+- **API** - the names a module or package offers for others to use.
+- **Pseudo-random / seed** - produced by a deterministic procedure that looks random / its starting value.
 
 ```quiz
 [
@@ -328,4 +379,4 @@ Modules are files executed once and cached in `sys.modules`; packages are direct
 ]
 ```
 
-> **Source:** Goodrich, Tamassia & Goldwasser, *Data Structures and Algorithms in Python*, §1.11 (Modules and the Import Statement, existing modules, pseudo-random numbers); Python docs, *Tutorial* ch. 6 "Modules" and *Language Reference* ch. 5 "The import system".
+> **Source:** Goodrich, Tamassia & Goldwasser, *Data Structures and Algorithms in Python*, §1.11 (Modules and the Import Statement, existing modules, pseudo-random numbers), restated in original wording with new examples; Python docs, *Tutorial* ch. 6 "Modules" and *Language Reference* ch. 5 "The import system".

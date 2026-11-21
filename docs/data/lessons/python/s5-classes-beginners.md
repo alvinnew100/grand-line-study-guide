@@ -1,10 +1,18 @@
 # Classes: modelling things with objects
 
-Dictionaries let you describe a thing ("this plant is a fern, 30 cm tall, in the kitchen"), and functions let you describe actions ("water a plant"). A **class** joins the two: it is a blueprint for objects that carry their own data *and* know how to do things with it. Once you have written the blueprint, you can stamp out as many objects as you need, each with its own data. This way of organising programs is called **object-oriented programming**, and you have been using its results all along — every string, list and dictionary is an object made from a class.
+> **Before this lesson:** you need dictionaries from [Decisions and dictionaries](#/lesson/python/py-start-decisions-dicts), and functions (defining them, parameters, `return`, default values) and `import` from [User input, while loops and functions](#/lesson/python/py-start-input-functions). Lists and loops come from [Lists and loops](#/lesson/python/py-start-lists-loops).
+
+## In plain words
+
+Dictionaries let you describe a thing ("this plant is a fern, 30 cm tall, in the kitchen"), and functions let you describe actions ("water a plant"). A **class** joins the two: it is a blueprint for objects that carry their own data *and* know how to do things with it. Once you have written the blueprint, you can stamp out as many objects as you need, each with its own data.
+
+Think of a cake tin, or an architect's plan for a house. The plan is not a house; it describes what every house built from it will have (a front door, three windows, a roof) and what you can do with it (open the door, turn on the heating). Builders can put up a whole street of houses from one plan, and each house then has its own paint colour and its own people living in it. The class is the plan; each **object** is one house.
+
+This way of organising programs is called **object-oriented programming**, and you have been using its results all along: every string, list and dictionary is an object made from a class. Why this matters for a job: most large programs, and nearly every library you will use, are built from classes, so reading and writing them is an everyday skill. Interviews ask you to design small classes ("model a parking lot", "write a bank account class") and to explain inheritance versus composition, both covered here.
 
 This lesson builds classes slowly, from a single-method example to a small system of cooperating objects. The later *Object-Oriented Python* module returns to the same ideas in depth.
 
-## Why not just dictionaries and functions?
+## Why not only dictionaries and functions?
 
 Here is a bank-like "savings jar" done with the tools you already have:
 
@@ -207,7 +215,7 @@ Vocabulary: `SavingsJar` is the **parent** (or *superclass*); `InterestJar` is t
 
 ## Objects inside objects
 
-Often the relationship is not "is a" but "**has a**": a bicycle *has* a lock; a library member *has* a list of loans. Then one object simply stores another object as an attribute. This is called **composition**, and it keeps each class small and focused.
+Often the relationship is not "is a" but "**has a**": a bicycle *has* a lock; a library member *has* a list of loans. Then one object stores another object as one of its attributes. This is called **composition**, and it keeps each class small and focused.
 
 ```python-run
 class Battery:
@@ -245,7 +253,7 @@ Everything about batteries lives in `Battery`. If batteries later become more co
 
 ## Classes in their own files
 
-Just as with functions, classes are kept in modules and imported. A file `transport.py` holding `Battery` and `EBike` can be used from another file like this:
+As with functions, classes are kept in modules and imported. A file `transport.py` holding `Battery` and `EBike` can be used from another file like this:
 
 ```python
 from transport import EBike                # one class
@@ -299,6 +307,8 @@ for label, code in attempts.items():
     except Exception as error:
         print(f"{label}\n    {type(error).__name__}: {error}")
 ```
+
+As in earlier lessons, each mistake is stored as text and run with `eval`, and the `except` block prints the error so the next one can run. Match each printed message against the table below.
 
 | Message | Likely cause |
 |---|---|
@@ -387,7 +397,7 @@ home.pass_days(20)
 print("Three weeks later:", home.thirsty())
 ```
 
-Three small classes, each responsible for one idea: a `Plant` knows about its own thirst; a `Succulent` is a plant with a different rule (inheritance, with one overridden method); a `Home` holds plants and coordinates them (composition). Notice that `Home.water_room` simply calls `plant.water()` and each object does the right thing for its own kind — the calling code does not need an `if` to tell the kinds apart.
+Three small classes, each responsible for one idea: a `Plant` knows about its own thirst; a `Succulent` is a plant with a different rule (inheritance, with one overridden method); a `Home` holds plants and coordinates them (composition). Notice that `Home.water_room` calls `plant.water()` on every plant alike, and each object does the right thing for its own kind — the calling code does not need an `if` to tell the kinds apart.
 
 Extend it: add a `height_cm` attribute and a `grow()` method; make `Home` report which room has the most thirsty plants; add a `Herb` subclass that needs water every day in summer.
 
@@ -410,6 +420,26 @@ Extend it: add a `height_cm` attribute and a `grow()` method; make `Home` report
 - Inheritance (`class Child(Parent):`) models "is a": the child inherits everything, can add to it, and can override methods; `super()` reaches the parent's version.
 - Composition models "has a": an object stores other objects as attributes.
 - Keep classes in modules and import them; library classes work the same way as your own.
+
+## Glossary
+
+- **Class** - a blueprint describing what data its objects hold and what they can do.
+- **Object (instance)** - one thing built from a class, with its own data.
+- **Instantiate** - create an object from a class by calling it: `SavingsJar("Dana", 200)`.
+- **Object-oriented programming** - organising a program around objects that combine data and behaviour.
+- **Method** - a function defined inside a class.
+- **`__init__`** - the special method Python runs automatically to set up each new object.
+- **`self`** - the particular object a method is working on; always the first parameter.
+- **Attribute** - a piece of data attached to an object, such as `self.saved`.
+- **CapWords** - the naming style for classes: each word capitalised, no underscores.
+- **`__repr__`** - the special method that gives an object's text form for printing.
+- **Inheritance** - defining a class as a specialised version of another ("is a").
+- **Parent (superclass) / child (subclass)** - the class inherited from / the class that inherits.
+- **Override** - define a method in a child class with the same name as one in the parent, replacing it.
+- **`super()`** - a way to reach the parent class's version of a method.
+- **Composition** - one object holding another as an attribute ("has a").
+- **`isinstance`** - a built-in that asks whether an object was made from a class (or one of its children).
+- **AttributeError** - the error raised when you read an attribute an object does not have.
 
 ```quiz
 [

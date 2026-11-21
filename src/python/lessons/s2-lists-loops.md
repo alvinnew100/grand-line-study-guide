@@ -1,6 +1,14 @@
 # Lists and loops: working with many values
 
-One variable holds one value. Real programs deal with collections: all the trails in a park, every reading from a thermometer, each line of a file. This lesson introduces the **list**, Python's general-purpose container for an ordered collection, and the **for loop**, which lets you write an instruction once and have it carried out for every item. Together they are the first real leap in what your programs can do — ten items or ten million, the code is the same length.
+> **Before this lesson:** you should know how to run Python code, create variables with `=`, work with strings and numbers, use f-strings and read a simple error message. All of that is in [First steps: running Python, values, names and text](#/lesson/python/py-start-first-steps).
+
+## In plain words
+
+One variable holds one value. Real programs deal with collections: all the trails in a park, every reading from a thermometer, each line of a file. This lesson introduces the **list**, Python's general-purpose container for an ordered collection, and the **for loop**, which lets you write an instruction once and have it carried out for every item.
+
+Think of a shopping list on paper. It has an order (first item, second item, and so on), you can add to it, cross things off and rearrange it, and when you are in the shop you go down it doing the same thing for every line: find it, put it in the basket. A Python list is that piece of paper, and a `for` loop is walking down it.
+
+Together, lists and loops are the first real leap in what your programs can do: ten items or ten million, the code is the same length. Why this matters for a job: nearly every program handles collections of things (customers, orders, measurements, files), and almost every coding-interview question starts with "given a list of...". Indexing, slicing, sorting and looping are the tools you will reach for in all of them.
 
 ## Making a list
 
@@ -155,7 +163,7 @@ for trail in trails:
     print("All trails swept.")             # printed twice - a logic error, not a crash
 ```
 
-Neither of those causes an error message. Python cannot know what you intended, so the program runs and simply does the wrong thing — a **logic error**. If output appears too few or too many times, check the indentation first.
+Neither of those causes an error message. Python cannot know what you intended, so the program runs and quietly does the wrong thing: a **logic error**. If output appears too few or too many times, check the indentation first.
 
 Two related mistakes *do* produce messages, because the result is not valid Python at all:
 
@@ -172,7 +180,7 @@ for label, code in broken.items():
         print(f"{label:<22} -> {type(error).__name__}: {error.msg}")
 ```
 
-The colon at the end of the `for` line tells Python "a block follows". Forgetting it is so common that the error message now says exactly what is missing.
+Each broken example is stored as text, and `compile(code, "example", "exec")` asks Python to check its grammar without running it; the `except` block prints the message Python would show. The colon at the end of the `for` line tells Python "a block follows". Forgetting it is so common that the error message now says exactly what is missing.
 
 ## Lists of numbers and `range`
 
@@ -292,7 +300,7 @@ Use a tuple for a small group of values that belong together and should stay as 
 
 ## A note on style
 
-Python programmers share a style guide known as **PEP 8**, so that everyone's code looks familiar. The parts that matter from day one:
+Python programmers share a style guide known as **PEP 8** (PEP stands for Python Enhancement Proposal, a numbered design document; number 8 is the style guide), so that everyone's code looks familiar. The parts that matter from day one:
 
 - Indent with four spaces per level; never mix tabs and spaces.
 - Keep lines reasonably short (the guide suggests about 79 characters; many teams allow up to 100).
@@ -352,6 +360,27 @@ Things to try: add a sixth trail to both lists; print only trails longer than th
 - `range(start, stop, step)` generates whole numbers up to but not including `stop`.
 - A list comprehension builds a list in one line; a slice `items[a:b]` takes a portion; `items[:]` makes a copy, whereas plain assignment only adds a second name.
 - Tuples `(a, b)` are fixed collections for values that belong together.
+
+## Glossary
+
+- **List** - an ordered, changeable collection written in square brackets: `[a, b, c]`.
+- **Item (element)** - one value stored in a list.
+- **Index** - an item's position, counted from 0; negative indexes count from the end.
+- **IndexError** - the error raised when you ask for a position that does not exist.
+- **Mutable / immutable** - can be changed after creation (lists) / cannot be changed (strings, tuples).
+- **Method** - an action belonging to a value, such as `append`, `pop` or `sort`.
+- **`None`** - Python's special "no value" marker, returned by methods such as `sort()`.
+- **For loop** - `for item in items:`, which runs its body once for each item.
+- **Loop body** - the indented lines that belong to a loop.
+- **Indentation** - the spaces at the start of a line, which show which block it belongs to.
+- **Logic error** - a mistake that produces wrong results without any error message.
+- **`range`** - a built-in that produces whole numbers from a start up to, but not including, a stop.
+- **List comprehension** - a one-line way to build a list: `[expression for item in source if condition]`.
+- **Slice** - part of a list taken with `items[start:stop]`; the stop position is not included.
+- **Copy** - a separate list with the same items, made with `items[:]`, `items.copy()` or `list(items)`.
+- **Tuple** - a fixed collection written in round brackets: `(a, b)`.
+- **Unpacking** - giving each item of a tuple or list its own name: `width, height = size`.
+- **PEP 8** - Python's official style guide.
 
 ```quiz
 [

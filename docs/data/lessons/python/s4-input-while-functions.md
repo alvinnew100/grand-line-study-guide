@@ -1,6 +1,14 @@
 # User input, while loops and functions
 
-Three tools in this lesson turn scripts into programs people can actually use. **`input`** lets a program ask its user a question. A **`while` loop** keeps going for as long as a condition holds — until the user quits, until a queue is empty, until a guess is right. And **functions** let you give a name to a piece of work, so you can use it again and again without repeating yourself, and think about a big program one small part at a time.
+> **Before this lesson:** you need lists and `for` loops from [Lists and loops](#/lesson/python/py-start-lists-loops), and conditions, `if`/`elif`/`else` and dictionaries from [Decisions and dictionaries](#/lesson/python/py-start-decisions-dicts). Converting text to numbers with `int()` and `float()` comes from [First steps](#/lesson/python/py-start-first-steps).
+
+## In plain words
+
+Three tools in this lesson turn scripts into programs people can actually use. **`input`** lets a program ask its user a question. A **`while` loop** keeps going for as long as a condition holds: until the user quits, until a queue is empty, until a guess is right. And **functions** let you give a name to a piece of work, so you can use it again and again without repeating yourself, and think about a big program one small part at a time.
+
+Everyday pictures for each. `input` is a shop assistant asking "what would you like?" and waiting for your answer. A `while` loop is "keep stirring while the sauce is still lumpy": you do not know in advance how many stirs it will take, so you keep checking. A function is a recipe card with a name on it, such as "pancake batter": once it is written, you say "make pancake batter" instead of listing every step again, and you can hand it different quantities each time.
+
+Why this matters for a job: functions are how all real software is organised. Professional code is made of many small, well-named functions, each doing one job and each testable on its own, and every coding interview asks you to write one. Loops that run "until something happens" drive menus, servers, games and retry logic. Knowing the difference between printing a value and returning it, and how arguments reach parameters, removes a whole family of beginner bugs.
 
 ## Asking the user: `input`
 
@@ -23,7 +31,7 @@ if age >= 18:
     print("You may vote.")
 ```
 
-Pages like this one cannot always pause for typing, so the runnable examples below use a stand-in called `ask` that returns prepared answers in turn. In your own editor, replace `ask(...)` with `input(...)` and the programs become interactive.
+Pages like this one cannot always pause for typing, so the runnable examples below use a stand-in called `ask` that returns prepared answers in turn. In your own editor, replace `ask(...)` with `input(...)` and the programs become interactive. (How the stand-in works, in case you are curious: `iter([...])` turns the list of answers into a source you can take items from one at a time, and each call to `next(prepared)` takes the next answer. `def ask(prompt):` defines a function, which this lesson explains properly further down.)
 
 ```python-run
 prepared = iter(["  dana ", "34", "172.5"])       # the answers our pretend user will give
@@ -141,7 +149,7 @@ while True:                               # 'loop until told otherwise'
 print("Total:", total)
 ```
 
-`while True:` with a `break` inside is a common, perfectly respectable idiom: the exit condition sits exactly where the decision is made. Just make sure every path can reach a `break`.
+`while True:` with a `break` inside is a common, perfectly respectable idiom: the exit condition sits exactly where the decision is made. Make sure every path can eventually reach a `break`.
 
 ### while loops with lists and dictionaries
 
@@ -257,6 +265,8 @@ for attempt in ("describe_trip('rome')", "describe_trip('rome', 3, 'bus', 'extra
     except TypeError as error:
         print(attempt, "->", error)
 ```
+
+Each attempted call is stored as text, and `eval(attempt)` runs that text as a Python expression; the `except` block prints the error instead of stopping. The three messages say that a required argument (`days`) is missing, that four arguments were given where at most three are accepted, and that there is no parameter called `nights`.
 
 ### Optional information and returning collections
 
@@ -443,6 +453,27 @@ The game logic lives in two small functions; the part that talks to the "user" i
 - Arguments can be positional or keyword; parameters may have defaults; `*args` and `**kwargs` collect extras.
 - A function receives the caller's actual list — pass a copy if it must not change.
 - Keep functions in modules and bring them in with `import`.
+
+## Glossary
+
+- **`input`** - a built-in function that shows a prompt, waits for typing and returns the text as a string.
+- **Prompt** - the question or message shown to the user before they type.
+- **`while` loop** - a loop that repeats its body for as long as a condition stays true.
+- **Infinite loop** - a loop whose condition never becomes false, so it never ends.
+- **Sentinel** - a special value, such as `"done"`, that means "stop" rather than being real data.
+- **Flag** - a variable, usually `True`/`False`, that records whether the program should carry on.
+- **`break` / `continue`** - leave the loop now / skip the rest of this round and test again.
+- **Function** - a named block of code that runs when called.
+- **Define / call** - write a function with `def` / run it with parentheses, as in `greet("dana")`.
+- **Parameter / argument** - the name in the definition / the value supplied in a call.
+- **Docstring** - the description in triple quotes on the first line of a function's body.
+- **`return`** - end the function and send a value back to the caller.
+- **Positional / keyword argument** - matched by order / matched by name, as in `days=7`.
+- **Default value** - a value a parameter takes when the caller leaves it out.
+- **`*args` / `**kwargs`** - parameters that collect extra positional arguments into a tuple / extra keyword arguments into a dictionary.
+- **Local variable** - a name created inside a function, which exists only during that call.
+- **Module / import** - a `.py` file of reusable code / the statement that brings it into another file.
+- **Standard library** - the modules that come with Python, such as `random`, `math` and `statistics`.
 
 ```quiz
 [

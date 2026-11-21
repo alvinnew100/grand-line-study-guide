@@ -1,16 +1,42 @@
 # Comprehensions, unpacking and copying
 
-This lesson collects three topics that cut across every container type. **Comprehensions** are Python's concise syntax for building lists, dicts and sets from iterables. **Unpacking** lets you pull structures apart in a single assignment. **Copying** — shallow versus deep — is where the names-and-references model from lesson 1 has the most practical consequences.
+> **Before this lesson:** you need lists, tuples and slices from [Lists, tuples and strings](#/lesson/python/py-sequences), dictionaries and sets from [Dictionaries and sets](#/lesson/python/py-dicts-sets), and above all the idea that names and container slots are references to objects, from [Objects, names, types and mutability](#/lesson/python/py-objects-names).
+
+## In plain words
+
+This lesson covers three everyday skills that work on every kind of container.
+
+A **comprehension** is a short way to build a new list, dictionary or set from an existing collection, in one line that reads almost like a sentence: "the square of each number in this list, for the even ones only". It replaces the four-line pattern "make an empty list, loop, test, append".
+
+**Unpacking** is taking a collection apart into separate names in a single assignment: "the first item is `x`, the second is `y`".
+
+**Copying** is making a second, independent version of a collection. Here there is a trap. Imagine photocopying a page that lists the addresses of three houses. You now have two separate pages: crossing an address off one does not affect the other. But both pages point at the same three houses, and if somebody repaints a house, both pages now lead to a repainted house. That is a **shallow copy**: the outer container is duplicated, the things inside are shared. A **deep copy** builds three new houses as well.
+
+Comprehensions and unpacking make your code shorter and are expected in any Python interview. Copying matters because getting it wrong produces bugs that are hard to see: data that "changes by itself", or a search algorithm that returns a list full of empty results. The last one is among the most common mistakes in coding interviews, and this lesson shows it and its fix.
 
 ## List comprehensions
 
-A list comprehension builds a new list by transforming and filtering an iterable:
+Suppose you want the squares of the numbers 0 to 9. With a loop:
+
+```python
+squares = []
+for n in range(10):
+    squares.append(n * n)
+```
+
+A **list comprehension** says the same thing inside one pair of square brackets:
+
+```python
+squares = [n * n for n in range(10)]
+```
+
+Read it from the middle: "for each `n` in `range(10)`, compute `n * n`, and collect the results in a list". The general shape is
 
 ```python
 [expression for item in iterable if condition]
 ```
 
-It is equivalent to this loop, but shorter, usually faster (the loop runs in specialised bytecode) and an expression rather than a statement:
+where the `if` part is optional and keeps only the items for which the condition is true. It does the same job as this loop:
 
 ```python
 result = []
@@ -18,6 +44,8 @@ for item in iterable:
     if condition:
         result.append(expression)
 ```
+
+The comprehension is shorter, usually a little faster (Python runs it with specialised internal instructions), and it is an expression, so it can be used directly inside a call or a `return`.
 
 ```python-run
 nums = range(10)
@@ -27,11 +55,18 @@ labels = ["even" if n % 2 == 0 else "odd" for n in nums]   # if/else goes BEFORE
 print(squares, even_squares, labels[:4], sep="\n")
 ```
 
-Note the two different `if`s: a **filter** (`... for n in nums if cond`) drops items; a **conditional expression** (`a if cond else b for n in nums`) chooses a value for every item.
+**Reading this code line by line**
+
+- `squares` has ten items: `[0, 1, 4, 9, 16, 25, 36, 49, 64, 81]`.
+- `even_squares` adds a filter. `n % 2 == 0` is true for even numbers, so only five squares are kept: `[0, 4, 16, 36, 64]`.
+- `labels` uses a conditional expression (`a if cond else b`) as the *output* part. Every number produces an item, either `"even"` or `"odd"`.
+- `sep="\n"` makes `print` put each result on its own line.
+
+Keep the two kinds of `if` apart. An `if` **after** the `for` is a **filter**: it drops items. An `if ... else` **before** the `for` is part of the expression: it chooses a value for every item and drops nothing.
 
 ### Nested loops
 
-Multiple `for` clauses nest left to right, in the same order you'd write the loops:
+A comprehension may have several `for` parts. They nest from left to right, in the same order you would write the loops:
 
 ```python-run
 pairs = [(r, c) for r in range(3) for c in range(3) if r != c]
@@ -43,9 +78,13 @@ transposed = [[row[i] for row in matrix] for i in range(3)]
 print(flat, transposed, list(zip(*matrix)))
 ```
 
-A nested comprehension (a comprehension inside the expression) builds nested lists; multiple `for` clauses build a flat list. `zip(*matrix)` is the idiomatic transpose.
+`pairs` is the loop "for each `r`, for each `c`, if they differ, keep the pair", giving six pairs from `(0, 1)` to `(2, 1)`. A `matrix` here is a list of rows, each row a list. `flat` takes every `x` of every `row` and produces one flat list, `[1, 2, 3, 4, 5, 6]`; the outer loop (`for row in matrix`) is written first, exactly as in the loop version.
+
+`transposed` is different: it is a comprehension *inside the expression* of another, so it builds a list of lists. For each column number `i` it collects item `i` of every row, turning rows into columns: `[[1, 4], [2, 5], [3, 6]]`. `zip(*matrix)` does the same thing in the idiomatic way: the star passes the rows as separate arguments, and `zip` pairs up their first items, second items, and so on (as tuples).
 
 ### Dict and set comprehensions
+
+Curly braces give a set comprehension; curly braces with `key: value` give a dict comprehension.
 
 ```python-run
 words = ["apple", "Avocado", "banana", "blueberry", "cherry"]
@@ -56,9 +95,11 @@ swapped = {v: k for k, v in {"a": 1, "b": 2}.items()}
 print(by_len, initials, index, swapped, sep="\n")
 ```
 
+`by_len` maps each word to its length. `initials` is a set of lowercase first letters, so it holds only three items (`a`, `b`, `c`) although there are five words. `index` maps each word to its position, a common preparation step when you will need "where is this word?" many times. `swapped` exchanges keys and values.
+
 ### Generator expressions
 
-Use parentheses instead of brackets and you get a **generator expression**: a lazy iterator that produces items on demand rather than building a list. When a generator expression is the only argument of a call, the extra parentheses can be dropped:
+Round brackets in place of square ones give a **generator expression**. It does not build a list. It produces its items one at a time, only when something asks for the next one; such behaviour is called **lazy**. When a generator expression is the only argument of a call, the extra pair of brackets may be left out.
 
 ```python-run
 import sys
@@ -69,11 +110,11 @@ print(sys.getsizeof((n for n in range(10_000))), "bytes for the generator")
 print(any(w.startswith("b") for w in ["apple", "banana"]), max(len(w) for w in ["a", "abc"]))
 ```
 
-`any`/`all` with a generator **short-circuit**: they stop as soon as the answer is known. We return to generators in module 4.
+`sum` pulls the squares one by one and adds them up; at no moment do a million numbers exist together in memory. The two `getsizeof` lines make the difference visible: tens of thousands of bytes for the list, a couple of hundred for the generator, however long the range. `any(...)` returns `True` as soon as one item is true and `all(...)` returns `False` as soon as one is false; fed by a generator, they stop early and never compute the remaining items. The generators lesson returns to this topic in depth.
 
 ### Scope inside comprehensions
 
-In Python 3, the loop variable of a comprehension is local to it — it doesn't leak into the surrounding scope (as it did in Python 2). The *first* iterable is evaluated in the enclosing scope; the rest are evaluated inside the comprehension. This matters in class bodies, where a comprehension can't see class-level names except in its first iterable.
+The loop variable of a comprehension exists only inside the comprehension. It does not overwrite a variable of the same name outside:
 
 ```python-run
 x = "outer"
@@ -81,15 +122,17 @@ squares = [x * 2 for x in range(3)]
 print(x)          # still 'outer'
 ```
 
+One detail for later: the *first* iterable (here `range(3)`) is evaluated in the surrounding code, and everything else inside the comprehension's own private area. This becomes visible in class bodies, where a comprehension cannot see the class's own names except in that first iterable.
+
 ### When not to use a comprehension
 
-- If you need side effects only (printing, appending elsewhere), write a `for` loop; `[print(x) for x in xs]` builds a useless list of `None`s.
-- If it needs more than two `for` clauses or complex conditions, a loop or helper function is clearer.
-- If you only need to iterate once, a generator expression saves memory.
+- When you only want an action to happen (printing, appending somewhere else), write a `for` loop. `[print(x) for x in xs]` builds a useless list of `None`s.
+- When it needs more than two `for` parts or a complicated condition, a loop or a helper function is easier to read.
+- When the result will be walked through once and thrown away, a generator expression saves memory.
 
 ## Unpacking
 
-**Sequence unpacking** assigns the items of any iterable to several names at once. The number of names must match the number of items, unless one name is starred:
+**Unpacking** assigns the items of any iterable to several names in one statement. The number of names must equal the number of items, unless one of the names carries a star.
 
 ```python-run
 point = (3, 4)
@@ -105,9 +148,18 @@ except ValueError as e:
     print("ValueError:", e)
 ```
 
-The starred name always becomes a **list** (possibly empty). Unpacking works in `for` loops too — `for name, score in pairs:` — and in function calls with `*` and `**`, as we saw in lesson 3.
+**Reading this code line by line**
 
-**Swapping** is just unpacking: `a, b = b, a`. The right side is evaluated into a tuple first, so there's no clobbering. A subtle trap: in `a[i], a[a[i]] = ...` the targets are assigned left to right, and the second target's index is evaluated *after* the first assignment. Use temporaries when targets depend on each other.
+- `x, y = point` ties `x` to 3 and `y` to 4.
+- `first, *middle, last = ...` gives the first item to `first`, the last to `last`, and everything in between to `middle` as a list: `1 [2, 3, 4] 5`.
+- `head, *tail = "abc"` works on a string too: `a` and `['b', 'c']`.
+- `*_, final = range(10)` keeps only the last item, 9. The name `_` is the conventional "I do not care about this" name.
+- `(a, b), c = (1, 2), 3` unpacks a pair inside a pair.
+- Two names cannot receive three items: Python raises `ValueError: too many values to unpack (expected 2)`.
+
+The starred name always becomes a **list**, possibly an empty one. Unpacking also works in a `for` loop (`for name, score in pairs:`) and in function calls with `*` and `**`, as the functions lesson showed.
+
+**Swapping** two variables is unpacking as well: `a, b = b, a`. The right-hand side is fully worked out (into a tuple) before any name on the left is touched, so nothing is overwritten too early. There is one subtle trap. The targets on the *left* are assigned one after another, left to right, and if the second target contains an expression, that expression is evaluated after the first assignment has already happened:
 
 ```python-run
 nums = [1, 0]
@@ -116,9 +168,11 @@ nums[i], nums[nums[i]] = nums[nums[i]], nums[i]   # tricky!
 print(nums)        # not the swap you might expect
 ```
 
+The right side evaluates to the pair `(0, 1)`. Then `nums[0] = 0` runs, making the list `[0, 0]`. Only now is the second target worked out: `nums[nums[0]]` is `nums[0]`, which receives 1. The result is `[1, 0]`, unchanged, not a swap of two positions. When targets depend on one another, compute the positions into separate variables first.
+
 ## Copying: assignment, shallow copy, deep copy
 
-Recall that assignment never copies — it creates another reference. When you *do* want an independent copy, you must choose how deep.
+Assignment never copies; it ties another name to the same object. When you do want an independent copy, you have to decide how far down the copying should go.
 
 ```mermaid
 graph TD
@@ -138,16 +192,18 @@ graph TD
   end
 ```
 
+The three panels show a list of lists. With plain assignment there is one outer list with two names. With a shallow copy there are two outer lists, both pointing at the same inner lists. With a deep copy everything is duplicated.
+
 ### Shallow copies
 
-A **shallow copy** creates a new container whose slots refer to the *same* element objects. Ways to make one:
+A **shallow copy** is a new container whose slots refer to the *same* item objects as the original. Ways to make one:
 
 - `lst.copy()`, `lst[:]`, `list(lst)`, `[*lst]`
 - `d.copy()`, `dict(d)`, `{**d}`
 - `s.copy()`, `set(s)`
-- `copy.copy(obj)` for anything
+- `copy.copy(obj)` for any object
 
-For containers of immutable items (numbers, strings, tuples of immutables), a shallow copy is all you ever need. For containers of mutable items, the inner objects are shared:
+If the items are immutable (numbers, strings, tuples of those), a shallow copy is all you will ever need, because nobody can alter the shared items. If the items are themselves mutable, such as inner lists, they are shared, and a change to one of them shows through both containers:
 
 ```python-run
 import copy
@@ -160,11 +216,13 @@ print(shallow)
 print(shallow[0] is palette[0])
 ```
 
-Goodrich's colour-palette example (§2.6) makes exactly this point: a shallow copy protects you from adding or removing *elements* but not from mutating the elements themselves.
+`shallow.append(["new"])` adds a third slot to the copy's outer list only; `palette` still has two. `shallow[0].append("PINK")` reaches *through* slot 0 into the inner list, and that inner list is the same object in both. So `palette` prints as `[['red', 'green', 'PINK'], ['blue']]`: it gained a colour that the program never added to it by name. The last line confirms the sharing with `is`: `True`.
+
+In short, a shallow copy protects you from adding, removing or replacing *slots*, but not from changes made *inside* the items.
 
 ### Deep copies
 
-`copy.deepcopy(obj)` recursively copies the whole object graph. It keeps a memo dictionary of objects already copied, so shared references and cycles are preserved in the copy rather than causing infinite recursion.
+`copy.deepcopy(obj)` copies the object, then everything it refers to, then everything those refer to, all the way down. While it works it keeps a private dictionary of the objects it has already copied (a *memo*), which has two benefits: an object that appears twice in the original appears as one shared object in the copy, and a structure that contains itself does not send the copying into an endless loop.
 
 ```python-run
 import copy
@@ -183,18 +241,20 @@ cyc.append(cyc)              # a list that contains itself
 print(copy.deepcopy(cyc)[1][1][0])
 ```
 
-Deep copies are O(size of the whole graph) and can be surprisingly expensive; they also copy things you may not want copied (large caches, locks will fail). Classes can control copying with `__copy__` and `__deepcopy__`.
+After the deep copy, adding `PINK` affects only `deep`; `palette` is untouched. In the second part, `pair` holds the same list twice, and so does its deep copy (`True`): one new inner list, referenced twice. In the third part, `cyc` is a list whose second item is the list itself; `deepcopy` handles it, and following the self-reference twice in the copy still leads to 1.
+
+A deep copy costs time and memory in proportion to the size of everything reachable from the object, which can be far more than you expect. It also copies things you may not want duplicated (a large cache) and fails on things that cannot be copied (an open file, a lock). A class can define the special methods `__copy__` and `__deepcopy__` to control how its objects are copied.
 
 ### Copying in practice
 
 | Situation | Use |
 |---|---|
-| Want two names for the same data | plain assignment |
-| Need to modify the container without affecting the original, items are immutable | shallow copy |
-| Nested mutable structure you'll mutate at depth (e.g., a grid you'll edit) | `[row[:] for row in grid]` or `deepcopy` |
-| Backtracking: record the current path | `result.append(path[:])` or `path.copy()` |
+| You want two names for the same data | plain assignment |
+| You will change the container, not the original; the items are immutable | shallow copy |
+| A nested mutable structure you will change at depth (for example a grid you will edit) | `[row[:] for row in grid]` or `deepcopy` |
+| Backtracking: recording the current path | `result.append(path[:])` or `path.copy()` |
 
-The backtracking case is a classic interview bug: appending `path` itself, then mutating `path` later, leaves every recorded result pointing to the same (finally empty) list.
+The last row deserves an example, because it is a classic interview bug. **Backtracking** is a search method that builds a candidate answer step by step in one working list, records it when complete, then undoes the last step and tries another. The code below lists all subsets of `[1, 2]`. For each number it explores two branches: leave it out, or put it in.
 
 ```python-run
 def subsets_buggy(nums):
@@ -223,9 +283,13 @@ print(subsets_buggy([1, 2]))
 print(subsets([1, 2]))
 ```
 
+`path` is the working list. In the inner function `dfs` (short for depth-first search), `i` is the position of the number being decided; when `i` reaches the end, the current `path` is one complete subset. The line `path.append(nums[i]); dfs(i + 1); path.pop()` means: put the number in, explore, take it out again.
+
+The buggy version prints `[[], [], [], []]`. It appended `path` itself four times, so `res` holds four references to one list, and by the end every `pop` has emptied that list. The correct version appends `path[:]`, a shallow copy taken at that moment (a *snapshot*), and prints `[[], [2], [1], [1, 2]]`.
+
 ## Equality versus identity, revisited
 
-Copies compare equal but are not identical:
+A copy is equal to its original but is not the same object:
 
 ```python-run
 a = [[1], [2]]
@@ -233,6 +297,8 @@ b = a[:]
 c = __import__("copy").deepcopy(a)
 print(a == b == c, a is b, a[0] is b[0], a[0] is c[0])
 ```
+
+The output `True False True False` sums up the lesson: all three are equal in value; `b` is a different outer list from `a`; the shallow copy shares its inner lists with the original; the deep copy does not. (`__import__("copy")` is an unusual way to import a module inside an expression, used here only to keep the demo to one line.)
 
 ## Worked example: a matrix utility belt
 
@@ -258,23 +324,46 @@ grid = [[1, 2, 3], [4, 5, 6], [7, 8, 9]]
 print(zeros(2, 3), transpose(grid), rotate90(grid), spiral(grid), grid, sep="\n")
 ```
 
-Each function returns a new structure and leaves `grid` untouched, which you can verify from the last line.
+- `zeros` builds a grid of `r` rows and `c` columns with a comprehension, so that every row is a separate list (recall the `[[0] * 3] * 3` trap).
+- `transpose` turns rows into columns with `zip(*m)`; `list(col)` converts each tuple that `zip` yields into a list.
+- `rotate90` reverses the order of the rows (`m[::-1]`) and then transposes, which turns the grid a quarter-turn clockwise.
+- `spiral` reads the grid in a spiral: take the top row, rotate what is left a quarter-turn counter-clockwise so that the next side is on top, and repeat until nothing is left. Its second line copies each row first, because `pop` would otherwise destroy the caller's grid.
+
+Each function returns a new structure and leaves `grid` as it was, which the last printed line confirms.
 
 > [!INTERVIEW]
-> "What's the difference between a shallow and a deep copy?" A shallow copy duplicates the container but shares the contained objects; a deep copy recursively duplicates contained objects too (using a memo to preserve sharing and handle cycles). Show the nested-list example, then mention the backtracking `path[:]` idiom — it signals you've been bitten by this in real code.
+> "What's the difference between a shallow and a deep copy?" A shallow copy duplicates the container but shares the objects inside it; a deep copy duplicates those objects too, recursively, using a memo to preserve shared references and cope with cycles. Show the nested-list example, then mention the backtracking `path[:]` idiom: it tells the interviewer you have met this bug in real code.
 
 ## Pitfalls recap
 
-- `[expr for x in xs if c else d]` is a syntax error — the `if/else` form goes before `for`.
-- Multiple `for` clauses run outer-first, like nested loops.
-- List comprehensions for side effects waste memory.
-- `copy()` is shallow; mutations of nested items are shared.
-- `deepcopy` is slow on large graphs and may fail on objects like locks or open files.
-- Appending a mutable "current state" (like `path`) to a result list without copying it.
+- `[expr for x in xs if c else d]` is a syntax error; the `if`/`else` form goes before `for`.
+- Several `for` parts run outer-first, like nested loops.
+- A list comprehension used only for its actions wastes memory.
+- `copy()` is shallow; changes inside nested items are shared.
+- `deepcopy` is slow on large structures and may fail on objects such as locks or open files.
+- Appending a mutable "current state" (such as `path`) to a result list without copying it.
 
 ## Summary
 
-Comprehensions build lists, dicts and sets declaratively; generator expressions do the same lazily. Unpacking (with an optional starred target) pulls apart any iterable. Assignment aliases, shallow copies duplicate one level, deep copies duplicate the whole graph — choose deliberately.
+Comprehensions build lists, dictionaries and sets by describing their contents; generator expressions do the same lazily. Unpacking, with an optional starred name, takes any iterable apart. Assignment makes an alias, a shallow copy duplicates one level, and a deep copy duplicates everything reachable. Choose among the three on purpose.
+
+## Glossary
+
+- **Comprehension** - a one-expression way to build a list, dict or set from an iterable.
+- **Filter** - the `if` after the `for` in a comprehension; it drops items.
+- **Conditional expression** - `a if cond else b`; it chooses a value and drops nothing.
+- **Generator expression** - a comprehension in round brackets that produces items lazily.
+- **Lazy** - computing each item only when it is requested.
+- **Unpacking** - assigning the items of an iterable to several names at once.
+- **Starred target** - a name with `*` that collects the leftover items into a list.
+- **Alias** - another name for the same object; what plain assignment creates.
+- **Shallow copy** - a new container that shares its items with the original.
+- **Deep copy** - a new container whose contents are also copied, recursively.
+- **Memo** - the record `deepcopy` keeps of objects it has already copied.
+- **Cycle** - a structure that, directly or indirectly, contains itself.
+- **Backtracking** - a search that builds candidates step by step and undoes steps to try alternatives.
+- **Snapshot** - a copy of a changing object taken at one moment, for example `path[:]`.
+- **Transpose** - to swap the rows and columns of a grid.
 
 ```quiz
 [
@@ -295,4 +384,4 @@ Comprehensions build lists, dicts and sets declaratively; generator expressions 
 ]
 ```
 
-> **Source:** Goodrich, Tamassia & Goldwasser, *Data Structures and Algorithms in Python*, §1.9 (comprehension syntax, packing and unpacking) and §2.6 (Shallow and Deep Copying); Python docs, *Tutorial* §5.1.3 "List Comprehensions" and *Library Reference* `copy` module.
+> **Source:** Goodrich, Tamassia & Goldwasser, *Data Structures and Algorithms in Python*, §1.9 (comprehension syntax, packing and unpacking) and §2.6 (Shallow and Deep Copying), restated in original wording with new examples; Python docs, *Tutorial* §5.1.3 "List Comprehensions" and *Library Reference* `copy` module.
