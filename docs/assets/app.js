@@ -148,6 +148,8 @@
   function renderSidebar(activeTrack, activeLesson) {
     let html = `<a class="side-track ${!activeTrack ? "active" : ""}" href="#/"><span class="ico">🏰</span><span class="lbl">Home</span></a>
       <a class="side-track" href="#/roadmap"><span class="ico">🗺️</span><span class="lbl">Roadmap</span></a>
+      <a class="side-track ${activeTrack === "#plan" ? "active" : ""}" href="#/plan"><span class="ico">📅</span><span class="lbl">Study plan</span></a>
+      <a class="side-track ${activeTrack === "#mock" ? "active" : ""}" href="#/mock"><span class="ico">🎤</span><span class="lbl">Mock interviews</span></a>
       <a class="side-track" href="#/scoreboard"><span class="ico">🏆</span><span class="lbl">Scoreboard</span></a>
       <a class="side-track" href="#/problems"><span class="ico">🧩</span><span class="lbl">All problems</span></a>
       <a class="side-track" href="#/gallery"><span class="ico">🖼️</span><span class="lbl">Gallery</span></a>`;
@@ -298,7 +300,7 @@
     };
     items.forEach((it, i) => {
       const q = h(`<div class="qitem"><div class="qq"></div><div class="qopts"></div></div>`);
-      renderInline($(".qq", q), `${i + 1}. ${it.q}`);
+      renderInline($(".qq", q), quizText(`${i + 1}. ${it.q}`));
       const opts = $(".qopts", q);
       const reveal = (chosen) => {
         $$(".qopt", opts).forEach((b, j) => {
@@ -308,13 +310,13 @@
         });
         if (!$(".qexp", q)) {
           const ex = h(`<div class="qexp"></div>`);
-          renderInline(ex, (chosen === it.answer ? "✅ **Correct.** " : "❌ **Not quite.** ") + (it.explain || ""));
+          renderInline(ex, (chosen === it.answer ? "✅ **Correct.** " : "❌ **Not quite.** ") + quizText(it.explain));
           q.appendChild(ex);
         }
       };
       it.options.forEach((o, j) => {
         const b = h(`<button class="qopt" type="button"></button>`);
-        renderInline(b, o);
+        renderInline(b, quizText(o));
         b.onclick = () => { store.set((s) => { (s.quiz[qkey] = s.quiz[qkey] || {})[i] = j; }); reveal(j); upd(); };
         opts.appendChild(b);
       });
@@ -340,6 +342,12 @@
       else out += "\\\\";
     }
     return out;
+  }
+  // Quiz strings are plain text with inline markdown, never HTML: show < and > literally outside
+  // code spans, so List<Integer>, <Esc> or git restore <file> are not swallowed as unknown tags.
+  function quizText(md) {
+    return String(md || "").split(/(`[^`\n]+`)/g)
+      .map((part, i) => (i % 2 ? part : part.replace(/</g, "&lt;").replace(/>/g, "&gt;"))).join("");
   }
   function renderInline(el, md) {
     const { md: safe, store: math } = protectMath(md || "");
@@ -613,6 +621,7 @@
         </div>
         ${hero ? `<div class="hero2-credit">${Ghibli.credit(hero.w)}</div>` : ""}
       </section>
+      ${homePlanHTML()}
       <div class="dash">
         <div class="card dash-ring">
           <svg viewBox="0 0 120 120" width="120" height="120" aria-hidden="true"><circle cx="60" cy="60" r="52" fill="none" stroke="var(--surface-2)" stroke-width="10"/>
@@ -636,6 +645,8 @@
       $$("#grpChips .chip").forEach((x) => x.classList.toggle("on", x === c));
       $$("#trackGrid .tcard").forEach((el) => (el.hidden = !!c.dataset.g && el.dataset.group !== c.dataset.g));
     }));
+    const hp = $("#homePlan");
+    if (hp) wirePlanChecks(hp, () => { const p = S().plan, st = p && planStatus(p, buildPlan(p)), el = $("#homePlanSt"); if (st && el) { el.textContent = st.label; el.className = "pl-badge " + st.cls; } });
     const rb = $("#rndBtn");
     if (rb) rb.onclick = () => { const p = randomUnsolved(); if (p) location.hash = `#/problem/${p}`; };
   }
@@ -788,7 +799,7 @@
       dlg = h(`<dialog id="pal" class="dlg pal"><input id="palIn" type="search" placeholder="Jump to a track, lesson or problem…" autocomplete="off"><div id="palList"></div><p class="muted pal-hint">↑ ↓ to move · Enter to open · Esc to close</p></dialog>`);
       document.body.appendChild(dlg);
     }
-    const items = [{ t: "Home", s: "", href: "#/" }, { t: "Roadmap", s: "", href: "#/roadmap" }, { t: "All problems", s: "", href: "#/problems" }, { t: "Gallery", s: "", href: "#/gallery" }, { t: "Credits", s: "", href: "#/credits" }];
+    const items = [{ t: "Home", s: "", href: "#/" }, { t: "Roadmap", s: "", href: "#/roadmap" }, { t: "Study plan", s: "Plan", href: "#/plan" }, { t: "Mock interviews", s: "Practice", href: "#/mock" }, { t: "Mock history", s: "Practice", href: "#/mock/history" }, { t: "All problems", s: "", href: "#/problems" }, { t: "Gallery", s: "", href: "#/gallery" }, { t: "Credits", s: "", href: "#/credits" }];
     DATA.index.forEach((ti) => {
       const t = DATA.tracks[ti.id];
       if (!t) return;
@@ -1368,6 +1379,733 @@
     setPage(`<div class="page narrow"><h1 class="page-title">Lost at sea</h1><p>That page doesn't exist (yet). <a href="#/">Back to the home port</a>.</p></div>`);
   }
 
+  // ---------------------------------------------------------------- study plan (#/plan)
+  // State: s.plan = { start, end, hours, tracks, ex, genAt, marks, first, replans } (or null).
+  // The schedule itself is not stored: it is rebuilt from these settings. Items finished before
+  // genAt are left out, so ticking things off later never reshuffles the days.
+  const PL = { core: [0, 1, 2, 5], dsaStage: 1, review: 0.12, studyDays: 6, revisit: 15, cost: { Easy: 20, Medium: 35, Hard: 50 }, mock: { coding: 60, design: 60, behavioural: 20 } };
+  const MOCK_NAME = { coding: "Coding mock", design: "System design mock", behavioural: "Behavioural mock" };
+  const KIND_LABEL = { lesson: "Read", problem: "Practise", revisit: "Revisit", review: "Review", mock: "Mock" };
+  const pDate = (k) => { const [y, m, d] = String(k).split("-").map(Number); return new Date(y, m - 1, d); };
+  const validDay = (k) => /^\d{4}-\d{2}-\d{2}$/.test(k || "") && !isNaN(pDate(k));
+  const addDays = (k, n) => { const d = pDate(k); d.setDate(d.getDate() + n); return dayKey(d); };
+  const daysBetween = (a, b) => Math.round((pDate(b) - pDate(a)) / 864e5);
+  const yearIf = (k, o) => (Math.abs(pDate(k) - new Date()) > 300 * 864e5 ? { ...o, year: "numeric" } : o);  // show the year when it is not obvious
+  const fmtDay = (k, o = { weekday: "short", day: "numeric", month: "short" }) => pDate(k).toLocaleDateString(undefined, yearIf(k, o));
+  const fmtShort = (k) => fmtDay(k, { day: "numeric", month: "short" });
+  const fmtMin = (m) => { m = Math.round(m); return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h${m % 60 ? " " + (m % 60) + " min" : ""}`; };
+  const fmtH = (m) => (m < 60 ? `${Math.round(m)} min` : `${(m / 60).toFixed(m < 6000 ? 1 : 0).replace(/\.0$/, "")} h`);
+  const sumMin = (a) => a.reduce((x, i) => x + i.min, 0);
+  const lessonCost = (l) => Math.max(5, Math.round(((l.words || 0) / 180) * 1.3));
+  const dsaTracks = () => PATH[PL.dsaStage].tracks.map((x) => x[0]);
+  const probMeta = (pid) => { const loc = DATA.problemTrack[pid]; return loc && DATA.tracks[loc.track] ? DATA.tracks[loc.track].problemIndex[pid] : null; };
+  const coreTracks = () => PL.core.flatMap((i) => PATH[i].tracks.map((x) => x[0])).filter((id) => DATA.tracks[id]);
+
+  // Depth "essentials" (default for new plans): neet-* lessons + Easy/Medium problems; python and
+  // dsa-foundations lessons + the first problem of each module; every other track its interview,
+  // essentials or playbook lessons + the first lesson of each module + about a third of its problems,
+  // Easy and Medium first. Depth "all" takes everything (plans saved without a depth used that).
+  // Streams: "read" (other tracks and the CTCI hiring/behavioural chapters), "theory" (DSA Foundations)
+  // and "pat" (pattern practice: neet-* in NeetCode roadmap order, then CTCI's coding chapters).
+  // Tier "A" items are kept before any "B" item when time is short: interview lessons, CTCI's hiring
+  // and behavioural chapters, and each pattern's first lesson with its first two Easy/Medium problems.
+  const ESS_RE = /interview|essentials|playbook/i;
+  const DIFF_RANK = { Easy: 0, Medium: 1, Hard: 2 };
+  const DEPTH_NAME = { essentials: "Interview essentials", all: "Everything" };
+  function trackItems(id, ex, genAt, marks, depth) {
+    const t = DATA.tracks[id], s = S(), out = [];
+    let skipped = 0;
+    if (!t) return { out, skipped };
+    const isD = dsaTracks().includes(id), mk = marks || {}, ess = depth !== "all";
+    const neet = /^neet-/.test(id), firstOnly = id === "python" || id === "dsa-foundations", ctci = id === "interview-prep";
+    const before = (v) => !!v && (typeof v !== "number" || v < genAt);
+    let quota = null;
+    if (ess && !neet && !firstOnly) {
+      const all = t.modules.flatMap((m) => m.problems || []).filter((p) => t.problemIndex[p]);
+      quota = new Set(all.map((p, i) => ({ p, i, r: DIFF_RANK[t.problemIndex[p].difficulty] ?? 1 })).sort((a, b) => a.r - b.r || a.i - b.i)
+        .slice(0, Math.ceil(all.length / 3)).map((x) => x.p));
+    }
+    t.modules.forEach((m) => {
+      const probs = (m.problems || []).filter((p) => t.problemIndex[p]);
+      const soft = ctci && !probs.length;
+      const stream = !isD || soft ? "read" : id === "dsa-foundations" ? "theory" : "pat";
+      (m.lessons || []).forEach((l, li) => {
+        const key = `${id}/${l.id}`, star = soft || ESS_RE.test(`${l.id} ${l.title}`);
+        if (ess && !neet && !firstOnly && li > 0 && !star) return;
+        if (before(s.lessons[key])) { skipped++; return; }
+        out.push({ c: "L:" + key, k: "lesson", track: id, stream, tier: star || (neet && li === 0) ? "A" : "B", href: `#/lesson/${id}/${l.id}`, title: l.title, sub: t.title, min: lessonCost(l) });
+      });
+      if (!isD && !ex) return;
+      let em = 0;
+      probs.forEach((pid, pi) => {
+        const x = t.problemIndex[pid];
+        if (ess && ((neet && x.difficulty === "Hard") || (firstOnly && pi > 0) || (quota && !quota.has(pid)))) return;
+        const core = neet && x.difficulty !== "Hard" && em++ < 2;
+        if (before(s.solved[pid]) || before(mk["P:" + pid])) { skipped++; return; }
+        out.push({ c: "P:" + pid, k: "problem", track: id, stream, tier: core ? "A" : "B", href: `#/problem/${pid}`, title: x.title, sub: `${x.difficulty} · ${t.title}`, pat: isD ? x.pattern || t.title : null, min: PL.cost[x.difficulty] || 35 });
+      });
+    });
+    return { out, skipped };
+  }
+
+  function buildPlan(cfg) {
+    const nDays = Math.max(1, daysBetween(cfg.start, cfg.end) + 1);
+    const B = (cfg.hours * 60) / PL.studyDays;
+    const nRev = nDays >= 10 ? Math.max(2, Math.round(nDays * PL.review)) : 0;
+    const days = [];
+    for (let i = 0; i < nDays; i++) days.push({ i, key: addDays(cfg.start, i), w: Math.floor(i / 7) + 1, rest: i % 7 === 6, review: i >= nDays - nRev, items: [] });
+    const wkEnd = (w) => { const e = addDays(cfg.start, w * 7 - 1); return e > cfg.end ? cfg.end : e; };
+    const mockItem = (kind, d) => ({ c: `M:${kind}:${d.key}`, k: "mock", kind, href: "#/mock", title: MOCK_NAME[kind] + " interview",
+      sub: kind === "behavioural" ? "5 questions, 2 minutes each" : "45 minutes, then score yourself", min: PL.mock[kind], ws: addDays(cfg.start, (d.w - 1) * 7), we: wkEnd(d.w) });
+    // weekly mocks: coding from week 3; from week 5 a second one alternating system design and behavioural
+    days.forEach((d) => {
+      if (d.rest || d.review || d.w < 3) return;
+      if (d.i % 7 === 5) d.items.push(mockItem("coding", d));
+      if (d.i % 7 === 2 && d.w >= 5) d.items.push(mockItem(d.w % 2 ? "design" : "behavioural", d));
+    });
+    const revDays = days.filter((d) => d.review && !d.rest);
+    if (revDays.length) {
+      const n = revDays.length, put = (j, k) => revDays[j].items.push(mockItem(k, revDays[j]));
+      put(0, "coding");
+      if (n >= 2) put(Math.floor(n / 2), "design");
+      if (n >= 3) put(n - 1, "behavioural");
+    }
+    // three streams, each in roadmap order: other tracks (45% of the time), DSA theory (25%) and
+    // pattern practice (30%); a stream that needs less hands its time to the others
+    const W = { read: 0.45, theory: 0.25, pat: 0.3 }, streams = { read: [], theory: [], pat: [] }, per = {};
+    const depth = cfg.depth || "all";
+    let skipped = 0;
+    PATH.forEach((st) => st.tracks.forEach(([id]) => {
+      if (!cfg.tracks.includes(id) || !DATA.tracks[id] || per[id]) return;
+      const r = trackItems(id, cfg.ex, cfg.genAt, cfg.marks, depth);
+      skipped += r.skipped;
+      per[id] = { id, title: DATA.tracks[id].title, total: r.out.length, kept: 0, min: sumMin(r.out), keptMin: 0 };
+      r.out.forEach((it) => streams[it.stream].push(it));
+    }));
+    const study = days.filter((d) => !d.rest && !d.review);
+    const avail = study.map((d) => Math.max(0, B - sumMin(d.items)));
+    const availTot = avail.reduce((a, x) => a + x, 0);
+    const need = {};
+    Object.keys(W).forEach((k) => (need[k] = sumMin(streams[k])));
+    const alloc = (C) => {
+      const cap = { read: 0, theory: 0, pat: 0 };
+      let open = Object.keys(W).filter((k) => need[k] > 0), left = C;
+      while (open.length) {
+        const ws = open.reduce((a, k) => a + W[k], 0), small = open.filter((k) => need[k] <= (left * W[k]) / ws);
+        if (!small.length) { open.forEach((k) => (cap[k] = (left * W[k]) / ws)); break; }
+        small.forEach((k) => { cap[k] = need[k]; left -= need[k]; });
+        open = open.filter((k) => !small.includes(k));
+      }
+      return cap;
+    };
+    const prefix = (arr, cap) => { const out = []; let c = 0; for (const it of arr) { if (c + it.min > cap + 0.01) break; c += it.min; out.push(it); } return out; };
+    const keep = (arr, cap) => {
+      const A = arr.filter((x) => x.tier === "A"), sA = sumMin(A);
+      const set = new Set(sA <= cap ? A.concat(prefix(arr.filter((x) => x.tier !== "A"), cap - sA)) : prefix(A, cap));
+      return arr.filter((x) => set.has(x));
+    };
+    const patterns = (arr) => new Set(arr.filter((x) => x.pat).map((x) => x.pat)).size;
+    let revisitMin = 0, kept = { read: [], theory: [], pat: [] };
+    for (let pass = 0; pass < 3; pass++) {
+      const cap = alloc(Math.max(0, availTot - revisitMin));
+      Object.keys(W).forEach((k) => (kept[k] = keep(streams[k], cap[k])));
+      revisitMin = patterns(kept.theory.concat(kept.pat)) * PL.revisit;
+    }
+    const kr = kept.read, all = kept.read.concat(kept.theory, kept.pat);
+    // spread each stream evenly over the study days, in proportion to each day's free time
+    const cum = []; let acc = 0;
+    avail.forEach((a) => cum.push((acc += a)));
+    const place = (arr) => {
+      const tot = sumMin(arr);
+      let c = 0, j = 0;
+      arr.forEach((it) => {
+        const pos = tot ? ((c + it.min / 2) / tot) * acc : 0;
+        c += it.min;
+        while (j < study.length - 1 && cum[j] < pos) j++;
+        study[j].items.push({ ...it });
+      });
+    };
+    place(kept.read); place(kept.theory); place(kept.pat);
+    // spaced repetition: revisit each pattern about three days after first practising it
+    const seen = new Set(), firstOf = [];
+    study.forEach((d) => d.items.forEach((it) => {
+      if (!it.pat || seen.has(it.pat)) return;
+      seen.add(it.pat); firstOf.push(it);
+      const tgt = days.find((x) => x.i >= d.i + 3 && !x.rest && !x.review);
+      if (tgt) tgt.items.push({ c: "R:" + it.c.slice(2), k: "revisit", href: it.href, title: `Revisit ${it.pat}`, sub: `Re-solve “${it.title}” from a blank editor`, min: PL.revisit });
+    }));
+    // final review window: rotate through practised patterns and the tracks read
+    const topics = [], keptTracks = [...new Set(kr.map((x) => x.track))];
+    for (let i = 0; i < Math.max(firstOf.length, keptTracks.length); i++) {
+      if (firstOf[i]) topics.push({ href: firstOf[i].href, title: `Review ${firstOf[i].pat}`, sub: `Re-solve “${firstOf[i].title}” and one more ${firstOf[i].pat} problem` });
+      if (keptTracks[i]) topics.push({ href: `#/track/${keptTracks[i]}`, title: `Review ${DATA.tracks[keptTracks[i]].title}`, sub: "Skim your notes and retake two lesson quizzes" });
+    }
+    if (!topics.length) topics.push({ href: "#/roadmap", title: "Review your weakest topics", sub: "Re-read notes and retake quizzes" });
+    let ti = 0;
+    revDays.forEach((d) => {
+      let free = B - sumMin(d.items), n = 0;
+      while (free >= 20 && n < 4) { const tp = topics[ti++ % topics.length]; d.items.push({ ...tp, c: `V:${d.key}:${n}`, k: "review", min: 30 }); free -= 30; n++; }
+    });
+    const rank = { revisit: 0, review: 1, lesson: 2, problem: 3, mock: 4 };
+    days.forEach((d) => d.items.sort((a, b) => rank[a.k] - rank[b.k] + (a.k === "problem" && b.k === "problem" ? (a.pat ? 1 : 0) - (b.pat ? 1 : 0) : 0)));
+    all.forEach((it) => { per[it.track].kept++; per[it.track].keptMin += it.min; });
+    const trimmed = Object.values(per).filter((p) => p.kept < p.total);
+    return { days, B, per, trimmed, fits: !trimmed.length, need: need.read + need.theory + need.pat, room: availTot - revisitMin, kept: sumMin(all), skipped, depth };
+  }
+  // smallest number of weeks (from cfg.start) or hours a week that fits everything; null if none within the cap
+  function planFitSearch(cfg, field) {
+    const tryIt = (v) => buildPlan(field === "weeks" ? { ...cfg, end: addDays(cfg.start, v * 7 - 1) } : { ...cfg, hours: v }).fits;
+    let lo = 1, hi = field === "weeks" ? 156 : 80;
+    if (!tryIt(hi)) return null;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (tryIt(mid)) hi = mid; else lo = mid + 1; }
+    return lo;
+  }
+
+  function mockDoneIn(kind, ws, we) {
+    return ((S().mocks || {}).history || []).some((m) => { const k = dayKey(new Date(m.at)); return m.kind === kind && k >= ws && k <= we; });
+  }
+  function itemAuto(it) {
+    if (it.k === "problem") return !!S().solved[it.c.slice(2)];
+    if (it.k === "mock") return mockDoneIn(it.kind, it.ws, it.we);
+    return false;
+  }
+  function itemDone(it, plan) {
+    if (it.k === "lesson") return !!S().lessons[it.c.slice(2)];
+    return itemAuto(it) || !!((plan && plan.marks) || {})[it.c];
+  }
+  function planStatus(plan, b) {
+    const today = dayKey();
+    let all = 0, done = 0, due = 0, dueMin = 0, ahead = 0;
+    b.days.forEach((d) => d.items.forEach((it) => {
+      all++;
+      if (itemDone(it, plan)) { done++; if (d.key > today) ahead++; }
+      else if (d.key < today) { due++; dueMin += it.min; }
+    }));
+    let label = "On track", cls = "ok";
+    if (today < plan.start) { label = `Starts ${fmtDay(plan.start)}`; cls = ""; }
+    else if (today > plan.end) { label = due ? `Ended with ${due} tasks open` : "Plan complete"; cls = due ? "warn" : "ok"; }
+    else if (due) { label = `Behind by ${due} task${due > 1 ? "s" : ""}`; cls = "warn"; }
+    else if (ahead) label = "Ahead of schedule";
+    return { all, done, due, dueMin, ahead, label, cls, pct: all ? Math.round((100 * done) / all) : 0 };
+  }
+  function planToggle(code, on) {
+    store.set((s) => {
+      const p = s.plan;
+      if (!p) return;
+      p.marks = p.marks || {};
+      if (code.startsWith("L:")) { const k = code.slice(2); if (on) { if (!s.lessons[k]) { s.lessons[k] = Date.now(); bump(s); } } else delete s.lessons[k]; }
+      else if (on) p.marks[code] = Date.now();
+      else delete p.marks[code];
+    });
+  }
+  function planItemHTML(it, plan) {
+    const done = itemDone(it, plan), auto = itemAuto(it);
+    const why = auto ? (it.k === "mock" ? "Done: you saved a mock of this kind this week" : "Solved in the judge") : "";
+    return `<li class="pl-it ${done ? "done" : ""}"><input type="checkbox" data-c="${esc(it.c)}" ${done ? "checked" : ""} ${auto ? "disabled" : ""} aria-label="${esc(`${KIND_LABEL[it.k]}: ${it.title}`)}"${why ? ` title="${esc(why)}"` : ""}>
+      <span class="pl-k k-${it.k}">${KIND_LABEL[it.k]}</span><span class="pl-t"><a href="${esc(it.href)}">${esc(it.title)}</a><span class="muted">${esc(it.sub || "")}</span></span><span class="mins">${it.min} min</span></li>`;
+  }
+  function wirePlanChecks(root, after) {
+    root.addEventListener("change", (e) => {
+      const cb = e.target.closest("input[data-c]");
+      if (!cb) return;
+      planToggle(cb.dataset.c, cb.checked);
+      $$(`input[data-c="${CSS.escape(cb.dataset.c)}"]`).forEach((x) => { x.checked = cb.checked; const li = x.closest(".pl-it"); if (li) li.classList.toggle("done", cb.checked); });
+      if (after) after();
+    });
+  }
+  function planDayHTML(d, plan, today) {
+    const isT = d.key === today;
+    return `<div class="pl-day ${isT ? "today" : ""} ${d.key < today ? "past" : ""}" ${isT ? 'id="plTodayRow"' : ""}>
+      <h3 class="pl-dh"><span>${fmtDay(d.key)}</span>${isT ? `<span class="pl-badge ok">Today</span>` : ""}${d.review && !d.rest ? `<span class="pill">Review</span>` : ""}${d.items.length ? `<span class="mins">${fmtMin(sumMin(d.items))}</span>` : ""}</h3>
+      ${d.items.length ? `<ul class="pl-items">${d.items.map((it) => planItemHTML(it, plan)).join("")}</ul>` : `<p class="muted pl-rest">${d.rest ? "Rest day, or catch up on anything left from this week." : "Nothing scheduled."}</p>`}</div>`;
+  }
+  function planICS(b) {
+    const e = (s) => String(s).replace(/\\/g, "\\\\").replace(/;/g, "\\;").replace(/,/g, "\\,").replace(/\r?\n/g, "\\n");
+    const fold = (line) => { const cps = Array.from(line), out = []; for (let i = 0; i < cps.length; i += 60) out.push(cps.slice(i, i + 60).join("")); return out.join("\r\n "); };
+    const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+/, "");
+    const L = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Sky Castle//Study plan//EN", "CALSCALE:GREGORIAN", "X-WR-CALNAME:Sky Castle study plan"];
+    b.days.forEach((d) => {
+      if (!d.items.length) return;
+      const k = d.key.replace(/-/g, "");
+      L.push("BEGIN:VEVENT", `UID:sky-castle-plan-${k}@sky-castle`, `DTSTAMP:${stamp}`, `DTSTART;VALUE=DATE:${k}`, `DTEND;VALUE=DATE:${addDays(d.key, 1).replace(/-/g, "")}`,
+        `SUMMARY:${e(`Study: ${d.items.length} task${d.items.length > 1 ? "s" : ""} (${fmtMin(sumMin(d.items))})`)}`,
+        `DESCRIPTION:${e(d.items.map((it) => `- ${KIND_LABEL[it.k]}: ${it.title} (${it.min} min)`).join("\n"))}`, "TRANSP:TRANSPARENT", "END:VEVENT");
+    });
+    L.push("END:VCALENDAR");
+    return L.map(fold).join("\r\n") + "\r\n";
+  }
+
+  function viewPlan(sub, msg) {
+    renderSidebar("#plan");
+    const plan = S().plan;
+    if (!plan || sub === "edit") return viewPlanForm(plan);
+    const b = buildPlan(plan), today = dayKey();
+    const weeks = Math.ceil(b.days.length / 7);
+    const tday = b.days.find((d) => d.key === today);
+    const curW = tday ? tday.w : today < plan.start ? 1 : weeks;
+    let wk = "";
+    for (let w = 1; w <= weeks; w++) {
+      const ds = b.days.filter((d) => d.w === w), items = ds.flatMap((d) => d.items);
+      wk += `<details class="module pl-week" ${w === curW ? "open" : ""}><summary><span class="num">${w}</span><span class="t"><b>Week ${w} · ${fmtShort(ds[0].key)} – ${fmtShort(ds[ds.length - 1].key)}</b>
+        <span>${fmtH(sumMin(items))} planned${ds.some((d) => d.review) ? " · review and mocks" : ""} · <span data-wk="${w}"></span></span></span><span class="chev" aria-hidden="true">▸</span></summary>
+        <div class="module-body">${ds.map((d) => planDayHTML(d, plan, today)).join("")}</div></details>`;
+    }
+    const nT = plan.tracks.filter((id) => DATA.tracks[id]).length;
+    let trim;
+    if (b.fits) trim = `<p class="pl-fit">Everything you selected${b.depth === "essentials" ? " (interview essentials)" : ""} fits: about ${fmtH(b.need)} of material in about ${fmtH(b.room)} of study time${b.skipped ? `, leaving out ${b.skipped} items you had already finished` : ""}.</p>`;
+    else {
+      const wN = planFitSearch(plan, "weeks"), hN = planFitSearch(plan, "hours");
+      const list = b.trimmed.map((p) => `<li><b>${esc(p.title)}</b> <span class="muted">${p.kept ? `partly planned: ${p.kept} of ${p.total} tasks, ${p.total - p.kept} left out` : `left out: all ${p.total} tasks`} (about ${fmtH(p.min - p.keptMin)})</span></li>`).join("");
+      trim = `<section class="card pl-trim" aria-labelledby="plTrimH"><h2 id="plTrimH">Not everything fits</h2>
+        <p>The tracks you picked need about <b>${fmtH(b.need)}</b>; this plan has room for about <b>${fmtH(b.room)}</b> once mocks, spaced revisits and the final review days are set aside. Nothing is dropped silently: the tasks below are left out. Interview material is kept first (lessons on interviews, essentials and playbooks, the hiring and behavioural chapters of Cracking the Coding Interview, and each coding pattern's first lesson with its first two problems); the rest is trimmed from the end of the roadmap. Reading, DSA theory and pattern practice run side by side (about 45%, 25% and 30% of the time), so each is trimmed from its own end.${b.depth === "essentials" ? ` Counts are at the ${DEPTH_NAME.essentials} depth; choose Everything in Edit settings for the full tracks.` : ""}</p>
+        <ul class="pl-trim-list">${list}</ul>
+        <p>To fit everything: ${wN ? `about <b>${wN} weeks</b> at ${plan.hours} h a week` : "more than three years at this pace"}${hN ? `, or about <b>${hN} h a week</b> until ${fmtDay(plan.end)}` : ""}.</p>
+        <div class="dlg-row">${wN && wN * 7 > b.days.length ? `<button class="btn sm" type="button" id="plExtend">Move end date to ${fmtDay(addDays(plan.start, wN * 7 - 1))}</button>` : ""}<a class="btn sm" href="#/plan/edit">Change hours or tracks</a></div></section>`;
+    }
+    const todayList = tday ? (tday.items.length ? `<ul class="pl-items">${tday.items.map((it) => planItemHTML(it, plan)).join("")}</ul>` : `<p class="muted pl-rest">${tday.rest ? "Rest day. Catch up on anything left from this week, or take the day off." : "Nothing scheduled today."}</p>`)
+      : `<p class="muted pl-rest">${today < plan.start ? `Your plan starts on ${fmtDay(plan.start)}.` : "This plan has ended."}</p>`;
+    setPage(`<div class="page narrow" id="plRoot"><div class="crumbs"><a href="#/">Home</a></div>
+      <div class="pl-head"><div><h1 class="page-title">Study plan</h1><p class="muted" style="margin:0">${fmtDay(plan.start)} to ${fmtDay(plan.end)} · ${weeks} weeks · ${plan.hours} h a week · ${DEPTH_NAME[b.depth]} · ${nT} track${nT === 1 ? "" : "s"}${plan.replans ? ` · re-planned ${plan.replans}×` : ""}</p></div>
+        <div class="pl-actions"><a class="btn sm" href="#/plan/edit">Edit settings</a><button class="btn sm" type="button" id="plIcs">Export to calendar (.ics)</button><button class="btn sm danger" type="button" id="plDel">Delete plan</button></div></div>
+      <p id="plMsg" class="pl-msg" role="status" tabindex="-1">${esc(msg || "")}</p>
+      <section class="card pl-status" id="plStatus" aria-label="Plan status"></section>
+      ${trim}
+      <section class="card pl-today" aria-labelledby="plTodayH"><h2 id="plTodayH">Today${tday ? ` · ${fmtDay(today)}` : ""}</h2>${todayList}</section>
+      <div class="section-h"><h2>Week by week</h2>${tday ? `<button class="btn sm" type="button" id="plJump">Jump to today</button>` : ""}</div>
+      ${wk}
+      <p class="muted pl-note">How times are estimated: a lesson takes its word count at 180 words a minute plus 30% for demos and the quiz; an Easy problem 20 minutes, Medium 35, Hard 50. ${plan.hours} h a week is spread over six study days; every seventh day is a rest or catch-up day. DSA theory (about 25% of the time) and pattern practice (30%, in NeetCode roadmap order with a lesson before each pattern's problems) run alongside the other tracks, each pattern comes back for a revisit about three days after you first practise it, and the last ${Math.round(PL.review * 100)}% of the plan is review and mock interviews.</p></div>`);
+    const drawStatus = () => {
+      const st = planStatus(plan, b), el = $("#plStatus");
+      if (!el) return;
+      const canRe = today >= plan.start && today <= plan.end && today !== plan.start;
+      el.innerHTML = `<div class="pl-st-row"><div class="streak-row"><div><b>${st.done}/${st.all}</b><span>tasks done</span></div><div><b>${st.pct}%</b><span>complete</span></div><div><b>${Math.max(0, daysBetween(today, plan.end) + 1)}</b><span>days left</span></div></div><span class="pl-badge ${st.cls}">${esc(st.label)}</span></div>
+        <div class="bar"><i style="width:${st.pct}%"></i></div>
+        ${st.due ? `<p>${st.due} task${st.due > 1 ? "s" : ""} from earlier days ${st.due > 1 ? "are" : "is"} unfinished (about ${fmtH(st.dueMin)}). Re-plan to spread the unfinished work over the days left before ${fmtDay(plan.end)}, or use a rest day to catch up.</p>` : ""}
+        ${today > plan.end ? `<p>The end date has passed, so a re-plan cannot keep it. Choose a new date in <a href="#/plan/edit">Edit settings</a>.</p>` : ""}
+        <div class="dlg-row"><button class="btn sm ${st.due ? "primary" : ""}" type="button" id="plRe" ${canRe ? "" : "disabled"} title="${canRe ? "Reschedule everything unfinished from today, keeping the end date" : "Available once the plan has started and before it ends"}">Re-plan from today</button><a class="btn sm" href="#/mock">Mock interviews</a></div>`;
+      $("#plRe").onclick = () => {
+        store.set((s) => { s.plan.start = today; s.plan.genAt = Date.now(); s.plan.replans = (s.plan.replans || 0) + 1; });
+        const nb = buildPlan(S().plan);
+        viewPlan(null, nb.fits ? `Re-planned: unfinished work now runs from today to ${fmtDay(plan.end)}.` : `Re-planned from today, but the unfinished work no longer fits before ${fmtDay(plan.end)}. See what is left out below, or move the end date.`);
+        const m = $("#plMsg"); if (m) m.focus();
+      };
+      for (let w = 1; w <= weeks; w++) {
+        const its = b.days.filter((d) => d.w === w).flatMap((d) => d.items), sp = $(`[data-wk="${w}"]`);
+        if (sp) sp.textContent = `${its.filter((it) => itemDone(it, plan)).length}/${its.length} done`;
+      }
+    };
+    drawStatus();
+    wirePlanChecks($("#plRoot"), drawStatus);
+    $("#plDel").onclick = () => { if (confirm("Delete this study plan? Your lesson and problem progress is kept.")) { store.set((s) => (s.plan = null)); viewPlan(); } };
+    $("#plIcs").onclick = () => {
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob([planICS(b)], { type: "text/calendar" }));
+      a.download = `sky-castle-plan-${plan.start}.ics`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    };
+    const ex = $("#plExtend");
+    if (ex) ex.onclick = () => { const wN = planFitSearch(plan, "weeks"); store.set((s) => (s.plan.end = addDays(s.plan.start, wN * 7 - 1))); viewPlan(null, `End date moved to ${fmtDay(S().plan.end)}.`); };
+    const jb = $("#plJump");
+    if (jb) jb.onclick = () => { const r = $("#plTodayRow"); if (r) { r.closest("details").open = true; r.scrollIntoView({ block: "center" }); const c = $("input, a", r); if (c) c.focus({ preventScroll: true }); } };
+  }
+
+  function viewPlanForm(plan) {
+    const today = dayKey();
+    const start = plan && plan.start > today ? plan.start : today;
+    const nDays = plan ? daysBetween(plan.start, plan.end) + 1 : 84;
+    const wks = Math.round(nDays / 7), std = [8, 12, 16, 24].includes(wks) && nDays % 7 === 0;
+    const mode = !plan || std ? "weeks" : "date";
+    const sel = new Set(plan ? plan.tracks : coreTracks()), ex = plan ? plan.ex !== false : true, depth = plan ? plan.depth || "all" : "essentials";
+    const endDefault = plan && plan.end > addDays(start, 6) ? plan.end : addDays(start, 83);
+    const stages = PATH.map((st, i) => {
+      const ids = st.tracks.filter(([id]) => DATA.tracks[id]);
+      if (!ids.length) return "";
+      return `<fieldset class="pl-stage"><legend><label class="check"><input type="checkbox" data-stage="${i}"> <b>Stage ${i + 1}: ${esc(st.title)}</b></label></legend>
+        <div class="pl-tracks">${ids.map(([id]) => `<label class="check"><input type="checkbox" name="plTrack" value="${id}" data-st="${i}" ${sel.has(id) ? "checked" : ""}> <span>${esc(DATA.tracks[id].icon || "")} ${esc(DATA.tracks[id].title)} <span class="muted" data-est="${id}"></span></span></label>`).join("")}</div></fieldset>`;
+    }).join("");
+    const seg = (name, vals, cur, fmtv) => `<div class="seg">${vals.map((v) => `<label><input type="radio" name="${name}" value="${v}" ${v === cur ? "checked" : ""}><span>${fmtv(v)}</span></label>`).join("")}</div>`;
+    setPage(`<div class="page narrow"><div class="crumbs"><a href="#/">Home</a>${plan ? ` / <a href="#/plan">Study plan</a>` : ""}</div>
+      <h1 class="page-title">${plan ? "Edit your study plan" : "Make a study plan"}</h1>
+      <p class="muted">Tell the planner when you start, how long you have and how many hours a week you can give. It lays the roadmap out day by day: one reading item and some coding practice most days, revisits a few days after each new pattern, weekly mock interviews from week 3 and a review stretch at the end.${plan ? " Saving rebuilds the schedule from the start date; work you have finished is kept and left out." : ""}</p>
+      <form id="plForm" class="pl-form" novalidate>
+        <section class="card"><h2>When</h2>
+          <label class="fld"><span>Start date</span><input type="date" id="plStart" value="${start}" required></label>
+          <fieldset class="fld-set"><legend>How long</legend>
+            <label class="check"><input type="radio" name="plMode" value="weeks" ${mode === "weeks" ? "checked" : ""}> A fixed length</label>
+            ${seg("plWeeks", [8, 12, 16, 24], std ? wks : 12, (v) => `${v} weeks`)}
+            <label class="check"><input type="radio" name="plMode" value="date" ${mode === "date" ? "checked" : ""}> Until my interview date</label>
+            <label class="fld fld-inline"><span>Interview date</span><input type="date" id="plEnd" value="${endDefault}"></label>
+          </fieldset>
+          <fieldset class="fld-set"><legend>Hours a week</legend>${seg("plHours", [5, 10, 15, 20, 30], plan && [5, 10, 15, 20, 30].includes(plan.hours) ? plan.hours : 10, (v) => `${v} h`)}</fieldset>
+        </section>
+        <section class="card"><h2>What to study</h2>
+          <fieldset class="fld-set"><legend>Depth</legend>${seg("plDepth", ["essentials", "all"], depth, (v) => DEPTH_NAME[v])}
+            <p class="muted" style="margin:0;font-size:13.5px">Interview essentials: pattern tracks' lessons with their Easy and Medium problems; Python and DSA Foundations lessons with one problem per module; for every other track its interview and essentials lessons, the first lesson of each module and about a third of its problems. Everything: every lesson and problem.</p></fieldset>
+          <p class="muted" style="margin:0">Tracks are scheduled in roadmap order (ordered by Singapore job demand). The core preset is Stages 1, 2, 3 and 6. Hours shown are what is left in each track at the chosen depth.</p>
+          <div class="chips" style="margin:6px 0 0"><button type="button" class="chip" data-preset="core">Core stages</button><button type="button" class="chip" data-preset="all">All stages</button><button type="button" class="chip" data-preset="none">Clear</button></div>
+          ${stages}
+          <label class="check"><input type="checkbox" id="plEx" ${ex ? "checked" : ""}> Include each track's practice exercises, not only its lessons (coding-interview tracks always include their problems)</label>
+        </section>
+        <section class="card pl-preview" aria-labelledby="plPrevH"><h2 id="plPrevH">Preview</h2><div id="plPreview" aria-live="polite"></div></section>
+        <p id="plErr" class="acct-bad" role="alert"></p>
+        <div class="dlg-row"><button class="btn primary" type="submit">${plan ? "Save and rebuild plan" : "Generate my plan"}</button>${plan ? `<a class="btn" href="#/plan">Cancel</a>` : ""}</div>
+      </form></div>`);
+    const form = $("#plForm");
+    const syncStages = () => $$("[data-stage]", form).forEach((sc) => {
+      const boxes = $$(`[data-st="${sc.dataset.stage}"]`, form), on = boxes.filter((x) => x.checked).length;
+      sc.checked = on === boxes.length; sc.indeterminate = on > 0 && on < boxes.length;
+    });
+    const read = () => {
+      const st = $("#plStart").value, mode = (form.plMode.value || "weeks");
+      const end = mode === "weeks" ? (validDay(st) ? addDays(st, +form.plWeeks.value * 7 - 1) : "") : $("#plEnd").value;
+      return { start: st, end, hours: +form.plHours.value || 10, depth: form.plDepth.value === "all" ? "all" : "essentials", tracks: $$("[name=plTrack]:checked", form).map((x) => x.value), ex: $("#plEx").checked, genAt: Date.now(), marks: (plan && plan.marks) || {} };
+    };
+    const check = (c) => {
+      if (!validDay(c.start)) return "Choose a start date.";
+      if (!validDay(c.end)) return "Choose your interview date.";
+      if (daysBetween(c.start, c.end) < 6) return "The interview date must be at least a week after the start date.";
+      if (daysBetween(c.start, c.end) > 731) return "Keep the plan under two years.";
+      if (!c.tracks.length) return "Tick at least one track.";
+      return "";
+    };
+    const draw = () => {
+      syncStages();
+      const c = read(), bad = check(c);
+      $("#plEnd").disabled = form.plMode.value !== "date";
+      $$("[name=plWeeks]", form).forEach((x) => (x.disabled = form.plMode.value !== "weeks"));
+      $$("[data-est]", form).forEach((el) => { const m = sumMin(trackItems(el.dataset.est, c.ex, Date.now(), c.marks, c.depth).out); el.textContent = m ? `· ~${fmtH(m)}` : "· done"; });
+      const pv = $("#plPreview");
+      if (bad) { pv.innerHTML = `<p class="muted" style="margin:0">${esc(bad)}</p>`; return; }
+      const b = buildPlan(c), n = Math.ceil(b.days.length / 7);
+      const pct = b.need ? Math.round((100 * b.kept) / b.need) : 100;
+      pv.innerHTML = `<p style="margin:0 0 6px">${fmtDay(c.start)} to ${fmtDay(c.end)} · ${n} weeks · ${DEPTH_NAME[c.depth]} · about <b>${fmtH(b.room)}</b> of study time for <b>${fmtH(b.need)}</b> of material.</p>
+        ${b.fits ? `<p class="pl-fit" style="margin:0">Everything you selected fits.</p>` : `<p class="pl-warn" style="margin:0">About ${pct}% fits. Interview material is kept first; the rest is trimmed from the end of the roadmap. Partly or fully left out: ${b.trimmed.map((p) => `${esc(p.title)}${p.kept ? ` (partly, ${p.kept} of ${p.total} tasks)` : ""}`).join(", ")}. The plan page lists exactly what was trimmed.</p>`}`;
+    };
+    const redraw = debounce(draw, 120);
+    form.addEventListener("input", redraw);
+    form.addEventListener("change", (e) => {
+      if (e.target.dataset.stage !== undefined) $$(`[data-st="${e.target.dataset.stage}"]`, form).forEach((x) => (x.checked = e.target.checked));
+      if (e.target.name === "plWeeks") form.plMode.value = "weeks";
+      redraw();
+    });
+    $("#plEnd").addEventListener("focus", () => (form.plMode.value = "date"));
+    $$("[data-preset]", form).forEach((bt) => (bt.onclick = () => {
+      const want = bt.dataset.preset === "core" ? new Set(coreTracks()) : bt.dataset.preset === "all" ? null : new Set();
+      $$("[name=plTrack]", form).forEach((x) => (x.checked = want ? want.has(x.value) : true));
+      draw();
+    }));
+    form.onsubmit = (e) => {
+      e.preventDefault();
+      const c = read(), bad = check(c);
+      $("#plErr").textContent = bad;
+      if (bad) return;
+      store.set((s) => (s.plan = { ...c, first: (plan && plan.first) || c.start, replans: 0 }));
+      if (location.hash === "#/plan") viewPlan(); else location.hash = "#/plan";
+    };
+    draw();
+  }
+
+  function homePlanHTML() {
+    const plan = S().plan;
+    if (!plan) return `<div class="card pl-home"><div><h2>Plan your prep</h2><p>Pick your interview date and weekly hours. You get a day-by-day schedule that follows the roadmap, with coding practice, spaced revisits and mock interviews built in.</p></div>
+      <div class="pl-home-cta"><a class="btn primary" href="#/plan">Make a study plan</a><a class="btn" href="#/mock">Try a mock interview</a></div></div>`;
+    const b = buildPlan(plan), st = planStatus(plan, b), today = dayKey(), d = b.days.find((x) => x.key === today);
+    const body = !d ? `<p class="muted">${today < plan.start ? `Your plan starts on ${fmtDay(plan.start)}.` : "Your plan has ended. Set a new date to keep going."}</p>`
+      : d.items.length ? `<ul class="pl-items">${d.items.slice(0, 6).map((it) => planItemHTML(it, plan)).join("")}</ul>${d.items.length > 6 ? `<p class="muted" style="margin:0;font-size:13px">and ${d.items.length - 6} more on the plan page</p>` : ""}`
+      : `<p class="muted">Rest day: catch up on anything left from this week, or take the day off.</p>`;
+    return `<section class="card pl-home today" id="homePlan" aria-labelledby="homePlanH"><div class="pl-home-h"><h2 id="homePlanH">Today's plan</h2><span class="pl-badge ${st.cls}" id="homePlanSt">${esc(st.label)}</span></div>${body}
+      <div class="pl-home-cta"><a class="btn sm" href="#/plan">Open the full plan</a><a class="btn sm" href="#/mock">Mock interviews</a></div></section>`;
+  }
+
+  // ---------------------------------------------------------------- mock interviews (#/mock)
+  // State: s.mocks = { active: {...} | null, history: [{ kind, at, end, scores, notes, ... }] }
+  const MOCK_MIN = 45;
+  const SCALE = ["", "Missed", "Partly", "Solid", "Strong"];
+  const SD_STEPS = [["req", "Requirements", "Functional and non-functional requirements, users and scope", 5], ["est", "Estimates", "Traffic, storage and bandwidth, roughly", 5],
+    ["api", "API", "The main calls, with their inputs and outputs", 5], ["data", "Data model", "Entities, keys, and which store holds them and why", 5],
+    ["hld", "High-level design", "Boxes and arrows for the main read and write flows", 10], ["deep", "Deep dive", "One or two components in depth", 10],
+    ["trade", "Bottlenecks and trade-offs", "Single points of failure, hot spots, and what you would change at ten times the load", 5]];
+  const RUBRIC = {
+    coding: [["ps", "Problem solving", "Clarified the problem, found a working approach, then improved it"], ["cq", "Code quality", "Correct, readable code with clear names and structure"],
+      ["comm", "Communication", "Thought aloud, explained trade-offs and complexity, used hints well"], ["test", "Testing", "Traced examples and edge cases, found and fixed bugs"]],
+    design: SD_STEPS.map(([k, t, d]) => [k, t, d]),
+  };
+  const SD_PROMPTS = [
+    ["Design a rate limiter that protects a public API used by millions of clients.", "rate-limiter"],
+    ["Design a consistent-hashing layer that spreads keys over a cache cluster that grows and shrinks.", "consistent-hashing"],
+    ["Design a distributed key-value store where each request can choose between speed and consistency.", "key-value-store"],
+    ["Design a service that hands out unique, roughly time-ordered 64-bit IDs from several data centres.", "unique-id"],
+    ["Design a link shortener that creates 100 million short links a day and redirects quickly.", "url-shortener"],
+    ["Design a polite web crawler that fetches a billion pages a month.", "web-crawler"],
+    ["Design a notification service that sends push, SMS and email reliably and without duplicates.", "notification-system"],
+    ["Design the home feed of a social app with hundreds of millions of users.", "news-feed"],
+    ["Design a chat service with one-to-one and group conversations and online status.", "chat-system"],
+    ["Design the autocomplete suggestions under a search box on a busy site.", "search-autocomplete"],
+    ["Design a video platform: uploads, transcoding and smooth playback worldwide.", "video-platform"],
+    ["Design a file storage service that keeps files in sync across a user's devices.", "file-storage-sync"],
+    ["Design ride-hailing dispatch that matches riders with nearby drivers in real time.", "more-designs", "ride-hailing"],
+    ["Design a payment system that never charges a customer twice.", "more-designs", "payment-system"],
+    ["Design a concert ticket-booking system that never sells the same seat twice.", "more-designs", "ticket-booking"],
+    ["Design a metrics and monitoring system with dashboards and alerts.", "more-designs", "metrics-and-job-scheduler"],
+  ];
+  const BQ = [
+    ["Conflict", "Tell me about a time you disagreed with a teammate about a technical decision. How was it settled?"],
+    ["Conflict", "Describe working with someone whose way of working was very different from yours."],
+    ["Failure", "Tell me about a project that did not go to plan. What did you learn from it?"],
+    ["Failure", "Describe a mistake you made that affected other people, and what you did next."],
+    ["Ownership", "Tell me about a time you picked up work outside your role because it needed doing."],
+    ["Ownership", "Describe a problem you noticed and fixed without anyone asking you to."],
+    ["Influence", "Tell me about a time you persuaded people to try your idea without having authority over them."],
+    ["Teamwork", "Describe a time you helped a teammate get unstuck or learn something."],
+    ["Ambiguity", "Tell me about a time the requirements were unclear. How did you move forward?"],
+    ["Ambiguity", "Describe a decision you had to make with incomplete information."],
+    ["Prioritisation", "Tell me about a time you had more work than time. How did you decide what to drop?"],
+    ["Prioritisation", "Describe a tight deadline you met, or missed, and what you did about it."],
+    ["Customer focus", "Tell me about a time you went out of your way for a user or customer."],
+    ["Learning", "Tell me about a time you had to learn a new technology or domain quickly."],
+    ["Technical depth", "What is the hardest technical problem you have solved? Walk me through it."],
+    ["Feedback", "Tell me about critical feedback you received and what you changed because of it."],
+    ["Motivation", "Why do you want this role, and why at this company?"],
+    ["Impact", "Tell me about the piece of work you are proudest of. What difference did it make?"],
+  ];
+  const STAR = [["Situation", "Set the scene in a sentence or two: where, when, who."], ["Task", "What were you responsible for, and what was at stake?"],
+    ["Action", "What did you do, step by step? Say “I”, not “we”."], ["Result", "What happened? Give a number if you can, then what you learned."]];
+  const AREA_HELP = { coding: { ps: "interview-prep/optimisation-techniques", cq: "interview-prep/good-code-and-recovery", comm: "interview-prep/seven-step-method", test: "interview-prep/seven-step-method" },
+    design: { req: "system-design/framework-four-steps", est: "system-design/estimation-worked", api: "system-design/bb-apis-observability", data: "system-design/bb-databases-replication-partitioning", hld: "system-design/framework-four-steps", deep: "system-design/framework-dos-donts", trade: "system-design/bb-cap-queues-idempotency" },
+    behavioural: "interview-prep/story-grid-star" };
+  const lessonLink = (path) => { if (!path) return ""; const [tid, lid] = path.split("/"), t = DATA.tracks[tid]; const l = t && flatLessons(t).find((x) => x.id === lid); return l ? `<a href="#/lesson/${tid}/${lid}">${esc(l.title)}</a>` : ""; };
+  const clock = (ms) => { const t = Math.max(0, Math.ceil(ms / 1000)); return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, "0")}`; };
+  const mocksOf = () => S().mocks || { active: null, history: [] };
+  const avgScore = (m) => { const v = Object.values(m.scores || {}); return v.length ? v.reduce((a, x) => a + x, 0) / v.length : 0; };
+  const shuffle = (a) => { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+
+  function pickCodingMock() {
+    const s = S(), codable = (x) => x && (!x.kind || x.kind === "function" || x.kind === "class" || x.kind === "js");
+    const studied = (id) => { const t = DATA.tracks[id]; return !!t && t.modules.some((m) => (m.lessons || []).some((l) => s.lessons[`${id}/${l.id}`]) || (m.problems || []).some((p) => s.solved[p] || s.tried[p])); };
+    const collect = (ids) => ids.flatMap((id) => { const t = DATA.tracks[id]; return t ? t.modules.flatMap((m) => m.problems || []).filter((p) => codable(t.problemIndex[p])).map((p) => ({ pid: p, d: t.problemIndex[p].difficulty })) : []; });
+    let note = "", pool = collect(dsaTracks().filter(studied));
+    if (!pool.length) pool = collect(Object.keys(DATA.tracks).filter(studied));
+    if (!pool.length) { pool = collect(dsaTracks().slice(0, 2)); note = "You have not started a coding track yet, so these come from the first coding tracks on the roadmap."; }
+    const rnd = (a) => a[Math.floor(Math.random() * a.length)];
+    const pick = (tiers, excl) => {
+      for (const fresh of [true, false]) for (const ds of tiers) {
+        const c = pool.filter((x) => ds.includes(x.d) && x.pid !== excl && (!fresh || !s.solved[x.pid]));
+        if (c.length) return rnd(c).pid;
+      }
+      return null;
+    };
+    const warm = pick([["Easy"], ["Medium"]]), main = pick([["Medium", "Hard"]], warm) || pick([["Easy"]], warm);
+    return { probs: [warm, main].filter(Boolean), note };
+  }
+  function mockStart(kind) {
+    const a = { kind, at: Date.now(), phase: "run" };
+    if (kind === "coding") { const r = pickCodingMock(); a.probs = r.probs; a.note = r.note; a.dur = MOCK_MIN; }
+    else if (kind === "design") { a.p = Math.floor(Math.random() * SD_PROMPTS.length); a.dur = MOCK_MIN; a.checks = {}; }
+    else { a.qs = shuffle(BQ.map((q, i) => i)).reduce((acc, i) => (acc.length < 5 && !acc.some((j) => BQ[j][0] === BQ[i][0]) ? acc.concat(i) : acc), []); a.qi = 0; a.qAt = null; }
+    store.set((s) => { s.mocks = s.mocks || { history: [] }; s.mocks.active = a; });
+    viewMock();
+    mockTick();
+  }
+  function mockSet(fn) { store.set((s) => { if (s.mocks && s.mocks.active) fn(s.mocks.active, s); }); }
+
+  let announceEl = null;
+  const said = {};
+  function announce(msg) {
+    if (!announceEl) { announceEl = h(`<div class="sr-only" aria-live="assertive"></div>`); document.body.appendChild(announceEl); }
+    announceEl.textContent = msg;
+  }
+  function mockTick() {
+    const a = mocksOf().active, timed = a && a.phase === "run" && a.dur;
+    let pill = $("#mockPill");
+    if (!timed) { if (pill) pill.remove(); }
+    else {
+      if (!pill) { pill = h(`<a id="mockPill" class="mock-pill" href="#/mock"></a>`); $(".top-actions").prepend(pill); }
+      const ms = a.at + a.dur * 60000 - Date.now();
+      pill.textContent = ms > 0 ? `⏱ ${clock(ms)}` : "⏱ Time's up";
+      pill.classList.toggle("soon", ms > 0 && ms <= 300000);
+      pill.classList.toggle("late", ms <= 0);
+      const lbl = `${MOCK_NAME[a.kind]}: ${ms > 0 ? clock(ms) + " left" : "time is up"}. Open the mock page.`;
+      if (pill.title !== lbl) { pill.title = lbl; pill.setAttribute("aria-label", lbl); }
+      if (ms <= 300000 && ms > 0 && !said[a.at + "5"]) { said[a.at + "5"] = 1; announce("Five minutes left in your mock interview."); }
+      if (ms <= 0 && !said[a.at + "0"]) { said[a.at + "0"] = 1; announce("Time is up. Finish and score your mock interview."); }
+    }
+    $$("[data-until]").forEach((el) => {
+      const ms = +el.dataset.until - Date.now();
+      el.textContent = clock(ms);
+      el.classList.toggle("late", ms <= 0);
+      el.classList.toggle("soon", ms > 0 && ms <= +(el.dataset.soon || 300000));
+      if (ms <= 0 && el.dataset.over && !el.dataset.done) { el.dataset.done = 1; const o = document.getElementById(el.dataset.over); if (o) o.hidden = false; }
+    });
+  }
+  setInterval(mockTick, 1000);
+
+  function viewMock(sub) {
+    renderSidebar("#mock");
+    if (sub === "history") return viewMockHistory();
+    const a = mocksOf().active;
+    if (a) return a.phase === "review" ? viewMockReview(a) : viewMockRun(a);
+    const hist = mocksOf().history || [];
+    const card = (kind, ico, title, desc, meta) => `<article class="card mk-card"><div class="card-top"><div class="card-ico" aria-hidden="true">${ico}</div><h2>${title}</h2></div><p>${desc}</p>
+      <div class="card-meta"><span>${meta}</span>${hist.filter((m) => m.kind === kind).length ? `<span>${hist.filter((m) => m.kind === kind).length} done</span>` : ""}</div>
+      <button class="btn primary" type="button" data-start="${kind}">Start ${title.toLowerCase()}</button></article>`;
+    setPage(`<div class="page narrow"><div class="crumbs"><a href="#/">Home</a></div><h1 class="page-title">Mock interviews</h1>
+      <p class="muted">Practise under a clock, then score yourself honestly against the rubric an interviewer would use. Scores are saved, so you can see which areas need work.${S().plan ? ` Your <a href="#/plan">study plan</a> schedules one most weeks.` : ""}</p>
+      <div class="mk-grid">
+        ${card("coding", "⌨️", "Coding mock", "Two problems from the tracks you have studied, unsolved ones first: a warm-up, then a harder one. The clock follows you onto the problem pages.", "45 minutes")}
+        ${card("design", "🏗️", "System design mock", "A random design prompt from the system-design case studies, with a step checklist to pace yourself and links to the lessons afterwards.", "45 minutes")}
+        ${card("behavioural", "🗣️", "Behavioural mock", "Five questions on different themes. Answer each out loud in STAR form within two minutes, then rate each answer.", "About 15 minutes")}
+      </div>
+      <div class="section-h"><h2>Recent mocks</h2>${hist.length ? `<a href="#/mock/history">Full history and weak spots</a>` : ""}</div>
+      ${hist.length ? `<div class="table-wrap">${mockTable(hist.slice(-5).reverse(), true)}</div>` : `<p class="muted">No mocks yet. Your scores will appear here.</p>`}</div>`);
+    $$("[data-start]").forEach((b) => (b.onclick = () => mockStart(b.dataset.start)));
+  }
+  function mockHead(a, title) {
+    return `<div class="crumbs"><a href="#/">Home</a> / <a href="#/mock">Mock interviews</a></div><h1 class="page-title">${title}</h1>`;
+  }
+  function viewMockRun(a) {
+    const until = a.dur ? a.at + a.dur * 60000 : 0, late = until && Date.now() >= until;
+    const clockCard = a.dur ? `<div class="card mk-clock-card"><div class="mk-clock" role="timer" aria-label="Time left" data-until="${until}" data-over="mkOver">${clock(until - Date.now())}</div>
+      <p class="muted" style="margin:0">The clock keeps running if you open a problem or reload the page; it also shows in the top bar.</p><p id="mkOver" class="pl-warn" ${late ? "" : "hidden"} style="margin:0">Time is up. Stop where you are and score yourself.</p></div>` : "";
+    const actions = `<div class="dlg-row"><button class="btn primary" type="button" id="mkFinish">Finish and score yourself</button><button class="btn danger" type="button" id="mkAbandon">Abandon mock</button></div>`;
+    if (a.kind === "coding") {
+      const s = S();
+      setPage(`<div class="page narrow">${mockHead(a, "Coding mock")}${clockCard}
+        ${a.note ? `<p class="muted">${esc(a.note)}</p>` : ""}
+        <ol class="mk-probs">${(a.probs || []).map((pid, i) => { const x = probMeta(pid); return x ? `<li class="card"><span class="pill">${i ? "Main problem · about 30 min" : "Warm-up · about 15 min"}</span>
+          <a class="mk-pt" href="#/problem/${esc(pid)}">${esc(x.title)}</a><span><span class="diff ${esc(x.difficulty)}">${esc(x.difficulty)}</span>${s.solved[pid] && s.solved[pid] >= a.at ? ` <span class="pill" style="color:var(--ok)">✓ Solved during this mock</span>` : ""}</span></li>` : ""; }).join("")}</ol>
+        <section class="card"><h2>How to run it</h2><ul class="mk-list"><li>Spend the first two or three minutes restating the problem and asking about inputs, sizes and edge cases.</li>
+          <li>Say the brute force first, then improve it, and state the time and space complexity before you code.</li><li>Talk while you type, as if an interviewer is listening. Recording yourself helps.</li>
+          <li>Trace an example and one edge case by hand before you press Submit. Leave the Guide tab closed.</li></ul></section>${actions}</div>`);
+    } else if (a.kind === "design") {
+      const [q] = SD_PROMPTS[a.p] || SD_PROMPTS[0];
+      setPage(`<div class="page narrow">${mockHead(a, "System design mock")}${clockCard}
+        <section class="card mk-prompt"><span class="tcard-group">Your prompt</span><h2>${esc(q)}</h2><p class="muted" style="margin:0">Use paper or a whiteboard tool and talk out loud. Tick each step as you cover it; the minutes are a guide.</p></section>
+        <section class="card"><h2>Checklist</h2><ul class="mk-check">${SD_STEPS.map(([k, t, d, m]) => `<li><label class="check"><input type="checkbox" data-step="${k}" ${a.checks && a.checks[k] ? "checked" : ""}> <span><b>${t}</b> <span class="muted">· ~${m} min · ${d}</span></span></label></li>`).join("")}</ul></section>${actions}</div>`);
+      $$("[data-step]").forEach((cb) => (cb.onchange = () => mockSet((x) => { x.checks = x.checks || {}; x.checks[cb.dataset.step] = cb.checked; })));
+    } else {
+      const qi = a.qi || 0, [tag, q] = BQ[a.qs[qi]] || BQ[0], last = qi >= a.qs.length - 1;
+      const qUntil = a.qAt ? a.qAt + 120000 : 0;
+      setPage(`<div class="page narrow">${mockHead(a, "Behavioural mock")}
+        <p class="muted">Question ${qi + 1} of ${a.qs.length}. Read it, take a few seconds to pick a story, then start the two-minute clock and answer out loud.</p>
+        <div class="bar" style="margin-bottom:14px"><i style="width:${(100 * qi) / a.qs.length}%"></i></div>
+        <section class="card mk-prompt"><span class="tcard-group">${esc(tag)}</span><h2>${esc(q)}</h2>
+          ${a.qAt ? `<div class="mk-clock sm" role="timer" aria-label="Answer time left" data-until="${qUntil}" data-soon="30000" data-over="mkOver">${clock(qUntil - Date.now())}</div><p id="mkOver" class="pl-warn" ${Date.now() >= qUntil ? "" : "hidden"} style="margin:0">Two minutes are up. Wrap up with the result.</p>` : ""}
+          <div class="dlg-row">${a.qAt ? `<button class="btn primary" type="button" id="mkNext">${last ? "Finish and rate my answers" : "Next question"}</button>` : `<button class="btn primary" type="button" id="mkGo">Start my 2-minute answer</button>`}</div></section>
+        <section class="card"><h2>STAR, briefly</h2><dl class="mk-star">${STAR.map(([k, d]) => `<dt>${k}</dt><dd>${d}</dd>`).join("")}</dl>
+          <p class="muted" style="margin:0;font-size:14px">More in ${lessonLink("interview-prep/story-grid-star") || "the interview-prep track"}${lessonLink("interview-prep/classic-behavioural-questions") ? ` and ${lessonLink("interview-prep/classic-behavioural-questions")}` : ""}.</p></section>
+        <div class="dlg-row"><button class="btn danger" type="button" id="mkAbandon">Abandon mock</button></div></div>`);
+      const go = $("#mkGo"), nx = $("#mkNext");
+      if (go) go.onclick = () => { mockSet((x) => (x.qAt = Date.now())); viewMock(); mockTick(); const b = $("#mkNext"); if (b) b.focus(); };
+      if (nx) nx.onclick = () => { mockSet((x) => { if (last) { x.phase = "review"; x.end = Date.now(); } else { x.qi = qi + 1; x.qAt = null; } }); viewMock(); const b = $("#mkGo") || $("#mkReview input"); if (b) b.focus(); };
+    }
+    const fin = $("#mkFinish");
+    if (fin) fin.onclick = () => { mockSet((x) => { x.phase = "review"; x.end = Date.now(); }); mockTick(); viewMock(); const f = $("#mkReview input"); if (f) f.focus(); };
+    $("#mkAbandon").onclick = () => { if (confirm("Abandon this mock? Nothing is saved to your history.")) { store.set((s) => (s.mocks.active = null)); mockTick(); viewMock(); } };
+    mockTick();
+  }
+  function viewMockReview(a) {
+    const s = S();
+    let areas, pre = {}, intro = "";
+    if (a.kind === "behavioural") areas = a.qs.map((i) => [BQ[i][0], BQ[i][0], BQ[i][1]]);
+    else areas = RUBRIC[a.kind];
+    if (a.kind === "design") SD_STEPS.forEach(([k]) => { if (!(a.checks || {})[k]) pre[k] = 1; });
+    if (a.kind === "coding") intro = `<ul class="mk-list">${(a.probs || []).map((pid) => { const x = probMeta(pid); return x ? `<li><a href="#/problem/${esc(pid)}">${esc(x.title)}</a> <span class="diff ${esc(x.difficulty)}">${esc(x.difficulty)}</span>${x.pattern ? ` <span class="muted">· ${esc(x.pattern)}</span>` : ""} · ${s.solved[pid] && s.solved[pid] >= a.at ? `<b style="color:var(--ok)">solved during the mock</b>` : "not solved during the mock"}</li>` : ""; }).join("")}</ul>`;
+    if (a.kind === "design") {
+      const [q, mod, lid] = SD_PROMPTS[a.p] || SD_PROMPTS[0], t = DATA.tracks["system-design"], m = t && t.modules.find((x) => x.id === mod);
+      const ls = m ? m.lessons.filter((l) => !lid || l.id === lid) : [];
+      intro = `<p><b>Prompt:</b> ${esc(q)}</p>${ls.length ? `<p>Compare your design with ${ls.map((l) => `<a href="#/lesson/system-design/${esc(l.id)}">${esc(l.title)}</a>`).join(" and ")}.</p>` : ""}${Object.keys(pre).length ? `<p class="muted">Steps you did not tick start at 1; change them if you did cover them.</p>` : ""}`;
+    }
+    const mins = Math.max(1, Math.round(((a.end || Date.now()) - a.at) / 60000));
+    setPage(`<div class="page narrow">${mockHead(a, `Score your ${MOCK_NAME[a.kind].toLowerCase()}`)}
+      <p class="muted">You took ${mins} minute${mins > 1 ? "s" : ""}. Rate each area from 1 to 4 as an interviewer would: 1 missed, 2 partly, 3 solid, 4 strong.</p>${intro}
+      <form id="mkReview" class="card mk-review" novalidate>
+        ${areas.map(([k, t, d]) => `<fieldset class="rub"><legend><b>${esc(t)}</b><span class="muted">${esc(d)}</span></legend><div class="seg">${[1, 2, 3, 4].map((v) => `<label><input type="radio" name="r-${esc(k)}" value="${v}" ${pre[k] === v ? "checked" : ""} required><span>${v} · ${SCALE[v]}</span></label>`).join("")}</div></fieldset>`).join("")}
+        <label class="fld"><span>Notes for next time</span><textarea id="mkNotes" class="notes-area" maxlength="2000" placeholder="What went well, where you got stuck, what to practise next…"></textarea></label>
+        <p id="mkErr" class="acct-bad" role="alert"></p>
+        <div class="dlg-row"><button class="btn primary" type="submit">Save to history</button><button class="btn danger" type="button" id="mkAbandon">Discard</button></div></form></div>`);
+    $("#mkReview").onsubmit = (e) => {
+      e.preventDefault();
+      const scores = {};
+      let missing = 0;
+      areas.forEach(([k]) => { const r = $(`#mkReview [name="r-${CSS.escape(k)}"]:checked`); if (r) scores[k] = +r.value; else missing++; });
+      if (missing) { $("#mkErr").textContent = `Rate every area (${missing} still blank).`; return; }
+      const notes = $("#mkNotes").value.slice(0, 2000);
+      store.set((st) => {
+        const x = st.mocks.active;
+        if (!x) return;
+        const e2 = { kind: x.kind, at: x.at, end: x.end || Date.now(), scores, notes };
+        if (x.probs) { e2.probs = x.probs; e2.solved = x.probs.filter((p) => st.solved[p] && st.solved[p] >= x.at); }
+        if (x.p != null) e2.p = x.p;
+        if (x.qs) e2.qs = x.qs;
+        st.mocks.history = (st.mocks.history || []).concat(e2).slice(-60);
+        st.mocks.active = null;
+      });
+      location.hash = "#/mock/history";
+    };
+    $("#mkAbandon").onclick = () => { if (confirm("Discard this mock without saving?")) { store.set((st) => (st.mocks.active = null)); viewMock(); } };
+  }
+  function mockDetail(m) {
+    if (m.kind === "coding") return (m.probs || []).map((p) => { const x = probMeta(p); return x ? `<a href="#/problem/${esc(p)}">${esc(x.title)}</a>${(m.solved || []).includes(p) ? " ✓" : ""}` : ""; }).filter(Boolean).join(", ");
+    if (m.kind === "design") return esc((SD_PROMPTS[m.p] || [""])[0]);
+    return `${(m.qs || []).length} questions`;
+  }
+  function mockTable(list, short) {
+    return `<table class="ptable mk-table"><thead><tr><th>Date</th><th>Type</th><th class="pat">Details</th><th>Score</th>${short ? "" : `<th>Notes</th>`}</tr></thead><tbody>${list.map((m) => `<tr>
+      <td>${new Date(m.at).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}</td><td>${MOCK_NAME[m.kind] || esc(m.kind)}</td><td class="pat">${mockDetail(m)}</td>
+      <td><b>${avgScore(m).toFixed(1)}</b><span class="muted">/4</span></td>${short ? "" : `<td class="mk-notes">${m.notes ? esc(m.notes) : `<span class="muted">none</span>`}</td>`}</tr>`).join("")}</tbody></table>`;
+  }
+  function mockChart(hist) {
+    const W = 640, H = 220, L = 30, Rp = 14, T = 12, Bp = 30, n = hist.length;
+    const x = (i) => (n === 1 ? (L + W - Rp) / 2 : L + (i * (W - L - Rp)) / (n - 1)), y = (v) => T + ((4 - v) / 3) * (H - T - Bp);
+    const col = { coding: "var(--accent)", design: "var(--accent-2)", behavioural: "var(--warn)" };
+    let g = [1, 2, 3, 4].map((v) => `<line x1="${L}" x2="${W - Rp}" y1="${y(v)}" y2="${y(v)}" stroke="var(--border)" stroke-width="1"/><text x="${L - 8}" y="${y(v) + 4}" text-anchor="end" font-size="11" fill="var(--muted)">${v}</text>`).join("");
+    Object.keys(col).forEach((k) => {
+      const pts = hist.map((m, i) => [i, m]).filter(([, m]) => m.kind === k);
+      if (pts.length > 1) g += `<polyline fill="none" stroke="${col[k]}" stroke-width="2" points="${pts.map(([i, m]) => `${x(i).toFixed(1)},${y(avgScore(m)).toFixed(1)}`).join(" ")}"/>`;
+      g += pts.map(([i, m]) => `<circle cx="${x(i).toFixed(1)}" cy="${y(avgScore(m)).toFixed(1)}" r="4.5" fill="${col[k]}" stroke="var(--surface)" stroke-width="2"><title>${MOCK_NAME[k]}, ${new Date(m.at).toLocaleDateString()}: ${avgScore(m).toFixed(1)} of 4</title></circle>`).join("");
+    });
+    const d0 = new Date(hist[0].at).toLocaleDateString(undefined, { day: "numeric", month: "short" }), d1 = new Date(hist[n - 1].at).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+    g += `<text x="${L}" y="${H - 8}" font-size="11" fill="var(--muted)">${d0}</text>${n > 1 ? `<text x="${W - Rp}" y="${H - 8}" text-anchor="end" font-size="11" fill="var(--muted)">${d1}</text>` : ""}`;
+    const kinds = Object.keys(col).filter((k) => hist.some((m) => m.kind === k));
+    return `<figure class="mk-chart"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Average self-score per mock, from 1 to 4, oldest on the left. ${n} mocks; the table below lists every score.">${g}</svg>
+      <figcaption class="mk-legend">${kinds.map((k) => `<span><i style="background:${col[k]}"></i>${MOCK_NAME[k]}</span>`).join("")}</figcaption></figure>`;
+  }
+  function viewMockHistory() {
+    const hist = (mocksOf().history || []).slice().sort((a, b) => a.at - b.at);
+    if (!hist.length) {
+      setPage(`<div class="page narrow"><div class="crumbs"><a href="#/">Home</a> / <a href="#/mock">Mock interviews</a></div><h1 class="page-title">Mock history</h1><p>No mocks saved yet. <a href="#/mock">Run your first mock</a> and your scores will build up here.</p></div>`);
+      return;
+    }
+    const agg = {};
+    hist.forEach((m) => {
+      const labels = m.kind === "behavioural" ? null : Object.fromEntries((RUBRIC[m.kind] || []).map(([k, t]) => [k, t]));
+      Object.entries(m.scores || {}).forEach(([k, v]) => {
+        const id = m.kind + ":" + k;
+        (agg[id] = agg[id] || { kind: m.kind, key: k, label: labels ? labels[k] || k : k, sum: 0, n: 0 });
+        agg[id].sum += v; agg[id].n++;
+      });
+    });
+    const areas = Object.values(agg).map((a) => ({ ...a, avg: a.sum / a.n })).sort((a, b) => a.avg - b.avg);
+    const weak = new Set(areas.filter((a) => a.avg < 3.5).slice(0, Math.min(3, Math.max(1, Math.floor(areas.length / 3)))).map((a) => a.kind + ":" + a.key));
+    const byKind = ["coding", "design", "behavioural"].filter((k) => areas.some((a) => a.kind === k)).map((k) => {
+      const rows = areas.filter((a) => a.kind === k).map((a) => {
+        const isW = weak.has(a.kind + ":" + a.key), help = k === "behavioural" ? AREA_HELP.behavioural : (AREA_HELP[k] || {})[a.key];
+        return `<li class="mk-area ${isW ? "weak" : ""}"><span class="mk-al">${esc(a.label)}${isW ? ` <span class="pl-badge warn">Focus</span>` : ""}</span><span class="bar"><i style="width:${(a.avg / 4) * 100}%"></i></span><span class="mk-av">${a.avg.toFixed(1)} <span class="muted">(${a.n})</span></span>${isW && lessonLink(help) ? `<span class="mk-help">Brush up: ${lessonLink(help)}</span>` : ""}</li>`;
+      }).join("");
+      const ms = hist.filter((m) => m.kind === k);
+      return `<section class="card"><h3>${MOCK_NAME[k]} <span class="muted" style="font-weight:400;font-size:14px">· ${ms.length} done · average ${(ms.reduce((a, m) => a + avgScore(m), 0) / ms.length).toFixed(1)}/4</span></h3><ul class="mk-areas">${rows}</ul></section>`;
+    }).join("");
+    const weakList = areas.filter((a) => weak.has(a.kind + ":" + a.key));
+    setPage(`<div class="page narrow"><div class="crumbs"><a href="#/">Home</a> / <a href="#/mock">Mock interviews</a></div><h1 class="page-title">Mock history</h1>
+      <p class="muted">${hist.length} mock${hist.length > 1 ? "s" : ""} saved. Scores are your own 1-to-4 ratings, averaged per mock.</p>
+      ${weakList.length ? `<p class="pl-warn">Weakest areas so far: ${weakList.map((a) => `<b>${esc(a.label)}</b> (${MOCK_NAME[a.kind].toLowerCase()}, ${a.avg.toFixed(1)})`).join(", ")}.</p>` : `<p class="pl-fit">No weak areas: every area averages 3.5 or more.</p>`}
+      <section class="card"><h2>Scores over time</h2>${mockChart(hist)}</section>
+      <div class="section-h"><h2>Rubric areas</h2></div><div class="mk-kinds">${byKind}</div>
+      <div class="section-h"><h2>Every mock</h2><a class="btn sm" href="#/mock">Start another</a></div>
+      <div class="table-wrap">${mockTable(hist.slice().reverse(), false)}</div></div>`);
+  }
+
   // ---------------------------------------------------------------- router
   async function route() {
     const hash = location.hash.replace(/^#\/?/, "");
@@ -1381,6 +2119,8 @@
       else if (parts[0] === "problems") viewProblems(new URLSearchParams(query || "").get("q"));
       else if (parts[0] === "scoreboard") await viewScoreboard();
       else if (parts[0] === "roadmap") viewRoadmap();
+      else if (parts[0] === "plan") viewPlan(parts[1]);
+      else if (parts[0] === "mock") viewMock(parts[1]);
       else if (parts[0] === "gallery") viewGallery(parts[1]);
       else if (parts[0] === "credits") viewCredits();
       else if (parts[0] === "search") viewSearch(new URLSearchParams(query || "").get("q") || "");
@@ -1449,7 +2189,7 @@
 
   // ---------------------------------------------------------------- boot
   window.__sg = { Py, Sql, DATA, getProblem, Cloud }; // debugging hook used by the self-test
-  Promise.all([loadAll(), Ghibli.load(), Cloud.pull().catch(() => {})]).then(route).catch((e) => {
+  Promise.all([loadAll(), Ghibli.load(), Cloud.pull().catch(() => {})]).then(() => { mockTick(); return route(); }).catch((e) => {
     main.innerHTML = `<div class="page narrow"><h1 class="page-title">Could not load content</h1><p class="muted">${esc(e.message)}</p><p>If you opened the file directly, serve the <code>docs/</code> folder over HTTP (e.g. <code>python -m http.server</code>).</p></div>`;
   });
 })();
