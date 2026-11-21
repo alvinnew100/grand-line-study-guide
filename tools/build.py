@@ -67,9 +67,25 @@ def fix_json_backslashes(s):
     return "".join(out)
 
 
+def ref_bucket(ms):
+    """A stable stand-in for a noisy reference timing. The judge's limit is max(1 s, 40 x ref), so any
+    ref up to 25 ms gives the same 1 s limit: store 25. Slower tests get the next power of two above."""
+    if ms <= 25:
+        return 25.0
+    bucket = 32.0
+    while bucket < ms:
+        bucket *= 2
+    return bucket
+
+
 def load_py(path, var):
     spec = importlib.util.spec_from_file_location(f"m_{path.stem}_{abs(hash(str(path)))}", path)
     mod = importlib.util.module_from_spec(spec)
+    # Problem files that generate tests with the module-level `random` functions get a seed derived
+    # from their own path, so every build produces identical tests regardless of what ran before.
+    import random
+    import zlib
+    random.seed(zlib.crc32(Path(path).resolve().relative_to(ROOT).as_posix().encode("utf-8")))
     spec.loader.exec_module(mod)
     return getattr(mod, var)
 
@@ -256,7 +272,9 @@ def build_code_problem(p):
         if e:
             err(f"{p['id']}: reference solution failed on test {i}: {e.splitlines()[-1]}")
             return None
-        tests.append({"args": args, "expected": got, "ref_ms": round(ms, 3)})
+        # Round the reference time up to a power-of-two bucket (at least 1 ms): the judge's limit is
+        # max(1 s, 40 x ref), so this never tightens a limit, and rebuilds stop rewriting the file.
+        tests.append({"args": args, "expected": got, "ref_ms": ref_bucket(ms)})
     # starter must at least compile and expose the entry
     try:
         compile(p["starter"], "starter.py", "exec")
