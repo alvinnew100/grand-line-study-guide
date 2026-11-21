@@ -705,7 +705,7 @@
     { title: "Interview coding", why: "Every junior posting asks for data structures and algorithms, and the coding round tests them. Keep a few problems going every day from here on.",
       tracks: [["dsa-foundations", "DSA Foundations"], ["neet-arrays", "Arrays, Hashing & Two Pointers"], ["neet-window-stack", "Sliding Window, Stack & Binary Search"],
         ["neet-linked-trees", "Linked Lists, Trees & Tries"], ["neet-heap-graphs", "Heaps, Backtracking & Graphs"], ["neet-dp", "Dynamic Programming"], ["neet-greedy-math", "Greedy, Intervals, Math & Bits"],
-        ["interview-prep", "Cracking the Coding Interview"]] },
+        ["interview-prep", "Cracking the Coding Interview"], ["behavioural", "Behavioural Interviews"]] },
     { title: "SQL and data stores", why: "SQL is the second most requested skill in Singapore postings and has its own interview round.",
       tracks: [["sql", "SQL"], ["databases", "Databases & Data-Intensive Systems"], ["redis", "Redis"], ["mongodb", "MongoDB"]] },
     { title: "A backend language and framework", why: "Postings ask for one strong backend language. Java with Spring and Go lead in Singapore; Python and Node.js follow. Learn one stack well, then skim the others.",
@@ -718,14 +718,14 @@
     { title: "How computers work", why: "The fundamentals behind 'what happens when' questions.",
       tracks: [["csapp", "Computer Systems"], ["os", "Operating Systems"]] },
     { title: "Machine learning and AI", why: "For ML and AI engineer roles: Python, models, LLMs, retrieval and deployment.",
-      tracks: [["ml", "Machine Learning"], ["mlops", "MLOps"], ["ai-eng", "AI Engineering"], ["llm-practice", "LLMs Hands-On"]] },
+      tracks: [["statistics", "Practical Statistics"], ["ml", "Machine Learning"], ["deep-learning", "Deep Learning with PyTorch"], ["mlops", "MLOps"], ["ai-eng", "AI Engineering"], ["llm-practice", "LLMs Hands-On"]] },
     { title: "Front end", why: "For full-stack roles: pages, React and testing.",
       tracks: [["html-css", "HTML & CSS"], ["react", "React with Firebase"], ["js-testing", "JavaScript Testing"]] },
   ];
   const ROLES = [
-    ["Backend engineer", ["python", "git", "linux-cli", "dsa-foundations", "neet-arrays", "sql", "java", "spring", "docker", "aws", "system-design"]],
-    ["Full-stack engineer", ["python", "git", "dsa-foundations", "neet-arrays", "sql", "javascript", "typescript", "react", "nodejs", "docker", "system-design"]],
-    ["AI / ML engineer", ["python", "git", "dsa-foundations", "neet-arrays", "sql", "ml", "ai-eng", "llm-practice", "fastapi", "docker", "mlops"]],
+    ["Backend engineer", ["python", "git", "behavioural", "linux-cli", "dsa-foundations", "neet-arrays", "sql", "java", "spring", "docker", "aws", "system-design"]],
+    ["Full-stack engineer", ["python", "git", "behavioural", "dsa-foundations", "neet-arrays", "sql", "javascript", "typescript", "react", "nodejs", "docker", "system-design"]],
+    ["AI / ML engineer", ["python", "git", "behavioural", "dsa-foundations", "neet-arrays", "sql", "statistics", "ml", "deep-learning", "ai-eng", "llm-practice", "fastapi", "docker", "mlops"]],
   ];
   function nextTrack() {
     for (const st of PATH) for (const [id] of st.tracks) { const t = DATA.tracks[id]; if (t && trackProgress(t).pct < 100) return id; }
@@ -1427,7 +1427,8 @@
     }
     t.modules.forEach((m) => {
       const probs = (m.problems || []).filter((p) => t.problemIndex[p]);
-      const soft = ctci && !probs.length;
+      // Behavioural rounds are in every interview loop, so that whole track is interview material.
+      const soft = (ctci && !probs.length) || id === "behavioural";
       const stream = !isD || soft ? "read" : id === "dsa-foundations" ? "theory" : "pat";
       (m.lessons || []).forEach((l, li) => {
         const key = `${id}/${l.id}`, star = soft || ESS_RE.test(`${l.id} ${l.title}`);
@@ -1875,7 +1876,7 @@
     ["Action", "What did you do, step by step? Say “I”, not “we”."], ["Result", "What happened? Give a number if you can, then what you learned."]];
   const AREA_HELP = { coding: { ps: "interview-prep/optimisation-techniques", cq: "interview-prep/good-code-and-recovery", comm: "interview-prep/seven-step-method", test: "interview-prep/seven-step-method" },
     design: { req: "system-design/framework-four-steps", est: "system-design/estimation-worked", api: "system-design/bb-apis-observability", data: "system-design/bb-databases-replication-partitioning", hld: "system-design/framework-four-steps", deep: "system-design/framework-dos-donts", trade: "system-design/bb-cap-queues-idempotency" },
-    behavioural: "interview-prep/story-grid-star" };
+    behavioural: "behavioural/star-in-depth" };
   const lessonLink = (path) => { if (!path) return ""; const [tid, lid] = path.split("/"), t = DATA.tracks[tid]; const l = t && flatLessons(t).find((x) => x.id === lid); return l ? `<a href="#/lesson/${tid}/${lid}">${esc(l.title)}</a>` : ""; };
   const clock = (ms) => { const t = Math.max(0, Math.ceil(ms / 1000)); return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, "0")}`; };
   const mocksOf = () => S().mocks || { active: null, history: [] };
@@ -1995,7 +1996,7 @@
           ${a.qAt ? `<div class="mk-clock sm" role="timer" aria-label="Answer time left" data-until="${qUntil}" data-soon="30000" data-over="mkOver">${clock(qUntil - Date.now())}</div><p id="mkOver" class="pl-warn" ${Date.now() >= qUntil ? "" : "hidden"} style="margin:0">Two minutes are up. Wrap up with the result.</p>` : ""}
           <div class="dlg-row">${a.qAt ? `<button class="btn primary" type="button" id="mkNext">${last ? "Finish and rate my answers" : "Next question"}</button>` : `<button class="btn primary" type="button" id="mkGo">Start my 2-minute answer</button>`}</div></section>
         <section class="card"><h2>STAR, briefly</h2><dl class="mk-star">${STAR.map(([k, d]) => `<dt>${k}</dt><dd>${d}</dd>`).join("")}</dl>
-          <p class="muted" style="margin:0;font-size:14px">More in ${lessonLink("interview-prep/story-grid-star") || "the interview-prep track"}${lessonLink("interview-prep/classic-behavioural-questions") ? ` and ${lessonLink("interview-prep/classic-behavioural-questions")}` : ""}.</p></section>
+          <p class="muted" style="margin:0;font-size:14px">More in ${lessonLink("behavioural/story-bank") || lessonLink("interview-prep/story-grid-star") || "the interview-prep track"}${lessonLink("behavioural/follow-up-probes") ? ` and ${lessonLink("behavioural/follow-up-probes")}` : lessonLink("interview-prep/classic-behavioural-questions") ? ` and ${lessonLink("interview-prep/classic-behavioural-questions")}` : ""}.</p></section>
         <div class="dlg-row"><button class="btn danger" type="button" id="mkAbandon">Abandon mock</button></div></div>`);
       const go = $("#mkGo"), nx = $("#mkNext");
       if (go) go.onclick = () => { mockSet((x) => (x.qAt = Date.now())); viewMock(); mockTick(); const b = $("#mkNext"); if (b) b.focus(); };

@@ -184,6 +184,31 @@
   "problems": 89
  },
  {
+  "id": "behavioural",
+  "title": "Behavioural Interviews",
+  "icon": "🗣️",
+  "blurb": "Tell-me-about-a-time questions from zero to offer: how structured interviews are scored, STAR and its variants, a reusable story bank, ten question families with weak and strong model answers, follow-up probes and red flags, playbooks for Amazon, Google, Meta, Microsoft, Apple and Singapore employers, senior-level signals, and offers with Singapore employment basics. Interactive STAR builder, answer timer, story-bank matrix and probe drill.",
+  "color": "#0f766e",
+  "sources": [
+   "Amazon Leadership Principles and interview preparation pages (https://atoz.amazon/en-us/discover/leadership-principles)",
+   "Amazon on the Bar Raiser and interviewing (https://www.aboutamazon.com/news/workplace/amazon-bar-raiser)",
+   "Google, How we hire (https://www.google.com/about/careers/applications/how-we-hire/)",
+   "Google re:Work, A guide to structured interviewing (https://rework.withgoogle.com/intl/en/guides/a-guide-to-structured-interviewing-for-better-hiring-practices)",
+   "Meta, Preparing for your software engineering interview and Hiring process (https://www.metacareers.com/hiring-process/)",
+   "Microsoft Careers, Interview tips and How we hire (https://careers.microsoft.com/v2/global/en/hiring-tips/interview-tips)",
+   "Apple, Interview tips (https://www.apple.com/careers/us/interview_tips.html)",
+   "US OPM, Structured interviews (https://www.opm.gov/policy-data-oversight/assessment-and-selection/other-assessment-methods/structured-interviews/)",
+   "MIT CAPD, Northwestern, Michigan Tech and Strayer career centres on STAR and behavioural answers",
+   "UC Berkeley Graduate Division, offer negotiation tips",
+   "Singapore MOM and TAFEP employment guidance (https://www.mom.gov.sg, https://www.tal.sg/tafep)",
+   "GovTech, Grab, DBS, ByteDance and Sea hiring and values pages"
+  ],
+  "words": 79883,
+  "modules": 7,
+  "lessons": 26,
+  "problems": 0
+ },
+ {
   "id": "sql",
   "title": "SQL from Zero to Interview",
   "icon": "🗃️",
@@ -610,6 +635,22 @@
   "problems": 33
  },
  {
+  "id": "statistics",
+  "title": "Statistics for Data Science",
+  "icon": "📊",
+  "blurb": "Probability, exploratory analysis, sampling and the bootstrap, A/B testing done right, regression and classification from the statistical side, plus interview drills and product-analytics cases, all in Python with runnable simulations and 31 implementation problems.",
+  "color": "#2a9d8f",
+  "sources": [
+   "Bruce & Bruce, Practical Statistics for Data Scientists (O'Reilly, 2017), ch. 1-7",
+   "SciPy, statsmodels and scikit-learn documentation",
+   "Kohavi, Tang & Xu, Trustworthy Online Controlled Experiments (2020) - background for A/B testing pitfalls"
+  ],
+  "words": 85777,
+  "modules": 9,
+  "lessons": 32,
+  "problems": 31
+ },
+ {
   "id": "ml",
   "title": "Machine Learning",
   "icon": "🧠",
@@ -625,6 +666,22 @@
   "modules": 10,
   "lessons": 26,
   "problems": 25
+ },
+ {
+  "id": "deep-learning",
+  "title": "Deep Learning with PyTorch",
+  "icon": "🔥",
+  "blurb": "Tensors, autograd, nn.Module, convnets and a full medical-imaging project (classification, segmentation, fine-tuning), then modern practice: AdamW, schedules, mixed precision, torch.compile, debugging and export. Runnable NumPy versions of every building block and 30 implementation problems.",
+  "color": "#ee4c2c",
+  "sources": [
+   "Stevens, Antiga & Viehmann, Deep Learning with PyTorch (Manning), ch. 1–15",
+   "PyTorch documentation (docs.pytorch.org): torch.amp, torch.compile, torch.export, torch.onnx, torch.utils.data",
+   "Goodfellow, Bengio & Courville, Deep Learning — background for optimisation and regularisation"
+  ],
+  "words": 87014,
+  "modules": 10,
+  "lessons": 30,
+  "problems": 30
  },
  {
   "id": "mlops",

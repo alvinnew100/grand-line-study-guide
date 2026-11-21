@@ -1,0 +1,125 @@
+TRACK = dict(
+    id="statistics",
+    title="Statistics for Data Science",
+    icon="📊",
+    color="#2a9d8f",
+    group="Machine Learning & MLOps",
+    blurb="Probability, exploratory analysis, sampling and the bootstrap, A/B testing done right, regression and "
+          "classification from the statistical side, plus interview drills and product-analytics cases, all in Python "
+          "with runnable simulations and 31 implementation problems.",
+    sources=[
+        "Bruce & Bruce, Practical Statistics for Data Scientists (O'Reilly, 2017), ch. 1-7",
+        "SciPy, statsmodels and scikit-learn documentation",
+        "Kohavi, Tang & Xu, Trustworthy Online Controlled Experiments (2020) - background for A/B testing pitfalls",
+    ],
+    modules=[
+        dict(
+            id="probability",
+            title="0 · Probability Foundations",
+            summary="Events, conditional probability, Bayes' rule, random variables, expected value and variance.",
+            lessons=[
+                dict(id="probability-bayes", title="Probability, conditional probability and Bayes' rule", file="00-probability-bayes.md"),
+            ],
+            problems=["stats-bayes-posterior", "stats-binomial-tail"],
+        ),
+        dict(
+            id="eda",
+            title="1 · Exploratory Data Analysis",
+            summary="Data types, estimates of location and variability, distributions, categorical data and correlation.",
+            lessons=[
+                dict(id="data-and-location", title="Data types and estimates of location", file="10-data-and-location.md"),
+                dict(id="variability", title="Estimates of variability", file="11-variability.md"),
+                dict(id="distributions-categorical", title="Exploring distributions and categorical data", file="12-distributions-categorical.md"),
+                dict(id="correlation-bivariate", title="Correlation and exploring two or more variables", file="13-correlation-bivariate.md"),
+            ],
+            problems=["stats-trimmed-mean", "stats-weighted-median", "stats-mad-iqr", "stats-percentile-linear",
+                      "stats-histogram-counts", "stats-robust-zscore", "stats-pearson-spearman"],
+        ),
+        dict(
+            id="sampling",
+            title="2 · Data and Sampling Distributions",
+            summary="Sampling and bias, the central limit theorem, standard errors, the bootstrap, confidence intervals and common distributions.",
+            lessons=[
+                dict(id="sampling-bias", title="Random sampling and the many faces of bias", file="20-sampling-bias.md"),
+                dict(id="sampling-distribution-clt", title="Sampling distributions, standard error and the central limit theorem", file="21-sampling-distribution-clt.md"),
+                dict(id="bootstrap", title="The bootstrap", file="22-bootstrap.md"),
+                dict(id="confidence-intervals", title="Confidence intervals done right", file="23-confidence-intervals.md"),
+                dict(id="normal-t-long-tails", title="Normal, t and long-tailed distributions", file="24-normal-t-long-tails.md"),
+                dict(id="discrete-distributions", title="Binomial, Poisson and other common distributions", file="25-discrete-distributions.md"),
+            ],
+            problems=["stats-bootstrap-ci", "stats-wilson-interval"],
+        ),
+        dict(
+            id="experiments",
+            title="3 · Experiments and Significance Testing",
+            summary="A/B tests and permutation tests, p-values, t- and z-tests, multiple testing, ANOVA and chi-square, power, pitfalls and bandits.",
+            lessons=[
+                dict(id="ab-tests-permutation", title="A/B tests, hypotheses and permutation tests", file="30-ab-tests-permutation.md"),
+                dict(id="p-values", title="Statistical significance, p-values and their misconceptions", file="31-p-values.md"),
+                dict(id="t-tests", title="t-tests, z-tests and degrees of freedom", file="32-t-tests.md"),
+                dict(id="multiple-testing", title="Multiple testing: Bonferroni, Holm and the false discovery rate", file="33-multiple-testing.md"),
+                dict(id="anova-chi-square", title="ANOVA and the chi-square test", file="34-anova-chi-square.md"),
+                dict(id="power-sample-size", title="Power and sample size for A/B tests", file="35-power-sample-size.md"),
+                dict(id="ab-pitfalls", title="A/B testing pitfalls: peeking, novelty, SRM and network effects", file="36-ab-pitfalls.md"),
+                dict(id="bandits", title="Multi-arm bandits: learning while earning", file="37-bandits.md"),
+            ],
+            problems=["stats-permutation-exact", "stats-two-proportion-ztest", "stats-welch-t", "stats-chi-square",
+                      "stats-anova-f", "stats-sample-size", "stats-multiple-testing", "stats-srm-check",
+                      "stats-epsilon-greedy"],
+        ),
+        dict(
+            id="regression",
+            title="4 · Regression and Prediction",
+            summary="Simple and multiple regression, prediction intervals, factor variables, interpretation, diagnostics, splines and causality.",
+            lessons=[
+                dict(id="simple-regression", title="Simple linear regression and prediction intervals", file="40-simple-regression.md"),
+                dict(id="multiple-regression", title="Multiple regression: assessment, cross-validation and model selection", file="41-multiple-regression.md"),
+                dict(id="factors-interpretation", title="Factor variables and interpreting regression", file="42-factors-interpretation.md"),
+                dict(id="regression-diagnostics", title="Regression diagnostics: outliers, influence and assumptions", file="43-regression-diagnostics.md"),
+                dict(id="nonlinear-regression", title="Polynomial regression, splines and GAMs", file="44-nonlinear-regression.md"),
+                dict(id="causation-simpson", title="Correlation, causation and Simpson's paradox", file="45-causation-simpson.md"),
+            ],
+            problems=["stats-ols-normal-equations", "stats-r2-adjusted", "stats-leverage-cooks", "stats-simpson-detect"],
+        ),
+        dict(
+            id="classification",
+            title="5 · Classification",
+            summary="Naive Bayes, discriminant analysis, logistic regression, evaluation metrics and rare classes.",
+            lessons=[
+                dict(id="naive-bayes-lda", title="Naive Bayes and discriminant analysis", file="50-naive-bayes-lda.md"),
+                dict(id="logistic-regression", title="Logistic regression: odds, log-odds and maximum likelihood", file="51-logistic-regression.md"),
+                dict(id="classification-evaluation", title="Evaluating classifiers and handling rare classes", file="52-classification-evaluation.md"),
+            ],
+            problems=["stats-confusion-metrics", "stats-auc-ranking", "stats-logloss", "stats-naive-bayes-counts",
+                      "stats-logistic-newton"],
+        ),
+        dict(
+            id="statistical-ml",
+            title="6 · Statistical Machine Learning",
+            summary="Bias and variance, k-NN, trees, bagging, random forests and boosting from the statistical side.",
+            lessons=[
+                dict(id="statistical-ml", title="Statistical machine learning: k-NN, trees, bagging and boosting", file="60-statistical-ml.md"),
+            ],
+            problems=[],
+        ),
+        dict(
+            id="unsupervised",
+            title="7 · Unsupervised Learning",
+            summary="PCA, k-means, hierarchical and model-based clustering, scaling and Gower's distance.",
+            lessons=[
+                dict(id="unsupervised", title="Unsupervised learning: PCA and clustering, the statistical view", file="70-unsupervised.md"),
+            ],
+            problems=["stats-pca-explained", "stats-gower-distance"],
+        ),
+        dict(
+            id="interview",
+            title="8 · Interviews and Product Cases",
+            summary="Concept drills, whiteboard calculations, probability puzzles and product-analytics case frameworks.",
+            lessons=[
+                dict(id="interview-essentials", title="Statistics interview essentials", file="90-interview-essentials.md"),
+                dict(id="product-cases", title="Product analytics case questions", file="91-product-cases.md"),
+            ],
+            problems=[],
+        ),
+    ],
+)
