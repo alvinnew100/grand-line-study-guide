@@ -1,19 +1,45 @@
 # Experiment tracking with MLflow
 
+> **Before this lesson:** read [Git workflows for ML teams](#/lesson/mlops/git-workflows) for the
+> commit SHA and [Data validation and versioning with DVC](#/lesson/mlops/validation-versioning)
+> for data versions. You should have trained at least one model with scikit-learn, or have read
+> code that does.
+
+## In plain words
+
+Training a model is an experiment: you choose some settings, run the training, and get a score.
+You will do this dozens or hundreds of times. **Experiment tracking** is a laboratory notebook
+that fills itself in. Every time the training code runs, a small library writes down what
+settings were used, which code and data were used, what scores came out, and where the resulting
+model file is.
+
+A scientist who mixes chemicals without noting the quantities cannot repeat a success or explain
+a failure. The same holds for models. Without a record, "which settings gave us the model that is
+live right now?" is answered from memory, and memory is wrong.
+
+**MLflow** is the most widely used open-source tool for this. Weights & Biases, Neptune, Comet and
+the trackers built into the cloud ML platforms work on the same ideas, so what you learn here
+transfers.
+
+Why this matters for a job: an experiment tracker is the first piece of MLOps tooling most teams
+adopt, and "what do you log for each experiment?" is a routine interview question. It is also the
+foundation of the next two lessons, on reproducibility and the model registry.
+
 ## The spreadsheet of doom
 
-Without tracking, experiment history lives in notebook filenames (`model_final_v3_REAL.ipynb`), Slack
-messages and memory. Questions you cannot answer:
+Without tracking, the history of experiments is scattered across notebook file names
+(`model_final_v3_REAL.ipynb`), chat messages and people's heads. There are questions you then
+cannot answer:
 
-- Which hyperparameters produced the model in production?
+- Which hyperparameters produced the model in production? (A **hyperparameter** is a setting
+  chosen before training, such as the learning rate.)
 - Did we already try `max_depth=12` last month? What happened?
-- Which data snapshot was used? Which code commit?
+- Which snapshot of the data was used? Which commit of the code?
 - Why is the new model worse than the one from March?
 
-**Experiment tracking** records, for every training run, its inputs (parameters, data version, code
-version, environment), its outputs (metrics, artifacts, the model) and metadata (who, when, how long).
-MLflow is the most widely used open-source tracker; Weights & Biases, Neptune, Comet, and the trackers in
-SageMaker/Vertex/Azure ML are popular alternatives with similar concepts.
+Experiment tracking records, for every training run, three groups of facts: its **inputs**
+(settings, data version, code version, software environment), its **outputs** (scores, files, the
+model itself) and **metadata** (who ran it, when, for how long).
 
 ## MLflow components
 
@@ -27,14 +53,22 @@ SageMaker/Vertex/Azure ML are popular alternatives with similar concepts.
 
 ## Core concepts
 
-- **Experiment**: a named group of runs (e.g., `churn-gbm`).
-- **Run**: one execution of training code. Has a `run_id`, a status (`RUNNING`, `FINISHED`, `FAILED`,
-  `KILLED`), start/end time.
-- **Parameters**: inputs, logged once (key-value strings): `learning_rate=0.05`.
-- **Metrics**: numeric outputs, can be logged many times with a `step` (e.g., loss per epoch).
-- **Tags**: free-form metadata (`git_sha`, `data_version`, `owner`).
-- **Artifacts**: files — plots, confusion matrices, feature importance, the model directory, the config.
+Six words make up the vocabulary. They are used the same way by every tracker.
 
+- **Experiment**: a named folder of runs that belong together, such as `churn-gbm`.
+- **Run**: one execution of the training code. It has an identifier (`run_id`), a status
+  (`RUNNING`, `FINISHED`, `FAILED` or `KILLED`) and start and end times.
+- **Parameters**: the inputs of the run, each written once as a name and a value:
+  `learning_rate=0.05`.
+- **Metrics**: numeric results. A metric can be written many times with a `step` number, for
+  example the loss after each **epoch** (one full pass over the training data), which produces a
+  curve.
+- **Tags**: free labels for searching and filtering, such as `git_sha`, `data_version`, `owner`.
+- **Artifacts**: files. Charts, tables, the configuration file, and above all the saved model.
+
+The diagram shows where these go. Your training script calls a few logging functions; the MLflow
+library (the "client") sends them over the network to a tracking server; the server keeps small
+structured facts in a database and files in object storage.
 ```mermaid
 flowchart LR
   CODE[train.py] -->|log_param, log_metric, log_artifact| CLIENT[MLflow client]
@@ -44,8 +78,10 @@ flowchart LR
   UI[MLflow UI] --> SERVER
 ```
 
-The **backend store** holds structured metadata; the **artifact store** holds files. Locally, both default
-to files under `./mlruns`; for teams you run a tracking server backed by a database and object storage.
+The **backend store** is a database for the structured facts (runs, parameters, metrics). The
+**artifact store** holds the files. On a laptop both default to a folder called `./mlruns`, and
+nothing has to be installed. A team runs a shared tracking server backed by a real database and
+object storage, started like this:
 
 ```bash
 mlflow server \
@@ -54,6 +90,10 @@ mlflow server \
   --host 0.0.0.0 --port 5000
 export MLFLOW_TRACKING_URI=http://mlflow.internal:5000
 ```
+
+The `mlflow server` command names the database, the storage bucket for artifacts and the port to
+listen on (`\` at the end of a line continues the command on the next line). The `export` line
+sets the environment variable that tells every training script where the server is.
 
 ## A complete instrumented training script
 
@@ -97,9 +137,27 @@ def main(cfg: dict) -> str:
         return run.info.run_id
 ```
 
-What gets captured: params, metrics, tags (code + data version), the resolved config, and an `MLmodel`
-directory with the pickled model, its **signature** (input/output schema), an input example, and the
-environment files (`requirements.txt`, `conda.yaml`, `python_env.yaml`).
+Reading the script from the top:
+
+- `git_sha()` asks Git for the current commit, so the run can be tied to the exact code.
+- `mlflow.set_experiment("churn-gbm")` chooses the folder the run will be filed under.
+- `train_test_split` holds back 20% of the rows as a test set; `stratify=y` keeps the share of
+  churners the same in both parts, and `random_state` fixes the random choice so it can be
+  repeated.
+- `with mlflow.start_run(...) as run:` opens a run. Everything logged inside the indented block
+  belongs to it, and the run is closed (and marked failed if an exception occurs) when the block
+  ends.
+- `set_tags`, `log_params` and `log_dict` record the code and data versions, the hyperparameters
+  and the complete configuration.
+- The model is trained, `predict_proba(X_te)[:, 1]` gives each test customer's predicted
+  probability of churning, and two scores are logged.
+- `infer_signature` works out the model's **signature**: the names and types of the columns it
+  expects and the type of what it returns. `log_model` then saves the model with that signature
+  and three example input rows.
+
+What ends up stored: parameters, metrics, tags, the configuration, and a model folder containing
+the pickled model, its signature, an input example and files describing the Python environment
+(`requirements.txt`, `conda.yaml`, `python_env.yaml`).
 
 > [!TIP]
 > **Autologging** — `mlflow.autolog()` (or `mlflow.sklearn.autolog()`, `mlflow.pytorch.autolog()`,
@@ -130,10 +188,12 @@ model/
 └── python_env.yaml
 ```
 
-**Flavors** let the same model be loaded in different ways: the native flavor (`mlflow.sklearn.load_model`
-returns the scikit-learn object) and the generic **`python_function` (pyfunc)** flavor, which exposes a
-uniform `predict(DataFrame)` interface for any framework. Serving tools (MLflow's own `mlflow models
-serve`, SageMaker, Azure ML, KServe's MLflow runtime) rely on pyfunc.
+A **flavor** is a way of loading the saved model. Every MLflow model has its native flavor (for a
+scikit-learn model, `mlflow.sklearn.load_model` gives back the original scikit-learn object) and
+also the generic **`python_function`** flavor, abbreviated **pyfunc**. Pyfunc presents every
+model, whatever library built it, through the same single method: `predict` on a table of inputs.
+That uniformity is what lets general-purpose serving tools (MLflow's own `mlflow models serve`,
+SageMaker, Azure ML, KServe) run any MLflow model without knowing what is inside.
 
 ```python
 model = mlflow.pyfunc.load_model(f"runs:/{run_id}/model")
@@ -145,8 +205,8 @@ subclass with a `predict(self, context, model_input)` method.
 
 ## Querying runs programmatically
 
-The UI is for humans; automation queries runs via the API — e.g., to pick the best candidate for
-promotion:
+The web interface is for people. Automation asks the tracking server questions through the
+programming interface, for example to pick the best candidate for release:
 
 ```python
 runs = mlflow.search_runs(
@@ -158,9 +218,14 @@ runs = mlflow.search_runs(
 print(runs[["run_id", "metrics.test_pr_auc", "params.learning_rate"]])
 ```
 
-This is exactly the logic of the `mlops-champion-model` problem: filter by status and metric presence,
-order by metric with deterministic tie-breaks.
+`filter_string` keeps only finished runs with a good enough score on a given data version,
+`order_by` sorts them best first, and the second sort key breaks ties by start time. The
+`mlops-champion-model` problem asks you to implement the same logic: filter by status and by the
+presence of the metric, then order with tie-breaks that always give the same answer.
 
+The simulation below creates twelve fake runs, some of them failed, and selects a champion. The
+sort key is a tuple, and Python compares tuples left to right: highest AUC first (the minus sign
+turns "largest" into "smallest"), then lowest latency, then earliest start, then run id.
 ```python-run
 # Simulate a tracked sweep and choose a champion with explicit tie-break rules.
 import random
@@ -181,6 +246,22 @@ for r in eligible[:5]:
 print("champion:", eligible[0]["run_id"])
 ```
 
+The output lists the five best finished runs:
+
+```text
+run09 {'lr': 0.03, 'max_leaf_nodes': 31} {'auc': 0.872, 'latency_ms': 7.75}
+run07 {'lr': 0.03, 'max_leaf_nodes': 15} {'auc': 0.845, 'latency_ms': 3.75}
+run04 {'lr': 0.03, 'max_leaf_nodes': 63} {'auc': 0.845, 'latency_ms': 15.75}
+run03 {'lr': 0.1, 'max_leaf_nodes': 31} {'auc': 0.821, 'latency_ms': 7.75}
+run11 {'lr': 0.01, 'max_leaf_nodes': 31} {'auc': 0.819, 'latency_ms': 7.75}
+champion: run09
+```
+
+Look at the second and third lines. Both runs have an AUC of 0.845, and run07 is placed first
+because its latency is lower. Without an explicit tie-break, the winner between two equal runs
+would depend on the order in which the server happened to return them, and the pipeline would not
+be repeatable.
+
 ## What to log — a checklist
 
 - **Code**: git SHA, branch, dirty flag (refuse to run "official" trainings with uncommitted changes).
@@ -193,8 +274,9 @@ print("champion:", eligible[0]["run_id"])
   importances, sample predictions, the validation report from your data checks.
 
 > [!WARNING]
-> Never compare runs evaluated on different test sets. Pin the evaluation dataset version (tag it) and
-> compare only runs that share it — otherwise a "better" model may simply have had an easier test set.
+> Never compare runs that were evaluated on different test sets. Fix the version of the evaluation
+> data, record it as a tag, and compare only runs that share it. Otherwise a "better" model may
+> owe its score to an easier test set.
 
 ## Tracking for deep learning and LLMs
 
@@ -299,6 +381,23 @@ print(f"difference B-A = {diff:+.4f}, standard error = {se:.4f}, ratio = {diff/s
 print("verdict:", "likely real" if abs(diff) > 2 * se else "within noise - do not promote on this evidence")
 ```
 
+This program asks whether configuration B is really better than A, or only luckier. Each
+configuration is trained five times with different random **seeds** (the starting value of the
+random-number generator), which gives five slightly different scores. `mean` is their average and
+`std` their spread. The **standard error** combines the two spreads into one number that says how
+much the difference between the averages would wobble by chance alone. The output:
+
+```text
+A lr=0.05: seeds=[0.732 0.73  0.734 0.731 0.729]  mean=0.7312  std=0.0017
+B lr=0.10: seeds=[0.736 0.74  0.739 0.732 0.73 ]  mean=0.7355  std=0.0044
+difference B-A = +0.0044, standard error = 0.0021, ratio = 2.1
+verdict: likely real
+```
+
+The difference is about twice the standard error, which is the usual threshold for taking it
+seriously, though only barely here. A single run of each would have told you nothing: B's worst
+seed (0.730) is below A's best (0.734).
+
 A checklist before believing "run B is better":
 
 1. Same evaluation data version and same metric definition?
@@ -333,6 +432,30 @@ A checklist before believing "run B is better":
   backend store (DB) and artifact store (object storage).
 - The MLflow model format with signatures and the pyfunc flavor makes models portable to serving tools.
 - Query runs programmatically to automate selection; pin evaluation data to keep comparisons fair.
+
+## Glossary
+
+- **Experiment tracking** - automatic recording of the inputs, outputs and metadata of training
+  runs.
+- **MLflow** - an open-source platform for tracking, packaging and registering models.
+- **Experiment / run** - a named group of runs / one execution of training code.
+- **Parameter** - an input setting of a run, logged once.
+- **Hyperparameter** - a setting chosen before training, such as the learning rate.
+- **Metric** - a numeric result of a run; can be logged repeatedly with a step.
+- **Epoch** - one full pass over the training data.
+- **Tag** - a free-form label on a run, used for filtering.
+- **Artifact** - a file saved with a run, such as a plot or the model.
+- **Backend store / artifact store** - the database of run metadata / the storage for files.
+- **Tracking server** - the service that receives and serves tracking data for a team.
+- **Signature** - the declared input and output schema of a saved model.
+- **Flavor / pyfunc** - a way of loading a saved model / the generic flavor with one `predict`
+  method.
+- **Autologging** - automatic capture of parameters, metrics and the model for supported
+  libraries.
+- **Nested run** - a child run grouped under a parent, used for sweeps and cross-validation.
+- **Seed** - the starting value of a random-number generator.
+- **Standard error** - how much an average would vary by chance from one sample to another.
+- **Champion** - the model currently chosen as best.
 
 ```quiz
 [

@@ -1,18 +1,46 @@
 # Docker Compose for local ML stacks
 
+> **Before this lesson:** read [Docker fundamentals: images, layers and the build cache](#/lesson/mlops/docker-fundamentals)
+> and [Dockerfiles for ML: best practices and multi-stage builds](#/lesson/mlops/dockerfile-ml).
+> You should know what an image, a container, a port mapping and a volume are. YAML was introduced
+> in lesson 5.
+
+## In plain words
+
+One container runs one program. A real system is several programs working together: the model
+service, a database, a storage service, a monitoring tool. **Docker Compose** lets you describe
+all of them in a single file and then start, stop and inspect the whole group with one command.
+
+If a single container is one musician, Compose is the score for the whole band: which
+instruments there are, who must start playing before whom, and how they hear each other. Without
+the score, you would be starting seven musicians one by one, each with a long list of spoken
+instructions, and hoping they come in at the right moment.
+
+Why this matters for a job: Compose is how most teams run a realistic copy of their system on a
+laptop and inside automated tests. It is also the gentlest introduction to the ideas (services
+that find each other by name, health checks, declared resources) that Kubernetes uses at larger
+scale in module 8. Interviewers ask "how do you test an ML service end to end on your own
+machine?", and this lesson is the answer.
+
 ## One command to bring up the whole system
 
-A realistic ML service is never one container. Even locally you want: the model API, a tracking server
-(MLflow) with its database and artifact store, perhaps Redis for caching or online features, Prometheus
-and Grafana for metrics. Starting each with long `docker run` commands — in the right order, on the same
-network, with the right environment variables — is error-prone.
+A realistic ML service is never a single container. Even on your own machine you want the model
+API, a tracking server (MLflow) with its database and its file storage, perhaps Redis for caching
+or fast feature lookups, and Prometheus and Grafana for metrics and dashboards. Starting each one
+with a long `docker run` command, in the right order, on the same network and with the right
+environment variables, invites mistakes.
 
-**Docker Compose** describes a multi-container application in one YAML file (`compose.yaml`) and manages
-it with one command: `docker compose up`. It is the standard tool for **local development, integration
-tests in CI, and demos**. (For production orchestration across machines, use Kubernetes — module 8.)
+Compose describes such a multi-container application in one YAML file, `compose.yaml`, and
+manages it with `docker compose up`. The file is **declarative**: it states what should exist,
+and the tool works out the steps. Compose is the standard tool for **local development,
+integration tests in CI, and demonstrations**. An **integration test** is a test that checks
+several real components working together. For running containers across many machines in
+production, Kubernetes takes over (module 8).
 
 ## Anatomy of a compose file
 
+The file below defines a full local stack of seven services. It is long, so read it with the
+walkthrough that follows it.
 ```yaml
 # compose.yaml
 name: churn
@@ -110,6 +138,31 @@ volumes:
   miniodata:
 ```
 
+How to read it:
+
+- `services:` is the list of containers to run. Each key under it (`api`, `mlflow`, `db`, …) is a
+  service name.
+- A service either has `build:` (build an image from our Dockerfile; `target: runtime` picks the
+  final stage from lesson 17) or `image:` (download a ready-made image). The `api` service has
+  both: it builds, then names the result.
+- `${GIT_SHA:-dev}` inserts the value of the shell variable `GIT_SHA`, or `dev` if it is not set.
+- `ports: "8000:8000"` connects a port on your machine (left) to a port in the container (right).
+- `environment:` sets environment variables inside the container. Notice the addresses:
+  `http://mlflow:5000`, `redis://redis:6379`. Compose puts all services on one private network
+  and runs a small **DNS** service (the system that turns names into network addresses), so each
+  service can reach another by its service name.
+- `depends_on:` says which services must be up first, and `condition: service_healthy` says "and
+  wait until its health check passes".
+- `healthcheck:` is a command Docker runs inside the container at intervals; exit code 0 means
+  healthy. `start_period` is a grace time before failures count.
+- `deploy.resources.limits` caps the CPU and memory the container may use.
+- `volumes:` attaches storage. The `db` service keeps its data in the named volume `pgdata`,
+  declared at the bottom of the file, so the data survives when the container is removed.
+- **MinIO** is a program that imitates Amazon's S3 storage service, so the stack can store model
+  files locally exactly as it would in the cloud.
+
+The diagram shows the same stack as a picture: arrows mean "connects to".
+
 ```mermaid
 flowchart LR
   U[You: curl or browser] -->|8000| API[api]
@@ -203,14 +256,19 @@ curl -fsS localhost:8000/healthz
 pytest tests/integration -q                  # hits http://localhost:8000/predict
 ```
 
-## Why readiness ordering matters — a simulation
+## Why readiness ordering matters: a simulation
 
+A container that has *started* is not necessarily *ready*. A database process may take several
+seconds after starting before it accepts connections. The simulation compares the two forms of
+`depends_on`. The database becomes ready at a random time between 2 and 8 seconds. With a plain
+`depends_on` the API starts half a second after the database container; with the health
+condition it starts when the database is ready. Each mode is tried 1,000 times.
 ```python-run
 import random
 random.seed(2)
 def startup(wait_for_healthy):
     db_ready_at = random.uniform(2, 8)          # seconds until postgres accepts connections
-    api_start = db_ready_at if wait_for_healthy else 0.5   # depends_on without condition: just "started"
+    api_start = db_ready_at if wait_for_healthy else 0.5   # plain depends_on only waits for "started"
     return api_start >= db_ready_at             # True = API finds DB ready
 
 for mode in (False, True):
@@ -219,6 +277,19 @@ for mode in (False, True):
     print(f"{label} -> API starts cleanly in {ok/10:.0f}% of runs")
 print("Mitigations: healthcheck + condition, and app-level retry with backoff on startup.")
 ```
+
+The output:
+
+```text
+plain depends_on         -> API starts cleanly in 0% of runs
+condition: service_healthy -> API starts cleanly in 100% of runs
+Mitigations: healthcheck + condition, and app-level retry with backoff on startup.
+```
+
+Zero percent is not an exaggeration of the model: the API always starts at 0.5 seconds and the
+database is never ready before 2. In real life the API would crash, be restarted, and probably
+succeed on the second or third attempt, which is the familiar "it works after I restart it"
+symptom.
 
 Even with health-gated start order, make services **resilient**: retry connections with exponential
 backoff at startup (the database can restart later too). Kubernetes has no `depends_on` at all — it
@@ -252,8 +323,10 @@ Compose concepts map onto Kubernetes objects, which is why Compose is a good ste
 
 ## The Prometheus configuration behind the stack
 
-The `prometheus` service mounts `./ops/prometheus.yml`. For a Compose stack it is short, because targets
-are just service names:
+The `prometheus` service mounts `./ops/prometheus.yml`. **Prometheus** is a monitoring system that
+collects numbers ("metrics") by regularly fetching a web page that each service publishes, an
+action called **scraping** (lesson 27). For a Compose stack its configuration is short, because
+the targets to scrape are the service names:
 
 ```yaml
 # ops/prometheus.yml
@@ -394,6 +467,29 @@ outage cannot take the service down, cache the model on local disk, or bake it i
 - Named volumes persist state; bind mounts are for config and live code.
 - Override files and profiles tailor the stack for dev, CI and optional components.
 - Compose is for dev/CI; its concepts map directly to Kubernetes objects.
+
+## Glossary
+
+- **Docker Compose** - a tool that defines and runs a multi-container application from one YAML
+  file.
+- **Service** - one entry in the Compose file; it becomes one or more containers.
+- **Declarative** - describing the desired result and letting the tool work out the steps.
+- **Compose network / service-name DNS** - the private network Compose creates / the ability to
+  reach a service by its name.
+- **Port mapping** - connecting a port on the host to a port in a container (`host:container`).
+- **Named volume** - Docker-managed storage that outlives containers.
+- **Bind mount** - a host folder or file made visible inside a container.
+- **Health check** - a command run periodically to decide whether a container is healthy.
+- **`depends_on` condition** - `service_started`, `service_healthy` or
+  `service_completed_successfully`.
+- **Started vs ready** - the process exists vs it can do its job.
+- **Override file** - a second Compose file whose settings are merged over the base file.
+- **Profile** - a label that makes a service optional unless requested.
+- **Integration test** - a test of several real components working together.
+- **MinIO** - an S3-compatible storage server suitable for local use.
+- **Scraping** - Prometheus fetching metrics from a service at intervals.
+- **Monitoring as code** - keeping dashboards and alert definitions as files in Git.
+- **Startup dependency** - something needed only when a service starts, not for each request.
 
 ```quiz
 [

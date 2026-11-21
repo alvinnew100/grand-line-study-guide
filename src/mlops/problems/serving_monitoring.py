@@ -613,4 +613,214 @@ Return the list of window indices at which alerts fire.
         follow_up="Add hysteresis: require the score to fall below a lower *clear* threshold before re-arming, like Prometheus `keep_firing_for` or Grafana recovery thresholds.",
     ),
 ),
+dict(
+    id="mlops-error-budget-burn",
+    title="Multi-Window Error-Budget Burn Alerts",
+    difficulty="Medium",
+    pattern="Alerting",
+    entry="burnAlerts",
+    description=r"""
+A **service level objective (SLO)** such as "99.5% of requests succeed" allows 0.5% of requests to fail:
+that allowance is the **error budget**. The **burn rate** says how fast you are spending it:
+
+`burn = (errors / requests in a window) / budget`
+
+A burn rate of 1 spends the budget exactly over the SLO period; 14.4 spends a 30-day budget in about two
+days. To avoid paging on a single bad minute, a rule fires only when **both** a short window and a long
+window burn faster than a threshold.
+
+Write `burnAlerts(budget, minutes, rules)`:
+
+- `budget`: the allowed error ratio, for example `0.005`.
+- `minutes`: a list of `[requests, errors]` per minute (minute 0, 1, 2, ...).
+- `rules`: a list of `[short_window, long_window, threshold, severity]`; windows are lengths in minutes.
+
+At each minute `t`, a window of length `w` covers minutes `max(0, t - w + 1)` to `t` inclusive. Its
+ratio is total errors divided by total requests in those minutes, or `0` if there were no requests. A
+rule is **active** at minute `t` when the short-window burn **and** the long-window burn are both
+`>= threshold`.
+
+Return the list of `[t, severity]` for every moment a rule **starts** firing (it is active at `t` and was
+not active at `t - 1`; at minute 0 "not active before" is assumed). Order by minute, then by the rule's
+position in `rules`.
+
+**Example:** `budget = 0.01`, `minutes = [[100, 0], [100, 30], [100, 30], [100, 0], [100, 0]]`,
+`rules = [[1, 3, 10, "page"]]` -> minute 1: short 0.30 / 0.01 = 30, long (minutes 0-1) 0.15 / 0.01 = 15,
+both >= 10, starts firing. Minute 2 stays active. Minute 3: short burn is 0, stops. Result: `[[1, "page"]]`.
+""",
+    starter='''def burnAlerts(budget, minutes, rules):
+    alerts = []
+    # for each minute, compute each rule's short and long burn; record when a rule turns on
+    return alerts
+''',
+    solution='''def burnAlerts(budget, minutes, rules):
+    req_sum, err_sum = [0], [0]
+    for requests, errors in minutes:
+        req_sum.append(req_sum[-1] + requests)
+        err_sum.append(err_sum[-1] + errors)
+
+    def burn(t, w):
+        lo = max(0, t - w + 1)
+        req = req_sum[t + 1] - req_sum[lo]
+        err = err_sum[t + 1] - err_sum[lo]
+        return 0.0 if req == 0 else (err / req) / budget
+
+    active = [False] * len(rules)
+    alerts = []
+    for t in range(len(minutes)):
+        for i, (short_w, long_w, threshold, severity) in enumerate(rules):
+            on = burn(t, short_w) >= threshold and burn(t, long_w) >= threshold
+            if on and not active[i]:
+                alerts.append([t, severity])
+            active[i] = on
+    return alerts
+''',
+    tests=[
+        [0.01, [[100, 0], [100, 30], [100, 30], [100, 0], [100, 0]], [[1, 3, 10, "page"]]],
+        [0.005, [], [[5, 60, 14.4, "page"]]],
+        [0.005, [[0, 0], [0, 0], [10, 0]], [[1, 2, 1, "ticket"]]],
+        [0.01, [[100, 50]] + [[100, 0]] * 5, [[1, 10, 2, "page"]]],
+        [0.01, [[100, 20]] * 3 + [[100, 0]] * 3 + [[100, 20]] * 3, [[1, 2, 5, "page"]]],
+        [0.005, [[1000, 2]] * 30 + [[1000, 120]] * 10, [[5, 60, 14.4, "page"], [30, 360, 6, "ticket"]]],
+        [0.01, [[200, 3]] * 50, [[5, 30, 1, "ticket"]]],
+        [0.02, [[50, 0], [0, 0], [50, 40], [0, 0], [0, 0], [50, 1]], [[1, 1, 10, "a"], [2, 4, 10, "b"]]],
+        [0.001, [[5003, (i * 37) % 23 if i % 50 < 40 else 200 + (i % 7) * 10] for i in range(3000)],
+         [[5, 60, 14.4, "page"], [30, 360, 6, "page"], [120, 1440, 3, "ticket"]]],
+    ],
+    examples=1,
+    wrong_solutions=[
+        '''def burnAlerts(budget, minutes, rules):
+    alerts, active = [], [False] * len(rules)
+    for t in range(len(minutes)):
+        for i, (s, l, th, sev) in enumerate(rules):
+            lo = max(0, t - s + 1)
+            req = sum(m[0] for m in minutes[lo:t + 1]); err = sum(m[1] for m in minutes[lo:t + 1])
+            on = req > 0 and err / req / budget >= th
+            if on and not active[i]: alerts.append([t, sev])
+            active[i] = on
+    return alerts
+''',
+        '''def burnAlerts(budget, minutes, rules):
+    alerts = []
+    for t in range(len(minutes)):
+        for s, l, th, sev in rules:
+            ok = True
+            for w in (s, l):
+                lo = max(0, t - w + 1)
+                req = sum(m[0] for m in minutes[lo:t + 1]); err = sum(m[1] for m in minutes[lo:t + 1])
+                if req == 0 or err / req / budget < th: ok = False
+            if ok: alerts.append([t, sev])
+    return alerts
+''',
+    ],
+    guide=dict(
+        prereqs="Lessons *Metrics, logs, traces and Prometheus* (SLOs, error budgets) and *Alerting, feedback loops and retraining triggers* (the 14.4 burn-rate rule).",
+        intuition="The long window proves the problem is significant (a real chunk of budget is gone); the short window proves it is still happening (so the alert stops soon after recovery). Requiring both removes most noisy pages.",
+        hints=["Prefix sums let you get the total of any window in O(1): `sum[t + 1] - sum[lo]`.",
+               "A window with zero requests has ratio 0 (nothing failed), not a division error.",
+               "Keep one `active` flag per rule and report only the transition from off to on."],
+        brute_force="Re-summing every window at every minute costs O(n x W) per rule; with a 1,440-minute window over 3,000 minutes that is millions of additions. Fine for small inputs, slow for long ones.",
+        approach="1. Build prefix sums of requests and errors.\n2. For each minute and each rule compute both burns; `on = both >= threshold`.\n3. Append `[t, severity]` when `on` and the rule was off; update the flag.",
+        complexity="O(n x R) time with prefix sums for n minutes and R rules; O(n) extra space.",
+        pitfalls="- Using only the short window (pages on every blip).\n- Reporting every active minute instead of the start of each episode.\n- Windows that start before minute 0: clamp the start with `max(0, ...)`.",
+        follow_up="The Google SRE workbook recommends pairs such as 1 h / 5 min at 14.4x (page), 6 h / 30 min at 6x (page) and 3 d / 6 h at 1x (ticket). In Prometheus these are recording rules over `rate()` windows.",
+    ),
+),
+dict(
+    id="mlops-token-bucket",
+    title="Per-Key Rate Limiting with Token Buckets",
+    difficulty="Medium",
+    pattern="LLMOps",
+    entry="rateLimit",
+    description=r"""
+A **model gateway** sits between your applications and the LLM providers. One of its jobs is **rate
+limiting**: stopping one team's runaway script from using the whole quota. A popular algorithm is the
+**token bucket** (these tokens are permits, not LLM tokens):
+
+- Each API key has its own bucket holding at most `capacity` permits. A key's bucket starts **full** the
+  first time the key is seen.
+- Permits flow back at `refill_per_sec` permits per second, but the bucket never holds more than
+  `capacity`.
+- A request with cost `c` is **allowed** if the bucket holds at least `c` permits; then `c` permits are
+  removed. Otherwise it is **rejected** and the bucket is unchanged (apart from the refill).
+
+Write `rateLimit(capacity, refill_per_sec, requests)` where `requests` is a list of
+`[time_sec, key, cost]` with integer, non-decreasing times and integer costs. Return a list of booleans,
+`True` for allowed.
+
+Refill rule (all integers): when a request for a key arrives at time `t`, first set
+`permits = min(capacity, permits + (t - last_time) * refill_per_sec)` and `last_time = t`, where
+`last_time` is the time of the key's previous request (or its first appearance).
+
+**Example:** `capacity = 3`, `refill_per_sec = 1`, requests at time 0 for key `"a"` with costs 1, 1, 1, 1,
+then one at time 2 with cost 2 -> `[True, True, True, False, True]` (the bucket empties after three
+requests, refills to 2 by time 2, and the last request uses both permits).
+""",
+    starter='''def rateLimit(capacity, refill_per_sec, requests):
+    buckets = {}   # key -> [permits, last_time]
+    # refill, then allow if enough permits
+    pass
+''',
+    solution='''def rateLimit(capacity, refill_per_sec, requests):
+    buckets = {}
+    out = []
+    for t, key, cost in requests:
+        if key not in buckets:
+            buckets[key] = [capacity, t]
+        permits, last = buckets[key]
+        permits = min(capacity, permits + (t - last) * refill_per_sec)
+        if permits >= cost:
+            permits -= cost
+            out.append(True)
+        else:
+            out.append(False)
+        buckets[key] = [permits, t]
+    return out
+''',
+    tests=[
+        [3, 1, [[0, "a", 1], [0, "a", 1], [0, "a", 1], [0, "a", 1], [2, "a", 2]]],
+        [5, 1, []],
+        [2, 1, [[0, "a", 2], [0, "b", 2], [0, "a", 1], [0, "b", 1]]],
+        [10, 2, [[0, "k", 10], [1, "k", 3], [5, "k", 8], [100, "k", 10], [100, "k", 1]]],
+        [4, 1, [[0, "x", 5], [0, "x", 4]]],
+        [3, 0, [[0, "a", 1], [10, "a", 1], [20, "a", 1], [30, "a", 1]]],
+        [5, 1, [[0, "a", 0], [0, "a", 5], [0, "a", 0], [0, "a", 1]]],
+        [6, 3, [[7, "late", 6], [7, "late", 1], [8, "late", 3], [9, "late", 4]]],
+        [100, 10, [[i // 3, "team%d" % (i % 5), 7 + (i * 13) % 30] for i in range(4000)]],
+    ],
+    examples=1,
+    wrong_solutions=[
+        '''def rateLimit(capacity, refill_per_sec, requests):
+    b, out = {}, []
+    for t, k, c in requests:
+        p, last = b.get(k, [capacity, t])
+        p = p + (t - last) * refill_per_sec
+        if p >= c: p -= c; out.append(True)
+        else: out.append(False)
+        b[k] = [p, t]
+    return out
+''',
+        '''def rateLimit(capacity, refill_per_sec, requests):
+    b, out = {}, []
+    for t, k, c in requests:
+        p, last = b.get(k, [capacity, t])
+        p = min(capacity, p + (t - last) * refill_per_sec) - c
+        out.append(p >= 0)
+        b[k] = [max(p, 0), t]
+    return out
+''',
+    ],
+    guide=dict(
+        prereqs="Lesson *Guardrails, gateways, caching and tracing* (model gateways, per-team keys and rate limits).",
+        intuition="The bucket size allows short bursts; the refill rate sets the long-run average. A key that waits long enough always gets back to a full bucket, but never beyond it.",
+        hints=["Store `[permits, last_time]` per key in a dictionary.",
+               "Refill lazily, only when a request for that key arrives, using the elapsed time.",
+               "Cap at `capacity` before checking the cost, and do not subtract anything for a rejected request."],
+        brute_force="Ticking every bucket once per second works but wastes time on idle keys and on long gaps; lazy refill computes the same numbers on demand.",
+        approach="For each request: create a full bucket for a new key; refill with `min(capacity, permits + elapsed x rate)`; allow and subtract if enough permits, else reject; save permits and time.\n\nDry run of the example: permits 3 -> 2 -> 1 -> 0, the fourth request is rejected; at time 2 the bucket refills to 2, and the cost-2 request is allowed.",
+        complexity="O(n) time for n requests and O(k) space for k distinct keys.",
+        pitfalls="- Forgetting the cap lets an idle key build up an enormous burst.\n- Subtracting the cost of rejected requests drains the bucket below what was actually used.\n- Sharing one bucket across all keys defeats the purpose (one noisy team blocks everyone).",
+        follow_up="LLM gateways usually limit both requests per minute and LLM tokens per minute, with the token cost known only after the response; they reserve an estimate up front and settle afterwards. Distributed gateways keep buckets in Redis with atomic scripts.",
+    ),
+),
 ]

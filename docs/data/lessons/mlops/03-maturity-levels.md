@@ -1,17 +1,49 @@
 # MLOps maturity levels 0, 1 and 2
 
+> **Before this lesson:** read [The ML lifecycle and the anatomy of an ML system](#/lesson/mlops/ml-lifecycle)
+> for the inner and outer loops, and [Roles, teams and hidden technical debt](#/lesson/mlops/tech-debt-roles)
+> for what a handoff and a platform team are.
+
+## In plain words
+
+A **maturity model** is a ladder with named rungs. It lets a team say "we are on rung 0" and see
+what climbing to rung 1 would require, in place of the vague wish to "get better at MLOps".
+
+Think of how a bakery grows. At first one baker makes every loaf by hand from memory (level 0).
+Then the bakery writes the recipe down and installs a machine that mixes and bakes a batch every
+morning without anyone starting it (level 1). Finally it sets up a process so that whenever
+someone improves the recipe, the change is tested on a small batch and rolled into the machine
+automatically (level 2). The bread may taste the same at every level. What changes is how much
+human effort each batch needs and how safely the recipe can be changed.
+
+For ML the "batch" is a freshly trained model, and the two things that get automated are:
+
+1. **Continuous training (CT):** a **pipeline**, meaning a fixed chain of steps (get data, check
+   it, train, evaluate) that a machine runs from start to finish, retrains the model on new data
+   without a person doing it.
+2. **CI/CD of the pipeline itself:** CI (continuous integration) means every change to the code is
+   automatically built and tested; CD (continuous delivery) means a change that passes is released
+   automatically. Here they are applied to the training pipeline's own code.
+
+Why this matters for a job: "describe the MLOps maturity levels" is a standard interview question,
+and knowing the ladder lets you say something useful in your first design review: which rung a
+system is on and what the cheapest next step is.
+
 ## Why a maturity model?
 
-"Do MLOps" is not actionable. A maturity model tells a team *where it is* and *what the next
-investment should be*. The most widely used one comes from Google Cloud's architecture guide
-*MLOps: Continuous delivery and automation pipelines in machine learning*, which defines three levels.
-Microsoft's Azure guidance defines five (0–4) along similar lines. We will use Google's three and map
-Microsoft's onto them.
+"Do MLOps" is not something a team can act on. A maturity model tells a team *where it is* and
+*what the next investment should be*. The most widely used one comes from a Google Cloud
+architecture guide, *MLOps: Continuous delivery and automation pipelines in machine learning*,
+which defines three levels. Microsoft's Azure guidance defines five (numbered 0 to 4) along
+similar lines. We use Google's three and map Microsoft's onto them later.
 
-The key idea: maturity is measured by **what is automated**, especially two things:
+The key idea: maturity is measured by **what is automated**, and specifically by the two items
+above.
 
-1. **Continuous training (CT):** the model is retrained automatically on new data by a pipeline.
-2. **CI/CD of the pipeline itself:** changes to training code are tested and deployed automatically.
+## Level 0: manual process
+
+Read the diagram left to right: one person does all the steps in a notebook, then passes a file to
+someone else.
 
 ## Level 0 — Manual process
 
@@ -25,20 +57,31 @@ flowchart LR
   F --> G[Serving]
 ```
 
-Characteristics:
+What level 0 looks like in practice:
 
-- Every step is manual and interactive: notebooks, scripts run by hand.
-- **Disconnect between ML and operations:** data scientists hand an artifact (a pickle) to engineers.
-- **Infrequent releases:** a few times a year. No CI, because there is little code change to test.
-- **Deployment = the model**, not the pipeline. Only the trained artifact goes to production.
-- **No active monitoring** of model quality.
+- Every step is done by hand and interactively: notebooks, or scripts that a person starts.
+- **ML and operations are disconnected.** The data scientist hands an artifact (usually a pickle
+  file holding the trained model) to engineers who had no part in making it.
+- **Releases are rare,** a few times a year. There is no CI, because there is little changing code
+  to test.
+- **What gets deployed is the model,** not the pipeline that made it. Only the trained file reaches
+  production; the steps that produced it stay on a laptop.
+- **Nobody actively watches model quality** once it is live.
 
-Level 0 is fine for a first model and for models that rarely change. It breaks down when data changes
-frequently, when there are many models, or when a key person leaves.
+Level 0 is a reasonable place for a first model and for models that rarely need to change. It
+breaks down when the data changes often, when there are many models, or when the one person who
+knows how to rerun the notebook leaves.
 
 > [!WARNING]
-> The main risk at level 0 is not technical — it is that nobody notices when the model degrades, and
-> nobody can retrain it because the notebook no longer runs.
+> The main risk at level 0 is not technical. It is that nobody notices when the model gets worse,
+> and that nobody can retrain it because the notebook no longer runs.
+
+## Level 1: ML pipeline automation (continuous training)
+
+The diagram is busier, so take it in two parts. The top box is where people experiment and save
+code to a **source repository** (the shared, versioned home of the code, usually Git). The bottom
+box is production, and the new thing in it is the box inside the box: an automated training
+pipeline that something other than a person starts.
 
 ## Level 1 — ML pipeline automation (continuous training)
 
@@ -61,20 +104,33 @@ flowchart LR
   end
 ```
 
-What changes:
+What changes compared with level 0:
 
-- **The pipeline is the deployable unit.** You deploy a *training pipeline* to production; it then
-  produces models continuously.
-- **Continuous training** on fresh data, triggered by schedule, by new data arrival, or by monitoring.
-- **Experiment–production symmetry:** the same pipeline code runs in dev and prod (modular, containerised
-  components).
-- **Automated data and model validation** gates: a new model is only pushed if data passes schema and
-  distribution checks and the model beats the current champion on held-out data.
-- **Feature store** (optional) and **ML metadata store** recording lineage of every run.
-- **Pipeline triggers** and **continuous delivery of the model** to the prediction service.
+- **The pipeline is the thing you deploy.** You put a *training pipeline* into production, and it
+  then produces models again and again.
+- **Continuous training** on fresh data, started by a **trigger**: a schedule (every Monday), the
+  arrival of new data, or an alarm from monitoring.
+- **Experiment-production symmetry:** the same pipeline code runs while experimenting and in
+  production. This is possible because each step is a separate, self-contained module packed into
+  a **container**, a sealed bundle of code plus everything it needs to run (module 6).
+- **Automated gates.** A **gate** is a check that must pass before the pipeline is allowed to
+  continue. Data validation stops the run if the new data has the wrong columns or wildly
+  different values. Model validation only lets a new model through if it beats the **champion**
+  (the model currently in production) on data neither has seen.
+- A **feature store** (optional) and an **ML metadata store**, a database recording for every run
+  which data, code and settings went in and which model came out. That record is called
+  **lineage**.
+- **Continuous delivery of the model:** an approved model is rolled out to the prediction service
+  automatically.
 
-What is still manual: building and deploying *new versions of the pipeline* itself. If a data scientist
-adds a feature, someone manually tests and deploys the new pipeline.
+What is still done by hand: building and deploying *new versions of the pipeline* itself. If a
+data scientist adds a feature, a person tests the changed pipeline and installs it.
+
+## Level 2: CI/CD pipeline automation
+
+Level 2 automates that last manual part. Follow the diagram from the left: a code change enters,
+machines test and package it, the new pipeline is installed, it trains a model, and the model is
+released carefully.
 
 ## Level 2 — CI/CD pipeline automation
 
@@ -92,15 +148,19 @@ flowchart LR
   MON -->|insights| DEV
 ```
 
-Level 2 adds a robust **CI/CD system for the pipeline itself**:
+Level 2 adds a dependable **CI/CD system for the pipeline itself**:
 
-- **CI:** on every commit, build packages and images, run unit tests (feature logic, model methods), check
-  that training converges on a small sample, check that the model does not produce NaNs, run integration
-  tests between pipeline components.
-- **CD:** deploy the new pipeline to a staging environment, run it end to end, then promote to
-  production. Model deployments use progressive delivery (canary/shadow, module 9).
-- Data scientists can try new ideas rapidly and have them reach production safely without the platform
-  team as a bottleneck.
+- **CI:** on every **commit** (a saved change in Git), machines build the packages and container
+  images and run tests. **Unit tests** check small pieces such as one feature calculation.
+  Further tests check that training makes progress on a small sample of data, that the model does
+  not output **NaN** ("not a number", the value arithmetic produces when something has gone
+  wrong), and that the pipeline steps fit together (**integration tests**).
+- **CD:** the new pipeline is installed first in **staging**, a copy of production that no real
+  user depends on, and run from start to finish. If that works it is promoted to production.
+  Models are released by **progressive delivery**: to a few users first (a canary) or alongside
+  the old model without affecting users (shadow), as module 9 explains.
+- The result: data scientists can try an idea and have it reach production safely the same day,
+  without waiting for the platform team.
 
 ## Comparing the levels
 
@@ -121,14 +181,19 @@ deployment* (model release with A/B and traceability); 4 *Full MLOps automated o
 level 2 with automatic retraining on monitoring signals.
 
 > [!INTERVIEW]
-> "What does level 1 add over level 0?" — **Continuous training**: the *pipeline* (not just the model)
-> runs in production, triggered automatically, with automated data validation and model validation gates
-> and a metadata store. "What does level 2 add?" — **CI/CD for the pipeline code itself**, so changes to
-> features or model code are tested and deployed automatically.
+> "What does level 1 add over level 0?" **Continuous training**: the *pipeline*, and not only the
+> model it produced, runs in production, is triggered automatically, has automated data-validation
+> and model-validation gates, and records its runs in a metadata store. "What does level 2 add?"
+> **CI/CD for the pipeline code itself**, so changes to features or model code are tested and
+> deployed automatically.
 
 ## Choosing your next step
 
-Not every model needs level 2. Use the cost of staleness and the rate of change:
+Not every model needs level 2. The choice is a sum: what does a stale model cost the business,
+and how often does the data change enough to matter? The program below adds up three costs for
+each level over one year. `ops` is the cost of people's time spent retraining, `staleness` is the
+business loss while an out-of-date model is serving, and `build` is the one-time cost of building
+the automation.
 
 ```python-run
 # Rough heuristic: expected yearly cost of operating at each level for one model
@@ -147,6 +212,20 @@ for lvl in ["L0", "L1", "L2"]:
     total = ops + stale + build_cost[lvl]
     print(f"{lvl}: ops={ops:>8.0f}  staleness={stale:>8.0f}  build={build_cost[lvl]:>6.0f}  total={total:>8.0f}")
 ```
+
+The loop computes, for each level, retrains per year times hours per retrain times the hourly
+rate (`ops`), then retrains per year times weeks spent stale per retrain times the weekly loss
+(`staleness`), and adds the build cost. The output is:
+
+```text
+L0: ops=   46080  staleness=  144000  build=     0  total=  190080
+L1: ops=    5760  staleness=   24000  build= 25000  total=   54760
+L2: ops=    1440  staleness=   14400  build= 60000  total=   75840
+```
+
+With 24 retrains a year, level 1 is the cheapest. Level 0 loses mostly through staleness, not
+through engineer hours, which is typical: the hidden cost of manual work is the weeks during which
+nothing happens.
 
 Try lowering `retrains_per_year_needed` to 2: level 0 becomes the cheapest. Raise it to 52 or add more
 models (platform cost is shared across models) and level 2 wins. Maturity is an economic decision.
@@ -167,12 +246,17 @@ Steps 1–5 move you from level 0 to level 1; 6–8 to level 2.
 
 ## Maturity for LLM applications
 
-Applications built on foundation-model APIs follow a similar path, though "training" is often replaced
-by prompt and retrieval changes. Huyen (*AI Engineering*, ch. 10) describes an architecture that grows
-step by step: start with a plain model call, then enhance context (RAG), add guardrails, add a router
-and gateway, add caching, add agent patterns — with monitoring and evaluation throughout. An LLMOps
-level 0 team edits prompts in production by hand; a level 2 team versions prompts, runs an evaluation
-suite in CI on every prompt change, and canaries prompt changes with online metrics (module 12).
+Applications built on foundation models reached through an API (lesson 2) follow a similar ladder,
+though "training" is usually replaced by changes to the prompt and to the documents the model is
+given. Huyen (*AI Engineering*, ch. 10) describes an architecture that grows one step at a time.
+Start with a plain call to the model. Add retrieval of relevant documents (RAG). Add
+**guardrails**, checks on what goes into and comes out of the model. Add a **gateway**, a single
+entry point through which all model calls pass so they can be counted, limited and logged. Add a
+cache, and later more autonomous "agent" behaviour, with monitoring and evaluation at every step.
+An LLMOps team at level 0 edits prompts in production by hand. A team at level 2 keeps prompts in
+version control, runs an evaluation suite in CI on every prompt change, and releases a prompt
+change to a few users first while watching live numbers (module 12). **LLM** stands for large
+language model.
 
 ## What each level looks like in the repository
 
@@ -217,8 +301,10 @@ production.
 
 ## Measuring where you are
 
-Self-assessment by opinion is unreliable; use numbers. The four DORA metrics from software delivery
-translate directly, and ML adds a few of its own:
+Judging your own maturity by opinion is unreliable; use numbers. The four **DORA metrics** (named
+after the DevOps Research and Assessment group that popularised them) are the standard measures of
+how well a software team delivers. They are the first four rows of the table below and they carry
+over to ML directly. ML adds three rows of its own:
 
 | Metric | Question | Typical level 0 | Typical level 2 |
 |---|---|---|---|
@@ -251,6 +337,22 @@ for v, k in gaps:
     print(f"  - {k}: {'build it' if v == 0 else 'automate what is manual'}")
 ```
 
+How the program decides: `reached(needs)` is true only when every listed capability is fully
+automated (score 2). The team is level 2 if everything level 2 needs is automated, level 1 if
+everything level 1 needs is, and otherwise level 0. The output is:
+
+```text
+score: 12/26  -> effective level 0
+next steps toward level 1:
+  - data validation gate: build it
+  - drift / performance monitoring: build it
+  - retraining trigger: build it
+  - model validation gate: automate what is manual
+  - training is a pipeline: automate what is manual
+```
+
+This team scores 12 out of 26, which sounds like "almost halfway", and yet its level is 0.
+
 A team can score well on tools (tracker, registry, Git) and still be at level 0, because the *loop* is
 not automated. Levels are defined by the weakest link in the chain, not by how many products you bought.
 
@@ -275,6 +377,27 @@ not automated. Levels are defined by the weakest link in the chain, not by how m
   metadata tracking and triggers.
 - Level 2: the pipeline code itself goes through CI/CD; rapid, safe iteration.
 - Choose the level by economics: rate of change, cost of staleness, and number of models.
+
+## Glossary
+
+- **Maturity model** - a ladder of named levels describing how automated a team's process is.
+- **Pipeline** - a fixed chain of steps that a machine runs from start to finish.
+- **Continuous training (CT)** - automatic retraining of a model on new data.
+- **CI (continuous integration)** - automatically building and testing every code change.
+- **CD (continuous delivery)** - automatically releasing changes that pass their tests.
+- **Trigger** - the event that starts a pipeline: a schedule, new data, or an alert.
+- **Gate** - an automated check that must pass before a pipeline continues.
+- **Champion / challenger** - the model in production / a new model competing to replace it.
+- **Metadata store / lineage** - a database of what went into each run / that record of origins.
+- **Container** - a sealed bundle of code and its dependencies that runs the same everywhere.
+- **Staging** - a production-like environment used for testing before release.
+- **Progressive delivery** - releasing to a small share of traffic first (canary) or in parallel
+  without user impact (shadow).
+- **Commit** - one saved change in a version-control system.
+- **Unit / integration test** - a test of one small piece / of several pieces working together.
+- **DORA metrics** - deployment frequency, lead time for changes, change failure rate, time to
+  restore.
+- **Staleness** - the state of serving a model that no longer reflects current data.
 
 ```quiz
 [

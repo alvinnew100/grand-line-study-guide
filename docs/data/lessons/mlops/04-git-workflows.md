@@ -1,21 +1,55 @@
 # Git workflows for ML teams
 
+> **Before this lesson:** you should know the lifecycle picture from
+> [The ML lifecycle and the anatomy of an ML system](#/lesson/mlops/ml-lifecycle) and be able to
+> type a command into a terminal. No previous use of Git is assumed.
+
+## In plain words
+
+**Git** is a program that remembers every saved state of a folder of files. Each saved state is
+called a **commit**. You can look at any earlier commit, see exactly what changed between two of
+them, and let several people change the same project at once and then combine their work.
+
+A familiar comparison is the "save game" feature of a video game combined with the "track changes"
+feature of a word processor. Each commit is a save point with a note attached ("added the new
+features"). If something goes wrong you can go back, and you can always answer the question "what
+was different the last time this worked?".
+
+Three more words appear constantly. A **repository** (or "repo") is the project folder together
+with its whole history. A **branch** is a separate line of work, so you can try something without
+disturbing everyone else. **GitHub** is a website that hosts repositories and adds a place to
+discuss and approve changes.
+
+Why this matters for a job: every engineering team uses Git every day, and in ML it carries extra
+weight. A trained model depends on the exact code that produced it, and the identity of a commit
+is how that code is pinned down. Interviewers also ask about branching strategy and about how you
+would review a change to a model.
+
 ## Why Git discipline matters more in ML
 
-In ML, a "version" of the system is the combination of **code + data + config + environment + model**.
-Git is the anchor for all of them: the commit SHA is what you log in every experiment run, what you tag
-a Docker image with, and what your model registry points back to. If your Git hygiene is poor —
-uncommitted changes, giant notebooks, secrets in history — every other layer of reproducibility
-collapses.
+In ordinary software a "version" is a version of the code. In ML a version of the system is a
+combination of five things: **code + data + configuration + environment + model**. Git is the
+anchor for all of them. Every commit has a unique identifier, a 40-character string called its
+**SHA** or hash (for example `a1b2c3d…`, usually shortened to the first seven characters). That
+SHA is what you record with every training run, what you stamp on every packaged service, and
+what the model registry points back to. If Git habits are poor (changes that were never
+committed, enormous notebooks, passwords buried in the history) every other layer of
+reproducibility falls with it.
 
-This lesson covers the Git mental model you need, branching strategies, commit and review practices,
-and the ML-specific problems: notebooks, large files and secrets.
+This lesson covers the mental model of Git, branching strategies, commit and review practices, and
+the problems specific to ML: notebooks, large files and secrets.
 
 ## The mental model in five minutes
 
-Git stores **snapshots**, not diffs. Each commit records a full tree (via content-addressed blobs), a
-pointer to its parent(s), an author and a message. Branches are just movable labels pointing at commits;
-`HEAD` points at the branch you are on.
+Git stores **snapshots**, not differences. Each commit records the full state of every file at
+that moment (stored efficiently, so unchanged files are not duplicated), a pointer to the commit
+that came before it (its **parent**), the author and a message. A branch is nothing more than a
+movable label that points at one commit; when you commit on a branch, the label moves forward.
+`HEAD` is Git's name for "the commit you are standing on now". The main branch, the one everybody
+shares, is conventionally called `main`.
+
+In the diagram each circle is a commit. The lower line is a branch that split off, received two
+commits of its own and was then combined with the main line; combining is called a **merge**.
 
 ```mermaid
 flowchart LR
@@ -23,8 +57,11 @@ flowchart LR
   C2 -->|branch feature/new-features| F1((add rolling features)) --> F2((tests)) --> M
 ```
 
-Three areas: **working tree** (your files), **index/staging area** (what goes into the next commit),
-**repository** (committed history). Essential commands:
+Your work passes through three areas. The **working tree** is the files as they are on your disk.
+The **staging area** (also called the index) is the list of changes you have selected for the next
+commit. The **repository** is the committed history. Changes move from the first to the second
+with `git add` and from the second to the third with `git commit`. The commands below are the ones
+you will use daily; lines starting with `#` are comments.
 
 ```bash
 git status                      # what changed?
@@ -39,31 +76,50 @@ git stash push -m "wip"         # park changes temporarily
 git tag -a v1.2.0 -m "model service 1.2.0" && git push origin v1.2.0
 ```
 
+Reading the less obvious ones: `git add -p` shows each changed piece (a "hunk") and asks whether to
+stage it, which forces you to read what you are about to commit. `git switch -c name` creates a
+branch and moves onto it. `origin` is the conventional name of the shared copy of the repository
+on a server such as GitHub; `git fetch origin` downloads what others have pushed there. `git
+rebase origin/main` re-applies your commits on top of the newest `main` (more on this below). `git
+stash` puts unfinished changes aside so you can come back to them. A **tag** is a permanent,
+human-readable name for one commit, such as `v1.2.0`. A **PR**, or pull request, is a proposal on
+GitHub to merge your branch, where teammates review the change before it is accepted.
+
 > [!TIP]
-> `git rev-parse HEAD` gives the exact commit SHA. Log it as a tag on every experiment run and bake it
-> into every Docker image label. When something breaks in production, that SHA is your starting point.
+> `git rev-parse HEAD` prints the exact SHA of the current commit. Record it with every experiment
+> run and write it into every packaged image. When something breaks in production, that SHA is
+> where the investigation starts.
 
 ## Branching strategies
 
+A branching strategy is a team's agreement about which branches exist, how long they live and how
+work gets into `main`. Three are common.
+
 ### Trunk-based development (recommended default)
 
-Everyone integrates into `main` at least daily through **short-lived feature branches** (hours to a
-couple of days) and pull requests. Unfinished work hides behind **feature flags** or config switches.
-`main` is always releasable; CI runs on every PR and on every merge.
+"Trunk" is another word for `main`. Everyone merges their work into `main` at least once a day
+through **short-lived feature branches** that exist for hours or a couple of days, each reviewed
+in a pull request. Work that is not finished is still merged, hidden behind a **feature flag**: a
+switch in configuration that keeps the new code path turned off until it is ready. `main` can be
+released at any moment, and CI runs the tests on every pull request and on every merge.
 
-Why it suits ML teams: long-lived branches diverge, and in ML they diverge in *data assumptions* too.
-Merging a three-week-old feature branch that assumes an old table schema is painful.
+Why it suits ML teams: branches that live a long time drift away from `main`, and in ML they drift
+in their *assumptions about data* as well. Merging a three-week-old branch that still expects the
+old columns of a table is painful.
 
 ### GitHub Flow
 
-A simplification of trunk-based: branch from `main`, open a PR, review, CI, merge, deploy. Most open-source
-and SaaS teams use this.
+A stripped-down form of trunk-based development: create a branch from `main`, open a pull request,
+get a review, let CI pass, merge, deploy. Most open-source projects and web companies work this
+way.
 
 ### Git Flow
 
-Long-lived `develop` and `main`, plus `feature/*`, `release/*` and `hotfix/*` branches. Designed for
-software with scheduled, versioned releases (desktop apps, libraries supporting several versions). Usually
-too heavy for services that deploy continuously.
+Two permanent branches, `develop` and `main`, plus temporary `feature/*`, `release/*` and
+`hotfix/*` branches (a **hotfix** is an urgent repair to what is live). It was designed for
+software that ships on a schedule in numbered versions, such as desktop applications or libraries
+that must support several versions at once. For a service that is deployed many times a week it is
+usually more ceremony than it is worth.
 
 ```mermaid
 flowchart LR
@@ -81,18 +137,23 @@ flowchart LR
   end
 ```
 
-### Environment branches — an anti-pattern
+### Environment branches: an anti-pattern
 
-`dev`, `staging`, `prod` branches where you "promote" by merging. They drift apart and hotfixes get lost.
-Prefer **one branch, many environments**: the same artifact (image tagged with the SHA) is promoted from
-staging to production by CD configuration, not by merges.
+An **environment** is one running copy of the system: typically `dev` for developers, `staging`
+for final checks, and `prod` (production) for real users. Some teams keep a branch per
+environment and "promote" a change by merging from one branch to the next. The branches slowly
+stop matching each other, and urgent fixes applied to one are forgotten on the others. The better
+rule is **one branch, many environments**: build one packaged artifact from a commit (a container
+image labelled with the SHA), and move that same artifact from staging to production by changing
+deployment configuration, not by merging.
 
 ## Commits and pull requests
 
 ### Conventional Commits
 
-A lightweight convention that makes history scannable and lets tools generate changelogs and version
-bumps:
+**Conventional Commits** is a small agreed format for commit messages: a type, an optional area in
+brackets, a colon, then a short description. It makes the history easy to scan and lets tools
+write the list of changes for a release and decide the next version number automatically.
 
 ```
 feat(features): add 7-day rolling purchase count
@@ -103,16 +164,21 @@ docs(model-card): add slice metrics for new region
 feat(api)!: rename /predict payload field "x" to "features"   # "!" = breaking change
 ```
 
-A breaking change (`!` or a `BREAKING CHANGE:` footer) maps to a major version bump — the same idea you
-will implement for model versions in the `mlops-semver-bump` problem.
+The types are `feat` for a new capability, `fix` for a bug repair, `perf` for a speed-up, `chore`
+for housekeeping and `docs` for documentation. A **breaking change** is one that forces users of
+the code to change something on their side. It is marked by `!` or by a `BREAKING CHANGE:` line at
+the end of the message, and it calls for a new *major* version number (the first number in
+`2.0.0`). You will implement the same rule for model versions in the `mlops-semver-bump` problem.
 
 ### What a good ML pull request contains
 
-- A focused change (one feature, one fix).
-- Tests for new logic (feature computations, preprocessing edge cases).
-- For model changes: a link to the experiment run(s) and a metrics comparison table against the champion,
-  including slices.
-- Data/schema changes called out explicitly.
+- One focused change: one feature or one fix.
+- Tests for the new logic, such as feature calculations and unusual inputs to preprocessing.
+- For changes to a model: a link to the experiment run or runs, and a table comparing the numbers
+  against the champion (the model now in production), including **slices**, meaning the same
+  numbers computed for subgroups such as each country or device type.
+- Any change to data or to the **schema** (the list of columns and their types) called out
+  explicitly.
 - No notebooks with huge outputs, no data files, no secrets.
 
 > [!INTERVIEW]
@@ -123,15 +189,20 @@ will implement for model versions in the `mlops-semver-bump` problem.
 
 ## Notebooks in Git
 
-Jupyter notebooks are JSON with embedded outputs (including base64 images) and execution counts. Diffs
-are unreadable and merge conflicts are miserable. Options:
+A Jupyter notebook file is stored as JSON (a text format for nested data) that contains your code
+and also every output: tables, printed text, even images encoded as long strings of characters,
+plus a counter of how many times each cell was run. When two versions of such a file are compared,
+the differences are unreadable, and when two people edit the same notebook, combining their
+versions is miserable. The options:
 
-- **Strip outputs before commit** with `nbstripout` (as a Git filter or pre-commit hook).
-- **Pair notebooks with scripts** using **Jupytext**: keep a `.py` (percent format) representation that is
-  what you review and diff.
-- **Diff tools** like `nbdime` for human-readable notebook diffs.
-- **Graduate code out of notebooks**: once logic is reused, move it into the package (`src/`) with tests,
-  and import it from the notebook.
+- **Strip outputs before committing** with `nbstripout`, installed as a Git filter or as a
+  pre-commit hook (a check that runs automatically before each commit; lesson 5).
+- **Pair each notebook with a script** using **Jupytext**: it keeps a plain `.py` twin of the
+  notebook, and the `.py` file is what you review and compare. A sample is shown below; a line
+  starting with `# %%` marks the start of a cell.
+- **Use a notebook-aware comparison tool** such as `nbdime`.
+- **Move code out of notebooks as it matures**: once a piece of logic is used twice, put it in the
+  project's Python package (the `src/` folder) with tests, and import it from the notebook.
 
 ```text
 # notebook.py — Jupytext "percent" format
@@ -145,8 +216,12 @@ df = pd.read_parquet("data/transactions.parquet")
 
 ## Large files: never commit data or models to Git
 
-Git keeps every version of every file forever, in every clone. A 2 GB parquet file committed once bloats
-the repo permanently. Options:
+Git keeps every version of every file forever, in every copy of the repository. A 2 GB data file
+committed once makes the repository 2 GB larger for everyone, permanently, even if the file is
+deleted in the next commit. The solution is always the same: keep the big content elsewhere and
+keep only a small **pointer file** (a few lines naming the content and where it lives) in Git.
+The tools differ in where "elsewhere" is. **Object storage** is a cloud service for storing files
+of any size cheaply; Amazon S3 and Google Cloud Storage (GCS) are the best known.
 
 | Tool | Idea | Good for |
 |---|---|---|
@@ -155,7 +230,8 @@ the repo permanently. Options:
 | lakeFS | Git-like branches over an object store | large data lakes |
 | Registry / object store | models in MLflow/S3 referenced by URI | model artifacts |
 
-Add a `.gitignore` early:
+Next, tell Git which files it must never track by listing them in a file called `.gitignore`. Each
+line is a file name or a pattern; `*.pkl` means "any file ending in .pkl". Add it early:
 
 ```gitignore
 # data and artifacts
@@ -176,28 +252,40 @@ __pycache__/
 
 ## Secrets
 
-Never commit API keys, database passwords or cloud credentials. Once pushed, assume they are compromised
-— rotate them; rewriting history is not enough because forks and clones may exist.
+A **secret** is any value that grants access: an API key, a database password, a cloud credential.
+Never commit one. If a secret has been pushed to a shared repository, assume it is compromised
+and **rotate** it (cancel it and issue a new one) at once. Deleting it from the history is not
+enough, because copies of the repository may already exist elsewhere.
 
-- Keep secrets in environment variables loaded from an **uncommitted** `.env` locally, and in a secret
-  manager (AWS Secrets Manager, GCP Secret Manager, Vault, GitHub Actions secrets, Kubernetes Secrets) in
-  deployed environments.
+- On your own machine, keep secrets in **environment variables** (named values the operating
+  system hands to a program when it starts), loaded from a `.env` file that is listed in
+  `.gitignore`. In deployed environments, keep them in a **secret manager**: a service built to
+  store secrets and hand them only to authorised programs (AWS Secrets Manager, GCP Secret
+  Manager, Vault, GitHub Actions secrets, Kubernetes Secrets).
 - Add a secret scanner (`gitleaks`, `detect-secrets`) as a pre-commit hook and in CI (lesson 5).
-- GitHub push protection blocks many known token formats automatically.
+- GitHub's push protection blocks many well-known key formats automatically.
 
 ## Monorepo or polyrepo?
 
-- **Monorepo**: training code, serving code, shared feature library, infra in one repo. Atomic changes
-  across training and serving (great for avoiding skew), one CI system, easier refactors. Needs
-  path-filtered CI to stay fast.
-- **Polyrepo**: separate repos per service. Clear ownership and independent release cadence, but shared
-  code becomes a versioned package and cross-repo changes need coordination.
+- **Monorepo**: one repository holds the training code, the serving code, the shared feature
+  library and the infrastructure files. A single commit can change training and serving together,
+  which is a strong defence against skew; there is one CI system and refactoring is easier. To
+  stay fast, CI has to be told to run only the tests for the folders that changed.
+- **Polyrepo**: one repository per service. Ownership is clear and each service releases on its
+  own schedule, but shared code has to be published as a versioned package and a change that
+  spans repositories needs coordination.
 
 Many ML teams use a monorepo per product (data pipelines + training + service) plus a shared platform
 repo.
 
 ## A simulation: how often do long-lived branches conflict?
 
+A **merge conflict** happens when two branches changed the same part of the same file and Git
+cannot decide which version to keep; a person has to sort it out. The simulation below estimates
+how the chance of a conflict grows with the age of a branch. The model is deliberately crude: a
+project of 40 files, where you edit 2 random files a day on your branch while three teammates
+together edit 6 random files a day on `main`. A trial counts as a conflict if any file was touched
+on both sides. Each branch age is tried 4,000 times.
 ```python-run
 import numpy as np
 rng = np.random.default_rng(1)
@@ -213,12 +301,26 @@ for days in [1, 2, 5, 10, 20]:
     print(f"branch alive {days:2d} days -> P(conflict) ~ {conflicts / trials:.2f}")
 ```
 
-Conflict probability rises steeply with branch lifetime — the quantitative case for trunk-based
-development with small PRs.
+`rng.integers(0, files, size=...)` draws random file numbers; wrapping them in `set(...)` keeps
+each file once; `main & branch` is the set of files touched on both sides, and `bool(...)` of a
+non-empty set is `True`, which counts as 1. The output:
+
+```text
+branch alive  1 days -> P(conflict) ~ 0.27
+branch alive  2 days -> P(conflict) ~ 0.70
+branch alive  5 days -> P(conflict) ~ 1.00
+branch alive 10 days -> P(conflict) ~ 1.00
+branch alive 20 days -> P(conflict) ~ 1.00
+```
+
+A one-day branch conflicts about a quarter of the time; by day five a conflict is practically
+certain. Real projects have more files, so the absolute numbers are lower, but the shape of the
+curve is the argument for trunk-based development with small pull requests.
 
 ## Worked workflow: one feature from branch to merge
 
-Seeing the commands in sequence makes the workflow concrete.
+Seeing the commands in order makes the workflow concrete. Read the comments on the right as you
+go.
 
 ```bash
 git switch main && git pull --ff-only                  # start from the latest main
@@ -240,14 +342,26 @@ git commit --fixup <sha> && git rebase -i --autosquash origin/main
 git push --force-with-lease                            # safe force-push: refuses if the remote changed
 ```
 
-Notes that trip people up:
+Points that confuse newcomers:
 
-- **Rebase vs merge.** Rebasing your *private* branch onto `main` keeps history linear and the PR diff
-  clean. Never rebase commits that others have already built on. Many teams use **squash merge** for
-  PRs: one commit per PR on `main`, which makes `git revert` of a bad change trivial.
-- **`--force-with-lease`**, not `--force`: it aborts if someone else pushed to your branch.
-- **`git revert <sha>`** creates a new commit that undoes a change — the correct way to undo something
-  already on `main`. `git reset --hard` rewrites history and is only for local, unpushed work.
+- **`git pull --ff-only`** downloads the newest `main` and refuses to do anything surprising if
+  your local copy has diverged from it.
+- **`make lint test`** runs the project's style checks and tests through a Makefile (lesson 5).
+- **Rebase versus merge.** A merge joins two lines of history with a special merge commit. A
+  **rebase** takes your commits and replays them one by one on top of the latest `main`, as if you
+  had started your work today. Rebasing your own *private* branch keeps the history a straight
+  line and the pull request easy to read. Never rebase commits that other people have already
+  built on, because it replaces them with new commits that have different SHAs. Many teams use a
+  **squash merge** for pull requests: all the commits of the pull request become one commit on
+  `main`, so a bad change can be undone in one step.
+- **`git commit --fixup` with `rebase -i --autosquash`** folds a small correction into the earlier
+  commit it belongs to.
+- **`--force-with-lease`**, not `--force`. After a rebase your branch has new SHAs, so the server
+  copy has to be overwritten. The "with lease" form refuses if someone else has pushed to your
+  branch in the meantime.
+- **`git revert <sha>`** creates a new commit that undoes an earlier one. It is the correct way to
+  undo something that is already on `main`. `git reset --hard` erases commits and is only for
+  local work nobody else has seen.
 
 ### Resolving conflicts in ML repositories
 
@@ -322,6 +436,32 @@ retrain, belongs in DVC or the model registry.
 - Use Conventional Commits for readable history and automated versioning.
 - Keep notebooks diffable (nbstripout, Jupytext) and move reusable logic into tested packages.
 - Never commit data, models or secrets; use DVC/LFS/object stores and secret managers.
+
+## Glossary
+
+- **Git** - a version-control program that records every saved state of a project.
+- **Repository (repo)** - a project folder plus its full history.
+- **Commit** - one saved snapshot, with an author, a message and a parent.
+- **SHA (hash)** - the unique identifier of a commit.
+- **Branch** - a movable label marking a line of work. **`main`** is the shared one.
+- **HEAD** - the commit you currently have checked out.
+- **Working tree / staging area** - your files on disk / the changes chosen for the next commit.
+- **Merge** - combining two branches. **Merge conflict** - both sides changed the same lines.
+- **Rebase** - replaying your commits on top of a newer base commit.
+- **Squash merge** - merging a pull request as one single commit.
+- **Pull request (PR)** - a reviewed proposal to merge a branch.
+- **Tag** - a permanent name for one commit, such as `v1.2.0`.
+- **Trunk-based development** - everyone merges small changes into `main` at least daily.
+- **Feature flag** - a configuration switch that hides unfinished code.
+- **Environment** - one running copy of a system, such as staging or production.
+- **Conventional Commits** - a standard format for commit messages (`feat:`, `fix:` and so on).
+- **Breaking change** - a change that forces users of the code to adapt.
+- **Schema** - the columns of a data set and their types.
+- **Pointer file** - a small file in Git that names large content stored elsewhere.
+- **Object storage** - a cloud service for storing files of any size, such as S3.
+- **Secret / rotate** - a value that grants access / replacing it with a new one.
+- **Monorepo / polyrepo** - one repository for everything / one per service.
+- **`git bisect`** - a search through history for the commit that introduced a bug.
 
 ```quiz
 [

@@ -1,33 +1,66 @@
 # Data validation and versioning with DVC
 
+> **Before this lesson:** read [Data sources, ETL/ELT, batch and streaming](#/lesson/mlops/data-pipelines)
+> for pipelines and partitions, and [Git workflows for ML teams](#/lesson/mlops/git-workflows) for
+> commits and pointer files. The examples use pandas tables; each operation is explained.
+
+## In plain words
+
+**Data validation** is an automatic inspection of data before it is used: are all the expected
+columns there, are the values possible, does today's batch look like the batches before it?
+**Data versioning** is keeping a numbered, retrievable record of exactly which data was used, so
+that a result can be repeated or undone.
+
+A food factory is a fair comparison. Every delivery of ingredients is inspected at the door:
+right product, sealed, within its date, at the right temperature. A delivery that fails is set
+aside, not mixed into the dough. And every finished batch carries a lot number that says which
+deliveries went into it, so that if customers complain, the factory can trace the problem and
+recall exactly the affected batches. Validation is the inspection at the door; versioning is the
+lot number.
+
+Why this matters for a job: bad data is the most common cause of a model going wrong in
+production, and "how would you reproduce a model from a year ago?" is among the most frequent
+MLOps interview questions. Both answers come from this lesson.
+
 ## Garbage in, silent garbage out
 
-A web service that receives malformed input raises an error. A training pipeline that receives
-malformed data happily trains a worse model. Typical real incidents:
+A web service that receives a malformed request raises an error. A training pipeline that
+receives malformed data raises nothing: it trains a worse model and reports success. Incidents of
+this kind are common:
 
-- An upstream team changes `price` from dollars to cents. Every price is now 100× larger.
-- A join key changes type; the join silently returns 40% nulls for a key feature.
-- A logging bug duplicates a day of events, doubling "activity" features for that day.
-- A category is renamed (`"premium"` → `"Premium"`), creating an unseen category at serving time.
+- An upstream team (the team that produces a table you read) changes `price` from dollars to
+  cents. Every price is now 100 times larger.
+- A join key changes type on one side, say from number to text. The join stops matching, and a
+  key feature is suddenly 40% empty.
+- A logging bug writes one day of events twice, doubling every "activity" feature for that day.
+- A category is renamed from `"premium"` to `"Premium"`, so the model meets a category it has
+  never seen.
 
-**Data validation** catches these before they reach a model; **data versioning** lets you know exactly
-which data a model was trained on and reproduce or roll back.
+Validation catches these before they reach a model. Versioning tells you exactly which data a
+model was trained on, so you can reproduce it or go back.
 
 ## What to validate
 
-Think in three layers, from cheap to expensive:
+Think in three layers, from cheapest to most expensive:
 
-1. **Schema checks** — columns present, types, nullability, allowed categories, uniqueness of keys.
-2. **Value checks** — ranges (`0 <= age <= 120`), regex formats, referential integrity, row counts within
-   expected bounds, freshness (max timestamp is recent).
-3. **Distribution checks** — means/quantiles within tolerance of a reference, category frequencies,
-   drift statistics (PSI, KS — module 10) compared to the training data.
+1. **Schema checks.** The schema is the list of columns and their types. Are all columns present,
+   with the right types? Which may contain a **null** (a missing value)? Which categories are
+   allowed? Is the key column unique?
+2. **Value checks.** Are values in a sensible range (`0 <= age <= 120`)? Do text fields have the
+   right format? Does every reference point to something that exists (every order's customer is
+   in the customer table)? Is the number of rows in the expected band? Is the data **fresh**,
+   meaning its newest timestamp is recent?
+3. **Distribution checks.** Do averages and **quantiles** (values such as the median that split
+   the data at a given percentage) stay within a tolerance of a reference? Do categories occur
+   about as often as before? Module 10 introduces formal statistics for this (PSI and KS).
 
 Where to run them:
 
-- **At ingestion** (data contracts): reject or quarantine bad batches.
-- **Before training**: gate the pipeline; if checks fail, do not train, alert.
-- **At serving**: validate request payloads (pydantic) and monitor live feature distributions.
+- **At ingestion**, when data enters your systems: reject a bad batch or put it in **quarantine**,
+  a holding area where it harms nothing while someone looks at it.
+- **Before training**: as a gate. If checks fail, do not train; alert someone.
+- **At serving**: check each incoming request (the pydantic library does this, lesson 20) and
+  watch the distribution of live feature values.
 
 ```mermaid
 flowchart LR
@@ -40,9 +73,11 @@ flowchart LR
 
 ## Great Expectations-style validation
 
-**Great Expectations (GX)** popularised declarative *expectations* — named, parameterised assertions
-about data — grouped into *suites* and run as *checkpoints* that produce human-readable "Data Docs".
-Representative expectations:
+**Great Expectations (GX)** is the tool that made a particular style popular. An *expectation* is
+a named, parameterised statement about data ("values in column `age` lie between 0 and 120"). You
+declare what should be true and the tool does the checking; this is called a **declarative**
+style. Expectations are collected into a *suite*, and running a suite against a batch of data
+produces a readable report. Representative expectations:
 
 ```python
 import great_expectations as gx
@@ -62,10 +97,14 @@ results = batch.validate(suite)
 print(results.success)
 ```
 
-(The GX API has changed considerably between versions — check the docs for yours.) Note a subtle but
-important convention: value expectations like *between* or *in set* **ignore nulls**; nullness is checked
-separately by *not null*. Many expectations also accept `mostly=0.95` (pass if 95% of rows satisfy it),
-which avoids failing on a handful of known-bad rows.
+Each `add_expectation` line adds one rule; the class names read as sentences. `batch.validate`
+runs all of them and `results.success` is true only if every rule passed. (The GX programming
+interface has changed considerably between versions, so check the documentation for yours.)
+
+Two conventions deserve attention. First, value expectations such as *between* or *in set*
+**ignore nulls**; whether nulls are allowed is tested separately by *not null*. That way each
+failure has one clear cause. Second, many expectations accept `mostly=0.95`, meaning "pass if at
+least 95% of rows comply". This avoids failing a whole batch over a handful of known-bad rows.
 
 Alternatives: **pandera** (typed DataFrame schemas as Python classes, great for unit tests),
 **TensorFlow Data Validation (TFDV)** (infers a schema and computes statistics at scale, used in TFX),
@@ -86,8 +125,10 @@ Customers.validate(df, lazy=True)   # lazy=True collects all failures instead of
 
 ### Build your own mini validator
 
-You will implement a full version in the `mlops-validate-rows` problem. Here is the shape of it with
-pandas:
+Building a small validator yourself removes the mystery. You will implement a full version in the
+`mlops-validate-rows` problem. The version below uses pandas, where a table is a `DataFrame` and a
+column is a `Series`. The test table has five rows with deliberate faults: a repeated id, a
+negative age, a missing age, an impossible age and a wrongly capitalised plan.
 
 ```python-run
 import pandas as pd
@@ -119,6 +160,21 @@ for r in report:
     print(f"{status}  {r[0]:12s} {r[1]:9s} failures={r[2]} rows={r[3]}")
 ```
 
+For each rule the loop builds `bad`, a column of True/False values marking the rows that break it.
+`s.isna()` is True where a value is missing. `s.duplicated(keep=False)` is True for every row
+whose value occurs more than once. `~` means "not", and `s.notna() & ...` applies the convention
+described above: a missing value is never reported by a value check. The output:
+
+```text
+FAIL  customer_id  unique    failures=2 rows=[2, 3]
+FAIL  age          not_null  failures=1 rows=[2]
+FAIL  age          between   failures=2 rows=[1, 4]
+FAIL  plan         in_set    failures=1 rows=[2]
+```
+
+Rows are numbered from 0. Row 2 has the missing age, and it is reported once, by `not_null`; the
+`between` rule reports only rows 1 (age -2) and 4 (age 130).
+
 > [!TIP]
 > Make validation **severity-aware**: a missing primary key should *fail* the pipeline; a mean that moved
 > 5% should *warn* and attach a report. Over-strict validation that fails daily gets disabled by
@@ -126,18 +182,25 @@ for r in report:
 
 ## Data versioning: why Git alone is not enough
 
-Reproducing a model requires the exact training data. Git cannot hold gigabytes efficiently. Options:
+To reproduce a model you need the exact data it was trained on. Git cannot hold gigabytes
+efficiently (lesson 4), so something else must. The options:
 
-- **Immutable, date-partitioned tables** plus recording the query and snapshot time.
-- **Table formats with time travel**: Delta Lake, Iceberg and Hudi keep versions of tables
-  (`SELECT ... VERSION AS OF 42`), and BigQuery/Snowflake offer time travel for limited windows.
-- **lakeFS**: Git-like branches and commits over an object store.
-- **DVC (Data Version Control)**: Git for data and pipelines for file-based projects.
+- **Immutable, date-partitioned tables**, together with a record of the query and the time it was
+  run.
+- **Table formats with time travel.** Delta Lake, Iceberg and Hudi keep earlier versions of a
+  table and let you query one (`SELECT ... VERSION AS OF 42`); BigQuery and Snowflake offer the
+  same for a limited period.
+- **lakeFS**: Git-style branches and commits over object storage.
+- **DVC (Data Version Control)**: a command-line tool that adds data files and pipelines to a
+  Git-based project.
 
 ## DVC in depth
 
-DVC stores small **pointer files** in Git and the actual content in a **remote** (S3, GCS, Azure Blob,
-SSH, local). Content is addressed by its **MD5 hash**, so identical files are stored once.
+DVC keeps small **pointer files** in Git and the real content in a **remote**, which here means a
+storage location such as an S3 bucket, a Google Cloud Storage bucket or a shared disk. Each file
+is identified by a **hash** of its contents (DVC uses an algorithm called MD5): a short
+fingerprint that changes if a single byte changes. Storing by fingerprint is called **content
+addressing**, and it means two identical files are stored once.
 
 ```bash
 pip install "dvc[s3]"
@@ -149,6 +212,11 @@ git commit -m "data: customers snapshot 2025-01-15"
 dvc push                                   # upload content to the remote
 ```
 
+In order: install DVC with S3 support; `dvc init` prepares the project; `dvc remote add` names the
+storage location; `dvc add` computes the file's hash, writes the pointer file next to it and
+tells Git to ignore the big file; the two `git` commands commit the pointer; `dvc push` uploads
+the content.
+
 The `.dvc` file is tiny:
 
 ```yaml
@@ -159,13 +227,16 @@ outs:
   path: customers.parquet
 ```
 
-Time travel: `git checkout <old-commit> && dvc checkout` restores the data exactly as it was. Collaborators
-run `git pull && dvc pull`.
+Going back in time takes two commands: `git checkout <old-commit>` restores the old pointer file,
+and `dvc checkout` fetches the content that pointer names. Teammates run `git pull && dvc pull`
+to receive both.
 
 ### DVC pipelines
 
-DVC can also define a pipeline of **stages** with dependencies and outputs in `dvc.yaml`. `dvc repro`
-reruns only stages whose dependencies changed (by hash) — `make` for data science.
+DVC can also describe a pipeline. A file named `dvc.yaml` lists **stages**; each stage has a
+command (`cmd`), the files it depends on (`deps`), the settings it reads (`params`) and the files
+it produces (`outs`). The command `dvc repro` ("reproduce") reruns only the stages whose inputs
+have changed, judged by hash. It is the `make` idea from lesson 5 applied to data.
 
 ```yaml
 # dvc.yaml
@@ -213,9 +284,13 @@ flowchart LR
   TRAIN --> MET[metrics.json]
 ```
 
-`dvc.lock` records the exact hash of every dependency and output — a complete, committed lineage record:
-this model came from this code, these params and this data.
+`dvc.lock` is written by `dvc repro` and records the exact hash of every input and output of every
+stage. Committed to Git, it is a complete lineage record: this model came from this code, these
+parameters and this data.
 
+The program below imitates the decision `dvc repro` makes. Each stage gets a signature: the hash
+of everything it depends on. If the signature matches the one stored in the lock from the
+previous run, the stage is skipped ("cached"); otherwise it runs.
 ```python-run
 # How content-addressed caching decides what to rerun (the core of dvc repro).
 import hashlib, json
@@ -238,6 +313,27 @@ print("param changed:");        lock = run(files, lock)
 files["raw"] = "rows-v2"
 print("raw data changed:");     lock = run(files, lock)
 ```
+
+Notice that `train` depends on `prepare`'s *output*, and that output is named after `prepare`'s
+signature. A change early in the chain therefore changes every later signature. The output:
+
+```text
+first run:
+  prepare  RUN
+  train    RUN
+nothing changed:
+  prepare  cached
+  train    cached
+param changed:
+  prepare  cached
+  train    RUN
+raw data changed:
+  prepare  RUN
+  train    RUN
+```
+
+Changing the learning rate reruns only `train`, because `prepare` does not read that parameter.
+Changing the raw data reruns both. Nothing is rerun without a reason and nothing stale is reused.
 
 > [!INTERVIEW]
 > "How do you guarantee you can reproduce a model from a year ago?" — Code SHA in Git; data version via
@@ -299,9 +395,26 @@ for name, sev, ok in checks:
 print("\npipeline decision:", "STOP - quarantine batch, alert owner" if failed_errors else "continue (with warnings attached to the run)")
 ```
 
-Notice which check caught the cents bug: not the hard range check (values stayed under 10,000) but the
-**mean-shift warning** — and the casing change was caught by the allowed-set check. Different faults
-need different kinds of expectations; a suite with only null checks would have passed this batch.
+The program builds 5,000 customers, then damages the data in two realistic ways: 400 rows have
+their charge multiplied by 100 (a switch to cents) and five rows get a differently capitalised
+plan. Each check is a triple of name, severity and a True/False result. The output:
+
+```text
+PASS   customer_id unique
+ERROR  plan in allowed set
+PASS   charges in [0, 10000] mostly
+WARN   charges mean within 15%
+PASS   last_login null rate <= 10%
+PASS   row count within 20%
+PASS   label rate in [2%, 30%]
+
+pipeline decision: STOP - quarantine batch, alert owner
+```
+
+Look at which check noticed the cents bug. It was not the hard range check, because the inflated
+values still stayed under 10,000. It was the **mean-shift warning**. The capitalisation change was
+caught by the allowed-set check. Different faults need different kinds of expectation; a suite
+containing only null checks would have passed this batch.
 
 ### Where validation results should go
 
@@ -362,6 +475,29 @@ resolves to exactly the bytes it read.**
   reportable; nulls are handled by `not_null`, other checks skip them; use severities and `mostly`.
 - Version data with DVC (pointer files + remote, content-addressed), table time travel or lakeFS.
 - DVC pipelines (`dvc.yaml` + `dvc.lock`) rerun only what changed and record full lineage.
+
+## Glossary
+
+- **Data validation** - automated checks that data has the expected structure and values.
+- **Schema** - the columns of a data set and their types.
+- **Null** - a missing value.
+- **Quantile** - a value that splits data at a given percentage, such as the median at 50%.
+- **Freshness** - how recent the newest data is.
+- **Quarantine** - a holding area for data that failed validation.
+- **Expectation / suite** - one declared rule about data / a named collection of rules.
+- **Declarative** - stating what must be true and leaving the checking to a tool.
+- **`mostly`** - the share of rows that must comply for an expectation to pass.
+- **Severity** - whether a failed check stops the pipeline (error) or only reports (warning).
+- **Data versioning** - keeping retrievable, identified snapshots of data.
+- **Time travel** - querying a table as it was at an earlier version.
+- **DVC** - a tool that versions data and pipelines alongside Git.
+- **Pointer file (`.dvc`)** - a small file in Git holding the hash, size and path of large content.
+- **Remote** - the storage location where DVC keeps file contents.
+- **Hash / content addressing** - a fingerprint of a file's contents / storing files under that
+  fingerprint.
+- **Stage** - one step of a DVC pipeline, with its command, inputs and outputs.
+- **`dvc.lock`** - the recorded hashes of every stage's inputs and outputs.
+- **Lineage** - the record of which code, data and settings produced a result.
 
 ```quiz
 [

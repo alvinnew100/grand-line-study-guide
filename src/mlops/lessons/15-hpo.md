@@ -1,18 +1,48 @@
 # Hyperparameter tuning at scale
 
+> **Before this lesson:** read [Experiment tracking with MLflow](#/lesson/mlops/mlflow-tracking)
+> (every trial here is a tracked run), [Reproducibility: seeds, environments and lineage](#/lesson/mlops/reproducibility)
+> for seed variance, and [Distributed training and GPUs](#/lesson/mlops/distributed-gpus) for
+> checkpoints and spot instances.
+
+## In plain words
+
+Every learning algorithm has dials that you set before it starts: how big each learning step is,
+how deep a decision tree may grow, how strongly to discourage complicated solutions. These dials
+are **hyperparameters**. The numbers the algorithm then works out by itself from the data are its
+**parameters**. **Hyperparameter optimisation** (HPO), or tuning, is the search for the dial
+settings that give the best model.
+
+Tuning an oven for a new bread recipe is the same activity. You cannot calculate the right
+temperature and time; you bake a loaf, taste it, adjust, and bake again. Each loaf costs flour
+and an hour. The questions are the ones this lesson answers: which settings should you try next,
+how do you avoid wasting loaves on settings that are clearly failing, and how do you judge the
+result fairly?
+
+Why this matters for a job: tuning is the most compute-hungry part of training and the easiest to
+waste money on. An MLOps engineer is expected to run it in parallel, within a budget, with every
+trial recorded. In interviews, "how would you tune an expensive model on a fixed budget?" and
+"why does random search beat grid search?" are both standard.
+
 ## Parameters vs hyperparameters
 
-**Parameters** are learned from data (weights, tree splits). **Hyperparameters** are chosen before or
-around training: learning rate, tree depth, regularisation strength, batch size, architecture choices,
-even preprocessing options. Hyperparameter optimisation (HPO) is the search for a configuration that
-maximises a validation metric — under a compute budget. From an MLOps point of view, HPO is the most
-compute-hungry, most parallelisable, and most easily wasted part of the training loop.
+**Parameters** are learned from data: the weights of a neural network, the split points of a
+decision tree. **Hyperparameters** are chosen around the training: learning rate, tree depth,
+regularisation strength (a penalty that keeps the model from fitting noise), batch size, the
+shape of the network, even choices in preprocessing. One training with one setting of the dials
+is called a **trial**, and the set of values each dial is allowed to take is the **search
+space**. HPO looks for the configuration with the best validation score that can be found within
+a budget of computing time.
 
 ## The evaluation protocol comes first
 
-Mueller & Guido (ch. 5) are emphatic: if you choose hyperparameters using the test set, the test score
-is no longer an honest estimate. The standard protocol is a **three-way split** (or cross-validation
-inside the training set):
+Before searching, decide how a trial is scored. Mueller and Guido (ch. 5) are emphatic on one
+rule: if you pick hyperparameters by looking at the **test set**, the test score stops being an
+honest estimate of how the model will do on new data, because you have chosen the settings that
+happen to suit those particular rows. The standard protocol uses three parts: a training part to
+fit the parameters, a **validation** part to choose hyperparameters, and a test part that is used
+exactly once at the end. Cross-validation inside the training data can stand in for a fixed
+validation part.
 
 ```mermaid
 flowchart LR
@@ -25,13 +55,14 @@ flowchart LR
   REFIT --> TEST
 ```
 
-- **Grid search with cross-validation** (`GridSearchCV`) evaluates each configuration by k-fold CV on the
-  training set, then refits the best on all training data.
-- For time-dependent data use **time-series splits** (train on the past, validate on the future) — random
-  CV leaks the future.
-- For grouped data (several rows per user) use **GroupKFold** so the same user is never in both train and
-  validation.
-- **Nested CV** gives an unbiased estimate of the whole "tune + train" procedure when data is scarce.
+- **Grid search with cross-validation** (`GridSearchCV` in scikit-learn) scores each configuration
+  by k-fold cross-validation on the training data, then retrains the winner on all of it.
+- For data ordered in time, use **time-series splits**: train on the past, validate on a later
+  period. Randomly mixed folds let the model see the future.
+- For grouped data (several rows per user), use **GroupKFold**, which keeps all rows of one user
+  on the same side.
+- **Nested cross-validation** wraps the whole "tune, then train" procedure in an outer loop and
+  gives an unbiased score for the procedure itself when data is scarce.
 
 > [!WARNING]
 > Every time you look at the test set and then change something, you leak a little. With thousands of
@@ -42,14 +73,21 @@ flowchart LR
 
 ### Grid search
 
-Try every combination of a fixed set of values. Simple, reproducible, embarrassingly parallel — and
-exponential in the number of hyperparameters. Four hyperparameters with five values each is 625 trainings.
+Choose a few values for each hyperparameter and try every combination. It is easy to understand,
+repeatable, and every trial is independent of the others, so they can all run at once. The
+weakness is that the number of trials multiplies: four hyperparameters with five values each is
+5 × 5 × 5 × 5 = 625 trainings.
 
 ### Random search
 
-Sample configurations from distributions. Bergstra & Bengio (2012) showed random search beats grid search
-when only a few hyperparameters really matter: a 3×3 grid tests only 3 distinct values of the important
-one, while 9 random points test 9.
+Draw each trial's settings at random from a stated range. Bergstra and Bengio showed in 2012 that
+this beats a grid whenever only a few of the hyperparameters really matter, which is the usual
+case. The reason is visible in a small example: a 3×3 grid over two hyperparameters tests only 3
+different values of the important one, three times each, while 9 random points test 9 different
+values of it.
+
+The simulation below uses an invented scoring function in which the learning rate `lr` matters a
+great deal and `depth` hardly at all, and gives both methods nine trials.
 
 ```python-run
 import numpy as np
@@ -71,26 +109,48 @@ print(f"random search (9 trials) mean best = {np.mean(best_random):.4f}, "
       f"beats grid in {np.mean(np.array(best_random) > grid_best) * 100:.0f}% of repeats")
 ```
 
-Note the **log-uniform** sampling for the learning rate: hyperparameters that span orders of magnitude
-(learning rate, regularisation) should be searched on a log scale.
+`grid_best` is the best of the nine grid combinations. The loop then repeats a nine-trial random
+search 500 times and records the best score of each repetition. The output:
+
+```text
+grid search (9 trials)  best = 0.7200
+random search (9 trials) mean best = 0.8620, beats grid in 95% of repeats
+```
+
+The best learning rate in this toy function is about 0.02, and the grid's three values (0.001,
+0.01, 0.1) all miss it. Nine random values nearly always land closer.
+
+Note the line `10 ** rng.uniform(-3, -1, 9)`. It draws the *exponent* uniformly, so values
+between 0.001 and 0.01 are as likely as values between 0.01 and 0.1. This is **log-uniform**
+sampling, and it is the right choice for any hyperparameter whose sensible values span several
+powers of ten, such as a learning rate or a regularisation strength.
 
 ### Bayesian optimisation
 
-Build a **surrogate model** of "configuration → score" from completed trials and use an **acquisition
-function** to pick the next configuration, trading off exploration (uncertain regions) and exploitation
-(promising regions). Common surrogates: Gaussian processes, and the **Tree-structured Parzen Estimator
-(TPE)** used by Optuna and Hyperopt, which models the densities of good and bad configurations. Bayesian
-methods are sample-efficient — valuable when each trial is expensive — but less trivially parallel since
-each suggestion wants prior results.
+Random search ignores what earlier trials found. **Bayesian optimisation** uses it. After each
+trial it updates a cheap statistical model, called a **surrogate**, that predicts the score of
+configurations not yet tried, along with how uncertain that prediction is. A rule called the
+**acquisition function** then picks the next configuration, balancing **exploitation** (try near
+the best results so far) against **exploration** (try where the surrogate is unsure). Two common
+surrogates are Gaussian processes and the **Tree-structured Parzen Estimator (TPE)**, the default
+in the Optuna and Hyperopt libraries. Bayesian methods reach a good configuration in fewer
+trials, which matters when each trial is expensive. They are harder to parallelise, because each
+suggestion is better the more earlier results are already known.
 
 ### Early stopping: successive halving, Hyperband, ASHA
 
-Most bad configurations reveal themselves early. **Successive halving** starts many trials with a small
-budget (few epochs), keeps the top $1/\eta$, multiplies their budget by $\eta$, and repeats.
-**Hyperband** runs several successive-halving brackets with different trade-offs between "many configs,
-small budget" and "few configs, large budget". **ASHA** is the asynchronous version that promotes trials
-as soon as possible without waiting for a whole rung — ideal on a cluster.
+Most bad configurations show themselves early in training. **Successive halving** exploits that.
+Start many trials but give each only a small budget, say one epoch. Keep the best third (in
+general the best $1/\eta$, where $\eta$ is a chosen factor such as 3), give the survivors three
+times the budget, and repeat until one remains. **Hyperband** runs several rounds of successive
+halving with different starting points, hedging between "many configurations with tiny budgets"
+and "few configurations with large budgets". **ASHA** (asynchronous successive halving) promotes
+a trial as soon as it qualifies without waiting for its whole group to finish, which suits a
+cluster where machines free up at different times.
 
+The simulation starts 27 configurations with $\eta = 3$. Each has a hidden true quality, and
+`observe` returns a noisy score that rises towards that quality as the budget grows, the way a
+learning curve does.
 ```python-run
 import numpy as np
 rng = np.random.default_rng(1)
@@ -112,6 +172,20 @@ print(f"picked config quality {quality[alive[0]]:.3f} (true best {quality.max():
       f"epochs spent {spent} vs {full_cost} for training all {n} fully")
 ```
 
+The output:
+
+```text
+budget= 1 epochs -> kept  9 configs
+budget= 3 epochs -> kept  3 configs
+budget= 9 epochs -> kept  1 configs
+picked config quality 0.885 (true best 0.894); epochs spent 81 vs 729 for training all 27 fully
+```
+
+The method spent 27×1 + 9×3 + 3×9 = 81 epochs, against 729 for training all 27 configurations to
+the end, and picked a configuration within 0.01 of the true best. It did not pick *the* best:
+early scores are noisy, and a slow starter can be eliminated. That is the trade this method
+makes, a small risk for a ninefold saving.
+
 ### Population-based training (PBT)
 
 Train a population in parallel; periodically, poor performers copy the weights of good performers
@@ -128,8 +202,10 @@ popular in reinforcement learning.
 
 ## Tools
 
-**Optuna** — define-by-run API, TPE sampler, pruners (median, successive halving, Hyperband), storage in
-a database for distributed studies, MLflow integration.
+**Optuna** is the most popular Python library for HPO. You write an `objective` function that
+receives a `trial`, asks it for hyperparameter values, trains, and returns the score. Optuna
+decides which values to hand out (its "sampler", TPE by default), can stop hopeless trials early
+(its "pruners"), and can store results in a database so that many machines work on one study.
 
 ```python
 import optuna, mlflow
@@ -159,6 +235,12 @@ with mlflow.start_run(run_name="hpo-parent"):
     study.optimize(objective, n_trials=100, timeout=3600)
     mlflow.log_params({f"best_{k}": v for k, v in study.best_params.items()})
 ```
+
+Inside `objective`, each `trial.suggest_*` call both declares a hyperparameter's range and
+returns the value to use in this trial; `log=True` requests log-uniform sampling. Each trial is
+recorded as a nested MLflow run and scored by 5-fold cross-validation. `create_study` sets the
+direction (maximise), the sampler, the pruner and a shared database, and `optimize` runs up to
+100 trials or one hour, whichever ends first.
 
 For iterative training, report intermediate values and let the pruner stop hopeless trials:
 
@@ -249,9 +331,11 @@ def objective(trial):
 
 ## How many trials? Thinking in probabilities
 
-For random search there is a neat rule: if you want at least one trial in the best 5% of the search
-space with probability 95%, you need $n$ such that $1 - 0.95^n \ge 0.95$, i.e. about 59 trials —
-regardless of the number of dimensions.
+How many random trials are enough? There is a neat piece of arithmetic. Suppose you would be
+satisfied with any configuration in the best 5% of the search space. One random trial misses that
+region with probability 0.95, and $n$ independent trials all miss it with probability $0.95^n$.
+For a 95% chance of at least one hit you need $1 - 0.95^n \ge 0.95$, which gives about 59 trials,
+whatever the number of hyperparameters.
 
 ```python-run
 import math
@@ -262,12 +346,14 @@ for q in (0.10, 0.05, 0.01):
         print(f"  top {q:4.0%}, confidence {conf:.0%}: {n:4d} trials")
 ```
 
-That gives a principled budget for a first random sweep (around 60 trials), after which a smarter
-sampler or a narrowed space is a better use of compute than hundreds more random points.
+The table printed by the program shows the pattern: 59 trials for the top 5% at 95% confidence,
+but 299 trials for the top 1%. Around 60 trials is therefore a principled size for a first random
+sweep. After that, a smarter sampler or a narrower search space uses the budget better than
+hundreds more random points.
 
 ## Reading the results
 
-Do not just take `study.best_params`. Inspect:
+The best trial's settings (`study.best_params`) are not the whole result. Also inspect:
 
 - **Optimisation history**: is the best value still improving, or flat for the last half? Flat means you
   can stop.
@@ -298,8 +384,22 @@ print(f"top-10 trials: lr in [{10**log_lr[best].min():.3f}, {10**log_lr[best].ma
       f"leaves in [{leaves[best].min()}, {leaves[best].max()}], subsample in [{sub[best].min():.2f}, {sub[best].max():.2f}]")
 ```
 
-The learning rate explains most of the variance; subsample explains none, and the top trials span its
-whole range — remove it from the next search and spend the budget where it matters.
+The program invents 200 trials whose score depends strongly on the learning rate, weakly on the
+number of leaves and not at all on `subsample`. `importance` sorts one hyperparameter's values
+into eight bins and measures what share of the variation in score is explained by which bin a
+trial fell in. The output:
+
+```text
+learning_rate (log)  importance ~ 0.92
+max_leaf_nodes       importance ~ 0.05
+subsample            importance ~ 0.04
+top-10 trials: lr in [0.030, 0.084], leaves in [26, 67], subsample in [0.52, 0.97]
+```
+
+The learning rate explains about 92% of the variation. The ten best trials agree on a narrow
+learning-rate range and are spread over nearly the whole `subsample` range, which confirms that
+`subsample` does not matter here. Remove it from the next search and spend the budget where it
+counts.
 
 ## HPO and continuous training
 
@@ -317,6 +417,29 @@ includes the tuning decision.
   bad trials early; PBT learns schedules.
 - Operationally: budget, track every trial, fix data/seed policy, checkpoint, and consider multi-objective
   trade-offs.
+
+## Glossary
+
+- **Hyperparameter** - a setting chosen before training, such as the learning rate.
+- **Parameter** - a value the model learns from data.
+- **HPO (tuning)** - the search for the best hyperparameter configuration.
+- **Trial / study** - one training with one configuration / a whole search.
+- **Search space** - the allowed values of each hyperparameter.
+- **Validation set** - data used to choose hyperparameters, separate from the final test set.
+- **Grid search** - trying every combination of listed values.
+- **Random search** - drawing configurations at random from ranges.
+- **Log-uniform** - sampling so that each power of ten is equally likely.
+- **Bayesian optimisation** - choosing the next trial with a model of earlier results.
+- **Surrogate / acquisition function** - that model / the rule that picks the next point.
+- **TPE** - the Tree-structured Parzen Estimator, a common surrogate.
+- **Exploration / exploitation** - trying uncertain regions / refining the best known region.
+- **Successive halving** - repeatedly keeping the best fraction of trials and raising their
+  budget.
+- **Hyperband / ASHA** - several halving rounds with different trade-offs / its asynchronous form.
+- **Pruner** - the component that stops unpromising trials early.
+- **PBT** - population-based training, which adapts hyperparameters during training.
+- **Pareto front** - the configurations for which no other is better on every objective.
+- **Warm start** - beginning a search from previously good configurations.
 
 ```quiz
 [

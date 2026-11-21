@@ -1,15 +1,47 @@
 # Docker fundamentals: images, layers and the build cache
 
+> **Before this lesson:** read [Python packaging, Makefiles and pre-commit](#/lesson/mlops/packaging-tooling)
+> for dependencies and lockfiles, and [Linux shell essentials and configuration management](#/lesson/mlops/shell-config)
+> for processes, ports, signals and environment variables.
+
+## In plain words
+
+A **container** is a sealed box that holds a program together with everything it needs to run:
+the right version of Python, every library, system files, the model file. The box runs the same
+way on any machine that can run containers, so the program behaves identically on your laptop, on
+a test machine and on a production server. **Docker** is the most widely used tool for building
+and running such boxes.
+
+The name comes from shipping. Before the standard steel shipping container, every cargo was
+loaded by hand in its own way, and things broke or went missing at every port. Once everything
+travelled in identical boxes, any ship, crane or lorry could handle any cargo without knowing
+what was inside. Software containers did the same for programs: the people who run servers no
+longer need to know whether a box contains a Python model or a Java service.
+
+Two more words. An **image** is the packed, unchanging box as stored on disk, like a recipe plus
+all its ingredients, frozen. A container is one running copy made from an image. You can start
+many containers from one image.
+
+Why this matters for a job: practically every production ML system ships as a container, and
+everything in the remaining modules (serving, Kubernetes, CI/CD) assumes you can build one. "Why
+do you copy `requirements.txt` before the source code?" is one of the most frequently asked
+Docker interview questions, and this lesson explains the mechanism behind the answer.
+
 ## "It works on my machine"
 
-A model trained with scikit-learn 1.5 on Python 3.11 with OpenBLAS may refuse to unpickle under 1.3,
-or — worse — load and predict differently. **Containers** package the application together with its
-entire userland (OS libraries, Python, packages, model files) into one immutable artifact that runs the
-same on a laptop, a CI runner and a Kubernetes node.
+A model trained with scikit-learn 1.5 on Python 3.11 may refuse to load under scikit-learn 1.3,
+or, worse, load and give different predictions. The cause is always some difference between the
+two environments. A container removes the difference by packaging the application with its whole
+**userland**, meaning everything above the operating system's core: system libraries, Python,
+packages and model files. The result is one **immutable** artifact (it is never modified after it
+is built) that runs the same everywhere.
 
-As Lubanovic recounts (*FastAPI*, ch. 13), Docker made Linux containers mainstream in 2013: instead of
-emulating a whole machine like a VM, a container shares the host's Linux kernel and isolates processes,
-filesystems and networks, which makes it much lighter and faster to start.
+Lubanovic recounts (*FastAPI*, ch. 13) how Docker made Linux containers mainstream from 2013. The
+earlier solution to the same problem was the **virtual machine** (VM), which imitates an entire
+computer, including its own complete operating system. A container does less: it shares the
+**kernel** (the core of the operating system that talks to hardware and manages processes) of the
+machine it runs on, and only isolates the program's view of files, processes and network. That
+makes it much smaller and far quicker to start.
 
 ## Containers vs virtual machines
 
@@ -35,21 +67,30 @@ flowchart TB
 | Size | gigabytes | megabytes to a few GB |
 | Kernel | own | shared with host |
 
-Containers are built from Linux kernel features: **namespaces** (isolated views of process IDs, network,
-mounts, hostnames, users), **cgroups** (limits on CPU, memory, I/O) and **union filesystems** (layered
-images). A container is just a normal process with a restricted view of the system.
+Containers are assembled from three features of the Linux kernel. **Namespaces** give a process
+its own private view of the system: its own list of process ids, its own network, its own file
+tree. **cgroups** (control groups) set limits on how much CPU, memory and disk activity it may
+use. A **union filesystem** stacks several read-only layers of files into one visible file tree,
+which is what makes layered images possible. A container, then, is an ordinary process running
+on the host, with a restricted view of the system around it.
 
 ## Core vocabulary
 
-- **Image**: a read-only template — an ordered stack of filesystem layers plus metadata (entrypoint, env,
-  exposed ports). Identified by a **digest** (`sha256:...`) and referenced by human-friendly **tags**
-  (`churn-api:1.4.0`).
-- **Container**: a running (or stopped) instance of an image with a thin writable layer on top.
-- **Dockerfile**: the recipe to build an image.
-- **Registry**: a server storing images (Docker Hub, GHCR, Amazon ECR, Google Artifact Registry, Azure ACR).
-- **Build context**: the directory sent to the builder (filtered by `.dockerignore`).
-- **Volume / bind mount**: storage that lives outside the container's writable layer.
+- **Image**: a read-only template made of an ordered stack of filesystem layers plus settings
+  (which command to start, environment variables, which ports the program listens on). Its exact
+  identity is a **digest**, a hash written `sha256:...`. People refer to it by a friendlier
+  **tag** such as `churn-api:1.4.0`.
+- **Container**: a running, or stopped, instance of an image, with a thin writable layer on top
+  for any files it creates.
+- **Dockerfile**: the text file of instructions from which an image is built.
+- **Registry**: a server that stores images so other machines can download them (Docker Hub,
+  GitHub's GHCR, Amazon ECR, Google Artifact Registry, Azure ACR).
+- **Build context**: the folder whose contents are sent to the builder, minus whatever a
+  `.dockerignore` file excludes.
+- **Volume / bind mount**: storage that lives outside the container, so data survives when the
+  container is deleted.
 
+The everyday commands:
 ```bash
 docker build -t churn-api:dev .               # build an image from ./Dockerfile
 docker images                                  # list local images
@@ -66,9 +107,18 @@ docker system df; docker system prune          # disk usage; clean up
 docker history churn-api:dev                   # see layers and their sizes
 ```
 
+The pattern is always `docker <action>`. `build -t name:tag .` builds an image from the Dockerfile
+in the current folder (the final dot) and names it. `run` starts a container; `--rm` deletes it
+when it stops, `-d` runs it in the background, `-e` sets an environment variable, and `-p
+8000:8000` connects port 8000 of your machine to port 8000 inside the container. `ps` lists
+containers, `logs` shows a container's output and `exec -it … bash` opens a shell inside a running
+one. `tag`, `push` and `pull` rename an image and move it to and from a registry.
+
 ## A first Dockerfile
 
-Lubanovic reproduces the minimal FastAPI Dockerfile from the official docs; here it is annotated:
+Lubanovic reproduces the minimal Dockerfile from the FastAPI documentation. Each line is one
+instruction; the comment on the right says what it does. Read it top to bottom as the steps
+taken to prepare the box.
 
 ```dockerfile
 FROM python:3.11-slim                           # base image: Debian + Python
@@ -94,18 +144,25 @@ Key instructions:
 | `HEALTHCHECK` | command Docker runs to test container health |
 | `LABEL` | metadata (git SHA, maintainer) |
 
-`CMD ["uvicorn", ...]` is the **exec form** (JSON array): the process becomes PID 1 and receives signals
-such as SIGTERM directly. The **shell form** (`CMD uvicorn ...`) wraps it in `/bin/sh -c`, which may not
-forward signals — graceful shutdown then fails. Prefer the exec form.
+Two details in the last line trip people up.
 
-`--host 0.0.0.0` matters: binding to `127.0.0.1` inside a container makes the server unreachable from
-outside the container's network namespace.
+`CMD ["uvicorn", ...]`, written as a list in square brackets, is the **exec form**. The program
+becomes the first process in the container (**PID 1**) and receives signals such as SIGTERM
+directly, so it can shut down cleanly. The alternative **shell form** (`CMD uvicorn ...`) starts
+a shell that in turn starts your program, and the shell may not pass signals on. The container is
+then killed abruptly on every stop. Prefer the exec form.
+
+`--host 0.0.0.0` tells the web server to accept connections from any network interface. The
+default, `127.0.0.1`, means "this machine only", and inside a container "this machine" is the
+container itself. A server bound to 127.0.0.1 cannot be reached from outside the container even
+when the port is published.
 
 ## Layers
 
-Each `FROM`, `RUN`, `COPY`, `ADD` instruction creates a **layer**: a tarball of filesystem changes
-relative to the previous layer. An image is the ordered list of layers; the union filesystem (overlay2)
-stacks them into one view. Consequences:
+Each `FROM`, `RUN`, `COPY` and `ADD` instruction produces a **layer**: a package of the files
+that the instruction added or changed compared with the layer below. An image is the ordered
+list of its layers, and the union filesystem stacks them into the single file tree the container
+sees. Three consequences follow:
 
 1. **Layers are shared.** Ten images based on `python:3.11-slim` store and download that base once.
 2. **Layers are immutable and additive.** Deleting a file in a later layer hides it but does not shrink
@@ -126,17 +183,25 @@ RUN apt-get update && apt-get install -y --no-install-recommends build-essential
 
 ## The build cache
 
-Docker reuses a cached layer when the instruction and its inputs are unchanged **and all earlier layers
-were cache hits**. The rules:
+Building an image from scratch can take many minutes, mostly spent installing packages. To avoid
+repeating that work, Docker keeps the layers from earlier builds and reuses a layer when the
+instruction and its inputs are unchanged **and every layer before it was also reused**. This
+store of reusable layers is the **build cache**. The rules:
 
-- For `RUN`: the cache key is the instruction text (plus parent layer). Docker does *not* check whether
-  the command would produce something different today — `RUN apt-get update` stays cached indefinitely.
-- For `COPY`/`ADD`: the key includes a checksum of the copied files' contents and metadata.
-- **Once one instruction misses, every subsequent instruction is rebuilt.**
+- For `RUN`, Docker compares only the text of the instruction (and the layer beneath). It does
+  *not* check whether the command would produce something different today. `RUN apt-get update`
+  therefore stays cached indefinitely.
+- For `COPY` and `ADD`, Docker also compares a checksum of the files being copied.
+- **As soon as one instruction cannot be reused (a cache "miss"), every instruction after it is
+  rebuilt.**
 
-That last rule dictates Dockerfile ordering: **put things that change rarely first, things that change
-often last**. Dependencies change weekly; source code changes every commit. Copy the lockfile and install
-dependencies *before* copying the source.
+The last rule dictates how a Dockerfile should be ordered: **what changes rarely goes first, what
+changes often goes last**. The list of dependencies changes perhaps weekly; source code changes
+with every commit. So copy the dependency list and install the dependencies *before* copying the
+source code.
+
+The simulation applies exactly that rule to two orderings of the same Dockerfile. Each
+instruction is a pair: its text and the files it reads (`"*"` meaning "everything").
 
 ```python-run
 # Simulate which layers rebuild for different Dockerfile orderings (see problem mlops-docker-layer-cache).
@@ -159,8 +224,20 @@ for name, df in [("bad ordering", bad), ("good ordering", good)]:
         print(f"{name:14s} change={change[0]:18s} rebuild layers {idx}  pip reinstall: {reinstall}")
 ```
 
-With the bad ordering every code edit triggers a full dependency reinstall. With the good ordering only a
-change to `requirements.txt` does.
+`rebuilt` walks down the instructions and stops at the first one whose input files include a
+changed file; that instruction and everything below it are rebuilt. The output:
+
+```text
+bad ordering   change=src/model.py       rebuild layers [1, 2, 3]  pip reinstall: True
+bad ordering   change=requirements.txt   rebuild layers [1, 2, 3]  pip reinstall: True
+good ordering  change=src/model.py       rebuild layers [3, 4]  pip reinstall: False
+good ordering  change=requirements.txt   rebuild layers [1, 2, 3, 4]  pip reinstall: True
+```
+
+In the bad ordering, `COPY . .` comes before `pip install`, so editing one line of source code
+invalidates the copy layer and forces the three-minute install to run again. In the good
+ordering the same edit rebuilds only the last two quick layers. Only a change to
+`requirements.txt` reinstalls the packages, which is the one case where that is necessary.
 
 ### .dockerignore
 
@@ -280,11 +357,16 @@ docker stats                                                    # live usage per
 docker inspect <container> --format '{{.State.OOMKilled}} {{.State.ExitCode}}'
 ```
 
-Memory limits are enforced by the kernel: a model that needs 3 GB in a 2 GB container is killed with
-137 and no Python traceback — the log simply stops. When a container "dies silently while loading the
-model", check `OOMKilled` first. Note that the Python process inside does not automatically know its
-limit; libraries that size thread pools or caches from the *host's* CPU count and memory can
-oversubscribe a small container, so set `OMP_NUM_THREADS` and similar variables to match the CPU limit.
+Memory limits are enforced by the kernel. A model that needs 3 GB inside a container limited to
+2 GB is killed with exit code 137, and there is no Python error message because Python never got
+the chance to print one; the log ends mid-sentence. When a container "dies silently while loading
+the model", check `OOMKilled` first.
+
+A second trap: the Python process inside does not automatically know its limits. Numerical
+libraries decide how many **threads** (parallel workers inside one process) to start by asking
+how many CPU cores the machine has, and they are told the *host's* count. Set `OMP_NUM_THREADS`
+and similar variables to match the container's CPU limit. The next program shows what happens
+otherwise.
 
 ```python-run
 # Thread oversubscription in a CPU-limited container: more threads than cores makes things slower.
@@ -298,8 +380,22 @@ for t in (1, 2, 4, 16, 64):
     print(f"  OMP_NUM_THREADS={t:2d} -> relative latency {relative_latency(t, 2) / base:4.2f}x")
 ```
 
-Defaulting to 64 threads (the host's core count) inside a 2-CPU container is slower than using 2 —
-a frequent cause of mysterious tail latency in containerised inference.
+The model says that a container cannot use more CPU than its limit (`min(threads, cpu_limit)`),
+and that every thread beyond the limit adds overhead, because the threads take turns on the same
+cores and keep interrupting each other. The output:
+
+```text
+container limited to 2 CPUs on a 64-core host
+  OMP_NUM_THREADS= 1 -> relative latency 1.00x
+  OMP_NUM_THREADS= 2 -> relative latency 0.50x
+  OMP_NUM_THREADS= 4 -> relative latency 0.55x
+  OMP_NUM_THREADS=16 -> relative latency 0.97x
+  OMP_NUM_THREADS=64 -> relative latency 3.33x
+```
+
+Two threads on two CPUs is the best case. The default of 64 threads (the host's core count) makes
+every request more than three times slower than a single thread would. This is a frequent cause
+of unexplained slow responses in containerised model serving.
 
 ## Image naming and registry hygiene
 
@@ -322,6 +418,28 @@ A full image reference is `registry/namespace/repository:tag@digest`, for exampl
 - The build cache reuses layers until the first miss; order instructions from least to most frequently
   changing, use `.dockerignore` and cache mounts.
 - Tags are mutable, digests are not; tag with git SHAs and never deploy `:latest`.
+
+## Glossary
+
+- **Container** - an isolated process packaged with everything it needs to run.
+- **Image** - the read-only, layered template a container is started from.
+- **Docker** - the most common tool for building and running containers.
+- **Virtual machine (VM)** - an emulated whole computer with its own operating system.
+- **Kernel** - the core of an operating system; containers share the host's.
+- **Namespace / cgroup** - a kernel feature isolating what a process can see / limiting what it
+  can use.
+- **Union filesystem** - stacks read-only layers into one visible file tree.
+- **Dockerfile** - the instruction file from which an image is built.
+- **Layer** - the file changes produced by one Dockerfile instruction.
+- **Build cache** - stored layers reused when an instruction and its inputs are unchanged.
+- **Cache miss** - an instruction that cannot be reused; all later ones rebuild.
+- **Build context / `.dockerignore`** - the files sent to the builder / the list excluded from it.
+- **Registry** - a server that stores and distributes images.
+- **Tag / digest** - a movable name for an image / the hash of its exact contents.
+- **Exec form** - `CMD ["prog", "arg"]`, which runs the program directly as PID 1.
+- **Volume / bind mount** - storage that outlives the container.
+- **Exit code 137** - the container was killed, usually for exceeding its memory limit.
+- **Thread** - a parallel worker inside one process.
 
 ```quiz
 [

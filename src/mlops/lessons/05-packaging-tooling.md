@@ -1,15 +1,40 @@
 # Python packaging, Makefiles and pre-commit
 
+> **Before this lesson:** read [Git workflows for ML teams](#/lesson/mlops/git-workflows) for
+> commits, pull requests and CI. You should be comfortable writing a Python function and running
+> `pip install`.
+
+## In plain words
+
+Code written in a notebook lives in one file on one machine. To be used by a training job, a web
+service and a test suite at the same time, it has to become a **package**: a named, versioned
+bundle of Python code that any machine can install with one command, the same way you install
+`pandas`.
+
+Think of the difference between cooking at home and supplying a chain of kitchens. At home you
+reach for whatever is in the cupboard. A supplier ships a labelled box: the name of the product,
+its version, the exact list of ingredients it needs, and instructions. This lesson is about
+building that labelled box for your ML code, and about three helpers around it: a **lockfile**
+(the exact list of ingredient versions), a **Makefile** (a short menu of standard commands) and
+**pre-commit** (an automatic inspection before anything is saved to Git).
+
+Why this matters for a job: "it works on my machine" is the most common reason an ML project
+stalls on its way to production, and "how do you make an environment reproducible?" is one of the
+most common interview questions. Everything later in this track (containers, pipelines, CI)
+installs the package you learn to build here.
+
 ## From notebook to package
 
-The first concrete MLOps step for most projects is turning notebook code into an **installable Python
-package**. Why bother?
+The first concrete MLOps step for most projects is turning notebook code into an **installable
+Python package**. What it buys:
 
-- Training pipelines, batch jobs, the serving API and tests can all `import churn.features` — one
-  implementation, no copy-paste skew.
-- Packages have **declared dependencies**, so environments can be rebuilt.
-- Tests can target functions instead of notebook cells.
-- Docker images install the package with one line.
+- The training pipeline, the batch jobs, the serving API and the tests can all write
+  `import churn.features`. There is one implementation, so there cannot be two slightly different
+  copies (the skew problem from lesson 2).
+- A package **declares its dependencies**, the other packages it needs, so the environment can be
+  rebuilt on another machine.
+- Tests can call functions directly, which is not practical with notebook cells.
+- A container image installs the package with one line.
 
 ## A project layout that scales
 
@@ -43,14 +68,22 @@ churn-model/
 └── Dockerfile
 ```
 
-The **`src/` layout** (code under `src/churn/` rather than `churn/` at the root) forces you to install
-the package to import it. That means your tests run against the *installed* package — the same way
-production uses it — and accidental imports from the working directory are impossible.
+Lines beginning with `#` in the tree are comments describing each file; several of the files are
+the subject of later lessons.
+
+The **`src/` layout** means the code sits in `src/churn/` and not in `churn/` at the top of the
+project. The effect is that Python cannot find the package by accident from the project folder;
+you have to install it before `import churn` works. Your tests therefore run against the
+*installed* package, which is how production uses it, and a file that was forgotten in the
+packaging step is noticed immediately.
 
 ## `pyproject.toml`: one file to rule them all
 
-PEP 517/518/621 standardised project metadata in `pyproject.toml`. A modern example using the `hatchling`
-build backend:
+`pyproject.toml` is the standard file that describes a Python project. The standard was set by
+three **PEPs** (Python Enhancement Proposals, the documents through which Python evolves),
+numbered 517, 518 and 621. **TOML** is a plain configuration format: `[section]` headers followed
+by `key = value` lines. The example uses `hatchling` as its **build backend**, the tool that turns
+the source folder into an installable file.
 
 ```toml
 [build-system]
@@ -89,18 +122,37 @@ addopts = "-q --cov=churn --cov-report=term-missing"
 strict = true
 ```
 
-Install for development with `pip install -e ".[dev,serve]"` (editable: code changes take effect without
-reinstalling).
+Section by section:
+
+- `[build-system]` names the build backend.
+- `[project]` holds the name, the version, the oldest Python that is supported, and
+  `dependencies`: the packages that must be present for the code to run. `"pandas>=2.2,<3"` is a
+  **version range** meaning "2.2 or newer, but below 3".
+- `[project.optional-dependencies]` defines named extra groups, called **extras**. The web server
+  is only needed when serving, and the test tools only during development.
+- `[project.scripts]` creates a terminal command: after installation, typing `churn-train` calls
+  the function `main` in `churn/train.py`.
+- The `[tool.*]` sections configure the helper tools described later, so they need no separate
+  configuration files.
+
+Install the project for development with `pip install -e ".[dev,serve]"`. The `-e` stands for
+**editable**: the installed package points at your source folder, so a change to the code takes
+effect without reinstalling. The part in square brackets selects the extras.
 
 ### Ranges vs pins vs lockfiles
 
-There are two distinct jobs:
+A dependency list has two different jobs, and mixing them up causes most packaging trouble.
 
-1. **Abstract dependencies** (in `pyproject.toml`): the *ranges* your code is compatible with, e.g.
-   `pandas>=2.2,<3`. Libraries should only declare ranges.
-2. **Concrete, locked environment** (lockfile): the *exact* versions, including transitive dependencies
-   and hashes, that a particular application runs with. Applications and training jobs need this for
-   reproducibility.
+1. **Abstract dependencies** (in `pyproject.toml`): the *ranges* your code is known to work with,
+   such as `pandas>=2.2,<3`. A library that other projects will install should declare ranges
+   only, so it can coexist with their other packages.
+2. **A concrete, locked environment** (in a **lockfile**): the *exact* version of every package
+   that one particular application runs with. This includes **transitive dependencies**, the
+   packages that your dependencies themselves depend on, and a **hash** of each file (a
+   fingerprint computed from its contents, so a tampered or different file is detected).
+   Applications and training jobs need this for reproducibility.
+
+The lockfile is generated by a tool, never written by hand. Several tools do this:
 
 | Tool | Lockfile | Notes |
 |---|---|---|
@@ -120,6 +172,12 @@ uv sync --frozen   # install exactly what is locked (CI, Docker)
 uv run pytest
 ```
 
+In the first flow, `pip-compile` reads the ranges and writes a file of exact versions with hashes;
+`pip install --require-hashes` then installs precisely those files and refuses anything else. In
+the second, `uv lock` does the resolving and `uv sync --frozen` installs exactly what the lockfile
+says without attempting to update it. "Resolving" means finding one set of versions that satisfies
+every range at once.
+
 > [!WARNING]
 > A training environment built from unpinned ranges today and in three months can produce *different
 > models* — a minor scikit-learn or NumPy release can change default parameters or floating-point
@@ -127,21 +185,30 @@ uv run pytest
 
 ### Virtual environments
 
-Always isolate: `python -m venv .venv && source .venv/bin/activate` (or let uv/poetry manage it). Never
-`pip install` into the system Python on servers. In Docker, the container itself is the isolation
-boundary, but a venv inside it is still handy for multi-stage builds (lesson 17).
+A **virtual environment** (often shortened to venv) is a private folder of installed packages for
+one project, so that two projects on the same machine can use different versions of the same
+library. Always work in one: `python -m venv .venv` creates it and `source .venv/bin/activate`
+switches your terminal to it (uv and Poetry can manage this for you). Never `pip install` into the
+Python that the operating system itself uses on a server. Inside a container the container is
+already the isolation boundary, but a venv inside it is still handy for multi-stage builds
+(lesson 17).
 
 ### Build and publish
 
-`python -m build` produces an sdist (`.tar.gz`) and a wheel (`.whl`). Wheels are pre-built and install
-fast. Internal packages are published to a private index (AWS CodeArtifact, GCP Artifact Registry,
-Azure Artifacts, JFrog, devpi) and installed by version — e.g. a shared `company-features` package used
-by many models.
+`python -m build` produces two files. The **sdist** (source distribution, a `.tar.gz`) is the
+source code packed up. The **wheel** (a `.whl` file) is a ready-to-install form that needs no
+build step on the receiving machine, so it installs quickly. Companies publish internal packages
+to a private **package index** (their own equivalent of the public PyPI site that `pip` downloads
+from; AWS CodeArtifact, GCP Artifact Registry, Azure Artifacts, JFrog and devpi are examples) and
+install them by version. A typical case is a shared `company-features` package used by many
+models.
 
 ## Makefiles: a self-documenting task runner
 
-`make` is ancient, installed everywhere, and perfect as a **single entry point** for common tasks. New
-team members (and CI) run `make test` without knowing the underlying commands.
+`make` is a decades-old program, present on almost every Linux and macOS machine, that runs named
+groups of shell commands listed in a file called `Makefile`. It works well as a **single entry
+point** for the everyday tasks of a project. A new team member, and the CI system, can run `make
+test` without knowing which commands sit behind it.
 
 ```makefile
 .DEFAULT_GOAL := help
@@ -182,20 +249,38 @@ clean:  ## remove caches
 	rm -rf .pytest_cache .mypy_cache .ruff_cache dist build
 ```
 
-Key concepts: **targets** (`test:`), **prerequisites** (`docker-run: docker-build` runs the build first),
-**recipes** (indented with a **tab**, not spaces), **variables** (`?=` sets a default overridable from the
-command line: `make docker-build TAG=v1`), and `.PHONY` for targets that are not files. `$$` escapes `$`
-for the shell.
+How to read a Makefile:
+
+- A **target** is a name followed by a colon, such as `test:`. Typing `make test` runs it.
+- The indented lines under a target are its **recipe**: the shell commands to run. They must be
+  indented with a **tab** character, not spaces. This is the most common Makefile error.
+- Names after the colon are **prerequisites**: `docker-run: docker-build` means "run
+  `docker-build` first".
+- `NAME ?= value` defines a **variable** with a default that can be overridden from the command
+  line, as in `make docker-build TAG=v1`. `$(NAME)` reads it.
+- `TAG ?= $(shell git rev-parse --short HEAD)` runs a shell command and stores its output, here
+  the short SHA of the current commit.
+- `.PHONY` lists the targets that are commands and not files to be produced.
+- The `help` target searches the Makefile for the `## ` comments and prints them as a menu. `$$`
+  is how a literal `$` is passed through to the shell.
 
 > [!TIP]
-> `make` was designed to rebuild *files* only when their inputs change (timestamps). DVC applies the same
-> idea to data pipelines using content hashes instead of timestamps (lesson 8). Alternatives to `make` for
-> task running: `just`, `task` (Taskfile), `nox`, `invoke`, `poe`.
+> `make` was designed to rebuild *files* only when their inputs are newer than their outputs. DVC
+> applies the same idea to data pipelines, comparing fingerprints of file contents in place of
+> timestamps (lesson 8). Other task runners with the same purpose include `task` (Taskfile),
+> `nox`, `invoke` and `poe`.
 
 ## pre-commit: catch problems before they reach Git
 
-`pre-commit` runs a configured set of hooks on staged files at `git commit` time. Fast, local feedback
-— and the same config runs in CI (`pre-commit run --all-files`) so nobody can bypass it.
+A **hook** is a small program that Git runs automatically at a certain moment. The tool
+`pre-commit` manages a list of hooks that run on the files you have staged whenever you type `git
+commit`; if any hook fails, the commit is refused until the problem is fixed. The feedback is
+fast and local. The same configuration is also run in CI (`pre-commit run --all-files`), so a
+person who skipped the local hooks is still caught.
+
+The configuration is written in **YAML**, a format in which nesting is shown by indentation and
+list items start with a dash. Each `repo` entry names a public repository of hooks, `rev` fixes
+the version, and `hooks` lists which ones to use:
 
 ```yaml
 # .pre-commit-config.yaml
@@ -245,11 +330,20 @@ What each hook buys you in an ML repo:
 
 ## Code quality tools in one place
 
-- **ruff**: extremely fast linter + formatter replacing flake8, isort, pyupgrade and black-style formatting.
-- **mypy / pyright**: static type checking. Type hints on pydantic models and function signatures pay off
-  hugely in data code.
-- **pytest**: tests; `pytest-cov` for coverage; `hypothesis` for property-based tests (lesson 25).
+Three kinds of tool appear in the configuration above.
 
+- A **linter** reads code without running it and reports likely mistakes, such as an unused import
+  or an undefined name. A **formatter** rewrites code into one consistent layout. **ruff** is a
+  very fast program that does both, replacing the older flake8, isort, pyupgrade and black.
+- A **static type checker** (**mypy** or **pyright**) reads **type hints**, the optional
+  annotations such as `window: int` that say what kind of value a function expects, and reports
+  calls that do not match. In data code this catches a great many errors before anything runs.
+- **pytest** runs tests. `pytest-cov` reports **coverage**, the share of code lines that the tests
+  executed, and `hypothesis` generates test inputs automatically (lesson 25).
+
+The runnable example below shows a small feature function with type hints and three tests. The
+function computes a trailing average: for each position, the mean of the last `window` values, or
+of however many values exist so far.
 ```python-run
 # A taste of why type hints + tests matter in feature code.
 from typing import Sequence
@@ -275,6 +369,24 @@ except ValueError:
     pass
 print("all feature tests passed:", rolling_mean([10, 20, 30, 40, 50], 3))
 ```
+
+Line by line: the signature `values: Sequence[float], window: int) -> list[float]` states that the
+function takes a sequence of numbers and a whole number and returns a list of numbers. The `if
+window <= 0` check rejects a meaningless window by raising an error. Inside the loop, `s` is a
+running sum: each new value is added, and once more than `window` values have been seen, the one
+that fell out of the window is subtracted. Dividing by `min(i + 1, window)` handles the first few
+positions, where fewer than `window` values exist.
+
+The three `assert` lines are the tests. An `assert` does nothing when its condition is true and
+stops the program when it is false. They check a normal case, an empty input, and that an invalid
+window raises `ValueError`. The output is:
+
+```text
+all feature tests passed: [10.0, 15.0, 20.0, 30.0, 40.0]
+```
+
+The first two results (10.0 and 15.0) average one and two values because the window of 3 is not
+yet full; from the third position on, each result is the mean of three values.
 
 ## Putting it together: the developer loop
 
@@ -315,11 +427,13 @@ serve = ["fastapi>=0.111", "uvicorn[standard]>=0.30", "prometheus-client>=0.20",
 dev   = ["pytest>=8", "pytest-cov", "hypothesis", "ruff", "mypy", "pre-commit"]
 ```
 
-The serving image installs `.[serve]` only: no Optuna, no DVC, and `mlflow-skinny` instead of full
-MLflow. Smaller images, fewer CVEs, faster cold starts. The cost is discipline: the **versions of shared
-libraries (scikit-learn, NumPy) must be identical** in the training and serving environments, or a
-pickled model may fail to load or behave differently. Generate both lockfiles from the same constraints,
-or use a single lock with groups (`uv sync --extra serve --frozen`).
+The serving image installs `.[serve]` only: no Optuna (a tuning library), no DVC, and
+`mlflow-skinny`, a cut-down MLflow, in place of the full one. The image is smaller, it has fewer
+**CVEs** (publicly catalogued security vulnerabilities, each of which arrives with some installed
+package), and it starts faster. The price is discipline: the **versions of the shared libraries
+(scikit-learn, NumPy) must be identical** in the training and serving environments, or a pickled
+model may fail to load or may behave differently. Generate both lockfiles from the same
+constraints, or use one lockfile with groups (`uv sync --extra serve --frozen`).
 
 > [!WARNING]
 > A pickle is tied to the library version that wrote it. scikit-learn warns (`InconsistentVersionWarning`)
@@ -411,9 +525,34 @@ it works from the source tree but the wheel is missing a module or a data file.
 
 - Turn notebook code into an installable package using the `src/` layout and `pyproject.toml`.
 - Separate compatible ranges (pyproject) from exact locks (lockfile with hashes).
-- Use a Makefile (or `just`/`nox`) as the single entry point for install, lint, test, train, serve, build.
+- Use a Makefile (or another task runner such as `nox`) as the single entry point for install,
+  lint, test, train, serve and build.
 - Use pre-commit for fast local checks — formatting, linting, typing, large files, notebook outputs, secrets
   — and run the same hooks in CI.
+
+## Glossary
+
+- **Package** - a named, versioned, installable bundle of Python code.
+- **Dependency** - another package your code needs. **Transitive dependency** - a dependency of a
+  dependency.
+- **`pyproject.toml`** - the standard file describing a Python project and its tool settings.
+- **Build backend** - the tool that turns source code into an installable file.
+- **Version range / pin** - a set of acceptable versions / one exact version.
+- **Lockfile** - a generated file listing the exact version (and hash) of every installed package.
+- **Hash** - a fingerprint computed from a file's contents.
+- **Extras** - optional groups of dependencies, such as `[serve]` or `[dev]`.
+- **Editable install** - an install that points at your source folder (`pip install -e .`).
+- **Virtual environment (venv)** - a private set of installed packages for one project.
+- **Wheel / sdist** - a ready-to-install package file / the packed source code.
+- **Package index** - a server that hosts packages for `pip` to download.
+- **Makefile / target / recipe** - a file of named tasks / one task name / its commands.
+- **Hook** - a program Git runs automatically, for example before each commit.
+- **Linter / formatter** - a tool that finds likely mistakes / rewrites code into a standard style.
+- **Type hint / static type checker** - an annotation of the expected kind of value / a tool that
+  verifies them without running the code.
+- **Coverage** - the share of code lines executed by the tests.
+- **CLI / entry point** - a command-line interface / the function a command runs.
+- **CVE** - a publicly catalogued security vulnerability.
 
 ```quiz
 [

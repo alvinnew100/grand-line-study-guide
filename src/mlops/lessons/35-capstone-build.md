@@ -1,10 +1,45 @@
 # Capstone part 1: train, track, package and serve
 
+> **Before this lesson:** this lesson puts earlier lessons together, so it helps to have read them,
+> though every term is explained again where it first appears. The most useful ones are
+> [The ML lifecycle](#/lesson/mlops/ml-lifecycle) (model, feature, pipeline, serving),
+> [Python packaging, Makefiles and pre-commit](#/lesson/mlops/packaging-tooling),
+> [Data validation and versioning with DVC](#/lesson/mlops/validation-versioning),
+> [Feature stores, training/serving skew and labeling](#/lesson/mlops/feature-stores),
+> [Experiment tracking with MLflow](#/lesson/mlops/mlflow-tracking),
+> [Model registry, model cards and governance](#/lesson/mlops/model-registry),
+> [REST and gRPC serving with FastAPI](#/lesson/mlops/fastapi-grpc) and
+> [Testing ML systems](#/lesson/mlops/testing-ml). You should be able to read basic Python
+> (functions, dictionaries, `import`). You do not need to run anything except the one browser demo.
+
+## In plain words
+
+A **capstone** is a final project that uses everything you have learned at once. Up to now each
+lesson looked at one part of a machine-learning system on its own: how to check data, how to record
+experiments, how to put a model behind a web address. In this lesson and the next we build one small
+but complete system from start to finish, so you can see how the parts connect.
+
+An everyday picture: earlier lessons taught you to make the dough, the sauce and the toppings, and to
+run the oven. The capstone is opening a tiny pizza shop: the same skills, but now the order of steps
+matters, the handovers between them matter, and a mistake in one place (wrong dough) shows up
+somewhere else (a burnt pizza at the counter).
+
+Why this matters for a job: "Tell me about an ML system you built end to end" is one of the most common
+interview questions for ML engineers and MLOps engineers. Hiring managers want to hear that you know how
+data turns into a model, how the model is checked before it reaches users, how it is served, and how
+you would notice and fix problems. A worked project like this one gives you a concrete story, real file
+names and real design choices to talk about.
+
 ## The project
 
-We will build a small but complete ML system — a **churn-prediction service** — and take it from data to
-a monitored deployment. Nothing here is new; the point is to see every piece from the track working
-together, with full code you can copy into a repository.
+We will build a **churn-prediction service**. **Churn** means a customer cancels a subscription. A
+churn model looks at facts about each customer (how long they have been subscribed, what they pay, how
+many support tickets they opened) and outputs a **probability**, a number between 0 and 1, that they
+will cancel soon. The retention team uses those probabilities to decide whom to call or offer a
+discount.
+
+Here is the whole journey, from a data file to a monitored service. Each box is a step; arrows show
+what each step hands to the next.
 
 ```mermaid
 flowchart LR
@@ -23,11 +58,34 @@ flowchart LR
   MON -->|trigger| T
 ```
 
-Part 1 (this lesson) covers the left half: repository, data validation, features, training with
-tracking, evaluation gates, registration, and the serving API. Part 2 covers Docker, CI/CD, Kubernetes,
-monitoring and retraining.
+A few words from the diagram, defined now so they do not trip you up later:
+
+- **Parquet** is a file format for tables that stores data column by column and compresses well.
+- **DVC (Data Version Control)** is a tool that versions large data files the way Git versions code.
+- A **feature** is one input column the model learns from, such as `tenure_months`.
+- A **pipeline** is a chain of steps where each step's output is the next step's input.
+- **MLflow** is a tool that records every training run: the settings, the scores and the trained model.
+- A **model registry** is a catalogue of trained models with version numbers. An **alias** is a movable
+  name tag on one version, such as `@champion` (the model serving users now) or `@challenger` (a new
+  model waiting to prove itself).
+- A **gate** is an automatic check that must pass before the next step is allowed to run.
+- **FastAPI** is a Python library for building web services; **Docker**, **GitHub Actions**,
+  **Kubernetes** and **Prometheus** are the packaging, automation, hosting and monitoring tools covered in
+  part 2.
+
+Part 1 (this lesson) covers the left half of the diagram: the repository, data validation, features,
+training with tracking, evaluation gates, registration and the serving API. Part 2 covers Docker, CI/CD,
+Kubernetes, monitoring and retraining.
+
+> [!NOTE]
+> Most code blocks below are files from a real repository. They need libraries such as pandas,
+> scikit-learn, MLflow and FastAPI installed on your own computer, so they are shown as plain code.
+> One block, marked as runnable, is a miniature of the whole training loop that works in the browser.
 
 ## Repository layout
+
+A **repository** (repo) is the project folder tracked by Git. A clear layout tells a new teammate where
+everything lives before they read a single line.
 
 ```text
 churn/
@@ -50,9 +108,26 @@ churn/
 └── ops/{prometheus.yml,alerts.yml}
 ```
 
-`pyproject.toml`, `Makefile` and pre-commit are as in lesson 5.
+Reading it top to bottom:
+
+- The top-level files configure tools. `pyproject.toml` describes the Python package and its
+  dependencies; the `Makefile` gives short commands such as `make test`; `.pre-commit-config.yaml` runs
+  formatters and linters before each commit. All three are explained in the packaging lesson.
+- `data/customers.parquet.dvc` is a tiny text file holding a hash (a fingerprint) of the real data
+  file. Git stores this small pointer; DVC stores the large file elsewhere.
+- `src/churn/` is the Python package. Putting code under `src/` forces you to install the package before
+  importing it, which catches "works on my machine" import mistakes early.
+- Each module has one job. The most important design choice is that **features.py is the only place
+  where feature logic lives**, and every other part (training, batch scoring, the web API) imports it.
+- `tests/` is split by what is being tested: plain code (`unit`), data (`data`), model behaviour
+  (`model`) and the running service (`integration`).
+- `k8s/` and `ops/` hold deployment and monitoring files for part 2.
 
 ## Configuration
+
+Hard-coding numbers such as the learning rate inside Python files makes them hard to find and easy to
+change by accident. Instead, they live in one configuration file written in **YAML**, a plain-text format
+for nested settings where indentation shows structure.
 
 ```yaml
 # params.yaml  (tracked by Git; referenced by dvc.yaml and logged to MLflow)
@@ -72,6 +147,17 @@ serve:
   threshold: 0.5
 ```
 
+Section by section: `data` says where the table is, which column is the **target** (the answer the model
+must learn to predict, here `churned`, 1 for cancelled and 0 for stayed) and that 20% of rows are held
+back for testing. `train` fixes the random **seed** (a starting number for the random generator, so runs
+can be repeated exactly) and the model's **hyperparameters** (settings chosen before training, such as
+how fast it learns). `gate` holds the promotion rules explained later. `serve` holds the
+**threshold**: a customer with probability at or above 0.5 is labelled "likely to churn".
+
+The web service reads its own settings from **environment variables**, named values the operating system
+hands to a running program. The library `pydantic-settings` reads them into a typed Python object and
+rejects bad values at startup:
+
 ```python
 # src/churn/config.py
 from pydantic import Field
@@ -85,7 +171,18 @@ class ServeSettings(BaseSettings):
     log_level: str = "INFO"
 ```
 
+`env_prefix="CHURN_"` means the field `threshold` is filled from the variable `CHURN_THRESHOLD` if it
+exists, otherwise the default 0.5 is used. `Field(0.5, ge=0, le=1)` adds a rule: the value must be
+greater than or equal to 0 and less than or equal to 1. If someone deploys with `CHURN_THRESHOLD=5`, the
+service refuses to start and says why, which is far better than silently labelling every customer.
+`model_uri` tells the service which model to load; `models:/churn@champion` means "the version of the
+registered model `churn` that currently carries the alias `champion`".
+
 ## Data loading and validation
+
+**Data validation** means checking that data looks the way you expect before you use it. A model trained
+on broken data is broken, but nothing crashes, so the damage is silent. We describe the expected table
+as a **schema** (a list of columns with their types and allowed values) using the library `pandera`:
 
 ```python
 # src/churn/data.py
@@ -115,7 +212,24 @@ def load(path: str) -> pd.DataFrame:
     return df
 ```
 
+Each line of the class is one rule. `customer_id` must be unique (a duplicated customer would be counted
+twice). `tenure_months` must be between 0 and 600 (50 years; anything above is a bug). `plan` may only
+take three values. `last_login_days` may be missing (`nullable=True`), because brand-new customers have
+not logged in yet. `strict = True` rejects unexpected extra columns, and `coerce = True` converts types
+where it safely can (for example the text "12" into the number 12).
+
+In `load`, `lazy=True` asks pandera to collect **every** failure before raising an error, so one run
+shows you all problems instead of the first one. The last check is a sanity test on the **label rate**,
+the share of customers who churned. If it suddenly reads 0.9 or 0.001, the most likely cause is a broken
+**join** (the step that attaches each customer's outcome to their row), not a real change in the
+business. Stopping here saves a wasted training run and, worse, a bad model.
+
 ## Features: one module for training and serving
+
+**Training/serving skew** is when the model sees inputs computed one way during training and a slightly
+different way in production. It is one of the most common reasons a model that scored well in testing
+performs badly with real users. The cure is to compute features in exactly one function that every part
+of the system calls:
 
 ```python
 # src/churn/features.py
@@ -137,10 +251,22 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     return out[NUMERIC + CATEGORICAL]
 ```
 
+Line by line: the three lists name the **numeric** columns (numbers), the **categorical** column (a label
+from a fixed set, here the plan name) and the raw inputs a caller must supply. `build_features` is a
+**pure function**: its output depends only on its input, with no hidden state, so it gives the same
+answer in a notebook, a nightly batch job and the web API. It copies the raw columns, replaces a missing
+last-login value with -1 (a value that cannot occur naturally, so the model can learn "never logged in"
+as its own case), and divides charges and tickets by tenure to get per-month rates. `clip(lower=1)`
+turns a tenure of 0 into 1, so a customer who joined today does not cause a division by zero.
+
 The serving path imports the **same function**. That, plus saving the preprocessing inside the model
-pipeline, removes the two most common sources of training/serving skew (lesson 9).
+pipeline (next section), removes the two most common sources of training/serving skew.
 
 ## Training with tracking
+
+Training means showing the model many examples with known answers so it can learn the pattern.
+**Tracking** means recording everything about that training run, so that months later anyone can see
+exactly which code, data and settings produced the model in production.
 
 ```python
 # src/churn/train.py
@@ -208,6 +334,46 @@ if __name__ == "__main__":
     main()
 ```
 
+This is the longest file, so here it is in pieces.
+
+**`git_sha()`** asks Git for the **commit SHA**, the unique ID of the exact code version being run. If
+the folder is not a Git repo it returns `"unknown"` instead of crashing.
+
+**`make_pipeline()`** builds a scikit-learn **Pipeline**: an object that chains steps and behaves like a
+single model. Calling `fit` runs every step in order on the training data; calling `predict_proba` runs
+the same steps on new data. Its three steps are:
+
+1. `FunctionTransformer(build_features)` wraps our feature function as a pipeline step. Because it is
+   inside the pipeline, **the feature logic is saved together with the model**. Whoever loads the model
+   later gets the feature code too, with no chance of using a different version.
+2. A `ColumnTransformer` treats column groups differently: numeric columns pass through unchanged, and
+   the categorical `plan` column goes through a `OneHotEncoder`, which turns one text column into one 0/1
+   column per value (`plan_basic`, `plan_pro`, `plan_premium`), because models need numbers.
+   `handle_unknown="ignore"` means a plan name never seen in training becomes all zeros instead of an
+   error.
+3. `HistGradientBoostingClassifier` is the model: a **gradient-boosted tree ensemble**, many small
+   decision trees where each new tree corrects the mistakes of the previous ones. It is a strong default
+   for tables of numbers and categories.
+
+**`main()`** reads `params.yaml`, loads and validates the data, and splits it with `train_test_split`
+into a training set (80%) and a **test set** (20%) the model never sees while learning, so the test
+score estimates performance on new customers. `stratify=` keeps the churn rate the same in both parts,
+which matters when only a minority of customers churn.
+
+Inside `with mlflow.start_run() as run:` everything is recorded under one **run**:
+
+- **Tags** are labels for searching: the code SHA, the data path and the number of rows.
+- **Params** are the input settings; **metrics** are the output scores.
+- `log_dict` stores the full configuration file as an **artifact** (any file attached to a run).
+- `log_model` stores the trained pipeline. The **signature** records the expected input columns and
+  output type, so a caller sending the wrong columns gets a clear error. `input_example` saves three real
+  rows as documentation. `pyfunc_predict_fn="predict_proba"` tells MLflow that the generic `predict`
+  call should return probabilities rather than hard 0/1 labels.
+
+Finally the run ID is written to `.last_run_id` so the next step (the gate) knows which run to judge.
+
+The evaluation module computes the scores:
+
 ```python
 # src/churn/evaluate.py
 import numpy as np
@@ -226,7 +392,27 @@ def evaluate(model, df, target: str, slices: list[str]) -> dict[str, float]:
     return {k: float(v) for k, v in out.items()}
 ```
 
+Four metrics, each answering a different question:
+
+- **PR-AUC** (area under the precision-recall curve, computed here as *average precision*) asks: when
+  the model ranks customers from most to least risky, how well are the real churners concentrated at
+  the top? It suits problems where the positive class is rare. A random model scores about the base rate.
+- **ROC-AUC** (area under the receiver operating characteristic curve) is the probability that a random
+  churner gets a higher score than a random non-churner. 0.5 is a coin flip; 1.0 is perfect.
+- The **Brier score** is the average squared gap between predicted probability and what happened. Lower
+  is better, and it rewards probabilities that can be taken at face value (**calibration**).
+- The **base rate** is the share of churners in the test set, for context.
+
+The loop computes PR-AUC per **slice**, a subgroup of rows such as customers on the basic plan. Results
+are stored under names like `pr_auc__plan=basic`. An average can improve while one group gets worse, and
+slice metrics are how you notice. Slices containing only one class are skipped because a ranking metric
+needs both churners and non-churners.
+
 ## The promotion gate
+
+A model that trained without errors is not automatically better than the one already serving users. The
+gate compares the new **candidate** with the current **champion** and refuses to register a model that is
+worse.
 
 ```python
 # src/churn/promote.py
@@ -262,9 +448,30 @@ if __name__ == "__main__":
     main(sys.argv[1])
 ```
 
-Promotion to `@champion` happens only after the online canary succeeds (part 2).
+The gate collects **reasons** rather than stopping at the first failure, so the log tells the engineer
+everything that is wrong. It runs three checks:
+
+1. **A floor.** PR-AUC must reach an absolute minimum (0.45), whatever the champion scores.
+2. **No overall regression.** The candidate must not score below the champion.
+3. **No slice regression.** For every slice, the champion's score minus the candidate's score must not
+   exceed `max_slice_drop` (0.02). A small tolerance allows for noise.
+
+If the registry has no champion yet (the very first model), MLflow raises an exception, which is caught
+and ignored, so only the floor applies. On failure, `sys.exit(1)` ends the program with **exit code** 1.
+Every program returns an exit code when it finishes: 0 means success and anything else means failure. CI
+systems read it to decide whether to continue, so a failed gate stops the pipeline automatically. On
+success, the model is registered as a new version, tagged as validated and given the alias `@challenger`.
+
+Promotion to `@champion` happens only after the model has also behaved well on a slice of real traffic
+(the canary in part 2). Doing well offline is necessary, but it is not proof.
+
+> [!TIP]
+> You can practise this exact logic in the problem **mlops-slice-gate**, which asks you to write the
+> gate as a pure function returning its list of reasons.
 
 ## The pipeline as DVC stages
+
+DVC can run the training as a **stage**: a command plus a list of everything it depends on.
 
 ```yaml
 # dvc.yaml
@@ -276,13 +483,17 @@ stages:
     metrics: [{metrics.json: {cache: false}}]
 ```
 
-`dvc repro` retrains only when code, data or params change; `dvc.lock` records the exact hashes.
+`cmd` is the command to run. `deps` lists the files the result depends on; `params` lists the sections of
+`params.yaml` it reads; `metrics` names the scores file it writes. `dvc repro` ("reproduce") retrains only
+when code, data or params change. It decides by comparing content hashes with those saved in `dvc.lock`,
+a file that records the exact fingerprint of every input of the last run. If nothing changed, the stage
+is skipped and you save the compute.
 
 ## Try the whole training loop in the browser
 
-The cell below is a dependency-light miniature of the same flow — synthetic data → validation → shared
-feature function → model → evaluation with slices → gate → "registry" — using only NumPy, so it runs
-here. Change the seed or the features and re-run.
+The cell below is a dependency-light miniature of the same flow (synthetic data, validation, a shared
+feature function, a model, evaluation with slices, a gate and a pretend registry) using only NumPy, so it
+runs here. Change the seed or the features and run it again.
 
 ```python-run
 import numpy as np, json, hashlib
@@ -341,7 +552,37 @@ print("GATE:", "PASS -> register as @challenger" if metrics["roc_auc"] >= champi
       else f"FAIL {reasons}")
 ```
 
+What each numbered block does:
+
+1. **Data.** It invents 6,000 customers. The line computing `logit` is the hidden "truth": long tenure
+   lowers churn risk, higher charges and more tickets raise it, and the basic plan adds risk. The next
+   line turns that into 0/1 outcomes with some randomness, as in real life.
+2. **Validation.** `assert` stops the program if a condition is false: the same idea as the pandera
+   schema and the label-rate check, in two lines.
+3. **Features.** One function builds the model inputs, scaled to similar sizes, with two 0/1 columns for
+   the plan. A real serving path would call this same function.
+4. **Training.** A **logistic regression** (a model that outputs a probability from a weighted sum of
+   inputs) is trained by **gradient descent**: 400 times, it predicts, measures the error and nudges each
+   weight a little in the direction that reduces it. The `l2` term keeps weights small to avoid
+   overfitting.
+5. **Evaluation.** It computes ROC-AUC with a rank formula, overall and per plan.
+6. **Tracking and gate.** It builds a run record whose ID is a hash of the parameters, then compares with
+   a pretend champion: the gate passes only if overall ROC-AUC is at least the champion's and no slice
+   dropped by more than 0.02.
+
+With the seed 42, you should see an overall ROC-AUC near 0.75, a base rate near 0.29, slice scores between
+about 0.73 and 0.76, and `GATE: PASS -> register as @challenger`. Try making the model worse (for example
+set `epochs` to 5) and watch the gate fail with a list of reasons.
+
 ## Serving API
+
+**Serving** means making the model available to other programs. Here it is a web **API** (application
+programming interface): a set of web addresses that accept requests and return answers. Other services
+send customer data to `/predict` and get probabilities back, using **JSON**, a plain-text format for
+nested data.
+
+First, the **schemas** describe the exact shape of valid requests and responses, using the library
+**pydantic**:
 
 ```python
 # src/churn/serve/schemas.py
@@ -364,6 +605,15 @@ class PredictResponse(BaseModel):
     probabilities: list[float]
     labels: list[bool]
 ```
+
+`Customer` repeats the data rules at the front door: `Literal[...]` allows only the three plan names,
+`Optional[float]` allows a missing value, and `extra="forbid"` rejects unknown fields, so a misspelled
+`tenure_month` is an error instead of being silently ignored. `PredictRequest` accepts a **batch** of 1 to
+256 customers in one call, which is much cheaper than 256 separate calls; the upper limit stops one huge
+request from exhausting memory. FastAPI uses these classes to check every request automatically and
+answers with HTTP status **422** (unprocessable content) when one fails.
+
+Now the service itself:
 
 ```python
 # src/churn/serve/app.py
@@ -443,12 +693,56 @@ async def predict(req: PredictRequest, request: Request):
                            labels=[p >= settings.threshold for p in probs])
 ```
 
-Checklist against lesson 20: model loaded once and warmed ✔, typed validation with bounds and
-`extra="forbid"` ✔, batch endpoint with a size cap ✔, liveness and readiness split ✔, inference off the
-event loop ✔, metrics for RED + prediction distribution + missing features ✔, structured prediction log
-with request ID, version and served features ✔.
+Reading it from the top:
+
+**Metrics objects.** The five objects created with `Counter`, `Histogram` and `Gauge` come from the
+Prometheus client library. A **counter** only goes up (number of requests, number of missing values). A
+**histogram** sorts observations into ranges called **buckets** (how many requests took under 10 ms,
+under 25 ms, and so on), which later lets you compute percentiles such as the 95th-percentile latency.
+**Latency** is the time a request takes. A **gauge** is a value that can go up or down; here it
+announces which model version is loaded. The `["status", "model_version"]` lists are **labels**, extra
+dimensions so you can, for example, count errors per model version.
+
+**Startup.** `lifespan` runs once when the service starts. It loads the model from the registry, makes
+one **warm-up** prediction (the first call is often slow because libraries initialise lazily, and it is
+better that a test row pays that cost than a customer), records the version and sets `ready`. Loading the
+model once at startup, never per request, is the single biggest performance rule of model serving.
+
+**Two health endpoints.** `/healthz` answers "is the process alive?"; `/readyz` answers "can it serve
+predictions yet?" and returns status **503** (service unavailable) until the model is loaded. Part 2 shows
+Kubernetes using the first to restart stuck processes and the second to decide when to send traffic.
+`/metrics` exposes all the counters and histograms in the text format Prometheus collects.
+
+**The prediction endpoint**, step by step:
+
+1. Take the **request ID** from the `x-request-id` header if the caller sent one, or make a new random
+   one with `uuid4`. This ID ties together every log line about one request across services.
+2. Start a timer and turn the validated customers into a pandas table with the raw input columns.
+3. Count missing values per column. A sudden rise in missing `last_login_days` often means an upstream
+   system broke, and this counter is how you notice.
+4. Run the model in a thread pool. FastAPI's `async` functions share one **event loop** (a single
+   scheduler that interleaves many requests); a slow, CPU-heavy model call inside it would block every
+   other request. `run_in_threadpool` moves the work to a separate thread.
+5. On failure, count the error, log the full traceback and return status 500 without exposing internals.
+6. On success, record latency, count the request and add every probability to the score histogram, so a
+   dashboard can show whether predictions are drifting upward or downward.
+7. Write the **prediction log**: one JSON line with the request ID, model version, latency, the exact
+   features used and the probabilities. Weeks later, when you learn which customers really churned, you
+   join their outcomes to these lines to measure real performance, detect skew and build the next
+   training set.
+8. Return the probabilities and the yes/no labels obtained by comparing each one with the threshold.
+
+Checklist against the FastAPI serving lesson: model loaded once and warmed ✔, typed validation with
+bounds and `extra="forbid"` ✔, batch endpoint with a size cap ✔, liveness and readiness split ✔,
+inference off the event loop ✔, metrics for request rate, errors and duration plus prediction
+distribution and missing features ✔, structured prediction log with request ID, version and served
+features ✔.
 
 ## Tests
+
+Tests are small programs that check your code does what you expect, run automatically on every change.
+They use **pytest**, Python's most common test runner, which finds functions named `test_...` and reports
+any whose `assert` fails.
 
 ```python
 # tests/unit/test_features.py
@@ -469,6 +763,12 @@ def test_zero_tenure_does_not_divide_by_zero():
 def test_missing_last_login_gets_marker():
     assert build_features(_row(last_login_days=None))["last_login_days"].iloc[0] == -1.0
 ```
+
+`_row` builds a one-customer table from sensible defaults and lets each test override a single field.
+The three **unit tests** (tests of one small piece in isolation) pin down the behaviours we chose on
+purpose: the column order the model expects, the zero-tenure guard (charges of 60 divided by a tenure
+clipped to 1 is 60) and the missing-value marker. If someone later "simplifies" the feature function and
+breaks one of these, the test fails before the change reaches users.
 
 ```python
 # tests/integration/test_api.py
@@ -492,7 +792,14 @@ def test_validation_rejects_unknown_plan_and_extra_fields():
         assert client.post("/predict", json={"instances": [{**VALID, "oops": 1}]}).status_code == 422
 ```
 
-Run locally:
+**Integration tests** check that pieces work together, here the whole web service with a real (tiny)
+model. `TestClient` sends requests to the app in memory without starting a real server. A **fixture**
+(`tiny_model_uri`) is a pytest helper that prepares something a test needs; this one trains a small model
+into a temporary folder. `monkeypatch.setenv` sets an environment variable only for the duration of the
+test. The first test checks a full round trip (ready, then two predictions between 0 and 1); the second
+checks that bad input is rejected with 422.
+
+To run everything locally:
 
 ```bash
 make install && make test
@@ -502,6 +809,26 @@ CHURN_MODEL_URI=models:/churn@challenger make serve
 curl -s localhost:8000/predict -H 'content-type: application/json' \
   -d '{"instances":[{"tenure_months":3,"monthly_charges":95,"plan":"basic","support_tickets_30d":4}]}'
 ```
+
+In order: install the package and run the tests; train through DVC; run the gate on the printed run ID;
+start the service pointing at the challenger; and send one request with `curl`, a command-line tool that
+makes web requests. A new customer (3 months) on the basic plan with high charges and four tickets should
+come back with a high churn probability.
+
+## Common mistakes in projects like this
+
+- **Feature code copied into the API.** Two copies drift apart within months. Import one function, and
+  bundle it inside the model pipeline.
+- **Evaluating on data the model trained on.** Scores look wonderful and mean nothing. Keep a test set
+  aside before any fitting, and for time-dependent problems split by date so the test set is the future.
+- **Loading the model inside the request handler.** Every call then pays seconds of loading time. Load
+  once at startup and warm up.
+- **A gate that only checks the average.** One customer group can get much worse while the mean improves.
+  Check slices with a small tolerance.
+- **Not logging what was served.** Without the prediction log you cannot measure real performance later,
+  cannot see skew and cannot build the next training set.
+- **Retraining on unvalidated data.** A broken upstream join produces a confidently wrong model. Validate
+  before training, every time.
 
 > [!INTERVIEW]
 > When you describe a project like this, narrate the **design decisions**, not the tools: one feature
@@ -514,12 +841,45 @@ curl -s localhost:8000/predict -H 'content-type: application/json' \
 
 - The project structure separates data, features, training, evaluation, promotion and serving, all
   importing one feature module.
-- Training validates data, fits a scikit-learn `Pipeline`, logs params/metrics/config/model with signature
-  to MLflow, and writes a metrics file for DVC.
+- Training validates data, fits a scikit-learn `Pipeline`, logs params, metrics, config and the model
+  with its signature to MLflow, and writes a metrics file for DVC.
 - A promotion gate compares the candidate with the champion overall and per slice before registering it
-  as `@challenger`.
-- The FastAPI service loads by alias, validates inputs, exposes health and metrics endpoints and writes a
-  structured prediction log.
+  as `@challenger`; its non-zero exit code stops automation when it fails.
+- The FastAPI service loads the model once by alias, validates inputs, exposes health, readiness and
+  metrics endpoints and writes a structured prediction log.
+- Unit tests pin down deliberate feature behaviour; integration tests check the running service end to
+  end.
+
+## Glossary
+
+- **Capstone** - a final project combining the skills of a whole course.
+- **Churn** - a customer cancelling a subscription; a churn model predicts its probability.
+- **Target (label)** - the column the model learns to predict.
+- **Schema** - a description of expected columns, types and allowed values used to validate data.
+- **Label rate (base rate)** - the share of positive examples, here churners.
+- **Training/serving skew** - inputs computed differently in training and in production.
+- **Pure function** - a function whose output depends only on its inputs, with no hidden state.
+- **Pipeline (scikit-learn)** - a chain of preprocessing steps and a model that behaves like one model.
+- **One-hot encoding** - turning a category column into one 0/1 column per category.
+- **Gradient-boosted trees** - many small decision trees, each correcting the errors of the previous ones.
+- **Run, params, metrics, tags, artifact** - one tracked training execution and its inputs, scores,
+  search labels and attached files.
+- **Signature** - the recorded input and output format of a logged model.
+- **PR-AUC / ROC-AUC / Brier score** - ranking quality focused on the rare class / probability that a
+  positive outranks a negative / average squared error of probabilities.
+- **Slice** - a subgroup of rows evaluated separately.
+- **Champion / challenger** - the model serving users / a new model waiting to replace it.
+- **Exit code** - the number a program returns when it ends; 0 means success.
+- **DVC stage, dvc.lock** - a declared command with its dependencies / the file recording their hashes.
+- **API, JSON, schema validation, 422** - a programmatic web interface / its data format / automatic
+  request checking / the status code for invalid input.
+- **Counter, histogram, gauge, bucket, label** - Prometheus metric types and their parts.
+- **Liveness / readiness** - "is the process alive?" / "can it serve traffic yet?"
+- **Warm-up** - a first prediction made at startup so users do not pay the initial slowness.
+- **Event loop, thread pool** - the scheduler of async code / extra threads for blocking work.
+- **Prediction log** - one structured record per request with ID, version, features and outputs.
+- **Unit test, integration test, fixture** - a test of one piece / of pieces working together / a helper
+  that prepares test inputs.
 
 ```quiz
 [
@@ -543,7 +903,10 @@ curl -s localhost:8000/predict -H 'content-type: application/json' \
    "answer": 1, "explain": "Content hashes decide whether a stage must rerun."},
   {"q": "Why does the `/readyz` endpoint return 503 until the model is loaded?",
    "options": ["To hide the service", "So the orchestrator does not route traffic to a pod that cannot serve yet", "To trigger retraining", "To save memory"],
-   "answer": 1, "explain": "Readiness gates traffic; liveness would restart the pod."}
+   "answer": 1, "explain": "Readiness gates traffic; liveness would restart the pod."},
+  {"q": "Why does the promote script call `sys.exit(1)` when the gate fails?",
+   "options": ["To free memory", "A non-zero exit code tells the CI system the step failed, so the pipeline stops automatically", "To restart the training job", "MLflow requires exit codes"],
+   "answer": 1, "explain": "Automation reads exit codes: 0 means success, anything else stops the workflow."}
 ]
 ```
 

@@ -1,27 +1,56 @@
 # Alerting, feedback loops and retraining triggers
 
+> **Before this lesson:** read [Metrics, logs, traces and Prometheus](#/lesson/mlops/observability)
+> (PromQL, SLOs, error budgets and burn rates) and
+> [Data drift, concept drift and statistical tests](#/lesson/mlops/drift) (PSI, label latency and
+> concept drift). [Deployment strategies](#/lesson/mlops/deployment-strategies) explains the canary
+> and shadow releases that retrained models go through.
+
+## In plain words
+
+Dashboards help only when someone is looking at them. An **alert** is a message that fetches a
+person, or triggers an automatic action, when a problem appears that nobody is watching. Monitoring
+only pays off when a signal leads to a decision: roll back, fix a pipeline, retrain the model, or
+consciously do nothing.
+
+An everyday picture is a smoke detector. A good one goes off when there is a fire and stays quiet
+when you make toast. One that shrieks every morning gets its battery removed, and then the real fire
+goes unnoticed. Alerting is the craft of building smoke detectors that people trust.
+
+This lesson covers three connected topics: how to alert without drowning the team in noise; how to
+collect **feedback**, the true outcomes that make real performance measurable; and **retraining**:
+when to train a new version of the model, and how to do it automatically without breaking anything.
+
+Why this matters for a job: an ML system without well-designed alerts and a feedback loop decays
+silently. Interviewers ask "when would you retrain?" to see whether you think beyond "every week"
+toward triggers, safety gates and the economics of staleness.
+
 ## From dashboards to decisions
 
-Dashboards are for humans who are already looking. **Alerts** bring a human (or an automated action) to
-a problem nobody is looking at. Monitoring only creates value when a signal leads to a decision:
-roll back, fix a pipeline, retrain, or deliberately do nothing. This lesson covers how to alert without
-drowning the team, how to collect the feedback that makes real performance measurable, and when and how
-to retrain.
+Every monitoring signal should map to one of four outcomes: **roll back** (the last change broke
+something), **fix a pipeline** (the data is wrong), **retrain** (the world moved), or **do nothing on
+purpose** (noise, or a change that does not hurt). The rest of this lesson is about getting from
+signal to the right outcome quickly and reliably.
 
 ## Principles of good alerting
 
-1. **Alert on symptoms users feel**, not on every possible cause. "Error-budget burn is 14×" is a
-   symptom; "CPU is 85%" is a cause that may be harmless.
-2. **Every alert must be actionable.** If the response is "ignore it", delete the alert. If it is "look
-   tomorrow", make it a ticket, not a page.
-3. **Severity tiers**: *page* (act now — user-visible outage, fast budget burn), *ticket* (act this week
-   — slow burn, moderate drift), *log/dashboard* (informational).
-4. **Each alert links to a runbook**: what it means, how to verify, first mitigations, who owns it.
-5. **Reduce noise**: require the condition to persist (`for:`), group related alerts, inhibit downstream
-   alerts when the upstream cause is already firing, add hysteresis.
+1. **Alert on symptoms users feel**, not on every possible cause. "The error budget is burning 14
+   times too fast" is a **symptom**; "CPU is at 85%" is a possible **cause** that may be perfectly
+   harmless.
+2. **Every alert must be actionable.** If the right response is "ignore it", delete the alert. If it
+   is "look at it tomorrow", make it a ticket, not a page.
+3. **Severity tiers**: a **page** (an urgent notification that wakes the on-call engineer: act now,
+   for a user-visible outage or a fast budget burn), a **ticket** (an item in the team's work queue:
+   act this week, for a slow burn or moderate drift), and **log or dashboard only** (information).
+4. **Each alert links to a runbook**: a short document saying what the alert means, how to confirm
+   it, the first things to try, and who owns it.
+5. **Reduce noise**: require the condition to persist for a while (Prometheus's `for:`), group related
+   alerts, **inhibit** (suppress) downstream alerts when the upstream cause is already firing, and
+   add **hysteresis**: use a lower threshold to clear an alert than to raise it, so a value hovering
+   at the line does not flip the alert on and off.
 
-Alert fatigue is a reliability risk: a team that receives fifty alerts a day stops reading them, and the
-one that matters is missed.
+**Alert fatigue** is a reliability risk in its own right: a team that receives fifty alerts a day
+stops reading them, and the one that matters is missed.
 
 ### Prometheus alerting rules
 
@@ -68,19 +97,42 @@ groups:
         labels: {severity: page}
 ```
 
-- `for:` requires the expression to stay true for the duration before firing — the **patience** you
-  implement in `mlops-drift-alerts`.
-- **Multi-window burn-rate** alerts (long window AND short window) fire fast on real incidents and stop
-  firing soon after recovery.
-- Comparing to `offset 7d` handles weekly seasonality.
-- "Absence of data" alerts (`NoPredictions`) catch the failure where everything looks quiet because
-  nothing is running.
+Each rule has a name, an `expr` (a PromQL condition; the alert is active while it is true), a `for:`
+duration, labels such as `severity` that decide where the alert is sent, and annotations with a
+human-readable summary and a runbook link. Rule by rule:
 
-**Alertmanager** receives firing alerts and handles **grouping** (one notification for 30 pods),
-**inhibition** (suppress pod alerts when the node is down), **silences** (during maintenance) and
-**routing** (page → PagerDuty; ticket → Slack/Jira).
+- **HighErrorBudgetBurn** pages when the error ratio is above 14.4 times the allowed 0.5% over *both*
+  the last 5 minutes *and* the last hour. Where does 14.4 come from? One hour is 1/720 of a 30-day
+  window, so a burn rate of 14.4 consumes 14.4 / 720 = 2% of the whole month's budget in a single
+  hour, a common threshold for "wake someone up" in the Google SRE workbook.
+- **LatencyP95High** opens a ticket if p95 latency stays above 200 ms for 10 minutes.
+- **PredictionMeanShift** compares the mean predicted score over the last hour with the same hour a
+  week earlier (`offset 7d`) and opens a ticket if the difference stays above 0.05 for 2 hours.
+- **FeatureMissingRateHigh** opens a ticket if any single feature is missing in more than 5% of
+  requests for 15 minutes. `group_left` lets each per-feature series be divided by the one total.
+- **NoPredictions** pages if no predictions were made for 10 minutes.
+
+Points worth remembering:
+
+- `for:` requires the expression to stay true for the whole duration before firing: the **patience**
+  you implement in the problem `mlops-drift-alerts`.
+- **Multi-window burn-rate** alerts (a long window AND a short window) fire quickly on real incidents,
+  because the short window reacts fast, and stop firing soon after recovery, because the short window
+  also clears fast. The long window prevents paging on a 2-minute blip. The problem
+  `mlops-burn-rate-alerts` asks you to implement this rule.
+- Comparing with `offset 7d` handles **weekly seasonality**: Monday morning is compared with last
+  Monday morning, not with Sunday night.
+- "Absence of data" alerts such as `NoPredictions` catch the failure in which everything looks quiet
+  because nothing is running at all.
+
+**Alertmanager** receives firing alerts and handles **grouping** (one notification for thirty
+failing pods, not thirty), **inhibition** (suppress pod alerts while the whole node is down),
+**silences** (mute alerts during planned maintenance) and **routing** (pages to PagerDuty, tickets to
+Slack or Jira).
 
 ### Patience and hysteresis
+
+The demo shows the trade-off that patience controls.
 
 ```python-run
 import numpy as np
@@ -106,18 +158,38 @@ for patience in (1, 2, 3):
           f"detection delay after day 40: {first_true - 40} days")
 ```
 
-Higher patience removes false alarms at the price of detection delay (your MTTD). Choose it per signal:
-no patience for hard failures, days for slow statistical drift.
+`psi` is 60 days of a noisy drift score around 0.08, with a real jump of 0.25 from day 40. In
+`alerts`, `run` counts consecutive days at or above the threshold and resets to zero on any quiet
+day. A notification goes out on the day the streak reaches `patience`. The loop counts false
+notifications before the real shift and the delay before the alert is firing after day 40. The
+output:
+
+```text
+patience=1: false notifications before the shift: 2   detection delay after day 40: 0 days
+patience=2: false notifications before the shift: 0   detection delay after day 40: 0 days
+patience=3: false notifications before the shift: 0   detection delay after day 40: 1 days
+```
+
+With no patience, two random spikes cause false alarms. Requiring two days removes them (here at no
+cost, because day 39 happened to be high by chance); requiring three adds a day of delay. In general,
+higher patience removes false alarms at the price of a longer detection delay, which is your MTTD.
+Choose it per signal: no patience for hard failures, days for slow statistical drift.
 
 ### Alerts for batch pipelines
 
-Batch systems need different alerts: **freshness** (the predictions table was not updated by 06:00),
-**volume** (row count deviates more than 20% from the trailing average), **duration** (job took 3× its
-usual time), **validation failures**, and **SLA misses** from the orchestrator.
+Batch systems need different alerts:
+
+- **Freshness**: the predictions table was not updated by 06:00.
+- **Volume**: the row count differs by more than 20% from the recent average.
+- **Duration**: the job took three times its usual time.
+- **Validation failures** from the data checks.
+- **SLA misses** reported by the orchestrator (an **SLA**, service level agreement, is a deadline
+  promised to the consumers of the data).
 
 ## Feedback loops: getting ground truth
 
-Real performance monitoring needs labels joined to predictions. Design the loop on day one:
+Real performance monitoring needs the true outcome (the **label**) joined to each prediction. Design
+this loop on day one; adding it later means months without measurable performance.
 
 ```mermaid
 flowchart LR
@@ -134,31 +206,42 @@ flowchart LR
   PERF --> ALERT[Alerts and retraining triggers]
 ```
 
+The service writes every prediction to the prediction log (lesson 27). Feedback arrives later from
+users and from delayed business outcomes (a **chargeback** is a disputed card payment, the usual
+fraud label). A join on the request ID, within a **label window** (the period in which an outcome
+counts, such as "churned within 30 days"), produces both performance metrics and new training
+examples.
+
 ### Kinds of feedback
 
-Huyen (*AI Engineering*, ch. 10) describes feedback as explicit or implicit:
+Huyen (*AI Engineering*, ch. 10) divides feedback into two kinds:
 
-- **Explicit**: the user is asked — thumbs up/down, star ratings, "did this solve your problem?". Clear
-  but sparse and biased toward users with strong opinions.
-- **Implicit**: inferred from behaviour — purchases after a recommendation, clicks, dwell time, and, in
-  conversational products, signals inside the dialogue itself: the user rephrases, corrects the model
-  ("no, I meant..."), regenerates the answer, edits the output, stops mid-generation, or abandons the
-  session. Abundant but noisy and needs interpretation.
+- **Explicit**: the user is asked: thumbs up or down, star ratings, "did this solve your problem?".
+  The meaning is clear, but it is **sparse** (few people answer) and skewed toward people with strong
+  opinions.
+- **Implicit**: inferred from behaviour: purchases after a recommendation, clicks, **dwell time**
+  (how long someone stays on an item), and, in conversational products, signals inside the
+  conversation itself. A user who rephrases the question, corrects the model ("no, I meant..."),
+  asks for a new answer, edits the output, stops the answer halfway or leaves the session is telling
+  you something. Implicit feedback is plentiful but noisy and needs interpretation.
 
-She also stresses that feedback is **proprietary data** — the fuel of a data flywheel that competitors
-cannot copy — and that it is *user data*: privacy and consent apply.
+She also stresses that feedback is **proprietary data**: data only your product collects, which
+feeds a **data flywheel** (better model, more use, more feedback, better model) that competitors
+cannot copy. It is also *user data*, so privacy rules and consent apply.
 
 ### Feedback pitfalls
 
-- **Delay**: define a label window (e.g., "churned within 30 days") and only score windows that are
-  complete; report metrics with their maturity.
-- **Selection bias**: outcomes exist only where the model acted. Keep a randomised holdout/exploration
-  slice for unbiased estimates.
-- **Degenerate feedback loops**: the model's own outputs shape its future training data, reinforcing
-  early winners (popularity bias in recommenders). Mitigate with exploration, position-bias correction
-  and diversity constraints.
+- **Delay**: define a label window and only score windows that are complete. Report metrics with
+  their **maturity** (what share of outcomes are already known).
+- **Selection bias**: outcomes exist only where the model acted. Keep a randomised holdout or
+  exploration slice for unbiased estimates (lesson 28).
+- **Degenerate feedback loops**: the model's own outputs shape its future training data and
+  reinforce its early favourites, as in the **popularity bias** of recommenders. Counter it with
+  exploration, corrections for position bias, and diversity rules.
 - **Position and presentation bias**: the first suggestion gets clicked more regardless of quality.
 - **Adversarial feedback**: users or bots gaming ratings. Never retrain blindly on raw feedback.
+
+The demo shows a degenerate feedback loop in a recommender with five equally good items.
 
 ```python-run
 import numpy as np
@@ -180,10 +263,26 @@ for label, eps in (("greedy, no exploration", 0.0), ("10% exploration", 0.10)):
     print("  items with enough data (>=200 impressions) to estimate CTR:", int((shows >= 200).sum()), "of 5")
 ```
 
-With no exploration, one arbitrary item captures every impression even though all five are equally good;
-the logged data then "proves" it is the best, and the system can never learn otherwise. A small
-exploration budget still favours the incumbent but gathers enough data on every item to estimate its
-true quality.
+Every item has the same true **click-through rate** (CTR) of 10%. On each of 20,000 steps the system
+either picks a random item (with probability `explore`) or shows the item with the most clicks so
+far. Each showing is an **impression**. This "show the best so far, explore a little" rule is called
+**epsilon-greedy**. The output:
+
+```text
+greedy, no exploration
+  impressions per item: [20000, 0, 0, 0, 0]
+  clicks per item     : [2046, 0, 0, 0, 0]
+  items with enough data (>=200 impressions) to estimate CTR: 1 of 5
+10% exploration
+  impressions per item: [18358, 412, 392, 414, 424]
+  clicks per item     : [1888, 43, 39, 40, 43]
+  items with enough data (>=200 impressions) to estimate CTR: 5 of 5
+```
+
+With no exploration, item 0 wins the first tie and captures every impression, although all five are
+equally good. The logged data then "proves" it is the best, and a model retrained on those logs can
+never learn otherwise. A 10% exploration budget still favours the incumbent but gathers enough data
+on every item to estimate its true quality (about 10% each).
 
 ## Retraining triggers
 
@@ -196,9 +295,14 @@ true quality.
 | **Event-based** | known change: new product, policy, market, upstream schema | proactive | needs humans in the loop |
 | **On demand** | code/feature change merged | captures improvements | not about staleness |
 
-Most teams combine a **schedule** as the baseline with **performance/drift triggers** for early action.
+Most teams combine a **schedule** as the baseline with **performance or drift triggers** for early
+action.
 
 ### How often? An economic view
+
+Retraining has a cost (compute, validation, rollout effort); not retraining has a cost too, because
+a stale model loses money every day, and the loss grows as the model ages. The demo finds the
+cheapest interval under a simple linear decay model.
 
 ```python-run
 import numpy as np
@@ -217,23 +321,45 @@ for interval in (7, 14, 30, 60, 90, 180):
 print(f"cheapest: every {best[1]} days   (analytic optimum ~ sqrt(2*cost/decay) = {np.sqrt(2 * retrain_cost / decay_per_day):.0f} days)")
 ```
 
-The optimum balances staleness loss against retraining cost — and it moves when either changes, which is
-why measuring your model's actual decay rate (by evaluating old models on newer data) is worth doing.
+A model that is `d` days old loses `20 * d` dollars that day, so one cycle of `interval` days loses
+`20 * (0 + 1 + ... + (interval - 1))`, which the code computes with the formula for the sum of
+consecutive numbers. Multiplying by the number of cycles in a year gives the staleness cost; each
+cycle also pays the fixed retrain cost. The output:
+
+```text
+interval(days)  staleness cost   retrain cost     total / year
+            7          21,600        205,714          227,314
+           14          46,800        102,857          149,657
+           30         104,400         48,000          152,400
+           60         212,400         24,000          236,400
+           90         320,400         16,000          336,400
+          180         644,400          8,000          652,400
+cheapest: every 14 days   (analytic optimum ~ sqrt(2*cost/decay) = 20 days)
+```
+
+Retraining weekly wastes money on retraining; retraining twice a year wastes far more on staleness.
+Among the tested intervals, two weeks is cheapest, and calculus puts the true optimum near
+$\sqrt{2 \times 4000 / 20} = 20$ days. The optimum moves when either number changes, which is why
+measuring your model's real decay rate (by evaluating old model versions on newer data) is worth the
+effort.
 
 ### What "retraining" can mean
 
-- **Refit** the same pipeline and hyperparameters on a newer window (most common, automatable).
-- **Stateless (from scratch)** vs **stateful (fine-tune/warm start)** on new data — the latter is cheaper
-  but risks drifting or forgetting.
-- **Window choice**: sliding window (recent data only, adapts fast) vs expanding window (all history,
-  stabler); or weight recent data more.
-- **Re-tune** hyperparameters or **re-engineer** features/architecture — a human project, triggered when
-  refits stop helping.
-- For LLM apps: update the retrieval index, prompts or examples; fine-tune occasionally.
+- **Refit** the same pipeline and hyperparameters on a newer window of data: the most common form,
+  and easy to automate.
+- **Stateless** (train from scratch) versus **stateful** (**warm start** or fine-tune: continue
+  training the existing model on new data). Stateful is cheaper but can drift, or forget older
+  patterns.
+- **Window choice**: a **sliding window** uses only recent data and adapts fast; an **expanding
+  window** uses all history and is more stable; or keep all data but give recent rows more weight.
+- **Re-tune** hyperparameters or **re-engineer** features and architecture: a human project, started
+  when refits stop helping.
+- For LLM applications: update the retrieval index, the prompts or the examples, and fine-tune
+  occasionally.
 
 ### Automated retraining needs automated safety
 
-A triggered retrain must go through the same gates as any release:
+A triggered retrain must pass the same gates as any other release:
 
 ```mermaid
 flowchart LR
@@ -247,25 +373,29 @@ flowchart LR
   ROLL --> PROM[Promote alias. Update drift reference window]
 ```
 
-Evaluate challengers on both a **fixed benchmark** (to detect regressions on what used to work) and a
-**recent holdout** (to measure the benefit of fresh data). After promotion, **update the monitoring
-reference** to the new training data — otherwise the drift alert that triggered retraining keeps firing.
+Evaluate challengers on both a **fixed benchmark** (to catch regressions on cases that used to work)
+and a **recent holdout** (to measure the benefit of fresh data). After promotion, **update the
+monitoring reference** to the new training data; otherwise the drift alert that triggered the
+retrain keeps firing forever.
 
-Guard against retraining storms: a cooldown between triggered retrains, a cap per week, and a human
-checkpoint if several consecutive retrains fail the gates.
+Guard against **retraining storms**, where a persistent alert triggers retrain after retrain: add a
+**cooldown** (a minimum time between triggered retrains), a cap per week, and a human checkpoint
+when several retrains in a row fail the gates.
 
 ## Incident response for ML
 
-When an alert fires:
+An **incident** is an unplanned event that hurts users or the business. When an alert fires:
 
-1. **Mitigate first**: roll back to the previous model version (alias move), switch to a fallback
-   (rules, cached predictions), or disable the feature flag.
-2. **Diagnose**: recent deployments? data pipeline health? which slices? which features drifted? check
-   traces and the prediction log.
+1. **Mitigate first**, which means reduce the harm before understanding it: roll back to the
+   previous model version (move the alias), switch to a fallback (rules, cached predictions), or turn
+   off the feature flag.
+2. **Diagnose**: any recent deployments? Is the data pipeline healthy? Which slices are affected?
+   Which features drifted? Check traces and the prediction log.
 3. **Fix** the root cause (pipeline bug, retrain, feature fix).
-4. **Blameless postmortem**: timeline, impact, root cause, what detected it (or should have), action
-   items — and add the failing cases to your tests and evaluation set, as Huyen recommends linking
-   monitoring back to evaluation.
+4. **Blameless postmortem**: a written review of the timeline, the impact, the root cause, what
+   detected it (or should have), and follow-up actions, focused on improving the system rather than
+   blaming people. Add the failing cases to your tests and evaluation set, which closes the loop
+   between monitoring and evaluation that Huyen recommends.
 
 > [!INTERVIEW]
 > "When would you retrain a model?" — Describe a baseline schedule justified by measured decay, plus
@@ -276,13 +406,45 @@ When an alert fires:
 
 ## Summary
 
-- Alerts must be symptom-based, actionable, tiered and tied to runbooks; use persistence, grouping and
-  burn rates to fight noise.
-- Build the feedback loop early: prediction log + explicit/implicit feedback + delayed outcomes, joined
-  by request ID; beware delay, selection bias and degenerate loops.
-- Combine scheduled retraining with performance- and drift-based triggers; choose frequency by the
-  economics of decay vs retraining cost.
-- Automated retraining requires automated validation, progressive rollout, reference updates and cooldowns.
+- Alerts must be symptom-based, actionable, tiered and linked to runbooks; use persistence, grouping
+  and multi-window burn rates to fight noise.
+- Build the feedback loop early: prediction log plus explicit and implicit feedback plus delayed
+  outcomes, joined by request ID. Beware delay, selection bias and degenerate loops.
+- Combine scheduled retraining with performance- and drift-based triggers, and choose the frequency
+  from the economics of decay versus retraining cost.
+- Automated retraining needs automated validation, progressive rollout, reference updates and
+  cooldowns.
+- In an incident, mitigate first, then diagnose, fix and write a blameless postmortem.
+
+## Glossary
+
+- **Alert** - a notification or automatic action triggered by a monitoring condition.
+- **Symptom / cause** - what users feel / a possible reason behind it.
+- **Page / ticket** - an urgent notification / an item in the work queue.
+- **Runbook** - a document explaining an alert and the first steps to take.
+- **Patience (`for:`)** - how long a condition must hold before an alert fires.
+- **Hysteresis** - different thresholds for raising and clearing an alert.
+- **Grouping / inhibition / silence** - merging notifications / suppressing dependent alerts /
+  muting alerts for a period.
+- **Alert fatigue** - people ignoring alerts because there are too many.
+- **Multi-window burn-rate alert** - fires only when both a long and a short window burn fast.
+- **Seasonality** - patterns that repeat daily, weekly or yearly.
+- **Freshness / SLA** - how recently data was updated / a promised deadline.
+- **Label window** - the period within which an outcome counts as the label.
+- **Explicit / implicit feedback** - asked of the user / inferred from behaviour.
+- **Dwell time** - how long a user stays on an item.
+- **Data flywheel** - more use, more feedback, better model, more use.
+- **Degenerate feedback loop / popularity bias** - a model's outputs reinforcing its own choices /
+  popular items getting ever more exposure.
+- **Impression / CTR** - one showing of an item / clicks divided by impressions.
+- **Exploration / epsilon-greedy** - deliberately trying other options / exploiting the best so far
+  except for a small random share.
+- **Retraining trigger** - the condition that starts training a new model version.
+- **Stateless / stateful retraining** - from scratch / continuing from the current model.
+- **Sliding / expanding window** - recent data only / all history.
+- **Retraining storm / cooldown** - repeated triggered retrains / a minimum gap between them.
+- **Incident / mitigation** - an unplanned harmful event / reducing harm before fixing the cause.
+- **Blameless postmortem** - a written review that improves systems instead of blaming people.
 
 ```quiz
 [

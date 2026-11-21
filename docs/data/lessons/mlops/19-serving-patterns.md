@@ -1,9 +1,40 @@
 # Serving patterns: batch, online and streaming
 
+> **Before this lesson:** read [Model registry, model cards and governance](#/lesson/mlops/model-registry)
+> (what a registered model version and an alias such as `@champion` are) and
+> [Feature stores, training/serving skew and labeling](#/lesson/mlops/feature-stores) (online and
+> offline feature storage). It also helps to have met containers in
+> [Docker fundamentals](#/lesson/mlops/docker-fundamentals), though no Docker is needed here.
+
+## In plain words
+
+A trained model sitting in a registry helps nobody. Somebody, or some program, has to ask it a
+question and receive the answer. **Serving** is the name for that delivery: getting predictions from
+the model to whoever needs them. The model's act of producing a prediction is called
+**inference**, and whoever uses the result is the **consumer** (a web page, a marketing tool,
+another service, a person).
+
+There are only a few ways to organise the delivery, and choosing between them is one of the first
+decisions in any ML project. An everyday picture is a bakery. It can bake everything at 5 a.m. and
+put it on the shelves (**batch**: cheap, efficient, but the bread is a few hours old by lunch). It
+can bake to order while the customer waits (**online**: fresh and personalised, but the oven must
+be hot all day and the queue must stay short). Or it can watch the delivery trucks arriving and bake
+as each load of flour comes in, sending loaves to shops without anyone placing an order
+(**streaming**). A fourth option is to sell bread machines so customers bake at home (**edge**).
+
+Why this matters for a job: "should this model run in batch or online?" is one of the most common
+questions in ML system design interviews, and in practice it decides most of the cost, the
+hardware and the amount of on-call work a model creates. This lesson gives you the vocabulary, the
+trade-offs and a decision procedure.
+
 ## The first architectural question
 
-"How will predictions reach the consumer?" decides most of your serving architecture, cost and
-operational burden. There are three basic patterns, plus edge deployment:
+The question to ask first is: **how will predictions reach the consumer, and how quickly must they
+arrive?** Two words keep coming up when answering it. **Latency** is the time between asking for
+one prediction and receiving it. **Throughput** is how many predictions the system completes per
+second (or per hour). Batch systems are tuned for throughput; online systems are tuned for latency.
+
+There are three basic patterns, plus running the model on the user's own device:
 
 | Pattern | Trigger | Latency | Typical examples |
 |---|---|---|---|
@@ -11,6 +42,11 @@ operational burden. There are three basic patterns, plus edge deployment:
 | **Online (real-time, synchronous)** | a request | milliseconds–seconds | fraud check at checkout, search ranking, chatbots |
 | **Streaming (asynchronous, near-real-time)** | an event on a stream | sub-second–seconds | anomaly detection on sensor data, real-time feature + score pipelines |
 | **Edge / on-device** | local event | milliseconds, no network | keyboard prediction, camera models |
+
+The **trigger** column says what starts the work: a clock (a schedule), a request from a consumer
+who is waiting, or an **event**, a record that something happened (a click, a payment, a sensor
+reading). An **embedding** in the first row is a list of numbers that represents an item or user;
+a "backfill" recomputes them for every historical row.
 
 ```mermaid
 flowchart TB
@@ -28,23 +64,39 @@ flowchart TB
   end
 ```
 
+Read each box from left to right. In batch, a **scheduler** (a program that starts jobs at set
+times, such as cron or Airflow from lesson 13) starts a scoring job, which writes a table that the
+app later reads. In online serving, a **client** (the program asking) sends a request over **HTTP**
+(the protocol web browsers use) or **gRPC** (a faster binary protocol, lesson 20) and waits for the
+response. In streaming, events arrive in **Kafka**, a widely used system that stores streams of
+events in order, a processor applies the model, and the predictions go into another stream for
+whoever is interested.
+
 ## Batch inference
 
-A scheduled job loads a model, scores a large table, and writes results to storage keyed by entity
-(customer, product). Consumers read the precomputed predictions.
+A batch job runs on a schedule. It loads a model, scores a large table, and writes the results to
+storage, one row per **entity** (the thing being predicted about: a customer, a product, a store).
+Consumers later read the precomputed predictions by looking up their entity's row.
 
 **Strengths**
 
-- Simple and cheap: no always-on service, can use spot instances, throughput-optimised hardware.
-- Easy to validate before publishing: check the distribution of scores, compare with yesterday, then
-  swap the table atomically.
-- Heavy models are fine; latency is irrelevant.
+- Simple and cheap: there is no service that must stay up all day. The job can run on **spot
+  instances** (spare cloud machines rented at a steep discount that the provider may reclaim with
+  little notice, lesson 31) and on hardware chosen for throughput.
+- Easy to check before anyone sees the results: inspect the distribution of scores, compare with
+  yesterday's run, and only then replace the old table in one step.
+- Heavy, slow models are fine, because nobody is waiting on any single prediction.
 
 **Weaknesses**
 
-- Predictions are stale: a user who signed up an hour ago has none (**cold start**).
-- You compute predictions for *everyone*, even entities that will never be looked at.
-- Cannot use request-time context (current query, session).
+- Predictions are **stale**, meaning computed from data that is hours or days old. A user who signed
+  up an hour ago has no prediction at all: this gap is called the **cold start** problem.
+- You compute predictions for *everyone*, including entities nobody will look at.
+- The model cannot use **request-time context**, the information that only exists at the moment of
+  asking, such as the words a user has typed into a search box or the pages viewed in this session.
+
+Here is the outline of a real batch scoring job. It uses MLflow (lesson 10) and pandas, so it is
+shown as static code and not as a runnable demo.
 
 ```python
 # batch scoring skeleton (chunked, idempotent partition overwrite)
@@ -62,28 +114,55 @@ def score(day: str, model_uri: str = "models:/churn@champion") -> None:
     result.to_parquet(f"s3://acme/predictions/churn/dt={day}/part-0.parquet")   # overwrite partition
 ```
 
-For large volumes, run the model inside the data engine: Spark with `mlflow.pyfunc.spark_udf`, Ray Data
-`map_batches`, or warehouse-native ML. Kleppmann's batch principles (DDIA ch. 10) apply directly:
-immutable inputs, outputs written to a fresh location, safe retries.
+What each part does:
+
+- `model_uri = "models:/churn@champion"` names the model by its registry alias. `load_model`
+  downloads that version once, at the start of the job.
+- `version = model.metadata.run_id` records exactly which training run produced the model, so
+  every output row can say which model scored it.
+- The loop reads the day's features in **chunks** of 100,000 rows, so a table of fifty million rows
+  never has to fit in memory at once. `iter_chunks` and `FEATURES` are helpers defined elsewhere.
+- `validate_scores` checks the output before publishing (more on this below).
+- The output path contains `dt={day}`. A folder per day is called a **partition**. Writing to that
+  exact folder makes the job **idempotent**: running it twice for the same day replaces the first
+  result instead of adding duplicate rows, so a failed run can be retried without fear.
+
+For very large volumes, run the model inside the data engine itself: Spark with
+`mlflow.pyfunc.spark_udf`, Ray Data's `map_batches`, or the machine-learning functions built into
+data warehouses. Kleppmann's principles for batch processing (*DDIA*, ch. 10) carry over directly:
+treat inputs as read-only, write outputs to a fresh location, and design every step so that
+retrying it is harmless.
 
 > [!TIP]
-> A common hybrid: **batch-precompute, online-serve**. Scores (or embeddings / candidate lists) are
-> computed nightly and loaded into a key-value store (Redis, DynamoDB, Bigtable). The online path is a
-> ~1 ms lookup, with a cheap fallback model or default for unseen keys.
+> A very common hybrid is **batch-precompute, online-serve**. Scores (or embeddings, or candidate
+> lists) are computed nightly and loaded into a **key-value store**, a database that returns the
+> value stored under a key extremely quickly (Redis, DynamoDB, Bigtable). The online path then
+> becomes a lookup of about 1 ms, with a cheap fallback model or a default value for keys that were
+> not precomputed.
 
 ## Online inference
 
-A long-running service exposes an endpoint; each request carries inputs (or keys to look up features)
-and gets a prediction back synchronously.
+In online serving, a long-running program called a **model service** listens for requests at an
+**endpoint** (an address such as `https://api.example.com/predict`). Each request carries the
+inputs, or keys used to look the inputs up, and the service sends a prediction back while the
+client waits. Waiting for the answer on the same connection is what **synchronous** means.
 
-**Strengths:** fresh predictions; can use real-time context; only computes what is requested.
+**Strengths:** predictions are fresh, they can use request-time context, and only the predictions
+someone asked for are computed.
 
-**Weaknesses:** you now own a low-latency, highly available distributed system: capacity planning,
-autoscaling, tail latency, timeouts, fallbacks, feature freshness, and training/serving skew risks.
+**Weaknesses:** you now run a distributed system that must answer quickly and almost never be down.
+That brings capacity planning (how many machines for the busiest hour), **autoscaling** (adding and
+removing copies of the service as load changes), **tail latency** (the slowest few percent of
+requests), timeouts, fallbacks, keeping features fresh, and the risk of training/serving skew from
+lesson 9.
 
 ### The latency budget
 
-A product requirement such as "p99 under 150 ms end to end" must be split across the request path:
+Latency targets are written using **percentiles**. The **p99 latency** is the value that 99 out of
+every 100 requests stay under; p50 is the median. A product requirement such as "p99 under 150 ms
+end to end" is a **latency budget**: the total time allowed from the moment the request leaves the
+user to the moment the answer arrives. That total has to be shared among every step of the request
+path, and the model gets only part of it. The demo adds up a typical path.
 
 ```python-run
 budget_ms = 150
@@ -97,20 +176,48 @@ for step, ms in path:
 print(f"headroom: {budget_ms - used} ms of {budget_ms} ms budget")
 ```
 
+Line by line: `path` is a list of pairs, each a step name and the milliseconds it costs. The loop
+adds each step's cost to the running total `used` and prints both; `{step:34s}` pads the name to 34
+characters so the columns line up. The last line prints what is left over. The output ends with:
+
+```text
+model inference                      60 ms   cumulative  105 ms
+post-processing + business rules      5 ms   cumulative  110 ms
+logging (async)                       0 ms   cumulative  110 ms
+headroom: 40 ms of 150 ms budget
+```
+
+Some of the step names deserve a sentence. **TLS** (Transport Layer Security) is the encryption
+behind `https`, and setting it up costs a little time per connection. A **gateway** is the front
+door that every request passes through for routing and authentication. Logging costs 0 ms here
+because it is **asynchronous**: the service hands the log line to a background writer and does not
+wait for it. The 40 ms of **headroom** absorbs bad moments such as a slow network hop.
+
 The model usually gets less than half the budget. If inference alone needs 300 ms, no amount of
-infrastructure fixes it: you need a smaller/faster model (distillation, quantization), hardware
-acceleration, caching — or a different pattern (precompute, async).
+infrastructure fixes it, because adding machines lets you answer *more* requests, not answer *one*
+request faster. You need a smaller or faster model (**distillation**, training a small model to
+imitate a large one; **quantization**, storing the model's numbers with fewer bits), faster
+hardware, caching, or a different pattern altogether (precompute, or an asynchronous job).
 
 ### Synchronous vs asynchronous request handling
 
-- **Synchronous**: client waits on an open connection. Good up to a few seconds.
-- **Asynchronous (queue-based)**: client submits a job, gets an ID, and polls or receives a
-  webhook/callback. Workers pull from a queue (SQS, RabbitMQ, Kafka, Celery). Use for long inference
-  (video, large documents, big LLM jobs), bursty load (the queue absorbs spikes), and when you want
-  retries without the client holding a connection. Lubanovic (*FastAPI*, ch. 13) suggests handing any
-  task longer than a fraction of a second to a job queue.
-- **Streaming responses**: for LLMs, stream tokens via server-sent events so the user sees output
-  immediately; the metric that matters becomes time to first token (module 12).
+- **Synchronous**: the client waits on an open connection until the answer arrives. Reasonable up
+  to a few seconds.
+- **Asynchronous (queue-based)**: the client submits a job, immediately gets back a **job ID**, and
+  later either asks for the result (**polling**) or is called back at an address it supplied (a
+  **webhook**). Between the two, the job waits in a **queue**, a list of pending work that
+  **workers** (programs that do the work) take items from one at a time. SQS, RabbitMQ, Kafka and
+  Celery are common queue tools. Use this for long inference (video, large documents, big language
+  model jobs), for **bursty load** (sudden spikes, which the queue absorbs), and when you want
+  failed jobs retried without a client holding a connection open. Lubanovic (*FastAPI*, ch. 13)
+  recommends handing any task that takes more than a fraction of a second to a job queue.
+- **Streaming responses**: a large language model produces its answer one **token** (a word or
+  piece of a word) at a time. Sending each token as soon as it exists, for example with
+  **server-sent events** (a simple way for a server to push a series of messages over one HTTP
+  connection), lets the user start reading immediately. The latency that matters then becomes the
+  **time to first token** (module 12).
+
+The sequence diagram shows the asynchronous flow. Time runs downward; each arrow is a message.
 
 ```mermaid
 sequenceDiagram
@@ -130,30 +237,51 @@ sequenceDiagram
   A-->>C: 200 result
 ```
 
+`POST` and `GET` are the HTTP verbs for "send data" and "fetch data". The status code `202
+Accepted` means "received, not finished yet"; `200` means "here is the result". The client is free
+between the third and seventh messages, which is the whole point.
+
 ## Streaming inference
 
-Events flow through a log-based broker; a stream processor (Flink, Kafka Streams, Spark Structured
-Streaming) or a consumer service applies the model to each event (or micro-batch) and emits predictions
-to another topic.
+In streaming, events flow through a **message broker**, a system that receives events from
+**producers** and keeps them in order until **consumers** read them. Kafka is the best-known
+log-based broker: it appends each event to a durable log and remembers, for each consumer, how far
+it has read (its **offset**). Events of one kind are grouped into a **topic**. A **stream
+processor** (Flink, Kafka Streams, Spark Structured Streaming) or an ordinary consumer service reads
+each event, or a small group of events called a **micro-batch**, applies the model, and writes
+predictions to another topic.
 
-- Decoupled: producers do not wait for the model; consumers subscribe to predictions.
-- Natural for **stateful features** (windowed aggregates per key) computed in the same pipeline —
-  see DDIA ch. 11 on windows and stream joins.
-- Back-pressure and replay: if the model is slow or was wrong, the log lets you catch up or reprocess.
-- Delivery semantics matter: at-least-once delivery means predictions may be emitted twice; make
-  consumers idempotent (dedupe by event ID).
+- **Decoupled:** producers never wait for the model, and any number of consumers can subscribe to
+  the predictions.
+- **Natural home for stateful features:** a **windowed aggregate** such as "number of card payments
+  by this customer in the last 10 minutes" needs memory of recent events per key, which stream
+  processors provide. Kleppmann covers windows and stream joins in *DDIA* ch. 11.
+- **Back-pressure and replay:** if the model is slow, events wait in the log instead of being lost
+  (that waiting is **back-pressure** at work); if the model was wrong, you can rewind the offset and
+  **replay** old events through a fixed model.
+- **Delivery guarantees matter:** most setups promise **at-least-once delivery**, meaning every
+  event is processed, but after a crash or retry some events are processed twice. Consumers must
+  therefore be **idempotent**: processing the same event twice must have the same effect as once,
+  usually by remembering event IDs and skipping duplicates.
 
-The model can be embedded in the stream job (lowest latency, but couples model deploys to job deploys)
-or called as an external online service (independent scaling and deployment, extra network hop).
+The model can be **embedded** in the stream job (lowest latency, but every model release now means
+redeploying the job) or **called** as an external online service (the two can be scaled and
+released independently, at the price of an extra network hop).
 
 ## Edge inference
 
-Running on the device avoids network latency, works offline and keeps data private. Constraints: memory,
-battery, heterogeneous hardware, and difficult updates. Typical toolchain: export to ONNX / TFLite /
-Core ML / ExecuTorch, quantize, and ship via the app release or over-the-air model downloads. Monitoring
-is harder — telemetry must be sampled and privacy-preserving.
+**Edge** inference means running the model on the user's device: a phone, a camera, a car. It
+avoids network latency, works offline and keeps raw data on the device, which helps privacy. The
+constraints are limited memory and battery, many different kinds of hardware, and slow updates. The
+usual toolchain exports the model to a portable format (ONNX, TFLite, Core ML or ExecuTorch),
+quantizes it, and ships it either inside the app release or as a separate download. Monitoring is
+harder, because **telemetry** (usage data sent back from devices) must be sampled and stripped of
+personal information.
 
 ## Choosing a pattern
+
+The flowchart below turns the trade-offs into a series of questions. Diamonds are questions; follow
+the arrow labelled with your answer.
 
 ```mermaid
 flowchart TD
@@ -167,6 +295,9 @@ flowchart TD
   Q4 -->|no| ASYNC[Async queue or smaller model or streaming UX]
 ```
 
+"Can the input space be enumerated" asks whether you could list every possible input ahead of time.
+The set of your customers can be listed; the set of all sentences a user might type cannot.
+
 ### Worked examples
 
 | Use case | Pattern | Why |
@@ -178,18 +309,33 @@ flowchart TD
 | Document summarisation (long PDFs) | async queue | tens of seconds per job |
 | Chat assistant | online with token streaming | perceived latency via time to first token |
 
+The recommendation row uses two terms worth defining. **Candidate retrieval** picks a few hundred
+possibly relevant items out of millions; **re-ranking** orders that short list carefully. The first
+is heavy and can be done overnight; the second is light and benefits from knowing what the user is
+doing right now.
+
 ## Cross-cutting concerns for every pattern
 
-- **Model loading**: load once at startup (not per request); warm up with a dummy prediction so the first
-  user does not pay JIT/lazy-initialisation cost.
-- **Versioning**: every prediction is logged with model version and feature snapshot/time.
-- **Fallbacks**: on timeout or error, return a default, cached, or simpler-model prediction rather than
-  failing the user journey (graceful degradation).
-- **Prediction logging**: inputs, outputs, version, latency, request ID — the raw material for
-  monitoring, debugging and retraining (module 10). Log asynchronously.
-- **Throughput vs latency**: batch optimises throughput (large batches, full GPUs); online optimises tail
-  latency (small/dynamic batches, headroom). Huyen (*AI Engineering*, ch. 9) notes providers offer
-  cheaper **batch APIs** precisely because relaxing latency lets them optimise utilisation.
+Whatever the pattern, the same five habits apply.
+
+- **Model loading**: load the model once when the service starts, never once per request. Then
+  **warm it up** by running one dummy prediction, so the first real user does not pay one-off setup
+  costs such as **JIT compilation** (code compiled the first time it runs) or memory allocation.
+- **Versioning**: log every prediction with the model version and the time (or snapshot) of the
+  features it used.
+- **Fallbacks**: on a timeout or error, return a default, a cached value or a simpler model's
+  prediction instead of failing the user's whole journey. Continuing with reduced quality instead
+  of breaking is called **graceful degradation**.
+- **Prediction logging**: record inputs, outputs, model version, latency and a **request ID** (a
+  unique label for each request). These logs are the raw material for monitoring, debugging and
+  retraining (module 10). Write them asynchronously so they never slow down the answer.
+- **Throughput vs latency**: batch work favours throughput (large batches, fully used GPUs); online
+  work favours tail latency (small or dynamic batches, spare capacity). Huyen (*AI Engineering*,
+  ch. 9) points out that model providers sell cheaper **batch APIs** for exactly this reason: when
+  the customer can wait, the provider can pack the hardware more fully.
+
+To see the cost difference, the next demo compares one day of 5 million predictions done as a batch
+job against the same load served online.
 
 ```python-run
 # Cost intuition: batch job vs always-on online service for 5M predictions per day.
@@ -205,8 +351,21 @@ print(f"batch : {batch_hours:.2f} GPU-hours/day  -> ${batch_cost:.2f}/day")
 print(f"online: avg {avg_rps:.0f} rps, {replicas:.0f} replicas for peak -> ${online_cost:.2f}/day")
 ```
 
-Online serving pays for idle headroom and peak capacity; batch pays only for work done. Choose online
-only when freshness or request-time context earns its cost.
+How it works: the batch job's machine handles 4,000 predictions per second, so 5 million take
+`5_000_000 / 4000 / 3600` = about 0.35 hours, billed at a spot price of \$0.35 an hour. For online,
+`avg_rps` is the average load in **requests per second** (5 million spread over 86,400 seconds,
+about 58). The service must be sized for the busiest hour, assumed to be three times the average,
+plus 50% spare capacity. Each **replica** (one running copy of the service) handles 150 requests
+per second. The odd-looking `-(-x // 150)` is a way to divide and round *up* in Python, because
+you cannot run a fraction of a replica. The output:
+
+```text
+batch : 0.35 GPU-hours/day  -> $0.12/day
+online: avg 58 rps, 2 replicas for peak -> $48.00/day
+```
+
+Online serving pays around the clock for idle headroom and peak capacity; batch pays only for work
+done. Choose online only when freshness or request-time context is worth the difference.
 
 > [!INTERVIEW]
 > "Batch or online?" is a staple system-design question. Ask: who consumes the prediction and how fast?
@@ -216,18 +375,23 @@ only when freshness or request-time context earns its cost.
 
 ## Designing a batch scoring job properly
 
-Batch inference looks trivial, which is why its failure modes are neglected. A production-grade job has
-five properties.
+Batch inference looks easy, which is exactly why its failure modes get neglected. A batch job you
+can trust in production has five properties.
 
-1. **Idempotent and partitioned**: output keyed by `(scoring_date, model_version)`; a rerun overwrites.
-2. **Pinned model**: resolve `@champion` to a concrete version *once* at job start and record it; never
-   let half the rows be scored by one version and half by another.
-3. **Validated inputs and outputs**: check feature freshness and row counts before scoring; check the
-   score distribution after.
-4. **Atomic publish**: write to a staging location, validate, then swap — consumers never read a
-   half-written table.
-5. **Observable**: emit rows scored, duration, null rates and score-distribution summaries; alert on
-   staleness (the table was not updated by its deadline).
+1. **Idempotent and partitioned**: output is keyed by `(scoring_date, model_version)`, so a rerun
+   overwrites instead of duplicating.
+2. **Pinned model**: resolve `@champion` to a concrete version *once* at job start and record it.
+   If the alias moved halfway through, half the rows would be scored by one model and half by
+   another.
+3. **Validated inputs and outputs**: before scoring, check that features are fresh and row counts
+   are plausible; after scoring, check the score distribution.
+4. **Atomic publish**: write to a **staging** location (a holding area that consumers do not read),
+   validate, then switch consumers over in one step. **Atomic** means the switch either happens
+   completely or not at all, so nobody ever reads a half-written table.
+5. **Observable**: report rows scored, run time, share of missing values and a summary of the score
+   distribution; alert on **staleness** (the table was not refreshed by its deadline).
+
+The demo simulates properties 3 and 4. Read it once, run it, then read the explanation.
 
 ```python-run
 import numpy as np
@@ -261,19 +425,44 @@ print("unit bug upstream :", publish(table, shifted, ("2025-01-16", "v7"), check
 print("partitions served :", sorted(k[0] for k in table))
 ```
 
-When a run is rejected, consumers keep reading yesterday's predictions — stale but sane — while an alert
-goes out. That is almost always better than publishing garbage on time.
+What each piece does:
+
+- `score_batch` is a stand-in model: a **sigmoid** function, `1 / (1 + e^-z)`, which squeezes any
+  number into a score between 0 and 1. The weight `w` depends on the model version.
+- `publish` runs every check on the staged scores. If any check fails it returns `REJECTED` and
+  leaves `table` untouched; otherwise it stores the new partition with one assignment, the
+  in-memory equivalent of an atomic swap.
+- `checks` compares the staged output with yesterday's: row count within 10%, no `NaN` ("not a
+  number", the marker for a missing or broken value), and a mean score within 0.05.
+- Three runs follow: a normal day, a day when the upstream file arrived truncated (4,000 rows), and
+  a day when an upstream bug multiplied a feature by 100 (a units mistake, such as cents instead of
+  dollars).
+
+The output:
+
+```text
+normal run        : published 10050 rows
+partial input     : REJECTED ['row count within 10% of yesterday']: previous partition kept
+unit bug upstream : REJECTED ['mean score within 0.05 of yesterday']: previous partition kept
+partitions served : ['2025-01-14', '2025-01-15']
+```
+
+Neither broken run crashed: the scoring code ran happily on bad inputs. Only the checks noticed.
+When a run is rejected, consumers keep reading the last good predictions, stale but sensible, while
+an alert goes out. That is almost always better than publishing garbage on time.
 
 ### Throughput for batch on GPUs
 
-Sort or bucket inputs by length (for text) so batches are homogeneous; use the largest batch that fits;
-keep the GPU fed with parallel data loading; write results in large files rather than row by row. Batch
-jobs are also where **spot instances** shine: split the work into chunks, checkpoint progress as
-completed chunk IDs, and a preempted job resumes where it stopped.
+To keep a **GPU** (graphics processing unit, the chip that runs model arithmetic fastest) busy,
+sort or group text inputs by length so each batch holds items of similar size, use the largest
+batch that fits in memory, load the next batch while the current one is computing, and write
+results in large files rather than row by row. Batch jobs are also where spot instances shine:
+split the work into numbered chunks and record each finished chunk ID (a **checkpoint**). If the
+provider reclaims the machine, the restarted job skips the chunks already done.
 
 ## Request path design for online serving: precompute vs compute
 
-Within an online request, each piece of work can happen at one of three times:
+Inside one online request, each piece of work could happen at one of three times:
 
 | When | Examples | Trade-off |
 |---|---|---|
@@ -281,9 +470,11 @@ Within an online request, each piece of work can happen at one of three times:
 | **Nearline (streaming, seconds)** | counters over recent events, session features | fresher, operationally heavier |
 | **Online (at request time)** | features from the request itself, final ranking, business rules | freshest, inside the latency budget |
 
-A good serving design pushes work as far *left* as freshness requirements allow. Typical recommendation
-architecture: embeddings and candidate retrieval indexes built offline; recent-activity features nearline;
-a light ranker online over a few hundred candidates.
+**Nearline** means updated continuously from a stream, a few seconds behind reality, but not
+computed inside the request. A good design moves work as far toward the *top* of this table (as
+early as possible) as freshness requirements allow. A typical recommender builds embeddings and the
+candidate retrieval index offline, keeps recent-activity features nearline, and runs a light ranker
+online over a few hundred candidates.
 
 ## Failure modes and fallbacks by pattern
 
@@ -295,17 +486,55 @@ a light ranker online over a few hundred candidates.
 | Async queue | queue grows unbounded, workers crash on one job | queue depth and age of oldest message | autoscale on depth, max retries then DLQ, reject new jobs |
 | Edge | model/app version mismatch, device too weak | telemetry sampling, crash reports | bundled smaller model, server-side fallback |
 
-Design the fallback **before** launch and exercise it: a fallback path that has never run in production
-will not work the day you need it.
+A few terms from the table: an **SLO** (service level objective) is a written target such as "p99
+under 150 ms on 99.9% of days" (lesson 27). **Canary analysis** compares a new version receiving a
+small slice of traffic against the old one (lesson 26). **Consumer lag** is how far a stream
+consumer has fallen behind the newest event. A **poison message** is an event that crashes the
+consumer every time it is read. A **dead-letter queue** (DLQ) is a side queue where such messages
+are parked after a few failed attempts so the rest of the stream keeps flowing.
+
+Design the fallback **before** launch and exercise it on purpose: a fallback path that has never run
+in production will not work the day you need it.
 
 ## Summary
 
 - Batch: scheduled, cheap, simple, stale. Online: fresh and contextual but operationally demanding.
   Streaming: event-driven, stateful, decoupled. Edge: private and offline but constrained.
 - Split the latency budget across the whole request path; the model gets only part of it.
-- Use async queues for slow jobs and bursty load; stream tokens for LLMs.
-- Hybrids (precompute + online lookup/re-rank) are extremely common.
+- Use asynchronous queues for slow jobs and bursty load; stream tokens for language models.
+- Hybrids (precompute plus online lookup or re-ranking) are extremely common.
 - Always load once, warm up, version, log predictions and provide fallbacks.
+- A batch job you can trust is idempotent, pinned to one model version, validated and published
+  atomically.
+
+## Glossary
+
+- **Serving / inference** - delivering predictions to consumers / the model computing one.
+- **Consumer** - the person or program that uses a prediction.
+- **Latency / throughput** - time for one prediction / predictions completed per second.
+- **Percentile (p50, p99)** - the value that 50% or 99% of requests stay under.
+- **Latency budget** - the total time allowed for a request, shared among all steps.
+- **Batch inference** - scoring a whole table on a schedule and storing the results.
+- **Online inference** - a service that answers each request while the client waits.
+- **Streaming inference** - applying the model to events as they flow through a broker.
+- **Edge inference** - running the model on the user's own device.
+- **Entity** - the thing a prediction is about, such as a customer.
+- **Cold start** - having no prediction for a new entity.
+- **Partition** - one slice of a table, such as one day's folder.
+- **Idempotent** - safe to repeat: doing it twice has the same effect as once.
+- **Atomic publish** - switching consumers to new output in one all-or-nothing step.
+- **Key-value store** - a database that returns the value stored under a key very quickly.
+- **Spot instance** - a discounted cloud machine that the provider may reclaim.
+- **Queue / worker / job ID** - a list of pending work / a program that takes items from it / the
+  label a client uses to fetch a result later.
+- **Webhook** - a callback address the server calls when a job is finished.
+- **Token** - a word or piece of a word produced by a language model.
+- **Message broker / topic / offset** - a system that stores events in order / a named stream /
+  how far a consumer has read.
+- **At-least-once delivery** - every event is processed, possibly more than once.
+- **Graceful degradation** - continuing with reduced quality instead of failing.
+- **Nearline** - updated continuously from a stream, slightly behind real time.
+- **Dead-letter queue (DLQ)** - a holding queue for messages that keep failing.
 
 ```quiz
 [

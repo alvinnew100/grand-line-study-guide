@@ -1,15 +1,41 @@
 # Reproducibility: seeds, environments and lineage
 
+> **Before this lesson:** read [Experiment tracking with MLflow](#/lesson/mlops/mlflow-tracking)
+> for runs, tags and artifacts, and [Python packaging, Makefiles and pre-commit](#/lesson/mlops/packaging-tooling)
+> for lockfiles. Lesson 8 covered data versions; lesson 4 the Git SHA.
+
+## In plain words
+
+A result is **reproducible** when someone else, or you a year from now, can run the same recipe
+and get the same result. For a model, the "recipe" has five ingredients: the code, the data, the
+settings, the installed software, and the random numbers used along the way. If any one of them
+is not written down, the model cannot be rebuilt.
+
+Baking is a good comparison. Two people following the same recipe get different cakes if one of
+them uses a different flour, an oven that runs hot, or "a pinch" where the other measured a gram.
+To get the same cake you fix every one of those. This lesson is about fixing the two ingredients
+not yet covered, randomness and the software environment, and then about **lineage**: the paper
+trail that connects a finished model back to everything that went into it.
+
+Why this matters for a job: you cannot debug a model you cannot rebuild, you cannot compare two
+models fairly if chance decides the winner, and in regulated industries (banking, insurance,
+medicine) you may be legally required to explain a decision a model made months ago. "A model
+retrained from the same commit gives different results; how do you debug it?" is a classic
+interview question, answered below.
+
 ## What "reproducible" means
 
-There are several levels, from weakest to strongest:
+There are three levels, from weakest to strongest:
 
-1. **Re-runnable**: someone else can run the training code without asking you questions.
-2. **Statistically reproducible**: rerunning gives a model with the *same quality* (metrics within noise).
-3. **Bit-for-bit reproducible**: rerunning gives *identical* weights and predictions.
+1. **Re-runnable**: another person can run the training code without having to ask you anything.
+2. **Statistically reproducible**: running it again gives a model of the *same quality*. The
+   scores differ only by the small amount that chance explains.
+3. **Bit-for-bit reproducible**: running it again gives *identical* numbers inside the model and
+   identical predictions.
 
-Level 2 is the usual target for production ML; level 3 is valuable for debugging and regulated domains
-but can be expensive (deterministic GPU kernels are slower). Either way you need to control five things:
+Level 2 is the usual target for production ML. Level 3 is valuable for debugging and in regulated
+fields, but it can cost speed, because the fastest GPU routines are not always the repeatable
+ones. Either way, five things have to be controlled:
 
 ```mermaid
 flowchart LR
@@ -27,16 +53,22 @@ tying everything together into lineage.
 
 ## Randomness
 
-Sources of randomness in training:
+A surprising amount of training is random on purpose. The sources:
 
-- train/validation/test splits and cross-validation folds,
-- weight initialisation, dropout, data augmentation,
-- data shuffling and sampling order (DataLoader workers),
-- algorithms with random components (random forests, `HistGradientBoosting` with early-stopping
-  validation splits, k-means init, t-SNE/UMAP),
-- **non-deterministic parallel computation**: floating-point addition is not associative, so summing in a
-  different order (multi-threaded reductions, atomic adds on GPU) yields slightly different results.
+- how rows are divided into training, validation and test parts, and into the **folds** of
+  cross-validation (a method that repeats the split several times and averages the scores);
+- the starting values of a neural network's weights, **dropout** (randomly switching off parts of
+  the network during training) and **data augmentation** (random variations of the inputs, such
+  as flipping images);
+- the order in which training examples are shuffled and fed in;
+- algorithms with randomness built in, such as random forests or the starting points of k-means
+  clustering;
+- **parallel computation whose order is not fixed.** Computers store decimal numbers with limited
+  precision (**floating point**), so every addition is rounded slightly. Adding the same numbers
+  in a different order therefore gives a slightly different total, and when many processor cores
+  or a GPU add numbers at the same time, the order is not guaranteed.
 
+The last point is the least intuitive, so here it is in action.
 ```python-run
 import numpy as np
 # Floating-point addition is not associative: order changes the result.
@@ -51,8 +83,20 @@ print("sum forward :", float(np.sum(v)))
 print("sum shuffled:", float(np.sum(rng.permutation(v))))
 ```
 
+The first two lines add the same three numbers in two groupings and get 1.0 and 0.0. A 32-bit
+float holds about seven significant digits, so `-1e8 + 1.0` is rounded back to `-1e8` and the 1.0
+is lost. In mathematics addition is **associative** (the grouping does not matter); in floating
+point it is not. The last two lines sum a million numbers forwards and in shuffled order. On this
+machine the totals agree, because NumPy uses a careful summation method, but on a GPU that adds in
+parallel the two would typically differ in the last digits, and during training such tiny
+differences can grow from step to step.
+
 ### Seeding properly
 
+Computers do not produce true randomness. A **random-number generator** (RNG) produces a long,
+fixed sequence of numbers that only looks random, and the **seed** is the number that selects
+where the sequence starts. The same seed gives the same sequence. Each library keeps its own
+generator, so each must be seeded:
 ```python
 import os, random
 import numpy as np
@@ -71,6 +115,12 @@ def seed_everything(seed: int) -> None:
     except ImportError:
         pass
 ```
+
+The function seeds Python's own generator, NumPy's, and (if it is installed) PyTorch's for both
+the CPU and the GPU. The last three PyTorch lines go further than seeding: they switch off a
+feature that picks the fastest routine by trial (and may pick differently each time), and they
+ask PyTorch to raise an error whenever an operation has no repeatable implementation. **CUDA** is
+NVIDIA's software layer for running computations on its GPUs.
 
 Better practice in modern NumPy is to **pass explicit generators** rather than relying on global state:
 
@@ -105,11 +155,27 @@ for n in [1, 5, 20]:
     print(f"seeds={n:2d}  A={np.mean(a):.4f}  B={np.mean(b):.4f}  diff={diff:+.4f}  ~2*SE={2*se:.4f}")
 ```
 
-With one seed the "winner" is a coin flip; with 20 seeds the difference becomes distinguishable from noise.
+`train_and_eval` is a stand-in for real training: configuration B is truly better than A, but only
+by 0.003, while the run-to-run noise is 0.004. The loop compares them using 1, 5 and 20 seeds.
+`SE` is the standard error of the difference (lesson 10); a difference larger than about twice the
+SE is unlikely to be chance. The output:
+
+```text
+seeds= 1  A=0.8505  B=0.8517  diff=+0.0012  ~2*SE=nan
+seeds= 5  A=0.8516  B=0.8528  diff=+0.0011  ~2*SE=0.0044
+seeds=20  A=0.8499  B=0.8521  diff=+0.0022  ~2*SE=0.0024
+```
+
+With one seed there is no way to estimate the noise at all (`nan`, "not a number"), so the
+"winner" is a coin flip. With five seeds the difference is still well inside the noise band. Even
+with twenty it only approaches the threshold. Small improvements need many repetitions before
+they can be believed.
 
 ## Environment pinning
 
-The same code with a different library version can give a different model. Pin at every layer:
+The same code running on a different version of a library can produce a different model, because
+default settings and numerical details change between releases. The software a program runs in is
+its **environment**, and it has layers, each of which must be fixed ("pinned"):
 
 | Layer | How to pin |
 |---|---|
@@ -126,13 +192,21 @@ COPY uv.lock pyproject.toml ./
 RUN pip install uv && uv sync --frozen --no-dev   # install exactly what is locked
 ```
 
-Record in each run: `pip freeze` output (or the lock hash), `python --version`, the image digest, and
-`nvidia-smi` driver/CUDA versions. MLflow logs `requirements.txt`/`conda.yaml` with each model
-automatically; add the image digest as a tag.
+Some terms from the table. A container **image** is a packaged file system containing an
+operating system layer, libraries and your code (module 6). Its **digest** is a hash of its exact
+contents, written `sha256:…`. **cuDNN** and **NCCL** are NVIDIA libraries for neural-network
+arithmetic and for communication between GPUs. The **driver** is the software through which the
+operating system talks to the GPU.
+
+In each run, record the installed package versions (the output of `pip freeze`, or the hash of the
+lockfile), the Python version, the image digest, and the driver and CUDA versions reported by
+`nvidia-smi`. MLflow saves `requirements.txt` and `conda.yaml` with every model automatically;
+add the image digest yourself as a tag.
 
 > [!TIP]
-> Tag images with the **git SHA** for humans and deploy them by **digest** for machines. Tags are mutable
-> (someone can push a new `:latest`); digests are content hashes and never change.
+> Label images with the **Git SHA** for people and deploy them by **digest** for machines. A label
+> ("tag") such as `:latest` can be moved to point at a different image tomorrow. A digest is
+> computed from the contents, so it can never refer to anything else.
 
 ## Lineage: connecting everything
 
@@ -159,8 +233,8 @@ catalogs (DataHub, Amundsen, Unity Catalog).
 
 ### A reproducibility manifest
 
-A simple, powerful habit: every training run writes a manifest artifact.
-
+A habit that costs a few lines and pays for itself many times: every training run writes a
+**manifest**, one small file listing the identity of all five ingredients.
 ```python-run
 import hashlib, json, platform, sys
 def sha256_of(obj):
@@ -180,7 +254,14 @@ manifest = {
 print(json.dumps(manifest, indent=2))
 ```
 
-If any field differs between two runs, you know where to look when results differ.
+`sha256_of` turns the configuration into text with its keys in sorted order and hashes it, so two
+runs with the same settings get the same short `config_hash` and a single changed value gives a
+different one. The manifest then gathers the commit, whether there were uncommitted changes
+(`git_dirty`), the data location and hash, the configuration, the environment and the seeds, and
+prints them as JSON. (The Python version and platform lines depend on where you run it.)
+
+When two runs disagree, compare their manifests field by field. Whichever field differs is where
+to look.
 
 ## Common reproducibility failures
 
@@ -202,10 +283,12 @@ If any field differs between two runs, you know where to look when results diffe
 
 ## Reproducible data splits
 
-A model comparison is only fair if both models saw the same rows in train and test. `train_test_split`
-with a fixed seed is reproducible *only while the dataset is unchanged*: add one row and every
-assignment can shift, silently moving examples between train and test. The robust alternative is to
-derive the split from a **stable hash of an entity ID**:
+Comparing two models is only fair if both saw the same rows for training and the same rows for
+testing. `train_test_split` with a fixed seed repeats exactly *only while the data set is
+unchanged*. Add one row and many assignments shift, quietly moving examples from the training
+side to the test side. The robust alternative is to decide each row's side from a **stable hash
+of an entity id**: compute a hash of the customer id, take the remainder after dividing by 100,
+and send remainders below 20 to the test set.
 
 ```python-run
 import hashlib
@@ -224,10 +307,22 @@ print(f"test share day 2: {sum(v == 'test' for v in s2.values()) / len(s2):.3f}"
 print(f"customers that changed split after the data grew: {moved}")
 ```
 
-Properties: deterministic across machines and languages, stable as data grows, and all rows of one
-entity land on the same side (no entity leakage). The **salt** lets you define a new, independent split
-deliberately (`v2`) without accidental reuse. For time-dependent problems, split by time instead and
-record the cutoff timestamps in the run.
+`split_of` builds a text from a salt and the id, hashes it with SHA-256, reads the result as one
+very large whole number and takes `% 100`, the remainder after division by 100. The output:
+
+```text
+test share day 1: 0.196
+test share day 2: 0.198
+customers that changed split after the data grew: 0
+```
+
+About 20% of customers land in the test set, as intended, and when 2,000 new customers arrive not
+one of the original 10,000 changes side. The method has three useful properties. It gives the same
+answer on any machine and in any programming language. It is stable as data grows. And every row
+belonging to one customer lands on the same side, so the model is never tested on a customer it
+trained on. The **salt** is an extra piece of text mixed into the hash; changing it (to `v2`)
+deliberately creates a new, unrelated split. For problems where time matters, split by date and
+record the cut-off dates in the run.
 
 ## Determinism in practice: what to expect
 
@@ -294,6 +389,31 @@ are your reproducibility debt.
 - Pin environments at every layer — lockfiles with hashes, base images by digest, CUDA versions — and
   record them per run.
 - Lineage links models back to runs, code, data and environment, and forward to affected predictions.
+
+## Glossary
+
+- **Reproducible** - able to be run again with the same result (same quality, or bit-for-bit).
+- **Seed** - the number that selects where a random-number generator's sequence starts.
+- **RNG (random-number generator)** - an algorithm producing a repeatable sequence of
+  random-looking numbers.
+- **Floating point** - the limited-precision format in which computers store decimal numbers.
+- **Associative** - giving the same result however the terms are grouped; floating-point addition
+  is not.
+- **Deterministic** - always producing the same output from the same input.
+- **Seed variance** - how much a metric changes when only the seed changes.
+- **Environment** - all the software a program runs with: Python, packages, system libraries,
+  drivers.
+- **Pinning** - fixing something to one exact version.
+- **Image digest** - a hash identifying the exact contents of a container image.
+- **Tag (image)** - a movable, human-readable label on an image.
+- **CUDA / cuDNN** - NVIDIA's GPU computing layer / its neural-network library.
+- **Lineage** - the recorded links from a model back to its code, data, settings and environment
+  (backward), and from a data source to everything built on it (forward).
+- **Manifest** - a small file listing the identity of every input of a run.
+- **Hash-based split** - assigning rows to train or test by a hash of an entity id.
+- **Salt** - extra text mixed into a hash to produce an independent result.
+- **Fold / cross-validation** - one of several train/validation divisions / the method that
+  averages over them.
 
 ```quiz
 [

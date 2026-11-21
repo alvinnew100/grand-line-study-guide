@@ -1,12 +1,35 @@
 # Dockerfiles for ML: best practices and multi-stage builds
 
+> **Before this lesson:** read [Docker fundamentals: images, layers and the build cache](#/lesson/mlops/docker-fundamentals).
+> This lesson assumes you know what an image, a layer, the build cache, a tag and a digest are.
+> GPU terms (CUDA, driver) come from [Distributed training and GPUs](#/lesson/mlops/distributed-gpus).
+
+## In plain words
+
+The previous lesson explained what a container image is. This one is about packing it *well* for
+a machine-learning service. A badly packed image works, but it is huge, slow to build, slow to
+start and full of things an attacker could use.
+
+Think of packing for a mountain hike. A beginner throws the whole wardrobe into the bag,
+including the sewing kit used to repair the jacket before leaving. An experienced hiker repairs
+the jacket at home and carries only the jacket. The central technique of this lesson, the
+**multi-stage build**, is exactly that: use the heavy tools in a workshop stage, then carry only
+the finished result into the image that ships.
+
+Why this matters for a job: image size is not cosmetic. When traffic rises and the platform
+starts another copy of your service, that copy cannot answer anything until its image has been
+downloaded, and a 10 GB image takes minutes. "How would you reduce a 10 GB ML image?" is a
+standard interview question, and the eight numbered sections below are the answer.
+
 ## What makes ML images hard
 
-A typical web service image is 100–200 MB. A naive ML image can be 8–15 GB: CUDA libraries (several GB),
-PyTorch wheels (2+ GB with bundled CUDA), build toolchains, model weights. Big images mean slow CI, slow
-autoscaling (a new pod must pull the image before serving — painful during a traffic spike), higher
-storage bills and a larger attack surface. This lesson is a checklist of techniques, ending with a
-production-grade Dockerfile.
+A typical web service image is 100 to 200 MB. A carelessly built ML image can be 8 to 15 GB. The
+weight comes from the GPU libraries (CUDA, several GB), PyTorch packages (over 2 GB when they
+bundle CUDA), compilers and other build tools, and the model's weight files. Large images mean
+slow CI, slow **autoscaling** (the automatic starting of extra copies under load, each of which
+must first download the image), higher storage bills and a larger **attack surface**, meaning
+more installed software in which a security hole might be found. This lesson is a checklist of
+techniques, ending with a production-grade Dockerfile.
 
 ## 1. Choose the right base image
 
@@ -19,8 +42,17 @@ production-grade Dockerfile.
 | `pytorch/pytorch:*-runtime`, `tensorflow/tensorflow:*-gpu` | multi-GB | convenient, framework preinstalled |
 | distroless / chainguard | minimal | hardened runtime with no shell or package manager |
 
-Pin the base precisely (`python:3.11.9-slim`) and ideally by digest for reproducibility (lesson 11).
+Some words in that table. A **base image** is the image named in `FROM`, on top of which yours is
+built. **Debian** and **Alpine** are Linux distributions; Alpine is tiny because it uses a
+different core C library (**musl** where most of Linux uses **glibc**). Python packages are
+usually downloaded as **wheels**, files already compiled for a particular system, and the
+standard Linux wheels ("manylinux") are compiled for glibc. On Alpine they cannot be used, so
+`pip` falls back to compiling NumPy and pandas from source code, which takes a long time and
+fails in odd ways. A **distroless** image contains your program's runtime and almost nothing
+else, not even a shell.
 
+Name the base image precisely (`python:3.11.9-slim`, not `python:3`) and ideally by digest, for
+reproducibility (lesson 11).
 > [!TIP]
 > PyTorch's default Linux wheels bundle their own CUDA libraries. For **CPU-only** inference, install
 > from the CPU index (`--index-url https://download.pytorch.org/whl/cpu`) to save roughly 2 GB.
@@ -32,8 +64,11 @@ deterministic. Use a BuildKit cache mount so rebuilt dependency layers do not re
 
 ## 3. Multi-stage builds
 
-A multi-stage Dockerfile has several `FROM` instructions. Early stages contain compilers, build tools and
-caches; the final stage copies only the *results*. Build-time clutter never reaches the shipped image.
+A Dockerfile may contain several `FROM` instructions, and each one begins a new **stage** with
+its own file system. Early stages hold compilers, build tools and download caches. The final
+stage starts from a clean, small base and copies in only the *results* of the earlier stages
+with `COPY --from=<stage>`. Only the final stage becomes the shipped image; the earlier ones are
+discarded. Build-time clutter never reaches production.
 
 ```mermaid
 flowchart LR
@@ -89,8 +124,25 @@ ENTRYPOINT ["uvicorn", "churn.serve.app:app"]
 CMD ["--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
 ```
 
-What each choice buys:
+A guided reading, top to bottom:
 
+- `FROM python:3.11.9-slim AS builder` opens the first stage and names it `builder`.
+- The first `RUN` installs `build-essential` (a C compiler and friends), needed only when some
+  package has to be compiled.
+- `python -m venv /opt/venv` creates a virtual environment in one known folder, and the `ENV
+  PATH=...` line makes its Python the default.
+- The lockfile is copied and installed *before* the source code (the cache rule from lesson 16).
+  `--mount=type=cache` keeps pip's download cache outside the image.
+- `pip install --no-deps .` installs our own package into the same virtual environment.
+- `FROM python:3.11.9-slim AS runtime` opens the second, final stage from a fresh slim base.
+- `ARG GIT_SHA` is a value supplied at build time; the `LABEL` lines stamp it on the image.
+- `COPY --from=builder /opt/venv /opt/venv` is the handover: one folder crosses from the workshop
+  to the shipped image. The compiler does not.
+- `groupadd`/`useradd` create an unprivileged account and `USER 10001` switches to it.
+- `HEALTHCHECK` tells Docker how to test that the service is alive.
+- `ENTRYPOINT` fixes the program; `CMD` supplies default arguments that can be replaced.
+
+What each choice buys:
 - **`builder` stage** has compilers; the runtime stage does not.
 - A **virtualenv at `/opt/venv`** is a single directory that is trivially copied between stages.
 - `--require-hashes` verifies every wheel against the lockfile (supply-chain safety).
@@ -140,17 +192,22 @@ ENV PATH="/opt/venv/bin:$PATH" NVIDIA_VISIBLE_DEVICES=all NVIDIA_DRIVER_CAPABILI
 
 ## 6. Security hygiene
 
-- **Never bake secrets** (`ENV API_KEY=...`, `COPY .env`) — they persist in layers and history. Inject at
-  runtime; for build-time private indexes use `RUN --mount=type=secret,id=pip_conf ...`.
-- **Run as non-root**; drop capabilities; read-only root filesystem where possible
-  (`docker run --read-only --tmpfs /tmp`).
-- **Scan images** for CVEs in CI (Trivy, Grype, Docker Scout) and rebuild regularly to pick up base
-  image patches.
+- **Never put secrets in an image** (`ENV API_KEY=...`, `COPY .env`). They stay in the layers and
+  in the image history even if a later instruction removes them. Supply secrets when the
+  container starts. If the *build* needs a secret, for example to reach a private package index,
+  use `RUN --mount=type=secret,id=pip_conf ...`, which makes it available during that one
+  instruction without storing it.
+- **Run as a non-root user**, remove unneeded privileges, and make the container's file system
+  read-only where possible (`docker run --read-only --tmpfs /tmp`). If the process is taken over,
+  the attacker can do less.
+- **Scan images** in CI for **CVEs** (publicly catalogued vulnerabilities) with a scanner such as
+  Trivy, Grype or Docker Scout, and rebuild regularly so fixes in the base image arrive.
 - **Minimise contents**: no compilers, no package caches, no test data in the final image.
-- **Pickle is code execution**: `pickle.load`/`torch.load` on an untrusted model file can run arbitrary
-  code. Only load artifacts from your trusted registry; prefer safer formats (safetensors, ONNX) where
-  possible.
-- Generate an **SBOM** and sign images (cosign) for supply-chain provenance.
+- **A pickle file is executable code.** Loading one with `pickle.load` or `torch.load` can run
+  any instructions hidden inside it. Only load model files from your own trusted registry, and
+  prefer formats that hold numbers only and cannot execute anything, such as safetensors or ONNX.
+- Generate an **SBOM** (software bill of materials, the list of every component in the image) and
+  **sign** images with a tool such as cosign, so that their origin can be verified.
 
 ## 7. Size diagnostics
 
@@ -176,8 +233,33 @@ pull_mbps = 100  # MB/s effective pull+extract speed
 print(f"cold-start pull time: naive ~{sum(naive.values())/pull_mbps:.0f}s vs optimised ~{sum(optimised.values())/pull_mbps:.0f}s")
 ```
 
-Smaller images directly shorten autoscaling reaction time: a new node must pull the image before the pod
-can become ready.
+The two dictionaries list, in megabytes, what a careless image and a careful image contain. The
+loop prints each total and its items, largest first, and the last line estimates the download
+time at 100 MB per second:
+
+```text
+naive: 10.3 GB
+    4600 MB  torch (CUDA wheels)
+    2300 MB  .git + data + notebooks via COPY . .
+    1010 MB  python:3.11 full base
+     900 MB  pip cache
+     700 MB  other deps
+     440 MB  model weights
+     350 MB  build-essential + headers
+multi-stage, slim, CPU wheels, .dockerignore: 2.1 GB
+     800 MB  torch (CPU wheels)
+     700 MB  other deps
+     440 MB  model weights
+     130 MB  python:3.11-slim base
+       2 MB  app code
+cold-start pull time: naive ~103s vs optimised ~21s
+```
+
+Almost half of the naive image is GPU libraries that a CPU-only service never calls, and nearly a
+quarter is the repository's own clutter copied in by `COPY . .`. The application code is 2 MB.
+The difference in pull time, 103 seconds against 21, is the extra time users wait for new
+capacity during a traffic spike. A **cold start** is the delay before a freshly started copy can
+serve.
 
 ## 8. One image, many roles
 
@@ -237,9 +319,25 @@ first, last = steps[0], steps[-1]
 print(f"\nsize: {first[1]/last[1]:.1f}x smaller; inner-loop rebuild: {first[2]/last[2]:.0f}x faster")
 ```
 
-(Numbers are representative of a PyTorch-based service; yours will differ.) The two changes with the
-largest payoff are usually **layer ordering** (developer speed) and **not shipping what you do not use**
-(size).
+The table printed by the program:
+
+```text
+step                                image MB  rebuild after code edit (s)
+v0 naive                                9400                          240
+v1 .dockerignore                        7100                          235
+v2 layer order                          7100                           12
+v3 slim base, no pip cache              5600                           12
+v4 multi-stage                          5100                           12
+v5 CPU wheels, serve extras only        1450                            9
+v6 hardening                            1450                            9
+
+size: 6.5x smaller; inner-loop rebuild: 27x faster
+```
+
+(The numbers are representative of a PyTorch-based service; yours will differ.) Two steps stand
+out. Step v2, **layer ordering**, does nothing for size and cuts the rebuild after a code edit
+from four minutes to twelve seconds, which is what a developer feels all day. Step v5, **not
+shipping what you do not use**, removes most of the remaining size.
 
 ## Health, startup and shutdown inside the container
 
@@ -310,6 +408,28 @@ SIGTERM instead of being killed.
 - GPU images carry CUDA userland; the driver is on the host.
 - Non-root, no secrets in layers, scan and sign, minimal contents.
 - Build one image for train/score/serve where possible to eliminate skew.
+
+## Glossary
+
+- **Base image** - the image named in `FROM`, on which yours is built.
+- **Slim / runtime / devel** - image variants: minimal, with libraries needed to run, with
+  compilers and headers for building.
+- **glibc / musl** - the standard C library of most Linux systems / Alpine's smaller alternative.
+- **Wheel** - a pre-compiled Python package file.
+- **Multi-stage build** - a Dockerfile with several `FROM` stages; only the last is shipped.
+- **Stage** - one `FROM` section with its own file system.
+- **`COPY --from`** - copying files from an earlier stage into the current one.
+- **`ARG` / `LABEL`** - a build-time value / metadata stamped on the image.
+- **`ENTRYPOINT` / `CMD`** - the fixed program / its default, overridable arguments.
+- **Non-root user** - an unprivileged account the container process runs as.
+- **Attack surface** - everything in a system that an attacker could try to exploit.
+- **CVE** - a publicly catalogued security vulnerability.
+- **SBOM** - the list of all software components in an image.
+- **Image signing** - attaching a verifiable proof of who built an image.
+- **Baking weights** - copying model files into the image at build time.
+- **Cold start** - the delay before a newly started instance can serve requests.
+- **Autoscaling** - automatically adding or removing instances as load changes.
+- **safetensors** - a model file format that stores numbers only and cannot run code.
 
 ```quiz
 [

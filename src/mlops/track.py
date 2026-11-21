@@ -25,7 +25,7 @@ TRACK = dict(
                 dict(id="tech-debt-roles", title="Roles, teams and hidden technical debt", file="02-tech-debt-roles.md"),
                 dict(id="maturity-levels", title="MLOps maturity levels 0, 1 and 2", file="03-maturity-levels.md"),
             ],
-            problems=[],
+            problems=["mlops-downstream-impact"],
         ),
         dict(
             id="foundations",
@@ -36,7 +36,7 @@ TRACK = dict(
                 dict(id="packaging-tooling", title="Python packaging, Makefiles and pre-commit", file="05-packaging-tooling.md"),
                 dict(id="shell-config", title="Linux shell essentials and configuration management", file="06-shell-config.md"),
             ],
-            problems=[],
+            problems=["mlops-version-satisfies", "mlops-config-merge"],
         ),
         dict(
             id="data-engineering",
@@ -58,7 +58,7 @@ TRACK = dict(
                 dict(id="reproducibility", title="Reproducibility: seeds, environments and lineage", file="11-reproducibility.md"),
                 dict(id="model-registry", title="Model registry, model cards and governance", file="12-model-registry.md"),
             ],
-            problems=["mlops-champion-model", "mlops-semver-bump"],
+            problems=["mlops-champion-model", "mlops-semver-bump", "mlops-hash-split"],
         ),
         dict(
             id="training-scale",
@@ -69,7 +69,7 @@ TRACK = dict(
                 dict(id="distributed-gpus", title="Distributed training and GPUs", file="14-distributed-gpus.md"),
                 dict(id="hpo", title="Hyperparameter tuning at scale", file="15-hpo.md"),
             ],
-            problems=["mlops-dag-order"],
+            problems=["mlops-dag-order", "mlops-successive-halving"],
         ),
         dict(
             id="containers",
@@ -80,7 +80,7 @@ TRACK = dict(
                 dict(id="dockerfile-ml", title="Dockerfiles for ML: best practices and multi-stage builds", file="17-dockerfile-ml.md"),
                 dict(id="compose", title="Docker Compose for local ML stacks", file="18-compose.md"),
             ],
-            problems=["mlops-docker-layer-cache"],
+            problems=["mlops-docker-layer-cache", "mlops-registry-storage"],
         ),
         dict(
             id="serving",
@@ -101,7 +101,7 @@ TRACK = dict(
                 dict(id="k8s-core", title="Kubernetes core objects", file="22-k8s-core.md"),
                 dict(id="k8s-ml", title="Scaling, GPUs and KServe on Kubernetes", file="23-k8s-ml.md"),
             ],
-            problems=["mlops-hpa-replicas"],
+            problems=["mlops-hpa-replicas", "mlops-pod-scheduling"],
         ),
         dict(
             id="cicd",
@@ -123,7 +123,7 @@ TRACK = dict(
                 dict(id="drift", title="Data drift, concept drift and statistical tests", file="28-drift.md"),
                 dict(id="alerting-retraining", title="Alerting, feedback loops and retraining triggers", file="29-alerting-retraining.md"),
             ],
-            problems=["mlops-rolling-p95", "mlops-psi", "mlops-ks-statistic", "mlops-drift-alerts"],
+            problems=["mlops-rolling-p95", "mlops-psi", "mlops-ks-statistic", "mlops-drift-alerts", "mlops-error-budget-burn"],
         ),
         dict(
             id="cloud-cost",
@@ -133,7 +133,7 @@ TRACK = dict(
                 dict(id="cloud-platforms", title="Cloud ML platforms and serverless", file="30-cloud-platforms.md"),
                 dict(id="cost-optimization", title="Cost optimisation for ML workloads", file="31-cost-optimization.md"),
             ],
-            problems=[],
+            problems=["mlops-instance-choice"],
         ),
         dict(
             id="llmops",
@@ -144,7 +144,7 @@ TRACK = dict(
                 dict(id="llmops-gateways", title="Guardrails, gateways, caching and tracing", file="33-llmops-gateways.md"),
                 dict(id="llm-inference", title="LLM inference optimization", file="34-llm-inference.md"),
             ],
-            problems=["mlops-kv-cache-capacity"],
+            problems=["mlops-kv-cache-capacity", "mlops-token-budget-trim", "mlops-token-bucket"],
         ),
         dict(
             id="capstone",
@@ -155,7 +155,7 @@ TRACK = dict(
                 dict(id="capstone-ship", title="Capstone part 2: containerise, CI, deploy and monitor", file="36-capstone-ship.md"),
                 dict(id="interview-playbook", title="MLOps interview and ML system design playbook", file="37-interview-playbook.md"),
             ],
-            problems=[],
+            problems=["mlops-slice-gate"],
         ),
     ],
 )

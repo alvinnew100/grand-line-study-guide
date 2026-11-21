@@ -1,20 +1,50 @@
 # Distributed training and GPUs
 
+> **Before this lesson:** read [Pipelines and orchestration](#/lesson/mlops/orchestration) and
+> [Reproducibility: seeds, environments and lineage](#/lesson/mlops/reproducibility). It helps to
+> know roughly how a neural network is trained: the model makes predictions on a small group of
+> examples (a **batch**), measures its error, and nudges its numbers to reduce it, over and over.
+> The terms are explained again below.
+
+## In plain words
+
+Some models are too slow to train on one ordinary computer. There are two ways out. The first is
+a **GPU** (graphics processing unit): a chip originally built to draw video-game images, which
+happens to be extremely good at the one operation neural networks need, doing the same arithmetic
+on millions of numbers at once. The second is **distributed training**: several machines, or
+several GPUs, working on the same model together.
+
+Painting a very long fence is a fair picture. One fast painter with a wide roller (a GPU) beats
+one person with a small brush (an ordinary processor). Four painters each taking a section
+(distributed training) are faster still, but not four times faster: they have to agree where the
+sections meet, share the paint, and wait for the slowest one. And if a painter is called away
+mid-job, someone needs to know where they stopped. That last point is **checkpointing**.
+
+Why this matters for a job: GPU time is usually the single largest line in an ML budget. An
+engineer who can tell why a training job is slow, estimate whether a model will fit in memory,
+and make a job survive interruption saves real money. "Training is too slow, what do you do?" is
+a standard interview question with a standard order of answers, given at the end of this lesson.
+
 ## When one machine is not enough
 
-Training gets slow for two different reasons, and the remedies differ:
+Training becomes slow for two different reasons, and the remedies differ:
 
-- **Too much data** for one machine to process in reasonable time → parallelise over data.
-- **Model too large** to fit in one GPU's memory → split the model, or shrink its footprint.
+- **Too much data** for one machine to get through in reasonable time. Remedy: let several
+  workers process different parts of the data in parallel.
+- **A model too large** to fit in one GPU's memory. Remedy: split the model across devices, or
+  shrink the space it needs.
 
-Before distributing anything, exhaust the cheap options: a bigger single machine, better data loading,
-mixed precision, a smaller sample for iteration. Distributed systems add failure modes; DDIA's chapter
-8 title is literally "The Trouble with Distributed Systems".
+Before distributing anything, use up the cheap options: a larger single machine, faster loading
+of data, lower numerical precision, a smaller sample while you are still experimenting. Several
+machines working together can fail in ways one machine cannot (one dies while the others carry
+on, messages are delayed), a theme DDIA devotes a whole chapter to.
 
 ## GPU basics for MLOps engineers
 
-A GPU has thousands of simple cores optimised for the same operation applied to many numbers at once —
-exactly what matrix multiplication needs. What you need to know operationally:
+An ordinary processor (**CPU**) has a few powerful cores that each do complicated work one step
+at a time. A GPU has thousands of simple cores that all perform the same operation on different
+numbers at the same moment, which is what multiplying large tables of numbers (matrices)
+requires. The vocabulary you need day to day:
 
 | Term | Meaning |
 |---|---|
@@ -36,7 +66,14 @@ docker run --rm --gpus all nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi
 
 ### Memory math
 
-A rough training memory estimate for a model with $P$ parameters in FP32 using Adam:
+Will the model fit? The numbers inside a model that training adjusts are its **parameters**
+(also called weights), and $P$ is how many there are. Each is normally stored as a 32-bit
+floating-point number (**FP32**), which occupies 4 bytes. During training, the GPU must hold
+several things for every parameter: the weight itself; its **gradient**, the number saying in
+which direction and how strongly to adjust it; and the bookkeeping of the **optimizer**, the
+algorithm that applies the adjustments. The popular optimizer **Adam** keeps two extra numbers
+per parameter. On top of that come the **activations**, the intermediate results computed for
+each example in the batch. So, roughly:
 
 $$\text{memory} \approx \underbrace{4P}_{\text{weights}} + \underbrace{4P}_{\text{gradients}} + \underbrace{8P}_{\text{Adam } m, v} + \text{activations (∝ batch size)}$$
 
@@ -53,10 +90,37 @@ for name, p in [("ResNet-50", 25.6e6), ("BERT-large", 340e6), ("7B LLM", 7e9)]:
           f"inference FP16 ~{p*2/1e9:6.1f} GB")
 ```
 
-A 7B-parameter model needs ~112 GB just for weights, gradients and Adam state in FP32 — more than one
-80 GB GPU. This is why large-model training uses mixed precision, memory-efficient optimizers,
-parameter-efficient fine-tuning (LoRA trains a tiny fraction of parameters) and multiple GPUs. Huyen
-(*AI Engineering*, ch. 7) walks through this style of memory calculation for fine-tuning.
+The function multiplies the parameter count by 4 bytes for the weights, again for the gradients,
+and twice more for Adam, then converts to gigabytes. The output:
+
+```text
+ResNet-50  params=      26M  FP32+Adam ~    0.4 GB (+activations)   inference FP16 ~   0.1 GB
+BERT-large params=     340M  FP32+Adam ~    5.4 GB (+activations)   inference FP16 ~   0.7 GB
+7B LLM     params=    7000M  FP32+Adam ~  112.0 GB (+activations)   inference FP16 ~  14.0 GB
+```
+
+A language model with 7 billion parameters needs about 112 GB for weights, gradients and Adam's
+bookkeeping alone, before any activations. The largest common GPUs have 80 GB. Yet *using* the
+same model (**inference**) with 16-bit numbers takes only 14 GB, because no gradients or
+optimizer state are needed. This gap is why training large models relies on lower precision,
+lighter optimizers, several GPUs, and **parameter-efficient fine-tuning** such as LoRA, which
+leaves the original weights untouched and trains a small set of added ones. Huyen (*AI
+Engineering*, ch. 7) works through the same kind of memory arithmetic for fine-tuning.
+
+### Getting more from one GPU
+
+- **Mixed precision**: do most of the arithmetic with 16-bit numbers (FP16 or the variant bf16)
+  and keep 32 bits only where accuracy needs it. Memory for those values halves and modern GPUs
+  compute faster. In PyTorch this is `torch.autocast` together with a `GradScaler`, which keeps
+  very small gradients from being rounded to zero.
+- **Gradient accumulation**: if a large batch does not fit, process several small batches, add up
+  their gradients, and adjust the weights once. The effect is that of one large batch.
+- **Gradient checkpointing**: discard some activations and compute them again when needed. This
+  trades extra computing time for less memory.
+- **Efficient data loading**: several worker processes preparing batches in parallel, data
+  already converted to a fast format. A GPU that is busy only 30% of the time is usually waiting
+  for input.
+- **`torch.compile`**, which optimises the model's code before running it.
 
 ### Getting more from one GPU
 
@@ -78,14 +142,20 @@ for step, (x, y) in enumerate(loader):
         scaler.step(optimizer); scaler.update(); optimizer.zero_grad(set_to_none=True)
 ```
 
+In the loop, `autocast` runs the forward computation in 16-bit precision. The loss is divided by
+`accum_steps` so that the accumulated gradients average correctly. `backward()` computes
+gradients, and only every `accum_steps`-th step does the optimizer adjust the weights and clear
+the gradients.
+
 > [!TIP]
 > Diagnose before scaling out. If `nvidia-smi` shows low GPU utilisation while CPU cores are pegged, the
 > bottleneck is data loading — adding GPUs will not help.
 
 ## Data parallelism
 
-The dominant strategy: replicate the model on N workers, give each a different shard of each batch,
-combine gradients.
+The usual way to use several GPUs is **data parallelism**: put an identical copy of the model on
+each of N GPUs, give each copy a different slice (a **shard**) of every batch, and combine the
+gradients they compute.
 
 ```mermaid
 flowchart TB
@@ -98,20 +168,24 @@ flowchart TB
   AR --> UP[Identical optimizer step on every replica]
 ```
 
-- **Synchronous (all-reduce)**: every step, workers exchange and average gradients (NCCL over
-  NVLink/InfiniBand/Ethernet). All replicas stay identical. This is PyTorch
-  `DistributedDataParallel` (DDP) and TensorFlow `MirroredStrategy`/`MultiWorkerMirroredStrategy`.
-- **Asynchronous (parameter server)**: workers push gradients to and pull weights from servers without
-  waiting for each other. Tolerates stragglers but gradients are stale; common historically for huge
-  sparse recommender models.
+- **Synchronous (all-reduce)**: at every step the workers exchange their gradients and average
+  them, an operation called **all-reduce**, so every copy of the model stays identical. This is
+  what PyTorch's `DistributedDataParallel` (**DDP**) and TensorFlow's `MirroredStrategy` do. The
+  exchange runs over fast links between GPUs.
+- **Asynchronous (parameter server)**: workers send gradients to central servers and fetch the
+  latest weights without waiting for each other. A slow worker (a **straggler**) holds nobody up,
+  but some gradients are computed from slightly outdated weights. This design was common for very
+  large recommender models.
 
-Practicalities:
+Practical points:
 
-- The **effective batch size** is per-GPU batch × N. Scale the learning rate accordingly (linear scaling
-  rule with warmup is a common starting point).
-- Each worker needs a **different data shard** per epoch (`DistributedSampler`).
-- Only rank 0 should log metrics and write checkpoints.
-- Batch-norm statistics are per-replica unless you use SyncBatchNorm.
+- The **effective batch size** is the per-GPU batch multiplied by N. The **learning rate** (how
+  large each adjustment is) usually has to be raised to match, starting gently ("warm-up").
+- Each worker must see a **different shard** of the data in each epoch (`DistributedSampler`).
+- Only one process, by convention the one numbered 0 (its **rank**), should write logs and
+  checkpoints, or you get N copies of everything.
+- Statistics that some layers compute over a batch (batch normalisation) are per copy unless you
+  ask for them to be synchronised.
 
 ```python
 # launched with: torchrun --nproc_per_node=4 train.py
@@ -131,14 +205,20 @@ for epoch in range(epochs):
     if rank == 0: save_checkpoint(model.module, epoch)
 ```
 
+`torchrun --nproc_per_node=4` starts four copies of the script, one per GPU. Each copy joins the
+group (`init_process_group`), learns its own number (`rank`), wraps the model in `DDP`, and uses
+a `DistributedSampler` so the four copies read different examples. Only rank 0 saves checkpoints.
+
 Higher-level launchers hide this boilerplate: PyTorch Lightning (`Trainer(devices=4, strategy="ddp")`),
 Hugging Face Accelerate, **Ray Train**, Horovod, and on Kubernetes the **Kubeflow Training Operator**
 (`PyTorchJob`, `TFJob`, `MPIJob`).
 
 ### Why speedup is not linear
 
-Amdahl's law: if a fraction $s$ of the work is serial (data loading, communication, logging), the
-maximum speedup with $N$ workers is $\frac{1}{s + (1-s)/N}$.
+Four GPUs do not train four times as fast. **Amdahl's law** explains why. If a fraction $s$ of
+the work cannot be divided (loading data, exchanging gradients, logging), then with $N$ workers
+the best possible speed-up is $\frac{1}{s + (1-s)/N}$. However many workers you add, the
+indivisible part still takes as long as before.
 
 ```python-run
 def speedup(n, serial_frac, comm_overhead_per_worker=0.0):
@@ -148,8 +228,22 @@ for n in [1, 2, 4, 8, 16, 32]:
     print(f"{n:4d}  {n:5.1f}  {speedup(n, 0.05):9.2f}  {speedup(n, 0.05, 0.003):10.2f}")
 ```
 
-With 5% serial work, 32 GPUs give ~12.5×, not 32× — and with communication overhead the curve can even
-turn down. Always measure **scaling efficiency** (speedup / N) before paying for more GPUs.
+The first column of results uses the plain formula with 5% indivisible work. The second also
+subtracts a small communication cost for each additional worker:
+
+```text
+GPUs  ideal  5% serial  5% serial + comm overhead
+   1    1.0       1.00        1.00
+   2    2.0       1.90        1.89
+   4    4.0       3.48        3.37
+   8    8.0       5.93        5.27
+  16   16.0       9.14        6.48
+  32   32.0      12.55        5.79
+```
+
+With 5% indivisible work, 32 GPUs give a speed-up of about 12.5, not 32. With communication cost
+included, 32 GPUs are *slower* than 16. Always measure **scaling efficiency**, the speed-up
+divided by N, before paying for more GPUs.
 
 ## Model parallelism and large-model techniques
 
@@ -174,8 +268,11 @@ Not everything is deep learning:
 
 ## Fault tolerance: checkpointing
 
-Long jobs *will* be interrupted — hardware faults, spot/preemptible instance reclamation, node drains.
-
+Long jobs *will* be interrupted: hardware fails, machines are taken down for maintenance, and
+cheap **spot instances** (spare cloud machines sold at a large discount on the condition that the
+provider may take them back at short notice, an event called **preemption**) are reclaimed. The
+defence is **checkpointing**: saving the full state of the training at intervals so the job can
+continue from the last save.
 - **Checkpoint regularly** to durable storage (object store): model weights, optimizer state, LR
   scheduler, epoch/step, RNG state, and the config.
 - **Resume automatically** on restart: look for the latest checkpoint at startup.
@@ -214,6 +311,22 @@ for ck in [0, 2, 0.5]:
     label = "no checkpoints" if ck == 0 else f"checkpoint every {ck}h"
     print(f"{label:22s} -> average wall time {avg:5.1f} h")
 ```
+
+The simulation runs a 10-hour job on a machine that is preempted on average once every 6 to 7
+hours (`0.15` per hour). `random.expovariate` draws the time until the next interruption. After
+an interruption, progress falls back to the last checkpoint: `(done + t) // ckpt * ckpt` rounds
+down to a multiple of the checkpoint interval, and with no checkpoints it falls to zero. Averaged
+over 2,000 trials:
+
+```text
+no checkpoints         -> average wall time  23.0 h
+checkpoint every 2h    -> average wall time  11.7 h
+checkpoint every 0.5h  -> average wall time  10.4 h
+```
+
+Without checkpoints the 10-hour job takes 23 hours on average, because every interruption throws
+away everything. Saving every half hour brings it to 10.4 hours, close to the uninterrupted time,
+while still paying the discounted price.
 
 > [!INTERVIEW]
 > "Training is too slow — what do you do?" — First profile: is the GPU fully utilised? If not, fix data
@@ -295,17 +408,28 @@ for name, p in profiles.items():
           f"GPU busy={gpu_busy:4.0%}  biggest cost: {worst}")
 ```
 
-The first fix (data loading) gives a 3.4× speedup without touching the model or buying hardware; only
-then does mixed precision matter. **Profile before you scale**: `torch.profiler`, `nvidia-smi dmon`,
-py-spy, or simply timing each phase of the loop.
+Each profile is a breakdown, in milliseconds, of where one training step spends its time. The
+loop adds up the parts, computes how many examples per second that allows, and what share of the
+time the GPU is doing real work:
+
+```text
+data-starved       step= 450 ms  throughput=   569 samples/s  GPU busy= 23%  biggest cost: data loading
+after fixing       step= 131 ms  throughput=  1954 samples/s  GPU busy= 80%  biggest cost: forward+backward
++ mixed precision  step=  87 ms  throughput=  2943 samples/s  GPU busy= 70%  biggest cost: forward+backward
+```
+
+Fixing data loading makes training 3.4 times faster without touching the model or buying
+hardware. Only after that does mixed precision make a visible difference. **Profile before you
+scale.** Tools include `torch.profiler`, `nvidia-smi dmon` and py-spy; timing each phase of the
+loop with a stopwatch in the code also works.
 
 ## Choosing hardware
 
 - **Tabular / classical ML**: CPUs with plenty of RAM; GPUs help XGBoost/LightGBM only on large data.
 - **Fine-tuning mid-size transformers, CV**: one or a few mid-range GPUs (T4/L4/A10 class) are often the
   best price-performance.
-- **Large-model training/fine-tuning**: high-memory GPUs (A100/H100 class) with fast interconnect;
-  memory capacity, not just speed, is the constraint.
+- **Large-model training/fine-tuning**: high-memory GPUs (A100/H100 class) with fast links
+  between them; memory capacity is the constraint, more than raw speed.
 - Always compare by **cost per training run** (time × price), not price per hour: a GPU that costs 3×
   more but finishes 5× sooner is cheaper.
 - Storage matters: reading millions of small files from network storage can dominate; use sharded
@@ -318,6 +442,33 @@ py-spy, or simply timing each phase of the loop.
 - Data parallelism (synchronous all-reduce via DDP) is the default way to scale; expect sub-linear speedup.
 - Model/tensor parallelism, FSDP/ZeRO and PEFT handle models too big for one device.
 - Checkpoint and auto-resume; treat preemption as normal.
+
+## Glossary
+
+- **GPU / CPU** - a chip with thousands of simple cores for parallel arithmetic / an ordinary
+  processor.
+- **VRAM** - the memory on a GPU.
+- **OOM (out of memory)** - the error when a job needs more memory than is available.
+- **Parameters (weights)** - the numbers inside a model that training adjusts.
+- **FP32 / FP16** - 32-bit and 16-bit floating-point numbers (4 and 2 bytes each).
+- **Gradient** - for each parameter, the direction and size of the adjustment that reduces error.
+- **Optimizer / Adam** - the algorithm applying the adjustments / a popular one that stores two
+  extra values per parameter.
+- **Activations** - intermediate results computed for each example during a step.
+- **Batch** - the group of examples processed in one step.
+- **Mixed precision** - using 16-bit numbers where safe to save memory and time.
+- **Gradient accumulation** - summing gradients over several small batches before updating.
+- **Data parallelism** - identical model copies on several GPUs, each processing part of a batch.
+- **All-reduce** - the exchange in which workers average their gradients.
+- **DDP** - PyTorch's `DistributedDataParallel`, synchronous data parallelism.
+- **Parameter server** - a central store of weights for asynchronous training.
+- **Amdahl's law** - the limit on speed-up set by the part of the work that cannot be divided.
+- **Scaling efficiency** - speed-up divided by the number of workers.
+- **Model / tensor parallelism** - splitting the model itself across GPUs.
+- **LoRA (PEFT)** - fine-tuning a small set of added weights while the original ones stay fixed.
+- **Checkpoint** - saved training state from which a job can resume.
+- **Spot instance / preemption** - discounted spare capacity / the provider taking it back.
+- **Gang scheduling** - starting all workers of a job together or none.
 
 ```quiz
 [

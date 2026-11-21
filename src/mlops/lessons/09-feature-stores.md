@@ -1,23 +1,55 @@
 # Feature stores, training/serving skew and labeling
 
+> **Before this lesson:** read [Data sources, ETL/ELT, batch and streaming](#/lesson/mlops/data-pipelines)
+> for batch, streaming and joins, and [Data validation and versioning with DVC](#/lesson/mlops/validation-versioning).
+> You should know that a **feature** is one input value a model reads and a **label** is the
+> correct answer for a training example.
+
+## In plain words
+
+A **feature store** is a shared pantry for model inputs. Each feature (for example "number of
+purchases by this customer in the last 30 days") is defined once, computed by one piece of code,
+and kept in two places: a large archive holding every past value, used for training, and a small
+fast shelf holding only the newest value, used when a live request arrives.
+
+Why bother? Think of a restaurant where the chef perfects a dish in the test kitchen using the
+measured, labelled ingredients there, and the line cooks then prepare it from a different
+supplier's unlabelled jars. The recipe is identical and the dish comes out different. A model has
+the same problem when the numbers it sees in production are computed differently from the numbers
+it was trained on. That mismatch is called **training/serving skew**, and a feature store exists
+mainly to prevent it.
+
+The lesson ends with **labelling**: where the correct answers for training come from and how to
+judge their quality.
+
+Why this matters for a job: skew is one of the most common reasons a model is "great offline and
+mediocre online", and "what is training/serving skew and how do you prevent it?" is asked in a
+large share of ML engineering interviews. The related idea of a point-in-time join comes up in
+almost every ML system design discussion.
+
 ## The problem feature stores solve
 
-Imagine a fraud model using the feature `txn_count_1h` (number of card transactions in the last hour).
+Imagine a fraud model that uses the feature `txn_count_1h`, the number of transactions on a card
+in the last hour.
 
-- For **training**, a data scientist computes it in SQL over historical transactions, for each labelled
-  transaction, *as of* the moment it happened.
-- For **serving**, an engineer computes it in the request path from a Redis counter.
+- For **training**, a data scientist computes it with SQL over the stored history of
+  transactions: for each labelled transaction, the count *as of* the moment it happened.
+- For **serving**, an engineer computes it while a live request is being answered, from a counter
+  kept in Redis (a fast in-memory store).
 
-Two implementations of the same concept will diverge: different window boundaries, timezone handling,
-treatment of declined transactions. The model learned on one definition and is fed another. This is
-**training/serving skew**, and it is one of the most common causes of "the model was great offline and
-mediocre online".
+Two implementations of one idea will drift apart. They may place the edge of the one-hour window
+differently, treat time zones differently, or disagree about whether declined transactions count.
+The model learned from one definition and is fed another.
 
-A **feature store** is a system that lets you define a feature *once* and then:
+A **feature store** lets you define a feature *once* and then:
 
-1. materialise historical values for training with **point-in-time correctness**,
-2. serve the latest values online with low latency,
-3. share and discover features across teams, with ownership and lineage.
+1. produce its historical values for training, with **point-in-time correctness** (explained
+   below);
+2. serve its newest value to a live model within a few milliseconds;
+3. let other teams find and reuse the feature, with a named owner and a record of its origin.
+
+In the diagram, the **offline store** is the archive of all past values (usually tables in a
+warehouse) and the **online store** is the fast lookup of current values.
 
 ```mermaid
 flowchart LR
@@ -43,10 +75,12 @@ flowchart LR
 | Leakage | training uses information from after the prediction time | joining the *latest* customer profile to old labels |
 | Preprocessing skew | different tokenizer, vocab, scaler versions | serving uses an old fitted scaler |
 
-The fixes: share feature code (feature store or a shared package), serialise preprocessing with the
-model (e.g., scikit-learn `Pipeline` saved as one artifact — Mueller & Guido ch. 6), log the features
-actually used at serving time and compare them to training features (**skew monitoring** — you will
-build a detector in `mlops-train-serve-skew`).
+The remedies follow from the causes. Share the feature code, through a feature store or a common
+package. Save the preprocessing together with the model: a scikit-learn `Pipeline` that contains
+the scaler and the model is stored as one file, so they cannot get out of step (Mueller and Guido
+ch. 6). And record the features the model received at serving time and compare them with the
+training features; this is **skew monitoring**, and you will build a detector for it in the
+`mlops-train-serve-skew` problem.
 
 > [!TIP]
 > "Log and wait": the most robust way to build training data for an online model is to **log the exact
@@ -56,9 +90,13 @@ build a detector in `mlops-train-serve-skew`).
 
 ## Point-in-time correctness
 
-To build a training row for an event at time *t*, each feature must take the value it had **as of t** —
-never a later value. Joining the latest value instead leaks the future.
+A training row represents a prediction that would have been made at some moment *t*. To be
+honest, each feature in that row must hold the value it had **as of t**, never a later one. If you
+attach the newest value of every feature to every old event, the model is trained with knowledge
+of the future, which it will not have in production.
 
+The program below shows the wrong join and the right one. `features` holds the history of one
+feature for two users; `labels` holds three events we want to train on.
 ```python-run
 import pandas as pd
 
@@ -87,20 +125,47 @@ print("\npoint-in-time join:")
 print(pit[["user_id", "event_ts", "ts", "purchases_30d", "churned"]])
 ```
 
-The user-1 event on Jan 12 should see `purchases_30d = 5` (value from Jan 10), not 9 (from Jan 20). A
-point-in-time join is what feature stores' `get_historical_features` does for you, often with a **TTL**
-so that very old values are treated as missing.
+`groupby("user_id").tail(1)` keeps the newest row per user, and the plain `merge` attaches it to
+every label. `pd.merge_asof` is the **as-of join**: for each label row it finds the feature row
+with the same `user_id` whose timestamp is the latest one that is not after `event_ts`
+(`direction="backward"`). The output:
+
+```text
+latest-value join (leaky):
+   user_id   event_ts  churned  purchases_30d
+0        2 2025-01-06        0              0
+1        1 2025-01-12        0              9
+2        1 2025-01-25        1              9
+
+point-in-time join:
+   user_id   event_ts         ts  purchases_30d  churned
+0        2 2025-01-06 2025-01-05              1        0
+1        1 2025-01-12 2025-01-10              5        0
+2        1 2025-01-25 2025-01-20              9        1
+```
+
+Compare the middle rows. For user 1's event on 12 January the leaky join supplies 9, a value that
+was only computed on 20 January. The point-in-time join supplies 5, the value from 10 January,
+which is what a live model would have read on the 12th. This is what a feature store's
+`get_historical_features` call does for you, usually with a **TTL** (time to live): a limit on
+how old a value may be before it is treated as missing.
 
 ## Feast: an open-source feature store
 
-Feast's core concepts:
+**Feast** is a widely used open-source feature store. Its vocabulary:
 
-- **Entity**: the key features are attached to (`customer`, `driver`, `card`).
-- **Data source**: where raw feature data lives (Parquet file, BigQuery, Snowflake, Redshift, Kafka push).
-- **Feature view**: a group of features from one source for an entity, with a TTL.
-- **Feature service**: a named set of features a model consumes (versionable).
-- **Offline store** (for training) and **online store** (Redis, DynamoDB, Postgres, SQLite...).
-- **Materialisation**: copying the latest values from offline to online on a schedule.
+- **Entity**: the thing a feature describes and is looked up by, such as a customer, a driver or a
+  card. Its id column is the join key.
+- **Data source**: where the raw feature data lives (a Parquet file, a warehouse table, a Kafka
+  stream).
+- **Feature view**: a group of features about one entity from one source, with a TTL.
+- **Feature service**: the named set of features that one model consumes. It can be versioned.
+- **Offline store** and **online store**: the archive for training and the fast lookup for
+  serving (Redis, DynamoDB, Postgres and others).
+- **Materialisation**: copying the newest values from the offline store into the online store on
+  a schedule.
+
+The definitions are ordinary Python:
 
 ```python
 # feature_repo/features.py
@@ -130,6 +195,11 @@ customer_activity = FeatureView(
 churn_v1 = FeatureService(name="churn_v1", features=[customer_activity])
 ```
 
+Read it from the top: `customer` is declared as an entity keyed by `customer_id`. The source is a
+Parquet file whose `event_timestamp` column says when each value became true. The feature view
+bundles three features about a customer, valid for 30 days. The feature service `churn_v1` is the
+list a model asks for by name.
+
 ```bash
 feast apply                                       # register definitions
 feast materialize-incremental $(date -u +%Y-%m-%dT%H:%M:%S)   # push latest values online
@@ -151,6 +221,11 @@ online = store.get_online_features(
     entity_rows=[{"customer_id": 1234}],
 ).to_dict()
 ```
+
+The two calls at the end are the point of the whole system. `get_historical_features` takes a
+table of ids and timestamps and performs the point-in-time join for training.
+`get_online_features` takes an id and returns the current values for serving. Both are driven by
+the same definition, so the two paths cannot disagree about what the feature means.
 
 Managed alternatives: Tecton, Databricks Feature Store / Unity Catalog feature tables, Vertex AI Feature
 Store, SageMaker Feature Store, Hopsworks.
@@ -176,28 +251,39 @@ both when building training data and at serving time, so the logic is still defi
 
 ## Labeling
 
-Supervised models need labels, and labels are often the bottleneck.
+**Supervised** learning means learning from examples that come with the correct answer attached.
+Those answers, the labels, are often the scarcest resource in a project.
 
 ### Sources of labels
 
-- **Natural labels** from user behaviour or outcomes: clicks, purchases, churn, chargebacks. Free but
-  delayed and sometimes biased (only observed for items shown).
-- **Hand labels** from annotators: expensive, slow, and require domain expertise (radiology, legal).
-- **Programmatic / weak supervision**: labeling functions (heuristics, regexes, knowledge bases) whose
-  noisy votes are combined statistically (Snorkel).
-- **Model-assisted / AI labels**: a strong model (often an LLM) pre-labels; humans review. Huyen
-  (*AI Engineering*, ch. 8) discusses AI-generated annotations and synthetic data, and warns that
-  their quality must be verified, not assumed.
-- **Active learning**: label the examples the model is most uncertain about to get the most value per
-  label.
+- **Natural labels** come from what users did or what happened: clicks, purchases, cancellations,
+  disputed card charges. They cost nothing, but they arrive late and can be biased, because you
+  only observe outcomes for the items you chose to show.
+- **Hand labels** from human annotators are expensive and slow, and in fields such as radiology
+  or law they need experts.
+- **Programmatic labelling**, also called **weak supervision**: you write several rough rules
+  (keyword matches, lookups in a reference list) that each vote on a label, and a statistical
+  method combines the noisy votes. Snorkel is the best-known tool.
+- **Model-assisted labels**: a strong model, often a large language model, proposes labels and
+  people review them. Huyen (*AI Engineering*, ch. 8) discusses machine-generated annotations and
+  synthetic data and warns that their quality has to be verified, not assumed.
+- **Active learning**: ask humans to label the examples the current model is least sure about,
+  which gives the most improvement per label.
 
 ### Label quality
 
-- Write clear **annotation guidelines** with examples and edge cases.
-- Measure **inter-annotator agreement** (Cohen's/Fleiss' kappa); low agreement means ambiguous guidelines.
-- Use **gold questions** with known answers to monitor annotator quality.
-- Version labels like data (DVC), and record **label lineage**: who/what labelled it, when, which
-  guideline version.
+- Write clear **annotation guidelines** with examples and difficult cases.
+- Measure **inter-annotator agreement**: have two people label the same items and see how often
+  they agree. Low agreement usually means the guidelines are ambiguous. The standard measure is
+  **Cohen's kappa**, computed below.
+- Mix in **gold questions**, items whose correct answer is already known, to keep an eye on each
+  annotator's accuracy.
+- Version labels the way you version data, and record **label lineage**: who or what produced each
+  label, when, and under which version of the guidelines.
+
+Raw agreement is misleading, because two people guessing at random would still agree part of the
+time. Kappa subtracts that chance agreement: $\kappa = (p_o - p_e) / (1 - p_e)$, where $p_o$ is
+the observed share of items they agree on and $p_e$ is the share they would agree on by chance.
 
 ```python-run
 # Cohen's kappa for two annotators: agreement corrected for chance.
@@ -212,7 +298,12 @@ kappa = (po - pe) / (1 - pe)
 print(f"observed agreement={po:.2f}, chance agreement={pe:.2f}, kappa={kappa:.2f}")
 ```
 
-Kappa above ~0.8 is usually considered strong agreement; around 0.6 is moderate — check your guidelines.
+In the code, `po` counts matching positions. `Counter` tallies how often each annotator used each
+label; if annotator A says "spam" half the time and B also half the time, they would both say
+"spam" on a quarter of items by chance, and `pe` adds that up over the labels. The output is
+`observed agreement=0.80, chance agreement=0.50, kappa=0.60`: (0.80 - 0.50) / (1 - 0.50) = 0.60.
+A kappa above roughly 0.8 is usually read as strong agreement. A value around 0.6 is moderate and
+a reason to revisit the guidelines.
 
 ### Label latency and feedback
 
@@ -230,11 +321,12 @@ An online feature is only as good as its age at the moment of prediction. Three 
   (14:02:11 for a streaming feature; tomorrow 03:00 for a daily batch feature).
 - **Prediction time**: when the model reads it.
 
-Training data must reproduce the *availability* delay, not just event time. If a daily feature is
-materialised at 03:00, a prediction made at 14:00 sees data up to yesterday midnight. A training join
-that uses everything "up to the prediction timestamp" is subtly fresher than serving ever is — a
-**time-travel skew** that inflates offline metrics. Fixes: join on the feature's `created`/availability
-timestamp rather than its event timestamp, or apply an explicit lag in the point-in-time join.
+Training data has to reproduce the *availability* delay, and not only the event time. Suppose a
+daily feature is computed overnight and loaded into the online store at 03:00. A prediction made
+at 14:00 then sees data up to the previous midnight. A training join that uses everything "up to
+the prediction timestamp" gives the model fresher data than serving ever will. This **time-travel
+skew** makes offline scores look better than reality. The fix is to join on the timestamp at
+which the value became available, or to build an explicit delay into the point-in-time join.
 
 ```python-run
 import pandas as pd
@@ -256,8 +348,16 @@ print("join on event/feature date  ->", int(naive.purchases_7d[0]), "(uses the 2
 print("join on availability time   ->", int(correct.purchases_7d[0]), "(what the online store actually held)")
 ```
 
-The naive join gives the model a value (9) that would not exist until the next morning; in production
-it would have seen 4.
+`available_at` is the feature date plus one day and three hours. The first join matches on the
+feature's own date, the second on when it could be read. The output:
+
+```text
+join on event/feature date  -> 9 (uses the 2025-01-12 value: not yet published at 14:00)
+join on availability time   -> 4 (what the online store actually held)
+```
+
+The naive join hands the model the value 9, which would not exist until the next morning. In
+production it would have read 4.
 
 ### Monitoring a feature store
 
@@ -299,6 +399,33 @@ an encoder upgrade is a backfill that must be swapped in atomically.
 - Logging served features and comparing distributions is the strongest skew defence.
 - Labels come from natural outcomes, humans, weak supervision or models; measure agreement, version labels
   and plan for label latency.
+
+## Glossary
+
+- **Feature store** - a system that defines features once and provides them for both training and
+  serving.
+- **Training/serving skew** - a difference between the inputs a model learned from and the inputs
+  it gets in production.
+- **Offline store / online store** - the archive of historical feature values / the fast lookup of
+  current values.
+- **Entity** - the thing a feature describes, identified by a key such as `customer_id`.
+- **Feature view / feature service** - a group of features from one source / the named set a model
+  uses.
+- **Materialisation** - copying the newest feature values into the online store.
+- **Point-in-time correctness** - each training row uses only values known at that row's time.
+- **As-of join** - a join that picks the most recent matching row at or before a timestamp.
+- **TTL (time to live)** - how long a value stays valid before it counts as missing.
+- **Leakage** - training with information from after the prediction time.
+- **Log and wait** - recording the features served, then joining labels when they arrive.
+- **On-demand feature** - a feature computed at request time from the request itself.
+- **Availability time** - the moment a feature value became readable for serving.
+- **Natural / hand / weak labels** - labels from outcomes / from annotators / from combined
+  heuristic rules.
+- **Active learning** - choosing the most informative examples to label next.
+- **Inter-annotator agreement / Cohen's kappa** - how often annotators agree / that agreement
+  corrected for chance.
+- **Cold start** - having no history for a new user or item.
+- **Embedding** - a list of numbers representing an item such as a text or a user.
 
 ```quiz
 [

@@ -489,4 +489,537 @@ Return `[kv_per_seq, max_seqs]` (integers).
         follow_up="PagedAttention (vLLM) allocates the KV cache in blocks so actual sequences use only what they need; KV-cache quantization (FP8) halves `kv_bytes`.",
     ),
 ),
+dict(
+    id="mlops-successive-halving",
+    title="Successive Halving for Hyperparameter Search",
+    difficulty="Medium",
+    pattern="Hyperparameter Tuning",
+    entry="successiveHalving",
+    description=r"""
+Training every candidate **configuration** (one choice of hyperparameters such as learning rate and tree
+depth) to the end is expensive. **Successive halving** trains all of them a little, keeps the best
+fraction, trains the survivors longer, and repeats. Bad configurations are dropped early, so most of the
+compute goes to promising ones.
+
+You get the learning curves in advance (so the result is deterministic): `curves[name][e - 1]` is the
+validation score of configuration `name` after `e` epochs. Higher is better.
+
+`successiveHalving(curves, eta, min_budget, max_budget)` runs these **rungs** (rounds):
+
+1. Start with all configurations alive and `budget = min_budget` epochs.
+2. Rank the alive configurations by their score at `budget` (`curves[name][budget - 1]`), best first;
+   break ties by name, alphabetically. Record the rung as `[budget, ranked_names]`.
+3. If only one configuration is alive, or `budget * eta > max_budget`, stop: the winner is the first name
+   of this rung.
+4. Otherwise keep the top `max(1, len(alive) // eta)` names, multiply `budget` by `eta`, and go to step 2.
+
+Trials **resume from checkpoints**: moving a configuration from a budget of `b_old` epochs to `b_new`
+costs `b_new - b_old` extra epochs (the first rung costs `min_budget` per configuration).
+
+Return `{"winner": name, "rungs": [[budget, ranked_names], ...], "epochs_used": total_epochs}`.
+
+**Example:** `curves = {"a": [0.5, 0.6, 0.7], "b": [0.6, 0.62, 0.64], "c": [0.4, 0.5, 0.9]}`, `eta = 3`,
+`min_budget = 1`, `max_budget = 3` -> rung 1 ranks `b, a, c`; keep `3 // 3 = 1` -> `b`; rung 3 has only
+`b`. Result: `{"winner": "b", "rungs": [[1, ["b", "a", "c"]], [3, ["b"]]], "epochs_used": 5}`
+(3 configurations x 1 epoch, then 2 more epochs for `b`). Note that `c` would have won with full
+training: early stopping is a bet, not a guarantee.
+""",
+    starter='''def successiveHalving(curves, eta, min_budget, max_budget):
+    alive = sorted(curves)
+    budget = min_budget
+    # loop over rungs: rank, record, stop or keep the top len(alive) // eta
+    pass
+''',
+    solution='''def successiveHalving(curves, eta, min_budget, max_budget):
+    alive = sorted(curves)
+    budget, previous, used, rungs = min_budget, 0, 0, []
+    while True:
+        ranked = sorted(alive, key=lambda c: (-curves[c][budget - 1], c))
+        used += (budget - previous) * len(ranked)
+        rungs.append([budget, ranked])
+        if len(ranked) == 1 or budget * eta > max_budget:
+            return {"winner": ranked[0], "rungs": rungs, "epochs_used": used}
+        alive = ranked[:max(1, len(ranked) // eta)]
+        previous, budget = budget, budget * eta
+''',
+    tests=[
+        [{"a": [0.5, 0.6, 0.7], "b": [0.6, 0.62, 0.64], "c": [0.4, 0.5, 0.9]}, 3, 1, 3],
+        [{"only": [0.1, 0.2, 0.3, 0.4]}, 2, 1, 4],
+        [{"x": [0.5] * 9, "y": [0.5] * 9}, 3, 1, 9],
+        [{"a": [0.1, 0.2, 0.3, 0.4], "b": [0.2, 0.1, 0.5, 0.3], "c": [0.3, 0.3, 0.1, 0.6], "d": [0.0, 0.4, 0.2, 0.9]}, 2, 1, 4],
+        [{"a": [0.1, 0.2], "b": [0.3, 0.1]}, 2, 2, 2],
+        [{"a": [0.9, 0.1, 0.1], "b": [0.1, 0.2, 0.8]}, 3, 1, 2],
+        [{"c%02d" % i: [((i * 7 + e * 3) % 11) / 10 for e in range(1, 28)] for i in range(27)}, 3, 1, 27],
+        [{"c%02d" % i: [((i * 5 + e) % 13) / 13 for e in range(1, 33)] for i in range(10)}, 2, 2, 32],
+        [{"cfg%03d" % i: [((i * 37 + e * 11) % 101) / 100 for e in range(1, 82)] for i in range(243)}, 3, 1, 81],
+    ],
+    examples=2,
+    wrong_solutions=[
+        '''def successiveHalving(curves, eta, min_budget, max_budget):
+    alive = sorted(curves)
+    budget, used, rungs = min_budget, 0, []
+    while True:
+        ranked = sorted(alive, key=lambda c: (-curves[c][budget - 1], c))
+        used += budget * len(ranked)
+        rungs.append([budget, ranked])
+        if len(ranked) == 1 or budget * eta > max_budget:
+            return {"winner": ranked[0], "rungs": rungs, "epochs_used": used}
+        alive = ranked[:max(1, len(ranked) // eta)]
+        budget *= eta
+''',
+        '''def successiveHalving(curves, eta, min_budget, max_budget):
+    alive = sorted(curves)
+    budget, previous, used, rungs = min_budget, 0, 0, []
+    while True:
+        ranked = sorted(alive, key=lambda c: (-curves[c][budget - 1], c))
+        used += (budget - previous) * len(ranked)
+        rungs.append([budget, ranked])
+        if len(ranked) == 1 or budget * eta > max_budget:
+            return {"winner": ranked[0], "rungs": rungs, "epochs_used": used}
+        alive = ranked[:-(-len(ranked) // eta)]
+        previous, budget = budget, budget * eta
+''',
+    ],
+    guide=dict(
+        prereqs="Lesson *Hyperparameter tuning at scale* (early stopping, successive halving, Hyperband, ASHA).",
+        intuition="Most bad configurations look bad early. Spend a tiny budget on everyone, then repeatedly hand the survivors `eta` times more budget. With `eta = 3` and 27 configurations, rungs hold 27, 9, 3 and 1 configurations.",
+        hints=["Sort with the key `(-score, name)` to get best-first with alphabetical tie-breaks.",
+               "Check the stop condition *after* recording the rung.",
+               "Keep track of the previous budget so promoted trials pay only the extra epochs."],
+        brute_force="Train every configuration for `max_budget` epochs and take the best: `n x max_budget` epochs. In the 243-configuration test that is 19,683 epochs; successive halving uses a small fraction.",
+        approach="Loop: rank alive by score at the current budget, add `(budget - previous) x len(alive)` epochs, record, stop if one left or the next budget would exceed the maximum, else keep `max(1, len // eta)` and multiply the budget.\n\nDry run of the example: rung 1 costs 3 epochs and ranks b (0.6), a (0.5), c (0.4); keep b; rung 3 costs 3 - 1 = 2 epochs; total 5.",
+        complexity="O(R x n log n) for R rungs over n configurations (R is about log base eta of max/min budget).",
+        pitfalls="- Forgetting checkpoint resumption and charging the full budget at every rung.\n- Ties: sorting on scores alone leaves equal scores in an order that depends on how the input was built; an explicit name tie-break makes the run reproducible.\n- Rounding the number of survivors up instead of down keeps too many configurations and wastes budget.\n- Keeping zero configurations when `len // eta` is 0: always keep at least one.",
+        follow_up="Hyperband runs several successive-halving brackets with different starting budgets; ASHA promotes trials asynchronously as soon as they rank in the top 1/eta of their rung. Optuna's `SuccessiveHalvingPruner` and Ray Tune's `ASHAScheduler` implement them.",
+    ),
+),
+dict(
+    id="mlops-registry-storage",
+    title="Shared Image Layers: Storage and Pull Cost",
+    difficulty="Easy",
+    pattern="Containers",
+    entry="registryStorage",
+    description=r"""
+A Docker **image** is a stack of read-only **layers**. Each layer is identified by a **digest** (a hash
+of its content), so two images built on the same base share those layers: a registry stores a shared
+layer once, and a machine that already has a layer does not download it again.
+
+`images` maps an image tag to its list of layers, base first, each layer given as `[digest, size_mb]`
+(integers). A digest never appears twice inside one image, and a digest always has the same size.
+`pulls` is a list of tags that one fresh machine pulls, in order, starting with nothing cached.
+
+Write `registryStorage(images, pulls)` returning a dictionary with:
+
+- `"per_image"`: tag -> total size of that image (sum of its layers).
+- `"unique_total"`: storage the registry really needs: the sum of sizes over **distinct** digests.
+- `"shared"`: the alphabetically sorted list of digests used by two or more different images.
+- `"pull_mb"`: for each entry of `pulls`, the megabytes downloaded for that pull (only layers not
+  already on the machine). Pulling the same tag twice downloads 0 the second time.
+
+**Example:** `images = {"api:1": [["base", 120], ["deps", 300], ["code1", 5]], "api:2": [["base", 120], ["deps", 300], ["code2", 6]]}`,
+`pulls = ["api:1", "api:2"]` ->
+`{"per_image": {"api:1": 425, "api:2": 426}, "unique_total": 431, "shared": ["base", "deps"], "pull_mb": [425, 6]}`
+""",
+    starter='''def registryStorage(images, pulls):
+    # remember each digest's size and which images use it; simulate a cache for pulls
+    pass
+''',
+    solution='''def registryStorage(images, pulls):
+    per_image = {tag: sum(size for _, size in layers) for tag, layers in images.items()}
+    size_of, users = {}, {}
+    for tag, layers in images.items():
+        for digest, size in layers:
+            size_of[digest] = size
+            users.setdefault(digest, set()).add(tag)
+    cache, pull_mb = set(), []
+    for tag in pulls:
+        downloaded = 0
+        for digest, size in images[tag]:
+            if digest not in cache:
+                cache.add(digest)
+                downloaded += size
+        pull_mb.append(downloaded)
+    return {
+        "per_image": per_image,
+        "unique_total": sum(size_of.values()),
+        "shared": sorted(d for d, u in users.items() if len(u) > 1),
+        "pull_mb": pull_mb,
+    }
+''',
+    tests=[
+        [{"api:1": [["base", 120], ["deps", 300], ["code1", 5]], "api:2": [["base", 120], ["deps", 300], ["code2", 6]]}, ["api:1", "api:2"]],
+        [{}, []],
+        [{"solo": [["l1", 10]]}, ["solo", "solo"]],
+        [{"a": [["x", 1], ["y", 2]], "b": [["z", 3]]}, []],
+        [{"train": [["cuda", 3000], ["torch", 2500], ["t", 1]], "serve": [["slim", 50], ["sk", 80], ["s", 1]],
+          "train-gpu2": [["cuda", 3000], ["torch", 2500], ["t2", 2]]}, ["serve", "train", "train-gpu2", "serve"]],
+        [{"a": [["base", 100], ["mid", 10]], "b": [["mid", 10], ["top", 1]]}, ["b", "a"]],
+        [{"a": [["empty", 0], ["x", 5]], "b": [["empty", 0]]}, ["b", "a", "b"]],
+        [{"base:only": [["os", 70]], "app": [["os", 70], ["app", 2]]}, ["app", "base:only"]],
+        [{"img%d" % i: [["os", 80], ["py", 40], ["deps%d" % (i % 4), 200 + i % 4], ["app%d" % i, 3]] for i in range(60)},
+         ["img%d" % (i * 7 % 60) for i in range(80)]],
+    ],
+    examples=1,
+    wrong_solutions=[
+        '''def registryStorage(images, pulls):
+    per_image = {t: sum(s for _, s in L) for t, L in images.items()}
+    users = {}
+    for t, L in images.items():
+        for d, s in L:
+            users.setdefault(d, set()).add(t)
+    return {"per_image": per_image, "unique_total": sum(per_image.values()),
+            "shared": sorted(d for d, u in users.items() if len(u) > 1),
+            "pull_mb": [per_image[t] for t in pulls]}
+''',
+    ],
+    guide=dict(
+        prereqs="Lesson *Docker fundamentals: images, layers and the build cache*. Python sets and dictionaries.",
+        intuition="Content addressing means identical bytes get identical names. Storage and downloads are therefore counted per distinct digest, not per image.",
+        hints=["A dictionary `digest -> size` deduplicates automatically.",
+               "A dictionary `digest -> set of tags` tells you which layers are shared.",
+               "For pulls, keep a `cache` set and add only sizes of digests not yet in it."],
+        brute_force="Summing image sizes counts the 3 GB CUDA layer once per image. That over-estimates registry storage and node download time.",
+        approach="1. Per-image sums.\n2. One pass over all layers to fill `size_of` and `users`.\n3. Simulate pulls with a set.\n4. Assemble the dictionary.",
+        complexity="O(total number of layers + total layers of pulled images), plus sorting the shared digests.",
+        pitfalls="- Treating a repeated pull as a full download.\n- Counting a digest as shared when only one image uses it.\n- Forgetting that ordering builds so that big, stable layers come first is what makes sharing possible.",
+        follow_up="Kubernetes nodes cache images the same way, which is why a new pod of an already-pulled image starts fast while a new node pulling a 10 GB GPU image can take minutes. Pre-pulling DaemonSets and slimmer base images reduce cold starts.",
+    ),
+),
+dict(
+    id="mlops-pod-scheduling",
+    title="Scheduling Pods onto GPU and CPU Nodes",
+    difficulty="Medium",
+    pattern="Kubernetes",
+    entry="schedulePods",
+    description=r"""
+The Kubernetes **scheduler** decides which **node** (machine) runs each **pod** (a group of containers).
+It first filters the nodes that can fit the pod, then scores the remaining ones and picks the best.
+
+Each node is `{"name", "cpu", "mem", "gpu", "labels"}`: capacity in millicores, GiB and whole GPUs, plus a
+dictionary of string labels. Each pod is `{"name", "cpu", "mem", "gpu", "selector"}`: its **requests**
+(the resources it reserves) and a `selector` dictionary of labels the node must have (may be empty).
+
+`schedulePods(nodes, pods)` places the pods **in order** and returns, for each pod, the chosen node name or
+`"Pending"` when no node fits. Rules:
+
+1. **Filter.** A node is feasible when its *remaining* CPU, memory and GPUs are each at least the pod's
+   request, and every `selector` key/value appears in the node's `labels`.
+2. **GPU taint.** Nodes with GPU capacity above 0 are reserved: a pod that requests `0` GPUs is never placed
+   on them.
+3. **Score** each feasible node as it would look *after* placing the pod:
+   `score = (free_cpu_after * 100) // cpu_capacity + (free_mem_after * 100) // mem_capacity`
+   (integer division). Pick the highest score; break ties by node name, alphabetically. Spreading pods
+   onto the emptiest node is Kubernetes' "least allocated" strategy.
+4. Subtract the pod's requests from the chosen node's remaining resources.
+
+**Example:** nodes `cpu-a` (4000 m, 16 GiB, 0 GPU) and `cpu-b` (8000 m, 32 GiB, 0 GPU); pods `api-1`
+(500 m, 1 GiB) and `api-2` (500 m, 1 GiB). `api-1` scores 87 + 93 = 180 on `cpu-a` and 93 + 96 = 189 on
+`cpu-b`, so it goes to `cpu-b`; `api-2` then scores 180 on `cpu-a` and 87 + 93 = 180 on `cpu-b`, a tie
+won by `cpu-a`. Result: `["cpu-b", "cpu-a"]`.
+""",
+    starter='''def schedulePods(nodes, pods):
+    free = {n["name"]: {"cpu": n["cpu"], "mem": n["mem"], "gpu": n["gpu"]} for n in nodes}
+    # for each pod: filter feasible nodes, score them, pick the best or "Pending"
+    pass
+''',
+    solution='''def schedulePods(nodes, pods):
+    free = {n["name"]: {"cpu": n["cpu"], "mem": n["mem"], "gpu": n["gpu"]} for n in nodes}
+    result = []
+    for pod in pods:
+        best, best_key = None, None
+        for node in nodes:
+            f = free[node["name"]]
+            if pod["gpu"] == 0 and node["gpu"] > 0:
+                continue
+            if f["cpu"] < pod["cpu"] or f["mem"] < pod["mem"] or f["gpu"] < pod["gpu"]:
+                continue
+            if any(node["labels"].get(k) != v for k, v in pod["selector"].items()):
+                continue
+            score = ((f["cpu"] - pod["cpu"]) * 100) // node["cpu"] + ((f["mem"] - pod["mem"]) * 100) // node["mem"]
+            key = (-score, node["name"])
+            if best_key is None or key < best_key:
+                best, best_key = node["name"], key
+        if best is None:
+            result.append("Pending")
+        else:
+            for r in ("cpu", "mem", "gpu"):
+                free[best][r] -= pod[r]
+            result.append(best)
+    return result
+''',
+    tests=[
+        [[{"name": "cpu-a", "cpu": 4000, "mem": 16, "gpu": 0, "labels": {}}, {"name": "cpu-b", "cpu": 8000, "mem": 32, "gpu": 0, "labels": {}}],
+         [{"name": "api-1", "cpu": 500, "mem": 1, "gpu": 0, "selector": {}}, {"name": "api-2", "cpu": 500, "mem": 1, "gpu": 0, "selector": {}}]],
+        [[{"name": "n1", "cpu": 1000, "mem": 4, "gpu": 0, "labels": {}}], []],
+        [[], [{"name": "p", "cpu": 1, "mem": 1, "gpu": 0, "selector": {}}]],
+        [[{"name": "gpu-1", "cpu": 16000, "mem": 64, "gpu": 4, "labels": {"accel": "a100"}}],
+         [{"name": "web", "cpu": 100, "mem": 1, "gpu": 0, "selector": {}}, {"name": "train", "cpu": 8000, "mem": 32, "gpu": 2, "selector": {}}]],
+        [[{"name": "gpu-t4", "cpu": 8000, "mem": 32, "gpu": 1, "labels": {"accel": "t4"}}, {"name": "gpu-a100", "cpu": 8000, "mem": 32, "gpu": 8, "labels": {"accel": "a100"}}],
+         [{"name": "llm", "cpu": 4000, "mem": 16, "gpu": 4, "selector": {"accel": "a100"}}, {"name": "small", "cpu": 1000, "mem": 4, "gpu": 1, "selector": {}},
+          {"name": "small2", "cpu": 1000, "mem": 4, "gpu": 1, "selector": {}}, {"name": "big", "cpu": 1000, "mem": 4, "gpu": 4, "selector": {"accel": "t4"}}]],
+        [[{"name": "a", "cpu": 2000, "mem": 8, "gpu": 0, "labels": {"zone": "eu"}}, {"name": "b", "cpu": 2000, "mem": 8, "gpu": 0, "labels": {"zone": "us"}}],
+         [{"name": "p%d" % i, "cpu": 500, "mem": 2, "gpu": 0, "selector": {"zone": "eu"}} for i in range(6)]],
+        [[{"name": "x", "cpu": 1000, "mem": 4, "gpu": 0, "labels": {}}],
+         [{"name": "exact", "cpu": 1000, "mem": 4, "gpu": 0, "selector": {}}, {"name": "tiny", "cpu": 1, "mem": 0, "gpu": 0, "selector": {}}]],
+        [[{"name": "m", "cpu": 4000, "mem": 2, "gpu": 0, "labels": {}}, {"name": "c", "cpu": 1000, "mem": 64, "gpu": 0, "labels": {}}],
+         [{"name": "memhog", "cpu": 100, "mem": 3, "gpu": 0, "selector": {}}, {"name": "cpuhog", "cpu": 2000, "mem": 1, "gpu": 0, "selector": {}}]],
+        [[{"name": "node-%02d" % i, "cpu": 4000 + 1000 * (i % 3), "mem": 16 + 8 * (i % 2), "gpu": (2 if i % 5 == 0 else 0),
+           "labels": {"pool": "gpu" if i % 5 == 0 else "cpu", "zone": "z%d" % (i % 2)}} for i in range(20)],
+         [{"name": "pod-%03d" % j, "cpu": 250 * (1 + j % 4), "mem": 1 + j % 3, "gpu": (1 if j % 9 == 0 else 0),
+           "selector": ({"zone": "z1"} if j % 4 == 0 else {})} for j in range(150)]],
+    ],
+    examples=1,
+    wrong_solutions=[
+        '''def schedulePods(nodes, pods):
+    free = {n["name"]: {"cpu": n["cpu"], "mem": n["mem"], "gpu": n["gpu"]} for n in nodes}
+    out = []
+    for p in pods:
+        placed = "Pending"
+        for n in sorted(nodes, key=lambda n: n["name"]):
+            f = free[n["name"]]
+            if p["gpu"] == 0 and n["gpu"] > 0: continue
+            if f["cpu"] >= p["cpu"] and f["mem"] >= p["mem"] and f["gpu"] >= p["gpu"] and all(n["labels"].get(k) == v for k, v in p["selector"].items()):
+                for r in ("cpu", "mem", "gpu"): f[r] -= p[r]
+                placed = n["name"]; break
+        out.append(placed)
+    return out
+''',
+        '''def schedulePods(nodes, pods):
+    free = {n["name"]: {"cpu": n["cpu"], "mem": n["mem"], "gpu": n["gpu"]} for n in nodes}
+    out = []
+    for p in pods:
+        best, bk = None, None
+        for n in nodes:
+            f = free[n["name"]]
+            if f["cpu"] < p["cpu"] or f["mem"] < p["mem"] or f["gpu"] < p["gpu"]: continue
+            if any(n["labels"].get(k) != v for k, v in p["selector"].items()): continue
+            s = ((f["cpu"] - p["cpu"]) * 100) // n["cpu"] + ((f["mem"] - p["mem"]) * 100) // n["mem"]
+            if bk is None or (-s, n["name"]) < bk: best, bk = n["name"], (-s, n["name"])
+        if best is None: out.append("Pending")
+        else:
+            for r in ("cpu", "mem", "gpu"): free[best][r] -= p[r]
+            out.append(best)
+    return out
+''',
+    ],
+    guide=dict(
+        prereqs="Lessons *Kubernetes core objects* (requests, the first-fit scheduler demo) and *Scaling, GPUs and KServe on Kubernetes* (GPU nodes, taints and tolerations, node selectors).",
+        intuition="Scheduling is filter-then-score. The filter removes nodes that cannot run the pod; the score expresses a preference among the rest. Here the preference is \"leave the most room\", which spreads load.",
+        hints=["Keep a separate `free` dictionary; never change the input capacities.",
+               "Scores use free resources *after* the pod is placed, divided by the node's total capacity.",
+               "Compare candidates with the tuple `(-score, name)`: the smallest tuple wins."],
+        brute_force="First-fit (take the first node that fits, in name order) is simpler and is what the lesson demo does, but it packs pods onto one node and is not what this problem asks for.",
+        approach="For each pod: loop over nodes; skip GPU nodes for CPU-only pods; skip nodes lacking room or labels; compute the score; keep the best key. If none, append Pending; else subtract the requests and append the node name.",
+        complexity="O(P x N x S) for P pods, N nodes and S selector entries.",
+        pitfalls="- Letting CPU-only pods land on expensive GPU nodes (the taint rule).\n- Scoring on capacity instead of remaining resources.\n- Floating-point scores: the spec uses integer division so ties are exact.",
+        follow_up="Real Kubernetes adds affinity and anti-affinity, topology spread constraints, priorities and pre-emption, and a \"most allocated\" bin-packing strategy that cluster autoscalers prefer to free whole nodes.",
+    ),
+),
+dict(
+    id="mlops-instance-choice",
+    title="Cheapest Fleet for a Serving Load",
+    difficulty="Medium",
+    pattern="Cost Optimization",
+    entry="rankFleets",
+    description=r"""
+You must serve a model at a **peak** of `peak_rps` requests per second. A load test measured how many
+requests per second one **replica** (one copy of the service) can handle on each cloud **instance
+type**. Running replicas at 100% of that capacity leaves no headroom for spikes, so you size the fleet
+for a **target utilisation** below 100%.
+
+Each instance is `{"name", "cents_per_hour", "rps"}` (all integers). For every instance type:
+
+- `replicas = max(min_replicas, ceil(peak_rps * 100 / (rps * util_pct)))`, computed with **integer**
+  arithmetic (no floats): the ceiling of `a / b` for positive integers is `(a + b - 1) // b`.
+- `monthly_cents = replicas * cents_per_hour * 730` (a month is counted as 730 hours).
+
+Write `rankFleets(instances, peak_rps, util_pct, min_replicas)` returning a list of
+`[name, replicas, monthly_cents]` for every instance type, sorted by `monthly_cents` ascending, then by
+fewer replicas, then by name.
+
+`min_replicas` (at least 1) keeps several copies running for availability even when one would be
+enough. `util_pct` is an integer from 1 to 100.
+
+**Example:** `instances = [{"name": "small", "cents_per_hour": 10, "rps": 50}, {"name": "large", "cents_per_hour": 38, "rps": 220}]`,
+`peak_rps = 300`, `util_pct = 60`, `min_replicas = 2` -> small needs ceil(30000 / 3000) = 10 replicas
+(73,000 cents), large needs ceil(30000 / 13200) = 3 replicas (83,220 cents):
+`[["small", 10, 73000], ["large", 3, 83220]]`
+""",
+    starter='''def rankFleets(instances, peak_rps, util_pct, min_replicas):
+    rows = []
+    # compute replicas with integer ceiling, monthly cost, then sort
+    return rows
+''',
+    solution='''def rankFleets(instances, peak_rps, util_pct, min_replicas):
+    rows = []
+    for inst in instances:
+        need = peak_rps * 100
+        per_replica = inst["rps"] * util_pct
+        replicas = max(min_replicas, (need + per_replica - 1) // per_replica)
+        rows.append([inst["name"], replicas, replicas * inst["cents_per_hour"] * 730])
+    rows.sort(key=lambda r: (r[2], r[1], r[0]))
+    return rows
+''',
+    tests=[
+        [[{"name": "small", "cents_per_hour": 10, "rps": 50}, {"name": "large", "cents_per_hour": 38, "rps": 220}], 300, 60, 2],
+        [[], 100, 70, 1],
+        [[{"name": "only", "cents_per_hour": 100, "rps": 1000}], 1, 50, 3],
+        [[{"name": "a", "cents_per_hour": 20, "rps": 100}], 300, 60, 1],
+        [[{"name": "a", "cents_per_hour": 20, "rps": 100}], 300, 100, 1],
+        [[{"name": "x", "cents_per_hour": 10, "rps": 100}, {"name": "y", "cents_per_hour": 20, "rps": 200}, {"name": "w", "cents_per_hour": 10, "rps": 100}], 1000, 50, 1],
+        [[{"name": "cpu", "cents_per_hour": 34, "rps": 40}, {"name": "gpu-t4", "cents_per_hour": 53, "rps": 400}, {"name": "gpu-a10", "cents_per_hour": 101, "rps": 900}], 2500, 65, 2],
+        [[{"name": "z", "cents_per_hour": 7, "rps": 3}], 0, 80, 2],
+        [[{"name": "t%02d" % i, "cents_per_hour": 5 + (i * 13) % 97, "rps": 20 + (i * 29) % 400} for i in range(60)], 12345, 70, 2],
+    ],
+    examples=1,
+    wrong_solutions=[
+        '''import math
+def rankFleets(instances, peak_rps, util_pct, min_replicas):
+    rows = []
+    for i in instances:
+        r = max(min_replicas, math.ceil(peak_rps / i["rps"]))
+        rows.append([i["name"], r, r * i["cents_per_hour"] * 730])
+    rows.sort(key=lambda r: (r[2], r[1], r[0]))
+    return rows
+''',
+        '''def rankFleets(instances, peak_rps, util_pct, min_replicas):
+    rows = []
+    for i in instances:
+        r = max(min_replicas, (peak_rps * 100) // (i["rps"] * util_pct))
+        rows.append([i["name"], r, r * i["cents_per_hour"] * 730])
+    rows.sort(key=lambda r: (r[2], r[1], r[0]))
+    return rows
+''',
+    ],
+    guide=dict(
+        prereqs="Lesson *Cost optimisation for ML workloads* (utilisation, right-sizing, cost per prediction).",
+        intuition="Cost is replicas x price. The cheapest instance per hour is not always the cheapest fleet: a pricier machine that serves many more requests can need far fewer replicas.",
+        hints=["Never use floats for the ceiling: `300 / (100 * 0.6)` is `5.000000000000001` in floating point and rounds up to 6.",
+               "Integer ceiling: `(a + b - 1) // b`.",
+               "Sort with the key `(monthly_cents, replicas, name)`."],
+        brute_force="This is already a single pass plus a sort; the trap is the arithmetic, not the algorithm.",
+        approach="For each instance compute `need = peak_rps * 100` and `per = rps * util_pct`, `replicas = max(min, ceil(need / per))`, cost = replicas x price x 730; then sort.",
+        complexity="O(n log n) for n instance types.",
+        pitfalls="- Floating-point ceilings giving one replica too many.\n- Forgetting `min_replicas` when traffic is tiny (one replica is a single point of failure).\n- Sizing for average traffic instead of peak.",
+        follow_up="Add spot or preemptible prices with an interruption discount, reserved-instance commitments, or autoscaling: if traffic sits at 30% of peak most of the day, an autoscaled fleet costs far less than a peak-sized one.",
+    ),
+),
+dict(
+    id="mlops-token-budget-trim",
+    title="Fit a Conversation into the Context Window",
+    difficulty="Medium",
+    pattern="LLMOps",
+    entry="fitContext",
+    description=r"""
+A large language model reads a limited number of **tokens** (pieces of words) per request: its **context
+window**. A chat application must therefore drop old messages once a conversation gets long, while
+keeping the instructions and the newest messages.
+
+Messages are dictionaries `{"role": ..., "content": ...}` where role is `"system"` (instructions),
+`"user"` or `"assistant"`. In this problem a message costs `4 + number of whitespace-separated words in
+content` tokens (the 4 stands for the formatting overhead each message adds).
+
+Write `fitContext(messages, budget)` returning the **sorted list of indices** of the messages to send:
+
+1. Every `"system"` message is always kept.
+2. The **last** message must be kept (it is the question being asked); it is never a system message.
+3. Then walk backwards from the second-to-last message, skipping system messages (already counted), and
+   keep each message while the running total stays within `budget`. Stop at the **first** message that
+   does not fit: never skip a long message to include an older one, because a conversation with a hole
+   in it confuses the model.
+4. If the system messages plus the last message already exceed `budget`, return `[]` (the request cannot
+   be sent).
+
+An empty `messages` list returns `[]`.
+
+**Example:** costs `system` 4 + 5 = 9, `user` "hi" 5, `assistant` 4 + 6 = 10, `user` 4 + 3 = 7,
+budget 30 -> keep system (9) and the last message (7) = 16; add the assistant reply (26); the old "hi"
+would make 31 > 30, so stop. Result: `[0, 2, 3]`.
+""",
+    starter='''def fitContext(messages, budget):
+    def cost(m):
+        return 4 + len(m["content"].split())
+    # keep system messages and the last message, then add older messages from newest to oldest
+    pass
+''',
+    solution='''def fitContext(messages, budget):
+    if not messages:
+        return []
+
+    def cost(m):
+        return 4 + len(m["content"].split())
+
+    last = len(messages) - 1
+    keep = [i for i, m in enumerate(messages) if m["role"] == "system"]
+    total = sum(cost(messages[i]) for i in keep) + cost(messages[last])
+    if total > budget:
+        return []
+    keep.append(last)
+    for i in range(last - 1, -1, -1):
+        if messages[i]["role"] == "system":
+            continue
+        c = cost(messages[i])
+        if total + c > budget:
+            break
+        total += c
+        keep.append(i)
+    return sorted(keep)
+''',
+    tests=[
+        [[{"role": "system", "content": "you are a helpful bot"}, {"role": "user", "content": "hi"},
+          {"role": "assistant", "content": "hello how can I help you"}, {"role": "user", "content": "reset my password"}], 30],
+        [[], 100],
+        [[{"role": "user", "content": "just one question here"}], 8],
+        [[{"role": "user", "content": "just one question here"}], 7],
+        [[{"role": "system", "content": " ".join(["rule"] * 50)}, {"role": "user", "content": "hello"}], 40],
+        [[{"role": "system", "content": "be brief"}, {"role": "user", "content": "a"}, {"role": "assistant", "content": "b"},
+          {"role": "user", "content": "c"}, {"role": "assistant", "content": "d"}, {"role": "user", "content": "e"}], 1000],
+        [[{"role": "system", "content": "s"}, {"role": "user", "content": "short"},
+          {"role": "assistant", "content": " ".join(["long"] * 40)}, {"role": "user", "content": "q"}], 30],
+        [[{"role": "user", "content": "old"}, {"role": "system", "content": "mid conversation instruction"},
+          {"role": "assistant", "content": "x y"}, {"role": "user", "content": "now"}], 20],
+        [[{"role": "system", "content": "  spaced   out \t text "}, {"role": "user", "content": ""}], 9],
+        [[{"role": "system", "content": "policy " * 20}] +
+         [{"role": ("user" if i % 2 == 0 else "assistant"), "content": " ".join(["w%d" % i] * (1 + i % 17))} for i in range(400)], 900],
+    ],
+    examples=1,
+    wrong_solutions=[
+        '''def fitContext(messages, budget):
+    if not messages: return []
+    cost = lambda m: 4 + len(m["content"].split())
+    last = len(messages) - 1
+    keep = [i for i, m in enumerate(messages) if m["role"] == "system"]
+    total = sum(cost(messages[i]) for i in keep) + cost(messages[last])
+    if total > budget: return []
+    keep.append(last)
+    for i in range(last - 1, -1, -1):
+        if messages[i]["role"] == "system": continue
+        if total + cost(messages[i]) <= budget:
+            total += cost(messages[i]); keep.append(i)
+    return sorted(keep)
+''',
+        '''def fitContext(messages, budget):
+    if not messages: return []
+    cost = lambda m: 4 + len(m["content"].split())
+    keep, total = [], 0
+    for i in range(len(messages) - 1, -1, -1):
+        c = cost(messages[i])
+        if total + c > budget: break
+        total += c; keep.append(i)
+    return sorted(keep)
+''',
+    ],
+    guide=dict(
+        prereqs="Lessons *Prompt management and evaluation pipelines* (prompt templates, context) and *LLM inference optimization* (why long contexts cost latency and money).",
+        intuition="Reserve the must-haves first (instructions and the question), then spend what is left of the budget on recent history, newest first, stopping at the first message that does not fit so the kept history stays contiguous.",
+        hints=["`len(text.split())` counts words and ignores repeated spaces and tabs.",
+               "Compute the mandatory cost first and return `[]` if it already exceeds the budget.",
+               "Walk `range(last - 1, -1, -1)` and `break`, not `continue`, when a message does not fit."],
+        brute_force="Trying every subset of messages is exponential and also wrong: the goal is not to pack the most tokens but to keep a contiguous recent history.",
+        approach="1. Empty -> `[]`.\n2. `keep` = system indices; `total` = their cost + last message cost; if over budget -> `[]`.\n3. Walk backwards from `last - 1`, skip system messages, add while it fits, break at the first misfit.\n4. Return `sorted(keep)`.",
+        complexity="O(n x w) where w is the average number of words per message.",
+        pitfalls="- Dropping the system prompt to make room (the model then forgets its rules).\n- Skipping a long message and keeping an older short one, which leaves a hole in the conversation.\n- Counting a system message twice when it sits in the middle of the history.",
+        follow_up="Production systems count real tokens with the model's tokenizer, summarise dropped history into a short memory message, or retrieve only relevant past turns. Keeping the stable system prompt at the start also makes prompt caching effective.",
+    ),
+),
 ]

@@ -1,17 +1,44 @@
 # Model registry, model cards and governance
 
+> **Before this lesson:** read [Experiment tracking with MLflow](#/lesson/mlops/mlflow-tracking)
+> for runs and artifacts, and [Reproducibility: seeds, environments and lineage](#/lesson/mlops/reproducibility)
+> for lineage. The champion/challenger vocabulary comes from lesson 3.
+
+## In plain words
+
+An experiment tracker remembers *every* training run, including the hundreds that were thrown
+away. A **model registry** is a much shorter list: the models that are serious candidates for
+production, each with a version number, a note about who approved it, and a label saying which
+one is live right now.
+
+Compare a chef's notebook with a restaurant's printed menu. The notebook contains every trial,
+including the failures. The menu contains only the dishes that passed tasting, each in its
+approved version, and it is the menu, not the notebook, that the kitchen cooks from. Changing
+what customers are served means changing the menu, and going back to last week's dish is one
+reprint.
+
+A **model card** is the label on the dish: what it is, what it is for, what is in it, and who
+should not eat it. **Governance** is the set of rules about who may change the menu and the
+record proving the rules were followed.
+
+Why this matters for a job: "how do you decide to promote a new model, and how do you roll it
+back?" is asked in nearly every MLOps interview. The registry is also the piece that connects
+training to deployment in every later lesson of this track.
+
 ## From "a run" to "the production model"
 
-Experiment tracking records *every* run. Most are discarded. A **model registry** is the curated catalog
-of models that are candidates for, or are in, production. It answers:
+The registry is the curated catalogue of models that are candidates for production or are in it.
+It answers questions the tracker cannot:
 
-- What versions of the `churn` model exist? Which one is serving traffic now? Which is next?
-- Who approved version 7, based on what evidence?
-- Which run (and therefore which code, data, config) produced version 7?
-- How do I roll back to the previous version in one step?
+- Which versions of the `churn` model exist? Which one is answering requests now? Which is next?
+- Who approved version 7, and on what evidence?
+- Which run (and therefore which code, data and settings) produced version 7?
+- How do I go back to the previous version in one step?
 
-The registry decouples **training** (producing versions) from **deployment** (choosing which version
-serves). Deployment code refers to a model by *name + alias/stage*, never by a file path.
+Its most important effect is to separate two activities. **Training** produces versions.
+**Deployment** chooses which version serves. The deployment code never names a file; it asks the
+registry for a model by *name and label*, for example "the `churn` model labelled `champion`".
+Because of that indirection, changing the live model requires no change to the serving code.
 
 ```mermaid
 flowchart LR
@@ -24,15 +51,22 @@ flowchart LR
 
 ## MLflow Model Registry concepts
 
-- **Registered model**: a named entity (`churn`), with description and tags.
-- **Model version**: an immutable, auto-incremented version (1, 2, 3...) pointing at a logged model
-  artifact and its source run.
-- **Aliases**: mutable, named pointers to a version (`@champion`, `@challenger`, `@shadow`). Promoting a
-  model = moving an alias. Rolling back = moving it back.
-- **Tags**: key-value metadata on versions (`validation_status=approved`, `approved_by=alice`).
-- (Legacy) **stages**: `None`, `Staging`, `Production`, `Archived`. MLflow deprecated stages in favour of
-  aliases and tags because fixed stages did not fit many workflows (e.g., multiple production models per
-  region).
+MLflow's registry has four ideas:
+
+- **Registered model**: a name, such as `churn`, with a description.
+- **Model version**: a numbered entry (1, 2, 3, …) under that name. Each version points to one
+  saved model and to the run that produced it, and it is **immutable**: once created, its
+  contents never change.
+- **Alias**: a movable label that points at one version, written with an `@` sign: `@champion`,
+  `@challenger`, `@shadow`. *Promoting* a model means moving an alias to it. *Rolling back* means
+  moving the alias to where it was before.
+- **Tags**: name-value notes on a version, such as `validation_status=approved` or
+  `approved_by=alice`.
+
+Older MLflow versions used fixed **stages** (`None`, `Staging`, `Production`, `Archived`) in place
+of aliases. They were deprecated because a fixed list did not fit real workflows, for instance a
+company with a different production model per region. You will still meet stages in older code
+and in interview questions, so know that an alias is the modern equivalent.
 
 ```python
 import mlflow
@@ -52,14 +86,22 @@ client.set_registered_model_alias("churn", "champion", mv.version)
 model = mlflow.pyfunc.load_model("models:/churn@champion")
 ```
 
+Step by step: `register_model` creates a new version from the model saved in a run (`runs:/…`
+means "inside this run's artifacts"). The next two calls attach a tag and a description. Moving
+the `challenger` alias marks the version as the candidate. Moving `champion` makes it the
+production model. The last line is all the serving code ever contains: the address
+`models:/churn@champion` means "whichever version the `champion` alias points to today".
+
 Other registries: SageMaker Model Registry (model packages with approval status), Vertex AI Model
 Registry, Azure ML registries, Databricks Unity Catalog models, W&B Registry, Hugging Face Hub (versioned
 Git repos for weights with model cards — very common for open models).
 
 ## Versioning schemes
 
-MLflow assigns integer versions per registered model, which is simple and monotonic. Many teams also add
-a **semantic version** tag to communicate compatibility to consumers, mirroring software semver:
+MLflow numbers versions 1, 2, 3 and so on, which is unambiguous but says nothing about what
+changed. Many teams therefore add a **semantic version** as a tag. Semantic versioning (often
+"semver") is the software convention of three numbers, `MAJOR.MINOR.PATCH`, where the position
+that changes tells users how much they need to care:
 
 | Change | Example | Bump |
 |---|---|---|
@@ -67,8 +109,10 @@ a **semantic version** tag to communicate compatibility to consumers, mirroring 
 | Retrained weights, same schema | monthly retrain | MINOR |
 | Non-functional fix | metadata, threshold doc, packaging fix | PATCH |
 
-You will implement this bumping logic in `mlops-semver-bump`. Note the classic pitfall: comparing version
-strings lexicographically puts `"1.10.0"` before `"1.9.0"`.
+You will implement this rule in the `mlops-semver-bump` problem. One classic mistake to avoid:
+comparing versions as text. Text comparison goes character by character, so `"1.10.0"` sorts
+before `"1.9.0"` because the character `1` comes before `9`. Split the version into numbers and
+compare those.
 
 > [!TIP]
 > The **signature** stored with an MLflow model is what makes "schema change" detectable automatically:
@@ -95,14 +139,23 @@ sequenceDiagram
   D->>R: on success move alias champion to v8
 ```
 
-Typical automated gates:
+The sequence diagram reads top to bottom as a conversation between five participants. The checks
+the validation job runs are called **gates**, and typical ones are:
 
-1. **Performance**: challenger ≥ champion − ε on the pinned evaluation set (overall).
-2. **Slices**: no important subgroup regresses by more than δ.
-3. **Calibration**: expected calibration error under a threshold (if probabilities are consumed).
-4. **Operational**: model size, p95 latency on reference hardware, memory.
-5. **Schema compatibility** with the serving contract.
-6. **Fairness/compliance** checks where required.
+1. **Performance**: on a fixed evaluation set, the challenger must be at least as good as the
+   champion, minus a small allowance ε for noise.
+2. **Slices**: no important subgroup of users may get worse by more than a limit δ.
+3. **Calibration**: when a model says "70% likely", the event should occur about 70% of the time.
+   The expected calibration error (ECE) measures the gap; it matters whenever the probabilities
+   themselves are used.
+4. **Operational**: file size, memory use, and the **p95 latency** (the response time that 95% of
+   requests stay under) on reference hardware.
+5. **Schema compatibility**: the inputs and outputs still match what the serving code and its
+   callers expect.
+6. **Fairness and compliance** checks where the use case requires them.
+
+The program below is such a gate. Each model is a dictionary holding an overall score, a score
+per slice and a latency. The three constants at the top are the tolerances.
 
 ```python-run
 # A promotion gate: compare challenger vs champion overall and on slices.
@@ -122,8 +175,13 @@ if challenger["p95_ms"] > champion["p95_ms"] * MAX_LATENCY_RATIO:
 print("PROMOTE" if not reasons else "BLOCK: " + "; ".join(reasons))
 ```
 
-The challenger wins overall but hurts new users — the gate blocks it. Overall averages hide subgroup
-regressions; this is why slice metrics belong in every gate.
+The output is `BLOCK: slice 'new_users' regressed by 0.022`. Follow the numbers: the challenger's
+overall score is better (0.731 against 0.712), so the first check passes. Its latency of 21 ms is
+within 1.25 times the champion's 18 ms, so the last check passes. But for new users it scores
+0.618 where the champion scores 0.640, a drop of 0.022, which is more than the permitted 0.01.
+
+A model that is better on average and worse for one group is common, because the average is
+dominated by the largest group. This is why slice scores belong in every gate.
 
 > [!INTERVIEW]
 > "How do you decide to promote a new model?" — Offline gates (pinned test set, slices, calibration,
@@ -133,9 +191,10 @@ regressions; this is why slice metrics belong in every gate.
 
 ## Model cards
 
-A **model card** (Mitchell et al., 2019) is short, structured documentation shipped with a model.
-Hugging Face Hub renders a `README.md` model card for every model repository; many companies require one
-before production.
+A **model card** is a short, structured document that travels with a model, proposed by Mitchell
+and colleagues in 2019. It plays the role of the leaflet in a medicine box. The Hugging Face Hub,
+the most popular public site for sharing models, displays a `README.md` model card on every
+model's page, and many companies require one before a model may go to production.
 
 Typical sections:
 
@@ -200,8 +259,8 @@ Pinning `revision` to a commit hash is the Hub equivalent of deploying an image 
 
 ## Rollback, hands-on
 
-The reason to route deployment through a registry is that rollback becomes boring. A complete promotion
-and rollback with MLflow aliases:
+The reason to route deployment through a registry is that undoing a release becomes dull and
+safe. Here is a complete promotion and rollback using aliases:
 
 ```python
 from mlflow import MlflowClient
@@ -223,6 +282,11 @@ def rollback(name: str, reason: str) -> None:
     c.set_registered_model_alias(name, "champion", good)
     c.set_model_version_tag(name, bad, "rolled_back", reason)
 ```
+
+`promote` first looks up which version is currently `champion` and parks a second alias,
+`previous_champion`, on it. Only then does it move `champion` to the new version, and it records
+who did it. `rollback` reads the two aliases, moves `champion` back, and tags the bad version
+with the reason. Neither function touches a model file.
 
 Two practical details:
 
@@ -259,7 +323,23 @@ print("after rollback serving loads version", r.resolve("champion"))
 print(*r.audit, sep="\n")
 ```
 
-The audit trail answers who changed what and when — the first question in any incident review.
+The class keeps three things: a dictionary of versions (only ever added to), a dictionary of
+aliases (freely changed), and a list recording every action. The output:
+
+```text
+serving now loads version 2
+after rollback serving loads version 1
+v1 registered from run run-a1
+ci: alias 'champion' vNone -> v1
+v2 registered from run run-b7
+ci: alias 'challenger' vNone -> v2
+cd: alias 'previous_champion' vNone -> v1
+cd after canary: alias 'champion' v1 -> v2
+on-call rollback: alias 'champion' v2 -> v1
+```
+
+The last seven lines are the **audit trail**: who changed what, in order. It is the first thing
+anyone asks for when reviewing an incident. `vNone` means the alias did not exist before.
 
 ## Registry anti-patterns
 
@@ -309,6 +389,29 @@ which models were trained on which data.
 - Semantic versions communicate compatibility; compare versions numerically.
 - Model cards document intended use, data, evaluation by slice, limitations and maintenance.
 - Governance = access control, audit trails, lineage, risk-tiered approvals, licensing and privacy.
+
+## Glossary
+
+- **Model registry** - the catalogue of versioned models that are candidates for, or in,
+  production.
+- **Registered model / model version** - a named model / one immutable numbered entry under it.
+- **Alias** - a movable label such as `@champion` pointing at one version.
+- **Stage** - the older, fixed set of labels (Staging, Production, Archived) that aliases
+  replaced.
+- **Immutable** - never changed after creation.
+- **Promotion / rollback** - making a version the live one / returning to the previous one.
+- **Champion / challenger** - the live model / the candidate to replace it.
+- **Semantic version** - `MAJOR.MINOR.PATCH`, signalling how disruptive a change is.
+- **Gate** - an automated check a model must pass before promotion.
+- **Slice** - a subgroup of the data, such as new users, evaluated separately.
+- **Calibration** - how well predicted probabilities match observed frequencies.
+- **p95 latency** - the response time that 95% of requests stay under.
+- **Model card** - a short document of a model's purpose, data, evaluation and limits.
+- **Datasheet** - the equivalent document for a data set.
+- **Governance** - the rules, approvals and records that show a model was handled properly.
+- **Audit trail** - the stored history of who did what and when.
+- **Separation of duties** - the person who builds a risky model is not the one who approves it.
+- **Revision** - on the Hugging Face Hub, a commit hash that pins an exact model version.
 
 ```quiz
 [

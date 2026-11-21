@@ -1,9 +1,33 @@
 # Roles, teams and hidden technical debt
 
+> **Before this lesson:** read [The ML lifecycle and the anatomy of an ML system](#/lesson/mlops/ml-lifecycle)
+> (lesson 1), which introduces the words model, feature, pipeline, serving and monitoring. No work
+> experience in a software team is assumed.
+
+## In plain words
+
+Two ideas share this lesson. The first is **who does what**. A model in production is touched by
+many people with different jobs, and most accidents happen at the moment one person passes work
+to another, the way a relay race is usually lost at the baton change and not on the straight.
+
+The second is **technical debt**. When you take a shortcut to finish sooner (copy a piece of code
+in place of sharing it, skip the test, hard-code a number) you have borrowed time. Like money
+borrowed from a bank, it comes with interest: every later change is slower and riskier until the
+shortcut is cleaned up. ML systems collect special kinds of this debt that are hard to see because
+they hide in the data and in the connections between systems, not in any one file of code.
+
+Why this matters for a job: interviewers for ML engineering roles routinely ask "what are the
+ML-specific sources of technical debt?" and "how would you organise an ML team?". More practically,
+on your first day you will need to know which colleague owns the thing that is broken.
+
 ## Who builds an ML system?
 
-Production ML is a team sport. Job titles vary wildly between companies, but the *responsibilities* are
-stable. Knowing them helps you understand handoffs — and handoffs are where most ML systems break.
+Production ML is a team sport. Job titles differ a great deal between companies, but the
+*responsibilities* are stable. Knowing them helps you understand **handoffs**, the points where
+work passes from one person or team to another, and handoffs are where most ML systems break.
+
+The table lists each role, what it is responsible for, and the documents or files it typically
+produces (its "artifacts").
 
 | Role | Primary responsibility | Typical artifacts |
 |---|---|---|
@@ -19,10 +43,26 @@ stable. Knowing them helps you understand handoffs — and handoffs are where mo
 | Labelers / domain experts | ground truth and evaluation | annotation guidelines, labels |
 | AI engineer (newer title) | builds applications on top of foundation models | prompts, RAG pipelines, eval suites |
 
-Huyen (*AI Engineering*, ch. 1) describes the rise of the **AI engineer**: with foundation models
-available through APIs, many teams start from a working model and spend their effort on prompts, context,
-evaluation and product, rather than on training. The MLOps disciplines in this track — versioning,
-evaluation pipelines, monitoring, cost control — apply equally to them (module 12).
+
+Some abbreviations from the table, each in one sentence. A **PRD** (product requirements document)
+describes what is to be built and why. **dbt** is a popular tool for writing and testing the SQL
+that shapes warehouse tables. An **SRE** (site reliability engineer) keeps services running and
+answers the pager when they fail, which is called being **on-call**. An **SLO** (service level
+objective) is a written reliability target such as "99.9% of requests succeed". **IaC**
+(infrastructure as code) means describing servers and networks in files kept in version control.
+A **runbook** is a step-by-step guide for handling a specific failure. A **DPIA** (data protection
+impact assessment) is a privacy review required by European law for risky uses of personal data.
+A **data contract** is a written promise from the team that produces a table about its columns,
+meaning and freshness.
+
+The last row needs a little more. A **foundation model** is a very large model, such as the ones
+behind chat assistants, trained once by a specialised company on enormous amounts of text and then
+rented out to everyone through an API. Huyen (*AI Engineering*, ch. 1) describes the rise of the
+**AI engineer**: a person who starts from such a ready-made model and spends their effort on
+**prompts** (the instructions sent to the model), on supplying it with the right documents (a
+technique called **RAG**, retrieval-augmented generation), on evaluation and on the product, and
+does little or no training. The disciplines in this track (versioning, evaluation pipelines,
+monitoring, cost control) apply to them as much as to anyone (module 12).
 
 ### Team topologies
 
@@ -42,26 +82,38 @@ flowchart TB
   end
 ```
 
-- **Centralized:** one ML team serves everyone. Good for scarce talent; bad for product context and
-  becomes a bottleneck.
-- **Embedded:** each product team owns its ML. Great context; every team reinvents tracking, serving and
-  monitoring.
-- **Platform (hub-and-spoke):** a platform team builds paved roads (templates, registry, serving, feature
-  store) and product teams use them self-serve. This is where most mature organisations land; Uber's
-  Michelangelo, Airbnb's Bighead and Netflix's Metaflow are famous examples.
+A "team topology" is the shape of the organisation chart: who sits with whom.
+
+- **Centralized:** one ML team serves every product. This works when ML specialists are scarce.
+  Its weaknesses are that the central team knows little about each product, and that every
+  request queues behind every other request.
+- **Embedded:** each product team has its own data scientists (DS) and ML engineers (MLE). They
+  understand the product well, but every team builds its own tracking, serving and monitoring from
+  scratch.
+- **Platform (hub-and-spoke):** a platform team builds **paved roads**, meaning ready-made,
+  well-supported ways of doing the common tasks (project templates, a registry, serving, a feature
+  store), and product teams use them without having to ask. This is called **self-serve**. Most
+  mature organisations end up here; Uber's Michelangelo, Airbnb's Bighead and Netflix's Metaflow
+  are well-known internal platforms of this kind.
 
 > [!TIP]
-> The goal of an ML platform team is to reduce the **time from idea to production model** and the
-> **cognitive load** on product ML engineers. Measure it: how many days does it take a new model to reach
-> a canary deployment?
+> The goal of an ML platform team is to shorten the **time from idea to production model** and to
+> reduce the **cognitive load** (how much a person has to hold in their head) on product ML
+> engineers. Measure it: how many days does a new model need to reach a canary deployment, the
+> stage where it serves a small slice of real traffic (lesson 26)?
 
 ## The "throw it over the wall" problem
 
-The classic failure: a data scientist hands a pickle file and a notebook to an engineer, who rewrites
-the feature logic in Java for the serving path. Six weeks later the model goes live — and performs worse
-than offline, because the Java feature code differs subtly from the pandas code (a different default for
-missing values, a timezone bug, a different tokenizer). This is **training/serving skew** (module 3),
-and it is a direct consequence of an organisational handoff.
+Here is the classic failure. A data scientist finishes a model and hands two things to an
+engineer: a notebook and a **pickle file** (Python's built-in format for saving an object, such as
+a trained model, to disk). The product's servers are written in Java, so the engineer rewrites the
+feature calculations in Java for the **serving path**, the code that runs when a live request
+arrives. Six weeks later the model goes live and performs worse than it did in testing. The cause:
+the Java feature code differs in small ways from the original pandas code. It fills in missing
+values with a different default, it handles time zones differently, it splits text into words
+differently. The model is being fed inputs that are computed differently from the ones it learned
+on. This is **training/serving skew** (lesson 9), and it is a direct result of how the two people
+were organised.
 
 Fixes are both technical and organisational:
 
@@ -73,17 +125,23 @@ Fixes are both technical and organisational:
 
 ## Hidden technical debt in ML systems
 
-*Technical debt* is the future cost of shortcuts taken now. Sculley et al. argued ML systems have all of
-ordinary software's debt **plus** ML-specific forms that are harder to see because they live at the
-*system* level rather than in code. Here are the main categories, each with a modern mitigation.
+*Technical debt* is the future cost of shortcuts taken now. Sculley and colleagues argued that ML
+systems carry all the debt of ordinary software **plus** ML-specific kinds that are harder to see,
+because they live at the *system* level (in how data, models and teams connect) and not in a line
+of code that a reviewer could point at. The main categories follow, each with a present-day
+**mitigation**, meaning a practice that reduces the risk.
 
-### 1. Entanglement — "CACE: Changing Anything Changes Everything"
+### 1. Entanglement: "CACE, Changing Anything Changes Everything"
 
-A model mixes its input signals. If you change the distribution of feature $x_1$, the learned weights for
-$x_2 \dots x_n$ may all shift. You cannot make isolated improvements.
+A model blends its input signals. If you change the range of typical values of feature $x_1$ (its
+distribution), the weights the model learned for $x_2 \dots x_n$ may all shift at the next
+retraining. You cannot improve one input in isolation the way you can fix one function in a
+program.
 
-*Mitigations:* ablation studies, monitoring per-feature importance across retrains, versioned feature
-sets, and treating any input change as a model change requiring full evaluation.
+*Mitigations:* **ablation studies** (retrain with one feature removed and measure what is lost),
+tracking how much the model relies on each feature from one retraining to the next, numbered
+versions of the feature set, and treating any change to an input as a change to the model that
+needs a full evaluation.
 
 ### 2. Correction cascades
 
@@ -103,14 +161,20 @@ APIs.
 
 ### 4. Data dependencies are costlier than code dependencies
 
-- **Unstable data dependencies:** an input signal produced by another system that changes over time
-  (another team retrains *their* model and the scores you consume shift).
-- **Underutilised data dependencies:** features that add almost no value but create risk — legacy
-  features, "bundled" features added together, epsilon features added for +0.001 AUC, correlated
-  features.
+Code that depends on other code is checked by compilers and tests. Data that depends on other data
+has no such safety net.
 
-*Mitigations:* versioned copies of upstream signals, regular leave-one-feature-out evaluation to prune,
-data lineage tooling.
+- **Unstable data dependencies:** an input produced by another system that changes over time. For
+  example, you consume a score from another team's model; they retrain it and your inputs shift
+  without any change on your side.
+- **Underutilised data dependencies:** features that add almost no value and still carry risk.
+  Examples are legacy features nobody remembers the reason for, "bundled" features that were
+  added as a group without testing each one, features added for a gain of +0.001 AUC, and features
+  that duplicate information already present in another.
+
+*Mitigations:* keep frozen, versioned copies of upstream signals; regularly retrain with each
+feature left out in turn and prune the ones that do not matter; use **data lineage** tools, which
+record which tables and columns each result was computed from.
 
 ### 5. Feedback loops
 
@@ -119,17 +183,21 @@ data lineage tooling.
 - **Hidden loops:** two systems influence each other through the world (two trading models reacting to
   each other's market impact).
 
-*Mitigations:* exploration (show a small random sample), logging propensities for off-policy correction,
-holdout groups that never receive model-driven treatment.
+*Mitigations:* **exploration** (show a small random sample of items regardless of what the model
+prefers, so that data about them exists), recording the probability with which each item was shown
+so the bias can be corrected later, and **holdout groups**: a small set of users who never receive
+the model's decisions and serve as a clean comparison.
 
 ### 6. ML-system anti-patterns
 
-- **Glue code:** most of the codebase is glue around a generic package. Wrap packages behind your own
-  interfaces.
-- **Pipeline jungles:** data preparation grown organically into a tangle of scrapes, joins and
-  intermediate files. Redesign pipelines holistically; use an orchestrator with explicit DAGs.
-- **Dead experimental codepaths:** `if experiment_17:` branches that never got removed.
-- **Abstraction debt:** no clean abstractions for data, models and their relationships.
+- **Glue code:** most of the codebase is wiring that feeds data into and out of a general-purpose
+  library. Wrap each library behind your own small interface so it can be replaced.
+- **Pipeline jungles:** data preparation that grew step by step into a tangle of extractions,
+  joins and intermediate files. Redesign the pipeline as a whole, and use an orchestrator in which
+  the steps and their order are written down explicitly as a **DAG** (directed acyclic graph: a
+  set of steps with arrows saying which must finish before which, and no loops; lesson 13).
+- **Dead experimental codepaths:** `if experiment_17:` branches that were never removed.
+- **Abstraction debt:** no agreed, clean way to represent data, models and how they relate.
 
 ### 7. Configuration debt
 
@@ -171,9 +239,10 @@ flowchart LR
 
 ## Measuring and paying down debt
 
-A practical, lightweight approach is the **ML Test Score** rubric (Breck et al., Google, 2017): 28 tests
-across four areas — features and data, model development, infrastructure, and monitoring — each scored
-0 (not done), 0.5 (done manually) or 1 (automated). Examples:
+How do you find out how much debt a system carries? A practical, lightweight tool is the **ML Test
+Score** rubric (Breck and colleagues at Google, 2017). A **rubric** is a scoring sheet. This one
+lists 28 checks in four areas (features and data, model development, infrastructure, monitoring),
+and each check is scored 0 (not done), 0.5 (done by hand) or 1 (automated). Examples:
 
 - Feature expectations are captured in a schema (data).
 - All features are beneficial; no feature's cost is too high (data).
@@ -184,8 +253,13 @@ across four areas — features and data, model development, infrastructure, and 
 - Dependency changes result in notification (monitoring).
 - Training and serving features compute the same values (monitoring).
 
-Score each area, take the **minimum** across areas as the overall score — the weakest area defines your
-risk. We will implement checks from every area during the track.
+Score each area, then take the **minimum** across the four areas as the overall score. The reason
+for the minimum and not the average: an excellent data score does not protect you if monitoring is
+absent, so the weakest area defines your risk. We will implement checks from every area during the
+track.
+
+The small program below scores an imaginary team. `scores` is a dictionary with one entry per
+area; each entry maps a check name to 0, 0.5 or 1.
 
 ```python-run
 # A toy ML Test Score calculator: 0 = not done, 0.5 = manual, 1 = automated
@@ -202,6 +276,23 @@ print("overall ML Test Score (min over areas):", min(totals.values()))
 weakest = min(totals, key=totals.get)
 print("invest next in:", weakest)
 ```
+
+The line `totals = {area: sum(v.values()) for area, v in scores.items()}` adds up the checks in
+each area. The loop prints each total next to the number of checks, and `min(totals.values())`
+picks the smallest. The output is:
+
+```text
+data        2.5 / 4
+model       2.5 / 4
+infra       2.5 / 4
+monitoring  1.5 / 4
+overall ML Test Score (min over areas): 1.5
+invest next in: monitoring
+```
+
+Three areas tie at 2.5, monitoring trails at 1.5, and so monitoring is where the next week of
+effort should go. Change one of the zeros under `monitoring` to 1 and run it again to see the
+overall score move.
 
 ## Communication artifacts that reduce debt
 
@@ -227,9 +318,10 @@ items for a marketing email. Nobody tells the ranking team. *Debt created:* an u
 top of the ranker's output. *Debt created:* a correction cascade — improving the ranker now changes the
 input distribution of the adjustment model.
 
-**Month 7.** Twelve features are added in one experiment that improves offline NDCG by 0.3%. Nobody
-checks which of the twelve matter. Four come from a table owned by another team. *Debt created:*
-underutilised, bundled and unstable data dependencies.
+**Month 7.** Twelve features are added in one experiment that improves offline NDCG by 0.3%. (NDCG,
+normalised discounted cumulative gain, is a score for how good the order of a ranked list is.)
+Nobody checks which of the twelve matter. Four come from a table owned by another team. *Debt
+created:* underutilised, bundled and unstable data dependencies.
 
 **Month 9.** The other team changes the semantics of a column in that table. Offline metrics are fine
 (training data is recomputed consistently); online, the Go feature code still reads the old meaning.
@@ -276,6 +368,32 @@ prioritise what you cannot see.
   and underutilised data dependencies, feedback loops, pipeline jungles and configuration debt.
 - Use rubrics like the ML Test Score to measure readiness; your weakest area sets your risk.
 
+
+## Glossary
+
+- **Handoff** - the point where work passes from one person or team to another.
+- **ML engineer** - turns model prototypes into production training and serving code.
+- **ML platform engineer** - builds the shared tools other ML teams use.
+- **SRE** - site reliability engineer; keeps services running and handles incidents.
+- **SLO** - service level objective, a written reliability target.
+- **Foundation model** - a very large pre-trained model offered to many users through an API.
+- **Paved road / self-serve** - a supported, ready-made way to do a common task / usable without
+  asking another team.
+- **Pickle** - Python's format for saving an object to a file.
+- **Training/serving skew** - a difference between the inputs a model learned on and the inputs it
+  receives in production.
+- **Technical debt** - the future cost of a shortcut taken today.
+- **Entanglement (CACE)** - changing one input changes how the model uses all the others.
+- **Correction cascade** - a model trained on another model's output, so neither can change
+  freely.
+- **Undeclared consumer** - a system that depends on your outputs without your knowledge.
+- **Ablation** - removing one component and measuring the effect.
+- **Feedback loop** - a model influencing its own future training data.
+- **Holdout group** - users kept away from the model's decisions for comparison.
+- **Glue code / pipeline jungle** - wiring code around libraries / tangled data preparation.
+- **Data contract** - a producer's written promise about a data set's schema, meaning and freshness.
+- **Runbook / postmortem** - instructions for an incident / the written review after one.
+- **ML Test Score** - a 28-item rubric for production readiness; the weakest area is the score.
 ```quiz
 [
   {"q": "What does 'CACE' stand for in Sculley et al.'s paper?",
