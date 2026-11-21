@@ -1,10 +1,22 @@
 # Cross joins, natural joins and densifying data
 
-Two more join types complete the picture. The **cross join** — the Cartesian product you were warned about — turns out to be genuinely useful for *generating* rows. The **natural join** lets the server guess the join condition, and is best understood so that you can avoid it. Along the way this lesson introduces one of the most practical reporting techniques: building a complete scaffold of rows (every day, every category, every combination) and attaching data to it, so that gaps show up as zeros instead of silently missing.
+> **Before this lesson:** you should understand the Cartesian product, the all-pairs result of a join with no condition ([Inner joins](#/lesson/sql/inner-joins)), left joins, `COALESCE` and why `COUNT(column)` gives 0 for unmatched rows ([Outer joins](#/lesson/sql/outer-joins)), and grouping ([Aggregate functions and GROUP BY](#/lesson/sql/group-by)). The examples use `WITH` to name intermediate results; a one-line reminder is given where it first appears.
+
+## In plain words
+
+Two kinds of join are left to cover.
+
+A **cross join** pairs every row of one table with every row of another. Earlier lessons treated that as an accident caused by a forgotten condition. Done on purpose, it is a tool for *making rows that are not stored anywhere*. Think of a blank timetable: write the five weekdays across the top and the eight lesson periods down the side, and you get a grid of 40 empty boxes before a single lesson has been entered. "Every weekday with every period" is a cross join.
+
+That grid is the key to the most practical technique in this lesson. A report built only from stored rows shows only what happened. A day with no sales has no rows, so it is missing from the report, not shown as zero. If you first build the grid of every day you expect and then attach the data to it, the empty days appear with a zero. Filling in the missing rows this way is called **densifying** the data.
+
+A **natural join** lets the database guess the join condition from the column names. It sounds convenient and is fragile; you need to recognise it mainly so that you can avoid it.
+
+**Why it matters for a job.** "Daily sales for the last 30 days, including days with no sales" is a standard interview question and a real reporting need: charts, moving averages and week-over-week comparisons all go wrong when days are silently missing.
 
 ## Cross joins
 
-A cross join pairs every row of one table with every row of another. You saw it happen by accident when a join condition was missing. To ask for it deliberately, say so:
+To ask for every pairing deliberately, write `CROSS JOIN`:
 
 ```sql-run dataset=bank
 SELECT pt.name AS product_type, d.name AS department
@@ -12,13 +24,13 @@ FROM product_type pt
 CROSS JOIN department d;
 ```
 
-3 product types × 3 departments = 9 rows. Writing `CROSS JOIN` documents that the Cartesian product is intentional; a comma (`FROM product_type pt, department d`) does the same thing with less clarity.
+There is no `ON`, because there is no matching rule. Three product types times three departments gives nine rows: "Customer Accounts" beside each of the three departments, then the next product type beside each, and so on. A comma between the tables (`FROM product_type pt, department d`) does the same; writing `CROSS JOIN` tells the reader that the all-pairs result is intended.
 
-The book is frank that cross joins are used rarely. But it then gives the one family of problems where they are indispensable: **when you need to fabricate rows that are not stored anywhere**.
+Pairing product types with departments has no business meaning. The useful cases come when the rows you need do not exist yet.
 
-## Generating rows: a table of numbers
+## Making rows from nothing: a table of numbers
 
-Suppose you want one row for every day of 2024, to report daily activity. No table holds "all days". The book's trick is to build a set of numbers by cross-joining small sets of digits. Three single-column sets — ones `{0..9}`, tens `{0,10,..,90}`, hundreds `{0,100,200,300}` — cross-joined produce every sum from 0 to 399:
+Suppose a report needs one row for every day of 2024. No table holds "all days". An old and universal trick builds a run of numbers by cross-joining small lists of digits. Take three tiny one-column lists: the ones 0 to 9, the tens 0, 10, ... 90, and the hundreds 0, 100, 200, 300. Pair them all and add:
 
 ```sql-run dataset=bank
 SELECT ones.num + tens.num + hundreds.num AS n
@@ -33,7 +45,9 @@ ORDER BY n
 LIMIT 12;
 ```
 
-10 × 10 × 4 = 400 rows from 24 literal values. Turn each number into a date by adding it, as days, to 1 January, and keep the ones that fall inside the year:
+Each of the three parenthesised pieces is a small table built with `UNION ALL`. The cross joins produce every combination of one "ones" value, one "tens" value and one "hundreds" value: 10 × 10 × 4 = 400 combinations, whose sums are exactly the numbers 0 to 399. The query shows the first twelve.
+
+A number becomes a date by adding it, as a count of days, to 1 January:
 
 ```sql-run dataset=bank
 WITH digits(d) AS (VALUES (0),(1),(2),(3),(4),(5),(6),(7),(8),(9)),
@@ -46,14 +60,14 @@ ORDER BY dt
 LIMIT 5;
 ```
 
-Here the same `digits` set is cross-joined with itself three times (0–999), which is tidier. 2024 is a leap year, so 366 days — and SQLite's date arithmetic takes care of February for us.
+This is tidier. `WITH` names an intermediate result so later parts of the query can use it like a table. The first, `digits`, is a ten-row list written with `VALUES`. The second, `nums`, cross-joins `digits` with itself three times, giving every number from 0 to 999. The main query turns each number below 366 into a date: `'+' || n || ' days'` builds text such as `'+3 days'`, which `date()` understands as a modifier. 2024 is a leap year, hence 366 days.
 
 > [!NOTE]
-> **Easier generators exist in modern engines.** PostgreSQL has `generate_series(start, stop, step)` for numbers and timestamps. SQLite has a `generate_series` table-valued function in some builds, and — everywhere, including MySQL 8 — you can use a **recursive CTE** (`WITH RECURSIVE days(d) AS (SELECT '2024-01-01' UNION ALL SELECT date(d, '+1 day') FROM days WHERE d < '2024-12-31')`), covered in the CTE module. Many warehouses simply keep a permanent **calendar (date dimension) table**.
+> **Shorter ways exist.** PostgreSQL has `generate_series(start, stop, step)`. Every modern database, including SQLite and MySQL 8, can count upward with a recursive query ([Recursive CTEs](#/lesson/sql/recursive-ctes)), used at the end of this lesson. Many companies keep a permanent **calendar table** with one row per day.
 
-## Densifying: scaffold, then left join
+## Densifying: build the grid, then left join
 
-Now the payoff. A plain GROUP BY reports only days that *have* transactions:
+Now the payoff. An ordinary grouped query reports only the days that *have* transactions:
 
 ```sql-run dataset=bank
 SELECT date(txn_date) AS day, COUNT(*) AS txns
@@ -63,7 +77,9 @@ GROUP BY day
 ORDER BY day;
 ```
 
-Days without transactions are simply absent. A chart drawn from this would connect neighbouring points and hide the gaps; a moving average over "the last 7 rows" would cover more than 7 days. To get a row for **every** day, generate the days and outer-join the facts to them — the book's final example in this chapter:
+Eight rows for a fourteen-day period. The list jumps from 1 February to 3 February; the 2nd is not there, because no transaction rows exist for it and a group is formed only from rows that exist. A chart drawn from this would join neighbouring points and hide the gaps. An "average of the last 7 rows" would cover more than 7 days.
+
+To get a row for **every** day, generate the days and left-join the facts onto them:
 
 ```sql-run dataset=bank
 WITH digits(d) AS (VALUES (0),(1),(2),(3),(4),(5),(6),(7),(8),(9)),
@@ -77,13 +93,13 @@ GROUP BY days.day
 ORDER BY days.day;
 ```
 
-Fourteen rows, zeros included. The recipe has three parts and is worth memorising:
+Fourteen rows, and 2 February now appears with 0 transactions and an amount of 0. The recipe has three parts and is worth memorising:
 
-1. **Scaffold** — generate every row that *should* exist (cross join, series, or calendar table).
-2. **LEFT JOIN** the facts onto the scaffold.
-3. **COALESCE / COUNT(col)** to turn missing matches into zeros.
+1. **Scaffold**: generate every row that *should* exist. A scaffold is the complete framework of expected rows.
+2. **`LEFT JOIN`** the real data onto the scaffold, so that scaffold rows without data are kept.
+3. **`COUNT(column)` and `COALESCE`** turn the missing matches into zeros. `COUNT(t.txn_id)` skips the NULL of an unmatched day; `SUM` over no rows is NULL, which `COALESCE(..., 0)` replaces.
 
-### Scaffolds with two dimensions
+### A scaffold with two dimensions
 
 The same recipe fills in missing *combinations*. Every category for every month, including months in which a category sold nothing:
 
@@ -104,11 +120,13 @@ LEFT JOIN sales s ON s.month = m.month AND s.category_id = c.category_id
 ORDER BY m.month, c.name;
 ```
 
-`months CROSS JOIN cats` is the grid; `sales` is pre-aggregated to the same grain; the left join attaches what exists. In ML feature engineering this is how you build a dense *entity × time* table (one row per user per day) before computing rolling features.
+Three named pieces. `months` is the list of months, `cats` a list of categories, and `sales` the units sold, already totalled to one row per month and category. Then `months CROSS JOIN cats` is the grid of every month with every category, and the left join attaches the sales that exist. Note that the facts were brought to the same grain as the grid before joining.
 
-### Other uses of cross joins
+In machine-learning work this is how a complete *entity by time* table is built (one row per user per day) before rolling features are calculated.
 
-- **Attaching a single-row result to every row** — a grand total for percentage-of-total calculations:
+### Other uses of a cross join
+
+**Attaching a one-row result to every row**, for example a grand total needed for a percentage:
 
 ```sql-run dataset=bank
 SELECT a.product_cd,
@@ -120,15 +138,18 @@ GROUP BY a.product_cd, t.total
 ORDER BY pct_of_total DESC;
 ```
 
-- **Generating test data** — cross join a handful of names, cities and dates to get thousands of rows.
-- **All pairs for comparison** — combine with a filter such as `a.id < b.id` (the tournament example in the joins module is a filtered self cross join).
+The subquery `t` has a single row, the total of all balances. Cross-joining a one-row table to `account` multiplies the row count by one: it only adds a `total` column to every account row. Checking accounts hold 44.8% of all balances.
+
+**Generating test data**: cross-join a handful of names, cities and dates to get thousands of rows.
+
+**All pairs for comparison**: add a filter such as `a.id < b.id`, as in the tournament example of [Three or more tables, self joins and non-equi joins](#/lesson/sql/multi-self-joins).
 
 > [!WARNING]
-> Row counts multiply. Cross-joining two million-row tables asks for 10¹² rows. Keep at least one side tiny, and filter as early as possible.
+> Row counts multiply. Cross-joining two tables of a million rows each asks for a million million rows. Keep at least one side tiny, and filter as early as you can.
 
 ## Natural joins
 
-A **natural join** lets the server work out the join condition: it joins on **all columns that have the same name** in both tables.
+A **natural join** has no `ON`. The database joins on **every column that has the same name in both tables**.
 
 ```sql-run dataset=bank
 SELECT a.account_id, a.cust_id, c.cust_type_cd, c.fed_id
@@ -137,7 +158,9 @@ NATURAL JOIN customer c
 LIMIT 5;
 ```
 
-`account` and `customer` share exactly one column name, `cust_id`, so this is equivalent to `JOIN customer c ON a.cust_id = c.cust_id`. Convenient — and fragile. The book immediately shows how it goes wrong: join `account` to `branch` naturally.
+`account` and `customer` share exactly one column name, `cust_id`, so this is the same as `JOIN customer c ON a.cust_id = c.cust_id`. Convenient, and fragile, in two opposite ways.
+
+**No shared name: an accidental cross join.** Join `account` to `branch` naturally:
 
 ```sql-run dataset=bank
 SELECT COUNT(*) AS rows_returned
@@ -145,46 +168,38 @@ FROM account a
 NATURAL JOIN branch b;
 ```
 
-`account` has `open_branch_id`; `branch` has `branch_id`. No column names match, so there is no join condition at all and the server quietly produces the **cross join**: 84 × 4 = 336 rows.
+336 rows. `account` calls its column `open_branch_id` and `branch` calls its column `branch_id`. No names match, so there is no condition at all, and the database quietly returns every pair: 84 × 4 = 336.
 
-The opposite failure is worse. `employee` and `individual` both have `fname` and `lname`; `branch`, `department`, `product` and `business` all have a column called `name`. A natural join between such tables matches on those *accidental* names:
+**Too many shared names: no rows.** `product` and `product_type` both have `product_type_cd`, the intended link. They also both have a column called `name`, holding unrelated descriptions.
 
 ```sql-run dataset=bank
 SELECT COUNT(*) AS products_naturally_joined_to_types
 FROM product NATURAL JOIN product_type;
 ```
 
-Both tables have `product_type_cd` (the intended key) **and** `name` (unrelated descriptions). The natural join requires both to be equal, which never happens, so the result is zero rows.
+Zero. The natural join requires *both* shared columns to be equal. A product's name never equals its type's name, so nothing matches.
 
-And a natural join that works today can break tomorrow: add an `updated_at` column to both tables and every natural join between them silently starts requiring the timestamps to match.
+There is a third danger. A natural join that works today can break tomorrow: add an `updated_at` column to both tables and every natural join between them silently begins to require equal timestamps.
 
 > [!TIP]
-> The book's verdict, and the industry's: **avoid NATURAL JOIN** and write the condition explicitly. If you like the brevity, `USING (cust_id)` gives it to you while still naming the column.
+> **Avoid `NATURAL JOIN`** and write the condition out. If you like the brevity, `USING (cust_id)` gives it to you while still naming the column, so a new same-named column cannot change the join.
 
-## Choosing a join type: a summary of the family
+## The whole join family
 
 | Join | Keeps | Typical use |
 |---|---|---|
-| `INNER JOIN` | matching pairs only | follow a mandatory foreign key |
-| `LEFT JOIN` | all left rows | optional relationships, counts including zero, anti-joins |
-| `RIGHT JOIN` | all right rows | rewrite as LEFT |
-| `FULL JOIN` | everything from both | reconciliation between two sources |
+| `INNER JOIN` | matching pairs only | following a link that always has a partner |
+| `LEFT JOIN` | all left rows | optional links, counts that include zero, anti-joins |
+| `RIGHT JOIN` | all right rows | rewrite as a `LEFT JOIN` |
+| `FULL JOIN` | everything from both sides | reconciling two sources |
 | `CROSS JOIN` | every combination | generating rows, scaffolds, attaching totals |
-| `NATURAL JOIN` | matches on same-named columns | avoid |
+| `NATURAL JOIN` | pairs equal on all same-named columns | avoid |
 
-## Pitfalls
+## Worked example: a complete activity grid
 
-- **Accidental cross join** from a forgotten condition (or a NATURAL JOIN with no common names).
-- **Natural join on accidental column names** (`name`, `id`, `created_at`).
-- **Scaffold at the wrong grain** — the facts must be aggregated to the scaffold's grain before (or while) joining.
-- **Filtering the fact table in WHERE** after the left join — removes the zero rows you just created; put fact filters in ON or in the pre-aggregation.
-- **Function on the join column** (`date(t.txn_date) = days.day`) prevents index use; for large tables join on a range (`t.txn_date >= day AND t.txn_date < next_day`).
+The scaffold technique is easiest to appreciate on a table that is *mostly* gaps. The shop's `logins` table has one row per customer per day on which they logged in. A picture of activity needs one cell for **every** customer on **every** day, including days on which nobody logged in.
 
-## Worked example: a complete activity grid for a retention chart
-
-The scaffold technique is easiest to appreciate on a table that is *mostly* gaps. The `logins` table records one row per customer per day with a login. A heat-map of activity needs one cell for **every** customer and **every** day — including the days nobody logged in.
-
-**Step 1 — the two dimensions.** The customers of interest and a calendar of days, generated without any calendar table:
+**Step 1: the two dimensions.** A handful of customers and a calendar of fourteen days:
 
 ```sql-run dataset=shop
 WITH digits(d) AS (VALUES (0),(1),(2),(3),(4),(5),(6),(7),(8),(9)),
@@ -197,9 +212,9 @@ SELECT (SELECT COUNT(*) FROM days) AS days,
        (SELECT COUNT(*) FROM days CROSS JOIN people) AS grid_cells;
 ```
 
-The grid has exactly days × customers cells — predictable and complete, which is the point.
+14 days, 4 customers, 56 cells. The size of the grid is known before any data is attached, which is the point.
 
-**Step 2 — attach the facts and summarise.** Left-join the logins to the grid; a missing match means "did not log in":
+**Step 2: attach the facts and summarise.** Left-join the logins onto the grid. A missing match means "did not log in".
 
 ```sql-run dataset=shop
 WITH digits(d) AS (VALUES (0),(1),(2),(3),(4),(5),(6),(7),(8),(9)),
@@ -218,9 +233,9 @@ GROUP BY p.customer_id
 ORDER BY p.customer_id;
 ```
 
-Each customer gets a 14-character strip (`#` = logged in, `.` = absent). Without the scaffold you could count active days, but **inactive days would be invisible** — there are no rows to count. (The strip relies on rows reaching `group_concat` in day order, which holds here because `days` is generated in order; SQLite 3.44+ lets you make it explicit with `group_concat(… ORDER BY d.day)`.)
+Each customer gets a strip of 14 characters, `#` for a day with a login and `.` for a day without. Customer 4 shows `.#.#..#.######`: 9 active days and 5 inactive ones. Without the scaffold you could count active days, but **inactive days could not be counted at all**, because there are no rows for them. (The strip depends on rows reaching `group_concat` in day order, which holds here because the days are generated in order. SQLite 3.44 and later let you state it: `group_concat(... ORDER BY d.day)`.)
 
-**Step 3 — daily totals, including empty days.** The same grid answers the per-day question:
+**Step 3: totals per day, empty days included.** This version makes the calendar with a recursive query: start at 1 March and keep adding one day until 10 March.
 
 ```sql-run dataset=shop
 WITH RECURSIVE days(day) AS (
@@ -233,39 +248,62 @@ GROUP BY d.day
 ORDER BY d.day;
 ```
 
-This version generates the calendar with a recursive CTE — shorter than the digits trick, and the form you will usually write today.
+It is shorter than the digits trick and is the form you will usually write today. How the recursion works is explained in [Recursive CTEs](#/lesson/sql/recursive-ctes).
 
-## Row generators compared
+## Ways to generate rows, compared
 
 | Technique | Works in | Notes |
 |---|---|---|
-| Cross-joined digit tables | everything, including MySQL 5.x | the book's method; verbose but universal |
-| Recursive CTE | SQLite, PostgreSQL, MySQL 8+, SQL Server | compact; mind recursion limits for very long series |
-| `generate_series(a, b, step)` | PostgreSQL, DuckDB (some SQLite builds) | simplest; also generates timestamps |
-| Permanent calendar / numbers table | everything | fastest; can carry holidays, fiscal periods, week numbers |
+| Cross-joined digit lists | every database, including old MySQL | wordy but universal |
+| Recursive query | SQLite, PostgreSQL, MySQL 8+, SQL Server | compact; very long series may hit a recursion limit |
+| `generate_series(a, b, step)` | PostgreSQL, DuckDB, some SQLite builds | shortest; also produces timestamps |
+| Permanent calendar or numbers table | every database | fastest; can also record holidays, financial periods, week numbers |
 
-For production reporting, a calendar table is the usual choice: it is generated once, indexed, and enriched with business attributes (is_holiday, fiscal_quarter) that no function can compute.
+For reports that run every day, a calendar table is the usual choice. It is generated once, and it can carry business facts (is this day a public holiday? which financial quarter?) that no function can work out.
 
 > [!INTERVIEW]
-> "Report daily sales for the last 30 days, including days with no sales" is a standard question that separates people who know GROUP BY from people who know its limits. The expected answer: generate the 30 dates, LEFT JOIN sales onto them, `COALESCE(SUM(amount), 0)`.
+> "Report daily sales for the last 30 days, including days with no sales" separates people who know `GROUP BY` from people who know its limits. The expected answer: generate the 30 dates, `LEFT JOIN` the sales onto them, and show `COALESCE(SUM(amount), 0)`.
+
+## Pitfalls
+
+- **An accidental cross join** from a forgotten condition, or from a `NATURAL JOIN` with no shared column names.
+- **A natural join on accidental names** such as `name`, `id` or `created_at`.
+- **A scaffold at the wrong grain.** The facts must be totalled to the scaffold's grain before, or while, joining.
+- **Filtering the fact table in `WHERE`** after the left join removes the zero rows you worked to create. Put such filters in `ON`, or inside the subquery that totals the facts.
+- **A function around the join column** (`date(t.txn_date) = days.day`) stops an index on that column from being used. On large tables join on a range instead: `t.txn_date >= day AND t.txn_date < next_day`.
 
 ## Summary
 
-- `CROSS JOIN` returns every combination; use it deliberately to generate rows.
-- Cross-joined digit sets (or `generate_series`, recursive CTEs, calendar tables) fabricate sequences of numbers and dates.
-- **Densify** reports with scaffold → LEFT JOIN → COALESCE so that gaps appear as zeros.
-- `NATURAL JOIN` joins on all same-named columns — fragile; prefer `ON` or `USING`.
+- `CROSS JOIN` returns every combination; use it on purpose to generate rows.
+- Cross-joined digit lists, recursive queries, `generate_series` and calendar tables all produce runs of numbers and dates.
+- **Densify** a report with scaffold, then `LEFT JOIN`, then `COALESCE`, so that gaps show as zeros.
+- `NATURAL JOIN` joins on all same-named columns and is fragile; prefer `ON` or `USING`.
+
+## Glossary
+
+- **Cross join** — a join with no condition that returns every row of one table paired with every row of the other.
+- **Cartesian product** — the mathematical name for that all-pairs result.
+- **Row generator** — a query that produces rows, such as a run of numbers or dates, that are not stored in any table.
+- **Numbers table** — a table (stored or generated) holding the whole numbers 0, 1, 2, ...
+- **Calendar table (date dimension)** — a permanent table with one row per day, often with extra facts about each day.
+- **Scaffold** — the complete set of rows a report should contain, built before any data is attached.
+- **Densifying** — filling in rows for which no data exists, so that gaps show as zeros.
+- **Sparse / dense data** — data with gaps where nothing happened / data with a row for every expected case.
+- **Natural join** — a join whose condition is equality on every column that has the same name in both tables.
+- **`USING`** — a join shorthand that names the shared column explicitly.
+- **`generate_series`** — a function, in PostgreSQL and some other databases, that returns a run of numbers or timestamps.
 
 ```quiz
 [
-  {"q": "A table with 12 rows is cross-joined with a table of 5 rows. How many rows result?", "options": ["12", "17", "60", "5"], "answer": 2, "explain": "A cross join produces every combination: 12 x 5."},
+  {"q": "A table with 12 rows is cross-joined with a table of 5 rows. How many rows result?", "options": ["12", "17", "60", "5"], "answer": 2, "explain": "A cross join produces every combination: 12 x 5 = 60."},
   {"q": "What columns does NATURAL JOIN match on?", "options": ["Primary and foreign keys", "All columns with the same name in both tables", "The first column of each table", "Columns of the same type"], "answer": 1, "explain": "It ignores declared keys entirely and uses identical column names."},
-  {"q": "account NATURAL JOIN branch (no common column names) returns...", "options": ["An error", "No rows", "The cross join of the two tables", "A join on branch_id"], "answer": 2, "explain": "With no shared names there is no condition, so every pair is returned."},
-  {"q": "Why does a GROUP BY date report omit days without transactions?", "options": ["GROUP BY skips zeros", "Groups are only formed from rows that exist", "Dates must be indexed", "A HAVING clause removes them"], "answer": 1, "explain": "No rows, no group. Generate the days and LEFT JOIN the data to them."},
-  {"q": "What are the three steps of densifying a report?", "options": ["Filter, sort, limit", "Scaffold, LEFT JOIN, COALESCE", "Group, having, order", "Union, intersect, except"], "answer": 1, "explain": "Generate every expected row, attach facts with an outer join, replace NULL with zero."},
-  {"q": "How many rows do three cross-joined copies of a 10-row digits table give?", "options": ["30", "100", "1000", "10"], "answer": 2, "explain": "10 x 10 x 10 = 1000, the numbers 0 to 999."},
-  {"q": "Which is the safer shorthand for a join on a same-named column?", "options": ["NATURAL JOIN", "USING (col)", "CROSS JOIN", "A comma join"], "answer": 1, "explain": "USING names the column explicitly, so new same-named columns cannot change the join."}
+  {"q": "account NATURAL JOIN branch, which have no column names in common, returns...", "options": ["An error", "No rows", "The cross join of the two tables", "A join on branch_id"], "answer": 2, "explain": "With no shared names there is no condition, so every pair is returned."},
+  {"q": "Why does a report grouped by date omit days without transactions?", "options": ["GROUP BY skips zeros", "Groups are formed only from rows that exist", "Dates must be indexed", "A HAVING clause removes them"], "answer": 1, "explain": "No rows, no group. Generate the days and LEFT JOIN the data onto them."},
+  {"q": "What are the three steps of densifying a report?", "options": ["Filter, sort, limit", "Scaffold, LEFT JOIN, COALESCE", "Group, having, order", "Union, intersect, except"], "answer": 1, "explain": "Generate every expected row, attach the facts with an outer join, and replace NULL with zero."},
+  {"q": "How many rows do three cross-joined copies of a 10-row digits table give?", "options": ["30", "100", "1000", "10"], "answer": 2, "explain": "10 x 10 x 10 = 1000 combinations, giving the numbers 0 to 999."},
+  {"q": "Which is the safer shorthand for a join on a same-named column?", "options": ["NATURAL JOIN", "USING (col)", "CROSS JOIN", "A comma join"], "answer": 1, "explain": "USING names the column, so a new same-named column added later cannot change the join."},
+  {"q": "After days LEFT JOIN txn, which expression shows 0 for a day with no transactions?", "options": ["COUNT(*)", "COUNT(t.txn_id)", "SUM(t.amount)", "MAX(t.txn_id)"], "answer": 1, "explain": "COUNT of a column from the joined table skips the NULL of an unmatched day; COUNT(*) would count that row as 1, and SUM would be NULL."}
 ]
 ```
 
-> **Source:** Beaulieu, *Learning SQL*, ch. 10 "Joins Revisited" (cross joins — including generating a year of dates — and natural joins).
+> **Source:** Beaulieu, *Learning SQL*, ch. 10 "Joins Revisited" (cross joins, including generating a year of dates, and natural joins), restated in original wording with this guide's own datasets.

@@ -1,10 +1,27 @@
 # CASE patterns
 
-Knowing the syntax of CASE is the easy part. Its real value shows in a handful of recurring patterns that the book walks through and that appear in nearly every analytics query and interview: **result set transformations** (pivoting rows into columns), **selective aggregation**, **checking for existence**, **avoiding division-by-zero errors**, **conditional updates**, and **handling NULL values**.
+> **Before this lesson:** you should be able to write a searched `CASE` with several `WHEN` lines, know that a missing `ELSE` gives NULL, and know that aggregate functions skip NULLs ([The CASE expression](#/lesson/sql/case-expressions), [Aggregate functions and GROUP BY](#/lesson/sql/group-by)). `EXISTS` comes from [Correlated subqueries, EXISTS and subqueries as data sources](#/lesson/sql/correlated-exists).
 
-## Result set transformations (pivoting)
+## In plain words
 
-A grouped query returns one **row** per group. Suppose you count accounts opened per year:
+The last lesson taught the grammar of `CASE`. This one teaches what people do with it. Six uses come up so often that they are worth learning as ready-made patterns:
+
+1. **Pivoting**: turning rows into columns, as a spreadsheet pivot table does.
+2. **Selective aggregation**: several totals in one query, each over a different subset of the rows.
+3. **Existence flags**: a yes/no column saying whether a related row exists.
+4. **Safe division**: deciding what happens when you divide by zero.
+5. **Conditional updates**: changing different rows by different rules in one statement.
+6. **Handling NULL**: showing something sensible where a value is missing.
+
+Most of them rest on one idea, which is worth stating before the examples. Put a `CASE` *inside* an aggregate function such as `SUM` or `COUNT`. For each row, the `CASE` decides whether that row should contribute. The aggregate then adds up only the contributions.
+
+An everyday picture: a teller counting a drawer of mixed notes. She goes through the drawer **once**, keeping several tallies at the same time: one for 10s, one for 20s, one for 50s. For each note she adds one to the tally it belongs to and nothing to the others. She does not go through the drawer three times.
+
+**Why it matters for a job.** Almost every dashboard query is built this way: one pass over a table producing many figures side by side. In interviews, "show the count of each status in its own column" and "what percentage of orders were cancelled?" are standard, and both are this pattern.
+
+## Pattern 1: pivoting rows into columns
+
+A grouped query returns one **row** per group. Accounts opened per year:
 
 ```sql-run dataset=bank
 SELECT strftime('%Y', open_date) AS year, COUNT(*) AS how_many
@@ -13,7 +30,7 @@ WHERE open_date >= '2020-01-01' AND open_date < '2024-01-01'
 GROUP BY year;
 ```
 
-Four rows. But the report wants **one row with four columns** — a year per column. The transformation: for each desired column, write an aggregate around a CASE that picks out only the rows belonging to that column.
+Four rows: 15 accounts in 2020, 21 in 2021, 17 in 2022, 17 in 2023. Now suppose the report wants **one row with four columns**, a column per year. Turning row values into column headings is called **pivoting**. The recipe: for each wanted column, write an aggregate around a `CASE` that picks out the rows belonging to that column.
 
 ```sql-run dataset=bank
 SELECT SUM(CASE WHEN strftime('%Y', open_date) = '2020' THEN 1 ELSE 0 END) AS year_2020,
@@ -24,9 +41,9 @@ FROM account
 WHERE open_date >= '2020-01-01' AND open_date < '2024-01-01';
 ```
 
-Each CASE returns 1 for rows of "its" year and 0 otherwise; summing counts them. Every row passes through all four columns but contributes to exactly one.
+One row: 15, 21, 17, 17. Follow a single account opened in 2021 through the query. In the first column its `CASE` gives 0. In the second it gives 1. In the third and fourth, 0 again. So that account adds one to `year_2021` and nothing elsewhere. Adding up 1s and 0s is counting.
 
-Add a GROUP BY and you get a cross-tab: rows for one dimension, columns for another.
+Add a `GROUP BY` and the result is a **cross-tabulation**: one thing down the side, another across the top.
 
 ```sql-run dataset=shop
 SELECT c.country,
@@ -41,14 +58,18 @@ GROUP BY c.country
 ORDER BY total DESC;
 ```
 
-The limitation: SQL needs to know the output **columns** when the query is written, so the pivoted values must be listed by hand. Truly dynamic pivots require generating the SQL in application code (or a tool like dbt/pandas `pivot_table`).
+One row per country, one column per order status. The USA has 97 orders: 62 delivered, 6 shipped, 8 cancelled, 9 returned (the rest are pending, a status with no column of its own).
+
+The limitation: SQL must know the **columns** of a result when the query is written, so the pivoted values have to be listed by hand. A pivot whose columns depend on the data needs the SQL text to be generated by a program.
 
 > [!NOTE]
-> SQL Server and Oracle have a dedicated `PIVOT` clause, and PostgreSQL offers `crosstab()` (tablefunc extension) and the `FILTER` clause: `COUNT(*) FILTER (WHERE status = 'delivered')`. SQLite also supports `FILTER` (3.30+). CASE-in-aggregate works in **all** of them.
+> SQL Server and Oracle have a dedicated `PIVOT` clause. PostgreSQL and SQLite offer `FILTER`: `COUNT(*) FILTER (WHERE status = 'delivered')`. The `CASE`-inside-an-aggregate form works on **all** of them.
 
-### Pivoting values, not counts: MAX(CASE …)
+### Pivoting a value instead of a count: MAX(CASE ...)
 
-When each cell should hold a *value* from the single matching row rather than a count, wrap the CASE in `MAX` (or `MIN`) and drop the ELSE. This is how you turn *long* (entity–attribute–value) data into *wide* data — a daily task with ML metric tables:
+Sometimes each cell should hold a *value* taken from the one matching row. Then wrap the `CASE` in `MAX` (or `MIN`) and leave out the `ELSE`.
+
+The `metrics` table in the `mlops` dataset is in **long** format: one row per training run, per measurement name, per step. "Run 23, accuracy, step 5, 0.93" is one row. People prefer **wide** format: one row per run with a column for each measurement.
 
 ```sql-run dataset=mlops
 SELECT run_id,
@@ -61,13 +82,15 @@ GROUP BY run_id
 HAVING accuracy IS NOT NULL;
 ```
 
-Inside each group, the CASE yields the metric's value on one row and NULL on all the others; MAX ignores the NULLs and returns the one value.
+Inside the group for run 23, the first `CASE` gives the value on rows whose `metric_name` is `accuracy` and NULL on all other rows (no `ELSE`). `MAX` ignores the NULLs and returns the largest accuracy recorded: 0.9328.
 
-The reverse (**unpivot**, wide → long) is done with `UNION ALL`, one SELECT per column (see the sets module).
+The opposite direction, wide to long, is done with `UNION ALL`, one `SELECT` per column ([Set theory and UNION](#/lesson/sql/union)).
 
-## Selective aggregation
+## Pattern 2: selective aggregation
 
-The pivot is one use of a more general idea: **an aggregate that only considers some of the rows**. The book's example deals with a real data-modelling wrinkle. In `txn`, the `amount` column is always positive; whether it adds to or subtracts from the balance depends on `txn_type_cd`. To check that each account's stored balance agrees with its transaction history you need a *signed* sum:
+The pivot is one use of a wider idea: **an aggregate that takes only some of the rows into account**.
+
+Here is a real modelling wrinkle. In the bank's `txn` table the `amount` is always positive. Whether it adds to the balance or subtracts from it depends on `txn_type_cd`: `'CDT'` is a credit (money in), `'DBT'` a debit (money out). The net effect per account needs a *signed* sum:
 
 ```sql-run dataset=bank
 SELECT t.account_id,
@@ -81,9 +104,9 @@ ORDER BY net_2024
 LIMIT 8;
 ```
 
-The first aggregate flips the sign of debits *inside* the SUM. One pass over the table produces all the conditional totals — far cheaper than running a separate filtered query for each and joining the results.
+The first `CASE` turns a debit into a negative number *before* it is added. The second passes credits through and replaces everything else with 0; the third does the same for debits. Account 169 had 515.48 in credits and 15884.45 in debits over 8 transactions: a net of −15368.97. One reading of the table produced all three totals, which is far cheaper than three separate filtered queries joined together.
 
-The book goes one step further with funds that are not yet available: a transaction counts toward the *available* balance only if its `funds_avail_date` has passed. That is just one more condition in the CASE:
+More conditions can be stacked. A deposit counts toward the *available* balance only once its `funds_avail_date` has passed; before then it is pending. That is one more `WHEN`:
 
 ```sql-run dataset=bank
 SELECT account_id,
@@ -99,7 +122,9 @@ GROUP BY account_id
 HAVING pending_net <> available_net;
 ```
 
-Selective aggregation is also how ratios and rates are computed in one query:
+The `available_net` column first asks "is the money still held?" and, if so, contributes 0; only otherwise does it apply the sign rule. The order of the lines carries the logic. Three accounts have a difference between the two figures.
+
+Rates and percentages work the same way:
 
 ```sql-run dataset=mlops
 SELECT d.deployment_id,
@@ -115,12 +140,14 @@ HAVING COUNT(*) >= 15
 ORDER BY slow_pct DESC;
 ```
 
+For deployment 3: 22 predictions, 16 of which took more than 100 milliseconds, so 72.7% were slow. The accuracy column divides the number of correct predictions by `COUNT(p.actual_label)`, the number of predictions whose true answer is known, not by all predictions. Choosing the right denominator is half of any rate.
+
 > [!TIP]
-> A neat equivalent for rates: `AVG(CASE WHEN cond THEN 1.0 ELSE 0 END)` is the fraction of rows meeting `cond`. Multiply by 100 for a percentage.
+> A neat equivalent for rates: `AVG(CASE WHEN condition THEN 1.0 ELSE 0 END)` is the fraction of rows that meet the condition, since the average of 1s and 0s is the share of 1s. Multiply by 100 for a percentage.
 
-## Checking for existence
+## Pattern 3: existence flags
 
-Sometimes you only need to know **whether** a relationship exists, not how many times. The book flags, for each customer, whether they have any checking account and any savings account — using CASE around correlated EXISTS subqueries:
+Sometimes you only need to know **whether** a related row exists, not how many. For each customer: do they have any checking account, and any savings account?
 
 ```sql-run dataset=bank
 SELECT c.cust_id, c.cust_type_cd,
@@ -135,9 +162,9 @@ ORDER BY c.cust_id
 LIMIT 10;
 ```
 
-No join, so no row multiplication; each flag is evaluated independently and can stop at the first match.
+`EXISTS (...)` is true if the subquery finds at least one row for this customer; `CASE` turns true into `'Y'` and false into `'N'`. Customer 1 has checking and no savings; customer 2 has both. There is no join, so no rows are multiplied, and each flag can stop looking at its first match.
 
-When a rough size matters — none, one, a couple, many — use a scalar count subquery inside a simple CASE, as the book does:
+When a rough size matters (none, one, two, many), put a counting subquery inside a simple `CASE`:
 
 ```sql-run dataset=bank
 SELECT c.cust_id,
@@ -152,9 +179,9 @@ ORDER BY c.cust_id
 LIMIT 10;
 ```
 
-## Division-by-zero errors
+## Pattern 4: safe division
 
-Calculations with division must consider a zero denominator. Engines disagree on what happens: PostgreSQL, SQL Server and Oracle raise an error and abort the query; MySQL and SQLite return NULL. Either way, the book's advice is to guard the denominator explicitly, so your query has the same, intended behaviour everywhere:
+Any calculation with a division must consider a zero underneath. The number below the line is the **denominator**. Databases disagree about what dividing by zero does: PostgreSQL, SQL Server and Oracle stop the whole query with an error; MySQL and SQLite return NULL. Guard the denominator yourself and the query behaves the same everywhere.
 
 ```sql-run dataset=bank
 SELECT 100 / 0 AS sqlite_gives_null,
@@ -162,7 +189,9 @@ SELECT 100 / 0 AS sqlite_gives_null,
        COALESCE(100 / NULLIF(0, 0), 0) AS guarded_with_default;
 ```
 
-A realistic case: each account's share of its product's total balance. Loan products have a total of zero.
+`NULLIF(x, 0)` returns NULL when `x` is 0 and `x` otherwise. Dividing by NULL gives NULL on every database, with no error. The third column adds `COALESCE(..., 0)` to turn that NULL into a chosen default.
+
+A realistic case: each account's share of its product's total balance. Mortgage accounts (`MRT`) all hold 0, so their product total is 0.
 
 ```sql-run dataset=bank
 SELECT a.account_id, a.product_cd, a.avail_balance,
@@ -177,11 +206,11 @@ ORDER BY a.product_cd, a.account_id
 LIMIT 8;
 ```
 
-The book replaces a zero denominator with 1 (so the result is 0 because the numerator is also 0). `NULLIF(tot, 0)` returns NULL instead — usually the more honest answer: "undefined", not "zero percent". Choose deliberately; do not let the engine choose for you.
+Two guards, two meanings. The first replaces a zero total with 1, so the share comes out as 0. The second returns NULL, which is usually the more honest answer: the share is "undefined", not "zero percent". Choose on purpose; do not let the database choose for you.
 
-## Conditional updates
+## Pattern 5: conditional updates
 
-When the new value depends on the row, CASE lets a single UPDATE apply different rules to different rows. The book updates `last_activity_date` after a transaction posts: use the current time, except where the transaction's funds become available in the future. A similar business rule here — apply monthly fees or interest by tier:
+When the new value depends on the row, `CASE` lets a single `UPDATE` apply different rules to different rows. A month-end rule: savings accounts earn 0.2% interest; checking accounts under 500 pay a fee of 5; accounts that are not active are left alone. (Each Run starts from a fresh copy of the data.)
 
 ```sql-run dataset=bank
 UPDATE account
@@ -199,11 +228,11 @@ SELECT account_id, product_cd, status, avail_balance
 FROM account WHERE product_cd IN ('CHK','SAV') ORDER BY avail_balance LIMIT 6;
 ```
 
-Doing this as three separate UPDATE statements risks a row being changed twice (a savings account that crosses a threshold after the first statement) and scans the table three times. One statement, one pass, each row evaluated once against its *original* values.
+Why not three separate `UPDATE` statements? Two reasons. A row could be changed twice: an account that crosses a threshold after the first statement would be caught again by the second. And the table would be read three times. With one statement, each row is tested once, against its *original* values.
 
-## Handling NULL values
+## Pattern 6: handling NULL
 
-NULL is the right way to store "unknown", but it is rarely the right thing to *display*, and it propagates through arithmetic. CASE (or its shorthand COALESCE) substitutes something meaningful at query time:
+NULL is the right way to *store* "unknown". It is seldom the right thing to *show*, and it spreads through arithmetic: any sum or product with a NULL in it is NULL. `CASE`, or its shorthand `COALESCE`, puts something meaningful in its place when the query runs.
 
 ```sql-run dataset=mlops
 SELECT run_id, status,
@@ -220,7 +249,9 @@ WHERE status IN ('RUNNING', 'KILLED')
 LIMIT 8;
 ```
 
-In calculations, one NULL operand makes the whole result NULL. The book's example multiplies three numbers, any of which may be missing; wrapping each in a CASE (or `COALESCE(x, 0)` / `COALESCE(x, 1)`) keeps the arithmetic alive:
+A run that has not finished has no end time; the first `CASE` shows `(still running)` instead of NULL. The last `CASE` tests for NULL *first*, for the reason given in the previous lesson: a NULL would otherwise fail every comparison and land in `ELSE`.
+
+In a calculation, protect each piece that may be missing:
 
 ```sql-run dataset=shop
 SELECT order_id,
@@ -233,9 +264,11 @@ ORDER BY order_id
 LIMIT 5;
 ```
 
-Be thoughtful about the substitute: 0 is the identity for addition, 1 for multiplication, and neither is right for an average.
+If an order had no items, the subquery's `SUM` would be NULL and `NULL + shipping_fee` would be NULL. `COALESCE(..., 0)` keeps the addition alive.
 
-## Putting it together: a one-query health report
+Think about the substitute. 0 is harmless in an addition and 1 in a multiplication; neither is right inside an average, where it would count as a real value.
+
+## All together: a one-query health report
 
 ```sql-run dataset=shop
 SELECT strftime('%Y-%m', o.order_date) AS month,
@@ -253,35 +286,72 @@ GROUP BY month
 ORDER BY month;
 ```
 
-Selective aggregation, a guarded division, and a CASE *over* aggregates for the final label — all in one pass.
+Three patterns in one pass over the table. Selective aggregation counts delivered orders and problem orders. A guarded division turns the count into a percentage. And a `CASE` wrapped *around* aggregates gives the month a label. This last `CASE` is evaluated once per group, after the sums are known, unlike the inner ones, which are evaluated once per row. January 2024 has 8 orders with 25% problems and is flagged `investigate`; February, with 3.3%, is `ok`.
+
+## The same patterns on other databases
+
+| Task | Works everywhere | Shorter where available |
+|---|---|---|
+| Count rows meeting a condition | `SUM(CASE WHEN c THEN 1 ELSE 0 END)` | `COUNT(*) FILTER (WHERE c)` (PostgreSQL, SQLite); `SUM(c)` (MySQL, SQLite) |
+| Total over some rows | `SUM(CASE WHEN c THEN x ELSE 0 END)` | `SUM(x) FILTER (WHERE c)` |
+| Pivot | aggregates around `CASE` | `PIVOT` (SQL Server, Oracle) |
+| Safe division | `x / NULLIF(y, 0)` | the same |
+
+```sql
+-- PostgreSQL and SQLite: the FILTER form of the country cross-tabulation
+SELECT c.country,
+       COUNT(*) FILTER (WHERE o.status = 'delivered') AS delivered,
+       COUNT(*) FILTER (WHERE o.status = 'cancelled') AS cancelled
+FROM orders o JOIN customers c ON c.customer_id = o.customer_id
+GROUP BY c.country;
+```
+
+> [!INTERVIEW]
+> When asked for a rate ("what share of orders were cancelled per month?"), say the three things an interviewer listens for: the count is a `SUM(CASE ...)` so the table is read once; the multiplication by `100.0` avoids whole-number division; and the denominator is guarded with `NULLIF` and chosen deliberately (all orders, or only orders that could have been cancelled?).
 
 ## Pitfalls
 
-- **`ELSE 0` with COUNT** — `COUNT(CASE WHEN c THEN 1 ELSE 0 END)` counts every row, because 0 is not NULL. Use SUM with `ELSE 0`, or COUNT with no ELSE.
-- **`ELSE 0` with AVG/MIN/MAX** — zeros enter the statistic.
-- **Integer division in rates** — multiply by `100.0`.
-- **Hand-listed pivot columns** go stale when new categories appear; add an "other" column or generate the SQL.
-- **Unqualified division** — decide what a zero denominator should mean.
+- **`ELSE 0` with `COUNT`.** `COUNT(CASE WHEN c THEN 1 ELSE 0 END)` counts every row, because 0 is not NULL. Use `SUM` with `ELSE 0`, or `COUNT` with no `ELSE`.
+- **`ELSE 0` with `AVG`, `MIN` or `MAX`.** The zeros enter the statistic.
+- **Whole-number division in rates.** Multiply by `100.0`.
+- **Hand-listed pivot columns go out of date** when a new category appears. Add an "other" column, or generate the SQL.
+- **An unguarded division.** Decide what a zero denominator should mean.
+- **Several `UPDATE` statements where one with `CASE` was needed.** A row may be changed twice.
 
 ## Summary
 
-- **Pivot**: one aggregate-around-CASE per output column; `SUM(CASE … THEN 1 ELSE 0 END)` for counts, `MAX(CASE … THEN value END)` for values.
-- **Selective aggregation** computes several conditional totals and rates in one scan.
-- **Existence flags**: `CASE WHEN EXISTS (…) THEN 'Y' ELSE 'N' END`.
-- **Safe division**: `NULLIF(denominator, 0)` (or CASE), plus COALESCE if a default is wanted.
-- **Conditional updates** apply per-row rules atomically in one statement.
-- **NULL handling**: translate missing values at query time with CASE / COALESCE.
+- **Pivot**: one aggregate around a `CASE` per output column; `SUM(CASE ... THEN 1 ELSE 0 END)` for counts, `MAX(CASE ... THEN value END)` for values.
+- **Selective aggregation** produces several conditional totals and rates in one reading of the table.
+- **Existence flags**: `CASE WHEN EXISTS (...) THEN 'Y' ELSE 'N' END`.
+- **Safe division**: `NULLIF(denominator, 0)`, plus `COALESCE` if a default is wanted.
+- **Conditional updates** apply per-row rules in one statement, each row tested once.
+- **NULL handling**: replace missing values when the query runs, with `CASE` or `COALESCE`.
+
+## Glossary
+
+- **Pivot** — turning the values of a column into separate output columns.
+- **Cross-tabulation (cross-tab)** — a table with one category down the side and another across the top.
+- **Long format / wide format** — one row per (item, attribute, value) / one row per item with a column per attribute.
+- **Unpivot** — the reverse of a pivot: turning columns into rows.
+- **Selective (conditional) aggregation** — an aggregate that, by means of a `CASE`, takes only some rows into account.
+- **Signed sum** — a total in which some amounts are added and others subtracted.
+- **Existence flag** — a yes/no column that says whether a related row exists.
+- **Denominator** — the number you divide by.
+- **`NULLIF(a, b)`** — returns NULL when `a` equals `b`, otherwise `a`; used to guard a division.
+- **`FILTER (WHERE ...)`** — a clause, in PostgreSQL and SQLite, that restricts the rows an aggregate sees.
+- **Conditional update** — an `UPDATE` whose new value is chosen per row by a `CASE`.
 
 ```quiz
 [
-  {"q": "Which expression counts delivered orders within each group?", "options": ["COUNT(CASE WHEN status = 'delivered' THEN 1 ELSE 0 END)", "SUM(CASE WHEN status = 'delivered' THEN 1 ELSE 0 END)", "COUNT(status = 'delivered')", "MAX(CASE WHEN status = 'delivered' THEN 1 END)"], "answer": 1, "explain": "SUM of 1/0 counts matches. COUNT with ELSE 0 counts every row because 0 is not NULL."},
-  {"q": "To pivot a long metrics table into one column per metric value, wrap the CASE in...", "options": ["SUM with ELSE 0", "MAX (or MIN) with no ELSE", "COUNT", "DISTINCT"], "answer": 1, "explain": "MAX ignores the NULLs from non-matching rows and returns the single value."},
-  {"q": "What does 100 / 0 do in PostgreSQL versus SQLite?", "options": ["NULL in both", "Error in PostgreSQL, NULL in SQLite", "Error in both", "0 in both"], "answer": 1, "explain": "Engines differ, which is why you should guard the denominator explicitly."},
-  {"q": "x / NULLIF(y, 0) returns what when y = 0?", "options": ["0", "x", "NULL", "An error"], "answer": 2, "explain": "NULLIF turns the zero into NULL and division by NULL is NULL."},
-  {"q": "Why use one UPDATE with CASE instead of several UPDATE statements?", "options": ["CASE is required in UPDATE", "Each row is evaluated once against its original values, in a single scan", "Multiple UPDATEs are not allowed in a transaction", "It avoids locks entirely"], "answer": 1, "explain": "Sequential updates can change the same row twice as it crosses thresholds."},
-  {"q": "AVG(CASE WHEN latency_ms > 100 THEN 1.0 ELSE 0 END) gives...", "options": ["The average latency", "The fraction of rows with latency above 100", "The count of slow rows", "NULL"], "answer": 1, "explain": "The mean of a 0/1 indicator is the proportion of ones."},
-  {"q": "What is the main limitation of pivoting with CASE?", "options": ["It is slow", "The output columns must be listed when the query is written", "It only works for counts", "It needs a self join"], "answer": 1, "explain": "SQL result shapes are fixed at parse time; dynamic pivots need generated SQL."}
+  {"q": "Which expression counts delivered orders within each group?", "options": ["COUNT(CASE WHEN status = 'delivered' THEN 1 ELSE 0 END)", "SUM(CASE WHEN status = 'delivered' THEN 1 ELSE 0 END)", "COUNT(status = 'delivered')", "MAX(CASE WHEN status = 'delivered' THEN 1 END)"], "answer": 1, "explain": "The SUM of 1s and 0s counts the matches. COUNT with ELSE 0 counts every row, because 0 is not NULL."},
+  {"q": "To pivot a long metrics table into one column per metric value, wrap the CASE in...", "options": ["SUM with ELSE 0", "MAX (or MIN) with no ELSE", "COUNT", "DISTINCT"], "answer": 1, "explain": "MAX ignores the NULLs from non-matching rows and returns the wanted value."},
+  {"q": "What does 100 / 0 do in PostgreSQL versus SQLite?", "options": ["NULL in both", "Error in PostgreSQL, NULL in SQLite", "Error in both", "0 in both"], "answer": 1, "explain": "Databases differ, which is why you should guard the denominator yourself."},
+  {"q": "x / NULLIF(y, 0) returns what when y = 0?", "options": ["0", "x", "NULL", "An error"], "answer": 2, "explain": "NULLIF turns the zero into NULL, and division by NULL gives NULL."},
+  {"q": "Why use one UPDATE with CASE instead of several UPDATE statements?", "options": ["CASE is required in UPDATE", "Each row is tested once against its original values, in a single pass", "Several UPDATEs are not allowed in a transaction", "It avoids all locks"], "answer": 1, "explain": "Separate statements can change the same row twice as it crosses a threshold, and they read the table several times."},
+  {"q": "AVG(CASE WHEN latency_ms > 100 THEN 1.0 ELSE 0 END) gives...", "options": ["The average latency", "The fraction of rows with latency above 100", "The number of slow rows", "NULL"], "answer": 1, "explain": "The average of 1s and 0s is the share of 1s."},
+  {"q": "What is the main limitation of pivoting with CASE?", "options": ["It is slow", "The output columns must be listed when the query is written", "It only works for counts", "It needs a self join"], "answer": 1, "explain": "The shape of a result is fixed when the query is written; a pivot whose columns depend on the data needs generated SQL."},
+  {"q": "In a grouped query, a CASE wrapped AROUND aggregates (CASE WHEN SUM(x) / COUNT(*) > 0.2 THEN ...) is evaluated...", "options": ["Once per row, before grouping", "Once per group, after the aggregates are calculated", "Once for the whole query", "Never; it is an error"], "answer": 1, "explain": "It tests the finished totals of each group, unlike a CASE inside an aggregate, which is evaluated for every row."}
 ]
 ```
 
-> **Source:** Beaulieu, *Learning SQL*, ch. 11 "Conditional Logic" — case expression examples: result set transformations, selective aggregation, checking for existence, division-by-zero errors, conditional updates, handling null values.
+> **Source:** Beaulieu, *Learning SQL*, ch. 11 "Conditional Logic" (result set transformations, selective aggregation, checking for existence, division-by-zero errors, conditional updates, handling null values), restated in original wording with this guide's own datasets.

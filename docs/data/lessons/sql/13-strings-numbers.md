@@ -1,30 +1,47 @@
 # Strings and numbers
 
-Raw data is rarely in the shape you need. Names arrive in the wrong case, emails have stray spaces, amounts need rounding, identifiers need zero-padding. Every database ships a library of built-in functions for generating, converting and manipulating data — and, as the book warns, this is the area where vendors differ the most, because the SQL standard left much of it open. This lesson covers string and numeric functions using SQLite, with a translation table for MySQL and PostgreSQL. The next lesson handles dates and type conversion.
+> **Before this lesson:** you should be able to write `SELECT ... FROM ... WHERE` queries with column aliases ([SELECT and FROM](#/lesson/sql/select-from)) and know the basic data types: text, whole numbers and decimal numbers ([Data types and CREATE TABLE](#/lesson/sql/data-types-tables)). A few examples use `GROUP BY` and `CASE`, which later lessons teach; each is explained in a sentence where it appears.
 
-## Working with string data
+## In plain words
 
-### String generation
+Data rarely arrives in the form you need. A name is typed in capitals, an email has a stray space in front, a price has too many decimals, an id must be shown with leading zeros. A database can fix these on the way out, using **functions**.
 
-The simplest way to make a string is a literal in single quotes. Two details matter.
+A function is a named operation that takes one or more inputs and gives back one result. You write the name, then the inputs in parentheses: `upper('abc')` gives `'ABC'`. The inputs are called **arguments**. If you have used a spreadsheet, you already know the idea: `=UPPER(A1)` and `=ROUND(B2, 1)` are the same kind of thing, and SQL functions are applied to every row the way a spreadsheet formula is filled down a column.
 
-**Embedded quotes.** Double the quote character:
+Two kinds of data get most of this treatment. A **string** is a piece of text, a "string of characters". A **number** is a number. This lesson covers the functions for both; the next lesson covers dates and converting between types.
+
+One warning before starting. This is the part of SQL where database products disagree most. The standard left many functions undefined, so each vendor invented its own names. The live examples use SQLite (the database running in this page), and tables throughout give the MySQL and PostgreSQL names.
+
+**Why it matters for a job.** Cleaning text and getting arithmetic right is a large part of real data work. Interviewers like the numeric traps in particular: a percentage that comes out as 0 because of whole-number division is one of the most common mistakes in SQL tests.
+
+## Working with text
+
+### Writing a string
+
+A string is written between single quotes: `'hello'`. A value typed directly into a query like this is called a **literal**. What if the text itself contains a single quote, as in *didn't*? Write the quote twice:
 
 ```sql-run dataset=bank
 SELECT 'This string didn''t break' AS s, length('didn''t') AS len;
 ```
 
-MySQL also accepts a backslash escape (`'didn\'t'`); the doubled quote is the standard, portable form. When values come from a program, **never build SQL by string concatenation** — use bound parameters (`WHERE lname = ?`), which is both safe from SQL injection and immune to quoting problems.
+The first column shows the text with one apostrophe. The second uses the function `length`, which counts characters: `didn't` has six, so the doubled quote was stored as one character.
 
-**Special characters.** `char(n, ...)` builds a string from character codes and `unicode(s)` returns the code of the first character (MySQL: `CHAR()` / `ASCII()`; PostgreSQL: `chr()` / `ascii()`):
+> [!WARNING]
+> When values come from a program (a web form, say), never build the query by gluing the user's text into the SQL. A user who types a quote can change the meaning of your query, an attack called **SQL injection**. Programs should send the query with placeholders (`WHERE lname = ?`) and pass the values separately; these are called **bound parameters**.
+
+Characters you cannot type can be produced from their numeric codes. Every character has a number in the Unicode standard; `char(...)` turns numbers into characters and `unicode(...)` does the reverse.
 
 ```sql-run dataset=bank
 SELECT char(97, 98, 99) AS abc, char(233) AS e_acute, unicode('é') AS code, hex('abc') AS bytes;
 ```
 
-**What happens to over-long strings?** In MySQL (strict mode) and PostgreSQL, inserting 50 characters into a `VARCHAR(30)` column raises an error; in non-strict MySQL it truncates with a warning. SQLite stores the whole string regardless of the declared length.
+Codes 97, 98 and 99 are `a`, `b` and `c`; code 233 is `é`. (MySQL: `CHAR()` and `ASCII()`; PostgreSQL: `chr()` and `ascii()`.)
 
-### Concatenation
+**What if a string is too long for its column?** MySQL in strict mode and PostgreSQL reject 50 characters going into a `VARCHAR(30)` column. SQLite stores the whole string regardless of the declared length.
+
+### Joining strings together
+
+Gluing strings end to end is called **concatenation**. The standard operator is `||` (two vertical bars).
 
 ```sql-run dataset=bank
 SELECT fname || ' ' || lname || ' has been a ' || title || ' since ' || start_date AS emp_narrative
@@ -33,9 +50,11 @@ WHERE title LIKE '%Teller'
 LIMIT 5;
 ```
 
-`||` is the standard operator (SQLite, PostgreSQL, Oracle). MySQL uses `CONCAT(a, b, ...)` and SQL Server uses `+` or `CONCAT`. Remember that `||` with a NULL operand yields NULL; wrap nullable pieces in `COALESCE(x, '')`. SQLite 3.44+ and the other engines also have `concat()` / `concat_ws(sep, ...)`, which skip NULLs.
+Each row becomes a sentence such as "Helen Fleming has been a Head Teller since 2022-03-17". The pieces in quotes are literals (note the spaces inside them); the others are columns.
 
-### Functions that return numbers
+`||` works in SQLite, PostgreSQL and Oracle. MySQL uses the function `CONCAT(a, b, ...)`; SQL Server uses `+` or `CONCAT`. One trap: if any piece is NULL (empty), the whole result of `||` is NULL. Wrap a column that may be empty in `COALESCE(x, '')`, which replaces NULL with an empty string.
+
+### Functions that measure a string
 
 ```sql-run dataset=shop
 SELECT name,
@@ -46,28 +65,25 @@ FROM products
 LIMIT 6;
 ```
 
-- `length(s)` — number of characters (MySQL: `CHAR_LENGTH`; its `LENGTH` counts bytes).
-- `instr(s, sub)` — 1-based position of the first occurrence, or 0 if absent (MySQL: `LOCATE(sub, s)` / `POSITION(sub IN s)`; PostgreSQL: `strpos(s, sub)` / `position(sub in s)`).
+- `length(s)` returns the number of characters. "UltraBook 13" has 12. (MySQL: `CHAR_LENGTH`; its `LENGTH` counts bytes.)
+- `instr(s, sub)` returns the position at which `sub` first appears inside `s`. A piece of a string is called a **substring**. The first space in "UltraBook 13" is at position 10. When the substring is not there, the answer is 0: "UltraBook 13" has no "Pro", while in "UltraBook 15 Pro" it starts at position 14. (MySQL: `LOCATE(sub, s)`; PostgreSQL: `strpos(s, sub)`.)
 
-Positions in SQL are **1-based**, unlike Python's 0-based indexing.
+Positions in SQL start at **1**, not at 0 as in Python and many other programming languages.
 
-String comparison is done with the ordinary operators, plus `LIKE`/`GLOB` from the filtering module. For case-insensitive comparison in SQLite use `COLLATE NOCASE` or compare `lower()` values.
-
-### Functions that return strings
+### Functions that return a changed string
 
 | Task | SQLite | MySQL | PostgreSQL |
 |---|---|---|---|
-| Upper / lower case | `upper(s)`, `lower(s)` | same | same (+ `initcap`) |
-| Substring | `substr(s, start, len)` | `SUBSTRING(s, start, len)` | `substring(s from start for len)`, `substr` |
-| Trim | `trim(s)`, `ltrim`, `rtrim`, `trim(s, chars)` | `TRIM([chars FROM] s)` | `trim`, `btrim(s, chars)` |
-| Replace | `replace(s, from, to)` | same | same |
-| Position | `instr(s, sub)` | `LOCATE(sub, s)` | `strpos(s, sub)` |
-| Pad | `printf('%05d', n)` / `format()` | `LPAD(s, n, pad)` | `lpad(s, n, pad)` |
-| Split by delimiter | `substr` + `instr` | `SUBSTRING_INDEX(s, d, n)` | `split_part(s, d, n)` |
-| Concatenate a group | `group_concat(x, sep)` | `GROUP_CONCAT(x SEPARATOR sep)` | `string_agg(x, sep)` |
-| Reverse / repeat | — (not built in) | `REVERSE`, `REPEAT` | `reverse`, `repeat` |
+| Upper / lower case | `upper(s)`, `lower(s)` | same | same (plus `initcap`) |
+| Cut out a piece | `substr(s, start, len)` | `SUBSTRING(s, start, len)` | `substring(s from start for len)`, `substr` |
+| Remove outer spaces | `trim(s)`, `ltrim`, `rtrim` | `TRIM(s)` | `trim`, `btrim` |
+| Replace text | `replace(s, from, to)` | same | same |
+| Find a position | `instr(s, sub)` | `LOCATE(sub, s)` | `strpos(s, sub)` |
+| Pad to a width | `printf('%05d', n)` | `LPAD(s, n, pad)` | `lpad(s, n, pad)` |
+| Split at a separator | `substr` with `instr` | `SUBSTRING_INDEX(s, d, n)` | `split_part(s, d, n)` |
+| Join a group's values | `group_concat(x, sep)` | `GROUP_CONCAT(x SEPARATOR sep)` | `string_agg(x, sep)` |
 
-`substr` in action. A negative start counts from the end; omitting the length means "to the end":
+**`substr(s, start, len)`** returns `len` characters of `s` beginning at position `start`. Leave out the length to get everything up to the end. A negative start counts from the end.
 
 ```sql-run dataset=bank
 SELECT fed_id,
@@ -79,7 +95,9 @@ WHERE cust_type_cd = 'I'
 LIMIT 5;
 ```
 
-Cleaning text — the workhorse combination is `lower(trim(x))`:
+For the id `766-16-2186`: `substr(fed_id, 1, 3)` starts at character 1 and takes three, giving `766`. `substr(fed_id, -4)` starts four characters from the end, giving `2186`. The last column hides all but the final four digits, the way a receipt hides a card number.
+
+**Cleaning text.** The pair used most is `lower(trim(x))`: remove spaces at both ends, then convert to lower case, so that two spellings of one address compare as equal. Functions can be **nested**: the result of the inner one becomes the input of the outer one.
 
 ```sql-run dataset=shop
 SELECT email AS raw,
@@ -91,7 +109,9 @@ ORDER BY import_id
 LIMIT 8;
 ```
 
-`replace` substitutes every occurrence:
+The first raw email begins with a space; the `clean` column has removed it. The last two columns are a "find a position, then cut" pattern: `instr(..., '@')` finds where the `@` is; everything before it (from position 1, for `position − 1` characters) is the part in front of the `@`, and everything from `position + 1` onward is the domain.
+
+**`replace(s, from, to)`** swaps every occurrence of one piece of text for another:
 
 ```sql-run dataset=shop
 SELECT name, replace(lower(name), ' ', '-') AS url_slug
@@ -99,7 +119,9 @@ FROM products
 LIMIT 6;
 ```
 
-Formatting with `printf` (alias `format` since SQLite 3.38) covers padding and number formatting:
+"UltraBook 15 Pro" becomes `ultrabook-15-pro`, a form fit for a web address.
+
+**Formatting with `printf`.** `printf` builds a string from a pattern in which codes starting with `%` are replaced by values:
 
 ```sql-run dataset=bank
 SELECT account_id,
@@ -110,7 +132,9 @@ FROM account
 LIMIT 5;
 ```
 
-Aggregating strings — one row per group with values joined:
+`%08d` means "a whole number, at least 8 characters wide, padded with zeros", so 101 becomes `00000101`. `%,.2f` means "a decimal number with thousands separators and two decimals", so 3820.42 becomes `3,820.42`. `%-6s` means "text, left-aligned in six characters".
+
+**Joining the values of a group.** `group_concat` collects many rows into one string. It needs `GROUP BY`, which gathers rows sharing a value into a group ([Aggregate functions and GROUP BY](#/lesson/sql/group-by)):
 
 ```sql-run dataset=bank
 SELECT cust_id, group_concat(product_cd, ', ') AS products
@@ -119,14 +143,16 @@ GROUP BY cust_id
 LIMIT 8;
 ```
 
+One row per customer, listing all their products: customer 1 has `CHK, MM`.
+
 > [!NOTE]
-> The order of items inside `group_concat` is not guaranteed in SQLite unless you order them (3.44+: `group_concat(product_cd, ', ' ORDER BY product_cd)`). MySQL: `GROUP_CONCAT(product_cd ORDER BY product_cd SEPARATOR ', ')`; PostgreSQL: `string_agg(product_cd, ', ' ORDER BY product_cd)`.
+> The order of items inside `group_concat` is not guaranteed unless you ask for one. SQLite 3.44+: `group_concat(product_cd, ', ' ORDER BY product_cd)`. MySQL: `GROUP_CONCAT(product_cd ORDER BY product_cd SEPARATOR ', ')`. PostgreSQL: `string_agg(product_cd, ', ' ORDER BY product_cd)`.
 
-## Working with numeric data
+## Working with numbers
 
-### Arithmetic and integer division
+### Arithmetic and the whole-number division trap
 
-All the usual operators work: `+ - * /` and `%` (modulo). The one that bites is `/`:
+The usual operators work: `+`, `-`, `*`, `/`, and `%`, which gives the remainder after division (called **modulo**). The one that catches people is `/`.
 
 ```sql-run dataset=bank
 SELECT 7 / 2      AS int_div,
@@ -136,7 +162,9 @@ SELECT 7 / 2      AS int_div,
        -7 / 2     AS neg_int_div;
 ```
 
-In SQLite, PostgreSQL and SQL Server, **integer / integer is integer division** (truncating toward zero). In MySQL and Oracle `/` always yields a decimal, and MySQL has a separate `DIV` operator for integer division. For portable percentages multiply by `100.0` or cast:
+`7 / 2` gives **3**, not 3.5. A whole number is called an **integer**, and when both sides of `/` are integers, SQLite, PostgreSQL and SQL Server perform **integer division**: they drop the fractional part. Write one side as a decimal (`2.0`) or convert it with `CAST(7 AS REAL)` and you get 3.5. (`CAST` converts a value to another type; `REAL` is a number with a fractional part.) MySQL and Oracle always give a decimal from `/`.
+
+This matters most in percentages:
 
 ```sql-run dataset=mlops
 SELECT COUNT(*) AS runs,
@@ -146,9 +174,9 @@ SELECT COUNT(*) AS runs,
 FROM runs;
 ```
 
-(`SUM(status = 'FAILED')` works because SQLite and MySQL evaluate a comparison to 1 or 0. PostgreSQL has a real boolean type, so there you write `COUNT(*) FILTER (WHERE status = 'FAILED')` or `SUM(CASE WHEN ... THEN 1 ELSE 0 END)`.)
+11 of 86 training runs failed. The true share is 12.8%; the version without a decimal point reports 12. Had the query divided first (`11 / 86`), the result would have been 0. The habit to form: **start a percentage with `100.0 *`.**
 
-Division by zero returns NULL in SQLite and MySQL but raises an error in PostgreSQL and SQL Server; guard with `NULLIF(divisor, 0)`.
+Two side notes. `SUM(status = 'FAILED')` counts the failed rows because SQLite and MySQL turn a true comparison into 1 and a false one into 0; PostgreSQL requires `COUNT(*) FILTER (WHERE status = 'FAILED')`. And dividing by zero gives NULL in SQLite and MySQL but an error in PostgreSQL and SQL Server; write `x / NULLIF(divisor, 0)` to be safe everywhere, since `NULLIF(a, b)` returns NULL when `a` equals `b`.
 
 ### Mathematical functions
 
@@ -163,27 +191,33 @@ SELECT abs(-25.76)                         AS abs_val,
        round(22 / 7.0, 4)                  AS approx_pi;
 ```
 
-Everything in that query is **core** SQLite: `abs`, `round`, the `%` modulo operator, the bit-shift operator `<<`, and the multi-argument forms of `max` / `min` (which pick the largest or smallest of their arguments on one row — MySQL and PostgreSQL call these `GREATEST` / `LEAST`). The expression `(x > 0) - (x < 0)` yields −1, 0 or 1: the sign of `x`.
-
-The book lists a much larger family for MySQL: `ACOS/ASIN/ATAN/COS/SIN/TAN`, `EXP`, `LN`, `SQRT`, `MOD`, `POW`, `CEIL`, `FLOOR`, `SIGN`, `TRUNCATE`.
+- `abs(x)` removes the sign: 25.76.
+- `(x > 0) - (x < 0)` gives −1, 0 or 1, the **sign** of `x`. Each comparison is 1 when true and 0 when false, so for a negative number this is 0 − 1.
+- `22 % 5` is 2, the remainder when 22 is divided by 5.
+- `1 << 10` shifts the number 1 ten places to the left in binary, which multiplies it by 2 ten times: 1024.
+- `max` and `min` with several arguments pick the largest or smallest value on one row (MySQL and PostgreSQL call these `GREATEST` and `LEAST`).
+- `round(x, 4)` rounds to four decimals.
 
 > [!NOTE]
-> **Math functions and this sandbox.** `ceil`, `floor`, `trunc`, `power`, `sqrt`, `exp`, `ln`, `log10`, `mod`, `pi` and the trigonometric functions exist in MySQL and PostgreSQL, and in SQLite builds compiled with math functions enabled (`SQLITE_ENABLE_MATH_FUNCTIONS` — the `sqlite3` shell and recent Python builds). The in-browser SQLite used by this guide is built **without** them, so calling them here gives *no such function*. The examples in this track therefore use core operators only, and name the function you would use elsewhere.
+> **Math functions and this page.** MySQL and PostgreSQL offer `CEIL`, `FLOOR`, `POWER`, `SQRT`, `EXP`, `LN`, `MOD`, `SIGN` and the trigonometric functions. Full SQLite installations have them too, but the SQLite that runs in this page was built without them, so calling them here gives *no such function*. The examples use basic operators and name the function you would use elsewhere.
 
-| You want | MySQL / PostgreSQL | Core SQLite equivalent |
+| You want | MySQL / PostgreSQL | Basic SQLite equivalent |
 |---|---|---|
-| Modulo | `MOD(a, b)` | `a % b` |
-| Truncate toward zero | `TRUNCATE(x, 0)` / `trunc(x)` | `CAST(x AS INTEGER)` |
-| Floor | `FLOOR(x)` | `CAST(x AS INTEGER) - (x < CAST(x AS INTEGER))` |
-| Ceiling | `CEIL(x)` | `CAST(x AS INTEGER) + (x > CAST(x AS INTEGER))` |
+| Remainder | `MOD(a, b)` | `a % b` |
+| Cut off decimals | `TRUNCATE(x, 0)` / `trunc(x)` | `CAST(x AS INTEGER)` |
+| Round down | `FLOOR(x)` | `CAST(x AS INTEGER) - (x < CAST(x AS INTEGER))` |
+| Round up | `CEIL(x)` | `CAST(x AS INTEGER) + (x > CAST(x AS INTEGER))` |
 | Sign | `SIGN(x)` | `(x > 0) - (x < 0)` |
-| Square, cube | `POWER(x, 2)` | `x * x`, `x * x * x` |
+| Square | `POWER(x, 2)` | `x * x` |
 | Power of two | `POWER(2, n)` | `1 << n` |
-| Square root, logarithms | `SQRT(x)`, `LN(x)` | not available — compute in the application, or use a full build |
+| Square root, logarithm | `SQRT(x)`, `LN(x)` | not available here; calculate in the application |
 
-### Controlling number precision
+### Controlling precision: four ways to drop decimals
 
-Four operations limit precision: **ceiling** (always up), **floor** (always down), **round** (to nearest) and **truncate** (toward zero). MySQL and PostgreSQL have a function for each (`CEIL`, `FLOOR`, `ROUND`, `TRUNCATE`/`trunc`). Here `round` is built in and the other three are written with `CAST` and a comparison, as in the table above:
+- **Ceiling**: up to the next whole number.
+- **Floor**: down to the previous whole number.
+- **Round**: to the nearest.
+- **Truncate**: cut the decimals off.
 
 ```sql-run dataset=bank
 SELECT CAST(72.445 AS INTEGER) + (72.445 > CAST(72.445 AS INTEGER)) AS ceil_v,
@@ -196,13 +230,13 @@ SELECT CAST(72.445 AS INTEGER) + (72.445 > CAST(72.445 AS INTEGER)) AS ceil_v,
        CAST(-72.5 AS INTEGER)    AS trunc_neg;
 ```
 
-The last two columns show the difference that matters for negative numbers: floor goes toward negative infinity (−73), truncation toward zero (−72). `CAST(x AS INTEGER)` truncates; the `(x < CAST(...))` term is 1 exactly when truncation moved the value upward, so subtracting it produces the floor.
+For 72.445 the ceiling is 73 and the floor 72. `CAST(72.999 AS INTEGER)` is 72: converting to an integer truncates, however close the value is to 73. The last two columns show where floor and truncate differ. For −72.5, floor goes *down* to −73, while truncation cuts toward zero and gives −72.
 
-`round(72.445, 2)` may surprise you by returning 72.44 or 72.45 depending on the engine: 72.445 cannot be represented exactly in binary floating point. `DECIMAL` columns in MySQL/PostgreSQL round exactly (half away from zero). MySQL's `TRUNCATE(x, d)` and PostgreSQL's `trunc(x, d)` take a digits argument; MySQL and PostgreSQL's `ROUND` also accept a **negative** precision to round to tens or hundreds (`ROUND(17456, -3)` = 17000) — in SQLite compute `round(x / 1000.0) * 1000`.
+`round(72.445, 2)` returns 72.44 here, not the 72.45 you might expect. Computers store most decimal numbers in a binary format called **floating point**, which cannot hold 72.445 exactly; the stored value is a hair below it. Columns declared `DECIMAL` in MySQL and PostgreSQL store exact decimals and round as people expect, which is why money belongs in `DECIMAL`.
 
-### Handling signed data
+### Signed values
 
-The bank's `txn.amount` is always positive and `txn_type_cd` says whether it is a credit or a debit. A sign expression and `abs()` help when data is stored signed instead (elsewhere: `SIGN(x)`):
+When a positive and a negative direction are stored in one column, `abs` and the sign expression pull them apart. Here they compare two balances:
 
 ```sql-run dataset=bank
 SELECT account_id, avail_balance, pending_balance,
@@ -214,9 +248,11 @@ WHERE pending_balance <> avail_balance
 LIMIT 6;
 ```
 
-### Bucketing numbers
+`direction` is 1 when the pending balance is higher and −1 when it is lower; `magnitude` is the size of the gap. The first row shows `105.57999999999993` where you expect 105.58: floating point again. Round for display.
 
-A staple of analytics and feature engineering is turning a continuous value into a bucket. Integer division does it in one expression:
+### Sorting numbers into buckets
+
+Reports often group a continuous measurement into ranges, called **buckets** or bins. Integer division does it in one expression:
 
 ```sql-run dataset=mlops
 SELECT (latency_ms / 50) * 50 AS bucket_start,
@@ -227,11 +263,11 @@ GROUP BY bucket_start
 ORDER BY bucket_start;
 ```
 
-`latency_ms / 50` is integer division, so 0–49 → 0, 50–99 → 50, and so on. The last column abuses `printf` to draw a text histogram.
+`latency_ms` is how long a prediction took, in milliseconds. Dividing by 50 with integer division and multiplying back by 50 turns 0–49 into 0, 50–99 into 50, and so on. The last column uses `printf` to repeat `#` once per four predictions, drawing a bar chart in text.
 
 ### Random numbers
 
-`random()` returns a random 64-bit integer in SQLite (MySQL `RAND()` and PostgreSQL `random()` return a float in [0, 1)). Typical uses are sampling and shuffling:
+`random()` returns a random whole number in SQLite (MySQL's `RAND()` and PostgreSQL's `random()` return a decimal between 0 and 1). Sorting by it shuffles the rows:
 
 ```sql-run dataset=shop
 SELECT customer_id, first_name, country
@@ -240,22 +276,13 @@ ORDER BY random()
 LIMIT 5;
 ```
 
-Run it twice — different rows each time. (This sorts the whole table, fine for small data; big systems use `TABLESAMPLE` or hash-based sampling such as `WHERE abs(customer_id * 2654435761) % 100 < 10`, which is also *repeatable* — important for reproducible ML train/test splits.)
-
-## Pitfalls
-
-- **Integer division** — `1 / 2 = 0` in SQLite/PostgreSQL/SQL Server.
-- **1-based string positions** and `instr` returning 0 (not −1, not NULL) when nothing is found.
-- **`||` and NULL** — the whole string becomes NULL.
-- **Functions on columns in WHERE** (`WHERE lower(email) = ...`) defeat ordinary indexes; use an expression index or store the normalised value.
-- **Dialect drift** — check the function table before porting a query.
-- **Concatenating user input into SQL** — use bound parameters.
+Run it twice and different customers appear. This sorts the whole table, which is fine for small data. Large systems sample with an expression on the id, such as `WHERE customer_id % 100 < 10`, which is also *repeatable*: the same rows are chosen every time, which matters when a machine-learning experiment must be reproduced.
 
 ## Worked example: cleaning a messy text column
 
-String functions are most often used in combination, to repair data. The `customer_imports` table has names and emails typed by hand. Suppose the CRM wants, for every import: a clean email, the email's user name and domain, the person's first and last name in separate columns, initials, and a display name in "LAST, First" form.
+The `customer_imports` table holds names and emails typed by hand. Suppose another system wants, for every row: a clean email, its user name and domain, first and last name in separate columns, initials, and a display name in the form "LAST, First".
 
-Build it incrementally. First isolate the cleaning step in a CTE, so later expressions can use tidy inputs instead of repeating `lower(trim(...))`:
+The cleaning step is done once, in a `WITH` clause, which gives a query result a name (here `clean`) so the main query can use it like a table ([Common table expressions](#/lesson/sql/ctes)). That avoids repeating `lower(trim(...))` in every expression.
 
 ```sql-run dataset=shop
 WITH clean AS (
@@ -277,15 +304,11 @@ ORDER BY import_id
 LIMIT 8;
 ```
 
-Read each expression as "find a position, then cut":
+Read each expression as "find a position, then cut". The email splits at the `@`; the name splits at the first space; the initials are the character at position 1 and the character right after the space. The first row gives `hana.muller`, `example.com`, `Hana`, `Muller`, `HM` and `MULLER, Hana`.
 
-- `instr(email, '@')` locates the separator; everything before it (`substr(…, 1, pos - 1)`) is the user name and everything after (`substr(…, pos + 1)`) the domain.
-- Names split the same way on the first space.
-- Initials take one character at position 1 and one at the position just after the space.
+This works for "First Last". Real names are harder (several given names, a single name, a suffix) and no arrangement of `substr` handles them all. The sound engineering answer is to **store first and last names in separate columns from the start** and treat splitting as a best effort.
 
-This works for "First Last". Real names are harder — "Mary Ann Van Der Berg", single names, trailing suffixes — and no amount of `substr` solves that reliably. The honest engineering answer is to **store names in separate columns at the source** and treat splitting as best-effort.
-
-A defensive version guards against a missing separator, where `instr` returns 0 and `substr(s, 1, -1)` would silently return an empty string:
+A careful version handles a name with no space. There `instr` returns 0, and `substr(s, 1, -1)` would quietly return an empty string. `CASE WHEN ... THEN ... ELSE ... END` is SQL's "if ... then ... else" ([The CASE expression](#/lesson/sql/case-expressions)):
 
 ```sql-run dataset=shop
 SELECT full_name,
@@ -298,19 +321,21 @@ SELECT full_name,
 FROM (SELECT 'Hana Muller' AS full_name UNION ALL SELECT 'Cher' UNION ALL SELECT 'Liam Rossi');
 ```
 
-### The same task in other dialects
+"Cher" keeps the whole name as first name and gets an empty last name instead of a wrong one.
+
+### The same tasks in other databases
 
 | Task | SQLite | MySQL | PostgreSQL |
 |---|---|---|---|
 | Domain of an email | `substr(e, instr(e,'@')+1)` | `SUBSTRING_INDEX(e, '@', -1)` | `split_part(e, '@', 2)` |
 | First word | `substr(s, 1, instr(s,' ')-1)` | `SUBSTRING_INDEX(s, ' ', 1)` | `split_part(s, ' ', 1)` |
 | Pad to 8 digits | `printf('%08d', n)` | `LPAD(n, 8, '0')` | `lpad(n::text, 8, '0')` |
-| Capitalise words | — (do it in the application) | — | `initcap(s)` |
-| Regex replace | — (needs an extension) | `REGEXP_REPLACE(s, pat, rep)` | `regexp_replace(s, pat, rep)` |
+| Capitalise words | not built in | not built in | `initcap(s)` |
+| Replace by pattern | needs an extension | `REGEXP_REPLACE(s, pat, rep)` | `regexp_replace(s, pat, rep)` |
 
-## Worked example: numeric functions in a pricing report
+## Worked example: numbers in a pricing report
 
-Numbers deserve the same care. A pricing analyst asks for, per product: margin, margin percentage rounded to one decimal, the price rounded to the nearest \$5 for a promotional sticker, a price band, and how the price compares with its category average.
+A pricing analyst asks, for each product: the margin (price minus cost), the margin as a percentage, the price rounded to the nearest 5 for a shelf sticker, a price band, and the price compared with the average of its category.
 
 ```sql-run dataset=shop
 SELECT p.name,
@@ -328,16 +353,17 @@ ORDER BY margin_pct DESC
 LIMIT 8;
 ```
 
-Points worth noticing:
+The Smart Watch costs 199.00 with a margin of 108.80, which is 54.7% of the price. Points to notice:
 
-- **`100.0 *` first.** Writing the real constant at the front makes the whole expression real-valued. With integer columns, `(price - cost) / price * 100` would truncate to 0 before multiplying.
-- **Rounding to a multiple:** divide, round, multiply back — `ROUND(x / 5.0) * 5`. The same idiom gives nearest 0.25, nearest 1,000 and so on.
-- **Bucketing:** `CAST(x / 100 AS INTEGER) * 100` floors to the hundred below; for negative numbers use a true floor (the `CAST … - (x < CAST …)` expression, or `FLOOR()` elsewhere), since CAST truncates toward zero.
-- **Powers** are written as repeated multiplication (`x * x`) in this sandbox; elsewhere use `POWER(x, 2)`. **Log transforms** (`LN(price)`), a standard feature-engineering step for skewed quantities, need MySQL/PostgreSQL or a SQLite build with math functions.
+- **`100.0 *` comes first**, so the whole calculation is done in decimals.
+- **Rounding to a multiple**: divide, round, multiply back. `ROUND(199.0 / 5.0) * 5` is 200. The same pattern rounds to the nearest 0.25 or the nearest 1,000.
+- **Banding**: `CAST(x / 100 AS INTEGER) * 100` gives the hundred below, so 199 falls in band 100.
+- **The category average** comes from a subquery joined in as a table, the derived-table technique from [Three or more tables, self joins and non-equi joins](#/lesson/sql/multi-self-joins).
+- **Powers** are written as repeated multiplication here; elsewhere use `POWER(x, 2)`.
 
-### Floating point: round at the end, compare with a tolerance
+### Floating point: round last, compare with a tolerance
 
-Round only for *presentation*, as the last step. Rounding intermediate values accumulates error:
+Round for *display*, as the final step. Rounding in the middle of a calculation piles up small errors:
 
 ```sql-run dataset=shop
 SELECT ROUND(SUM(quantity * unit_price * (1 - discount)), 2)          AS sum_then_round,
@@ -346,32 +372,67 @@ SELECT ROUND(SUM(quantity * unit_price * (1 - discount)), 2)          AS sum_the
 FROM order_items;
 ```
 
-And never test floating-point values for exact equality; compare within a tolerance:
+Summing first gives 184225.88. Rounding each line to cents first gives 184225.85, three cents off. Rounding each line to whole units is 88 cents off.
+
+And never test floating-point values for exact equality:
 
 ```sql-run dataset=shop
 SELECT 0.1 + 0.2 = 0.3                    AS exact_equal,
        ABS((0.1 + 0.2) - 0.3) < 1e-9      AS equal_within_tolerance;
 ```
 
+`0.1 + 0.2 = 0.3` is 0, meaning false: in floating point the sum is 0.30000000000000004. The second test asks whether the two values differ by less than a billionth (`1e-9`), and that is true. An allowed difference like this is called a **tolerance**.
+
 > [!INTERVIEW]
-> Three numeric traps appear in almost every SQL screen: **integer division** (`COUNT(x) / COUNT(*)` giving 0), **division by zero** (guard with `NULLIF`), and **percentages that do not sum to 100** because each was rounded separately. Mention them unprompted when you compute a rate.
+> Three numeric traps appear in almost every SQL test: **integer division** (`COUNT(x) / COUNT(*)` giving 0), **division by zero** (guard with `NULLIF`), and **percentages that do not add up to 100** because each was rounded separately. Mention them without being asked whenever you calculate a rate.
+
+## Pitfalls
+
+- **Integer division.** `1 / 2` is 0 in SQLite, PostgreSQL and SQL Server.
+- **Positions start at 1**, and `instr` returns 0 (not −1, not NULL) when nothing is found.
+- **`||` with NULL** makes the whole string NULL.
+- **A function around a column in `WHERE`** (`WHERE lower(email) = ...`) stops the database from using an ordinary index on that column, so the search reads every row. Store the cleaned value, or index the expression ([Indexes and query plans](#/lesson/sql/indexes)).
+- **Different names on different databases.** Check a translation table before moving a query.
+- **Gluing user input into SQL.** Use bound parameters.
 
 ## Summary
 
-- Strings: quote with `'`, double embedded quotes; concatenate with `||` (MySQL `CONCAT`); `length`, `instr`, `substr`, `trim`, `upper/lower`, `replace`, `printf`, `group_concat`.
-- Numbers: watch integer division; `round/ceil/floor/trunc`, `abs/sign`, `mod`, `power`, logs; bucket with integer division.
-- Function names differ by engine more than any other part of SQL — keep a translation table handy.
+- Strings: quote with `'` and double any quote inside; join with `||` (MySQL: `CONCAT`); measure with `length` and `instr`; change with `substr`, `trim`, `upper`, `lower`, `replace`, `printf`; collect a group with `group_concat`.
+- Numbers: watch integer division; know ceiling, floor, round and truncate; use `abs` and the sign expression; make buckets with integer division.
+- Floating point is approximate: round at the end and compare with a tolerance.
+- Function names vary between databases more than any other part of SQL.
+
+## Glossary
+
+- **Function** — a named operation that takes inputs and returns one value, written `name(inputs)`.
+- **Argument** — an input given to a function.
+- **String** — a piece of text.
+- **Literal** — a value typed directly into a query, such as `'abc'` or `42`.
+- **Concatenation** — joining strings end to end.
+- **Substring** — a piece cut from inside a string.
+- **Nested functions** — functions placed inside one another, the inner result feeding the outer.
+- **SQL injection** — an attack in which user-typed text changes the meaning of a query.
+- **Bound parameter** — a placeholder in a query whose value is supplied separately and safely.
+- **Integer** — a whole number.
+- **Integer division** — division of two integers that drops the fractional part.
+- **Modulo** — the remainder left after division.
+- **Ceiling / floor** — rounding up / down to a whole number.
+- **Truncate** — cutting off the decimals, which moves a number toward zero.
+- **Floating point** — the approximate binary format in which computers store most decimal numbers.
+- **Bucket (bin)** — a range into which values are grouped.
+- **Tolerance** — the small difference allowed when comparing approximate numbers.
 
 ```quiz
 [
-  {"q": "What is 7 / 2 in SQLite or PostgreSQL?", "options": ["3.5", "3", "4", "An error"], "answer": 1, "explain": "Both operands are integers, so the division truncates. Use 7 / 2.0 or a CAST."},
-  {"q": "What does 'abc' || NULL return in SQLite and PostgreSQL?", "options": ["'abc'", "'abcNULL'", "NULL", "''"], "answer": 2, "explain": "Concatenation with NULL yields NULL; use COALESCE or concat_ws."},
-  {"q": "What does instr('hello', 'z') return?", "options": ["-1", "0", "NULL", "5"], "answer": 1, "explain": "instr returns 0 when the substring is not found; positions are 1-based."},
-  {"q": "How do you write a string literal containing an apostrophe portably?", "options": ["'didn\\'t'", "\"didn't\"", "'didn''t'", "`didn't`"], "answer": 2, "explain": "Doubling the single quote is standard SQL."},
-  {"q": "Which expression extracts the last four characters of fed_id in SQLite?", "options": ["substr(fed_id, 4)", "substr(fed_id, -4)", "right4(fed_id)", "fed_id[-4:]"], "answer": 1, "explain": "A negative start position counts from the end."},
-  {"q": "The floor of -72.5 and the truncation of -72.5 (CAST AS INTEGER) are...", "options": ["-73 and -72", "-72 and -73", "-72 and -72", "-73 and -73"], "answer": 0, "explain": "floor goes toward negative infinity; trunc goes toward zero."},
-  {"q": "Which is the PostgreSQL equivalent of SQLite's group_concat(x, ', ')?", "options": ["GROUP_CONCAT(x SEPARATOR ', ')", "string_agg(x, ', ')", "concat_all(x)", "array_join(x)"], "answer": 1, "explain": "string_agg is PostgreSQL's (and standard-ish LISTAGG's cousin) string aggregate."}
+  {"q": "What is 7 / 2 in SQLite or PostgreSQL?", "options": ["3.5", "3", "4", "An error"], "answer": 1, "explain": "Both sides are integers, so the fractional part is dropped. Write 7 / 2.0 or use CAST to get 3.5."},
+  {"q": "What does 'abc' || NULL return in SQLite and PostgreSQL?", "options": ["'abc'", "'abcNULL'", "NULL", "''"], "answer": 2, "explain": "Concatenation with NULL gives NULL; wrap the nullable part in COALESCE(x, '')."},
+  {"q": "What does instr('hello', 'z') return?", "options": ["-1", "0", "NULL", "5"], "answer": 1, "explain": "instr returns 0 when the substring is not found; real positions start at 1."},
+  {"q": "How do you write a string literal containing an apostrophe so that it works on every database?", "options": ["'didn\\'t'", "\"didn't\"", "'didn''t'", "`didn't`"], "answer": 2, "explain": "Doubling the single quote is the standard form."},
+  {"q": "Which expression extracts the last four characters of fed_id in SQLite?", "options": ["substr(fed_id, 4)", "substr(fed_id, -4)", "right4(fed_id)", "fed_id[-4:]"], "answer": 1, "explain": "A negative start position counts from the end of the string."},
+  {"q": "The floor of -72.5 and the truncation of -72.5 (CAST AS INTEGER) are...", "options": ["-73 and -72", "-72 and -73", "-72 and -72", "-73 and -73"], "answer": 0, "explain": "Floor goes down, toward negative infinity; truncation cuts toward zero."},
+  {"q": "Which is the PostgreSQL equivalent of SQLite's group_concat(x, ', ')?", "options": ["GROUP_CONCAT(x SEPARATOR ', ')", "string_agg(x, ', ')", "concat_all(x)", "array_join(x)"], "answer": 1, "explain": "string_agg is PostgreSQL's function for joining a group's values; GROUP_CONCAT with SEPARATOR is MySQL's."},
+  {"q": "Why does SELECT 0.1 + 0.2 = 0.3 return 0 (false)?", "options": ["SQLite cannot add decimals", "Floating-point numbers are stored approximately, so the sum is not exactly 0.3", "The = operator only works on integers", "0.3 is treated as text"], "answer": 1, "explain": "The sum is 0.30000000000000004 in binary floating point; compare within a tolerance instead."}
 ]
 ```
 
-> **Source:** Beaulieu, *Learning SQL*, ch. 7 "Data Generation, Conversion, and Manipulation" (working with string data; working with numeric data). SQLite documentation, "Built-in Scalar SQL Functions" and "Built-In Mathematical SQL Functions".
+> **Source:** Beaulieu, *Learning SQL*, ch. 7 "Data Generation, Conversion, and Manipulation" (working with string data; working with numeric data), restated in original wording. SQLite documentation, "Built-in Scalar SQL Functions" and "Built-In Mathematical SQL Functions".

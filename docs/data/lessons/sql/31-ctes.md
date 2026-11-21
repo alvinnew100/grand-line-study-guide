@@ -1,20 +1,32 @@
 # Common table expressions
 
-As queries grow, subqueries nest inside subqueries until the logic reads inside-out and nobody — including the author a month later — can follow it. A **common table expression (CTE)** fixes that. It is a named, temporary result set defined at the top of a statement with the `WITH` keyword and then used like a table in the query that follows. CTEs don't add new computational power for ordinary queries (anything they do, a derived table can do), but they change how you *write* SQL: as a sequence of small, named steps, each building on the previous ones. This lesson covers CTE syntax, chaining, reuse, how they differ from subqueries, views and temp tables, and how optimizers treat them. The next lesson covers the one thing only CTEs can do: recursion.
+> **Before this lesson:** you should be able to use a subquery in `FROM` as a derived table ([Correlated subqueries, EXISTS and subqueries as data sources](#/lesson/sql/correlated-exists)), group and aggregate ([Aggregate functions and GROUP BY](#/lesson/sql/group-by)), write a `CASE` expression ([The CASE expression](#/lesson/sql/case-expressions)) and read a window function with `OVER` ([Window basics and ranking](#/lesson/sql/ranking)). Earlier lessons already used `WITH` in passing; this one explains it properly.
+
+## In plain words
+
+As a query grows, subqueries end up nested inside subqueries. To understand such a query you must find the innermost parentheses and read outward, holding every level in your head. A month later even the author struggles.
+
+A **common table expression**, almost always shortened to **CTE**, fixes that. It is a query whose result you give a name at the top of a statement, using the keyword `WITH`. The rest of the statement then uses that name as if it were a table. The result is temporary: it exists only while that one statement runs.
+
+An everyday picture: a recipe. A badly written recipe is one enormous sentence: "fold the mixture made from whipping the eggs you separated into the chocolate you melted with the butter...". A well-written one has numbered steps, and later steps refer to the results of earlier ones by name: "1. Make the meringue. 2. Make the chocolate base. 3. Fold the meringue into the base." The ingredients and the dish are the same. Only the way it is written down has changed, and that makes all the difference to the cook.
+
+For ordinary queries a CTE adds no new power: anything it does, a derived table can do. What it changes is how you *write* SQL: as a sequence of small named steps, each building on the ones before. (There is one thing only a CTE can do, which is to refer to itself. That is the subject of the next lesson.)
+
+**Why it matters for a job.** In most analytics teams, CTEs are the standard way to write any query longer than a few lines. In a live interview, writing your answer as named steps lets the interviewer follow your thinking and correct you early. The follow-up question "is a CTE faster than a subquery?" is also common, and is answered below.
 
 > [!NOTE]
-> CTEs are standard SQL:1999. Supported by PostgreSQL, SQL Server, Oracle, SQLite (3.8.3+) and MySQL **8.0+**. The second edition of the book (MySQL 5) uses derived tables throughout for this reason; its third edition introduces CTEs alongside subqueries in chapter 9.
+> CTEs are standard SQL and are supported by PostgreSQL, SQL Server, Oracle, SQLite and MySQL **8.0 and later** (not MySQL 5.7).
 
 ## Syntax
 
 ```
-WITH cte_name [(column, ...)] AS (
+WITH name [(column, ...)] AS (
     SELECT ...
 )
-SELECT ... FROM cte_name ...;
+SELECT ... FROM name ...;
 ```
 
-Compare the two styles on a question from the subqueries module — classify customers by total deposit balance, then count customers per class. With nested derived tables:
+Compare the two styles on one question: *put each customer in a tier according to their total deposits, then count the customers in each tier.* First with nested derived tables:
 
 ```sql-run dataset=bank
 SELECT tier, COUNT(*) AS customers
@@ -27,7 +39,7 @@ FROM (SELECT cust_id,
 GROUP BY tier;
 ```
 
-You have to read from the innermost parentheses outward. The same logic with CTEs:
+It works: 8 large, 16 medium and 16 small customers. But to read it you must start at the innermost `SELECT` (the balances), move out to the middle one (the tiers) and finish at the top (the count). Now the same logic with CTEs:
 
 ```sql-run dataset=bank
 WITH balances AS (
@@ -46,22 +58,28 @@ FROM tiers
 GROUP BY tier;
 ```
 
-Identical result, but now it reads top to bottom: *compute balances; assign tiers; count*. Each step has a name that documents its purpose.
+The same three rows, and now it reads from top to bottom:
 
-Rules of the WITH clause:
+- `WITH balances AS (...)` — step one: total the deposit balances per customer and call the result `balances`.
+- `tiers AS (...)` — step two: read from `balances` and label each customer; call that `tiers`.
+- The final `SELECT` — step three: count the rows of `tiers` per label.
 
-- Several CTEs are separated by **commas**; `WITH` appears once.
-- A CTE can reference CTEs defined **before** it (and itself, if recursive), not ones defined later.
-- A CTE's scope is the **single statement** it is attached to. It is not stored anywhere.
-- Column names come from the CTE's SELECT list, or from an optional list after the name: `WITH t(a, b) AS (...)`.
-- `WITH` can precede `SELECT`, and in most engines also `INSERT`, `UPDATE` and `DELETE`.
+Each step has a name that says what it holds.
+
+The rules of the `WITH` clause:
+
+- Several CTEs are separated by **commas**. The word `WITH` appears once.
+- A CTE can refer to CTEs defined **before** it, not to ones defined later.
+- A CTE is visible only in the **one statement** it belongs to. Nothing is stored.
+- Its column names come from its `SELECT` list, or from an optional list after the name: `WITH t(a, b) AS (...)`.
+- `WITH` can come before `SELECT` and, on most databases, before `INSERT`, `UPDATE` and `DELETE` too.
 
 ## CTEs as a pipeline
 
-Think of each CTE as a stage in a data pipeline — exactly how you would write a pandas or dbt transformation. A realistic analytics question: *for each month, what share of delivered revenue came from repeat customers (customers who had ordered in an earlier month)?*
+Think of each CTE as a stage through which the data flows, a **pipeline**. A realistic question: *for each month, what share of delivered revenue came from repeat customers, meaning customers whose first order was in an earlier month?*
 
 ```sql-run dataset=shop
-WITH order_revenue AS (               -- 1. one row per delivered order with its value
+WITH order_revenue AS (               -- 1. one row per delivered order, with its value
   SELECT o.order_id, o.customer_id, o.order_date,
          SUM(oi.quantity * oi.unit_price * (1 - oi.discount)) AS revenue
   FROM orders o
@@ -69,18 +87,18 @@ WITH order_revenue AS (               -- 1. one row per delivered order with its
   WHERE o.status = 'delivered'
   GROUP BY o.order_id, o.customer_id, o.order_date
 ),
-first_order AS (                      -- 2. each customer's first order month
+first_order AS (                      -- 2. one row per customer: the month of their first order
   SELECT customer_id, MIN(strftime('%Y-%m', order_date)) AS first_month
   FROM orders
   GROUP BY customer_id
 ),
-labelled AS (                         -- 3. tag each order as new or repeat
+labelled AS (                         -- 3. one row per delivered order, tagged new or repeat
   SELECT strftime('%Y-%m', r.order_date) AS month, r.revenue,
          CASE WHEN strftime('%Y-%m', r.order_date) = f.first_month THEN 'new' ELSE 'repeat' END AS kind
   FROM order_revenue r
   JOIN first_order f ON f.customer_id = r.customer_id
 )
-SELECT month,                         -- 4. aggregate
+SELECT month,                         -- 4. one row per month
        ROUND(SUM(revenue), 2) AS revenue,
        ROUND(100.0 * SUM(CASE WHEN kind = 'repeat' THEN revenue ELSE 0 END) / SUM(revenue), 1) AS repeat_pct
 FROM labelled
@@ -88,16 +106,16 @@ GROUP BY month
 ORDER BY month;
 ```
 
-Four small steps, each of which you can test on its own.
+Four small steps. The comment beside each one states its **grain**, what one row of that step stands for; that single habit prevents most mistakes in long queries. In January 2024, the shop's first month, the repeat share is 0.0: nobody can be a repeat customer yet. By March it is 18.6%.
 
 > [!TIP]
-> **Debugging a CTE chain:** temporarily replace the final SELECT with `SELECT * FROM some_cte LIMIT 20` to inspect any intermediate step. Check row counts between steps — a jump usually means a join fan-out; a drop means an inner join or filter removed rows you expected to keep.
+> **Debugging a chain of CTEs.** Temporarily replace the final `SELECT` with `SELECT * FROM some_cte LIMIT 20` to look at any intermediate step. Compare the row counts between steps. A jump usually means a join multiplied rows; a drop means an inner join or a filter removed rows you expected to keep.
 
-## Reusing a CTE
+## Using a CTE more than once
 
-Unlike a derived table, a CTE can be referenced **more than once** in the same statement. Without it you would have to paste the same subquery twice.
+Unlike a derived table, a CTE can be referred to **several times** in the same statement. Without it you would have to paste the same subquery twice.
 
-Compare each product's revenue with the average product revenue of its category:
+Here each product's revenue is compared with the average product revenue of its category:
 
 ```sql-run dataset=shop
 WITH product_rev AS (
@@ -121,9 +139,9 @@ WHERE pr.revenue > 2 * ca.avg_rev
 ORDER BY pr.revenue DESC;
 ```
 
-A CTE joined to itself is the tidy way to write self joins over a derived result — for example, comparing each month with the same month's neighbour, or pairs of users with the same attribute.
+`product_rev` is used once to compute the category averages and once more to compare each product with its category's average. Seven products earn more than twice their category's average; the first is the UltraBook 15 Pro, with 39128.25 against a category average of 19103.05.
 
-(This particular query could also use `AVG(revenue) OVER (PARTITION BY category_id)`. CTEs and window functions are natural partners: compute a window function in a CTE, filter on it in the next step.)
+CTEs and window functions are natural partners. A window function cannot be used in `WHERE`, so you compute it in a CTE and filter on it in the next step:
 
 ```sql-run dataset=mlops
 WITH scored AS (
@@ -141,9 +159,11 @@ WHERE s.rn = 1
 ORDER BY lift_over_avg DESC;
 ```
 
-## CTEs with data-modifying statements
+The CTE numbers the runs of each experiment from most to least accurate and attaches the experiment's average accuracy to every row. The main query keeps number 1, the best run of each experiment, and shows how far it is above that average.
 
-`WITH` can feed an INSERT, UPDATE or DELETE. A cleanup — delete all but the earliest copy of each imported email:
+## CTEs with statements that change data
+
+`WITH` can feed an `INSERT`, `UPDATE` or `DELETE`. A clean-up: delete all but the earliest copy of each imported email. (Each Run starts from a fresh copy of the data.)
 
 ```sql-run dataset=shop
 WITH ranked AS (
@@ -157,38 +177,42 @@ WHERE import_id IN (SELECT import_id FROM ranked WHERE rn > 1);
 SELECT COUNT(*) AS rows_left, COUNT(DISTINCT lower(trim(email))) AS distinct_emails FROM customer_imports;
 ```
 
-PostgreSQL goes further with *data-modifying CTEs*: `WITH moved AS (DELETE FROM t WHERE … RETURNING *) INSERT INTO archive SELECT * FROM moved` — an atomic move in one statement.
+The CTE numbers the copies of each email from oldest to newest. The `DELETE` removes every copy numbered 2 or higher. The check afterwards shows 30 rows left and 30 different emails: no duplicates remain.
+
+PostgreSQL goes further and lets a CTE itself change data: `WITH moved AS (DELETE FROM t WHERE ... RETURNING *) INSERT INTO archive SELECT * FROM moved` moves rows from one table to another in a single statement.
 
 ## CTE, subquery, view or temporary table?
 
-| | Scope | Stored? | Reusable within a statement | Reusable across statements |
+| | Where it is visible | Stored? | Can be used twice in one statement | Can be used by later statements |
 |---|---|---|---|---|
-| Derived table (subquery in FROM) | one place in one statement | no | no | no |
+| Derived table (subquery in `FROM`) | one place in one statement | no | no | no |
 | **CTE** | one statement | no | yes | no |
-| View | permanent, shared | definition only | yes | yes |
-| Temporary table | session | data, until the session ends | yes | yes (same session) |
+| View | everywhere, permanently | the definition only | yes | yes |
+| Temporary table | one session | the data, until the session ends | yes | yes, in the same session |
+
+A **temporary table** is a real table that the database deletes automatically when your session ends.
 
 Guidelines:
 
-- Logic used by **one query** → CTE.
-- Logic shared by **many queries or people** → view (or a dbt model).
-- An expensive intermediate result needed by **several statements**, or that would benefit from an index → temporary table.
-- A tiny one-off filter → an inline subquery is fine; don't wrap everything in a CTE.
+- Logic used by **one query**: a CTE.
+- Logic shared by **many queries or people**: a view ([Views](#/lesson/sql/views)).
+- A costly intermediate result needed by **several statements**, or one that would benefit from an index: a temporary table.
+- A tiny one-off filter: an ordinary subquery is fine. Not everything needs to be a CTE.
 
 ## Performance: inlining versus materialization
 
-A CTE is a *logical* construct. The optimizer may treat it in two ways:
+A CTE describes logic; it does not dictate how the work is done. The optimizer can treat it in two ways:
 
-- **Inline** it into the outer query, like a view or derived table, so filters from outside can be pushed inside and unused columns dropped.
-- **Materialize** it: compute it once into a temporary result and scan that wherever it is referenced.
+- **Inline** it: substitute its definition into the main query, as with a view. A filter in the main query can then be applied inside the CTE, and unused columns can be dropped.
+- **Materialize** it: compute it once into a temporary result and read that result wherever the CTE is mentioned.
 
-Which is better depends. Inlining lets `WHERE customer_id = 42` on the outside reduce the CTE's work to one customer; materializing computes all customers first. On the other hand, a costly CTE referenced three times is computed three times if inlined and once if materialized.
+Which is better depends on the query. With inlining, a `WHERE customer_id = 42` in the main query can reduce the CTE's work to a single customer; with materialization all customers are computed first. On the other hand, a costly CTE mentioned three times is computed three times when inlined and once when materialized.
 
-Engines differ:
+Databases differ:
 
-- **PostgreSQL** before version 12 *always* materialized CTEs — they were an "optimization fence", and a common cause of slow queries. Since 12 it inlines a CTE that is non-recursive, side-effect-free and referenced once; you can force either behaviour with `AS MATERIALIZED` / `AS NOT MATERIALIZED`.
-- **SQLite** (3.35+) accepts the same `MATERIALIZED` / `NOT MATERIALIZED` hints and otherwise decides by itself — typically materializing CTEs that are used more than once.
-- **MySQL 8** and **SQL Server** usually merge CTEs into the outer query; SQL Server re-evaluates a multiply-referenced CTE each time.
+- **PostgreSQL** before version 12 *always* materialized CTEs, which blocked the optimizer from pushing filters in and was a common cause of slow queries. Since version 12 it inlines a CTE that is used once and has no side effects, and you can choose with `AS MATERIALIZED` or `AS NOT MATERIALIZED`.
+- **SQLite** (3.35 and later) accepts the same two hints and otherwise decides for itself, typically materializing a CTE that is used more than once.
+- **MySQL 8** and **SQL Server** usually inline. SQL Server recomputes a CTE each time it is mentioned.
 
 ```sql-run dataset=shop
 EXPLAIN QUERY PLAN
@@ -200,30 +224,21 @@ FROM per_customer a
 JOIN per_customer b ON b.orders = a.orders AND b.customer_id < a.customer_id;
 ```
 
-Look for `MATERIALIZE per_customer` in the plan: because the CTE is used twice, SQLite computes it once and reuses it.
+The first line of the plan reads `MATERIALIZE per_customer`. The CTE is used twice (as `a` and as `b`), so SQLite computes it once and reads the stored result twice.
 
-The practical advice: write CTEs for clarity first; if a query is slow, read the plan, and if a CTE is acting as a fence, filter early *inside* it or apply a hint.
+Practical advice: write CTEs for clarity first. If a query is slow, read its plan. If a materialized CTE is doing far more work than the final result needs, filter early *inside* it, or apply a hint.
 
 ## Style conventions
 
-- Name CTEs for **what they contain** (`monthly_revenue`, `first_order`), not `cte1`, `tmp`, `t2`.
-- One logical step per CTE; keep the final SELECT simple.
+- Name a CTE for **what it holds** (`monthly_revenue`, `first_order`), not `cte1`, `tmp` or `t2`.
+- One logical step per CTE; keep the final `SELECT` short.
 - State the **grain** in a comment: `-- one row per customer per month`.
 - Filter early, in the first CTE that touches a large table.
-- Don't chain CTEs that merely rename columns; fold trivial steps together.
-
-## Pitfalls
-
-- **Assuming a CTE is cached** — it may be recomputed per reference (or the reverse: assuming filters get pushed in when it is materialized).
-- **Referencing a CTE defined later** in the WITH list.
-- **Repeating `WITH`** — only the first CTE takes the keyword; the rest are comma-separated.
-- **Expecting a CTE to persist** to the next statement.
-- **MySQL 5.7** — no CTE support.
-- **Deep chains hiding fan-outs** — check row counts at each stage.
+- Do not chain CTEs that only rename columns; fold trivial steps together.
 
 ## Worked example: refactoring a query into CTEs
 
-A good way to learn CTEs is to refactor a query that works but resists reading. This one answers *which products are bought mostly by repeat customers?* in a single nested statement:
+Rewriting code to make it clearer without changing what it does is called **refactoring**. A good way to learn CTEs is to refactor a query that works but resists reading. This one answers *which products are bought mostly by repeat customers?* in one nested statement:
 
 ```sql-run dataset=shop
 SELECT p.name, t.buyers, t.repeat_buyers, ROUND(100.0 * t.repeat_buyers / t.buyers, 1) AS repeat_pct
@@ -241,7 +256,7 @@ ORDER BY repeat_pct DESC
 LIMIT 5;
 ```
 
-The refactoring recipe: find the innermost subquery, give it a name that says what it contains, move it to the top; repeat outward.
+The recipe: find the innermost subquery, give it a name that says what it holds, and move it to the top. Repeat, working outward.
 
 ```sql-run dataset=shop
 WITH orders_per_customer AS (          -- one row per customer
@@ -267,28 +282,54 @@ ORDER BY repeat_pct DESC
 LIMIT 5;
 ```
 
-Same rows, same plan in most engines — but each step now states its **grain** in a comment and can be checked alone. Verify that a refactoring changed nothing by comparing the two versions with `EXCEPT` in both directions; an empty result both ways means the outputs are identical.
+The same five rows. The innermost subquery, the number of orders per customer, became the first CTE. The middle one, buyers and repeat buyers per product, became the second and now reads from the first by name. Each step states its grain and can be run alone.
+
+To confirm that a refactoring changed nothing, compare the two versions with `EXCEPT` in both directions ([INTERSECT, EXCEPT and set operation rules](#/lesson/sql/intersect-except)). Two empty results mean the outputs are identical.
 
 > [!INTERVIEW]
-> In a live SQL interview, writing CTEs top-down *is* your thinking aloud: name a step, say its grain, move on. Interviewers can follow and correct you early. Be ready for the follow-up "is a CTE faster than a subquery?" — generally no; it is a readability tool, and whether it is inlined or materialized depends on the engine.
+> In a live SQL interview, writing CTEs from the top down *is* your thinking aloud: name a step, say its grain, move on. Be ready for "is a CTE faster than a subquery?" In general, no. It is a tool for readability, and whether it is inlined or materialized depends on the database and version.
+
+## Pitfalls
+
+- **Assuming a CTE is computed once.** It may be recomputed for each mention. Or the reverse: assuming outside filters reach inside when it is materialized.
+- **Referring to a CTE defined later** in the `WITH` list.
+- **Writing `WITH` twice.** Only the first CTE takes the keyword; the rest follow after commas.
+- **Expecting a CTE to survive** into the next statement.
+- **MySQL 5.7** has no CTEs.
+- **Long chains that hide multiplied rows.** Check the row count at each stage.
 
 ## Summary
 
-- A CTE is a named result set defined with `WITH name AS (SELECT …)` and visible to one statement.
-- CTEs make queries read top-down as a pipeline, can be referenced several times, and combine naturally with window functions (compute, then filter).
-- Use a CTE for single-statement logic, a view for shared logic, a temp table for multi-statement or indexed intermediates.
-- Optimizers either inline or materialize CTEs; `MATERIALIZED` / `NOT MATERIALIZED` hints exist in PostgreSQL 12+ and SQLite 3.35+.
+- A CTE is a named result defined with `WITH name AS (SELECT ...)` and visible to one statement.
+- CTEs make a query read from top to bottom as a pipeline, can be used several times, and pair naturally with window functions: compute, then filter.
+- Use a CTE for logic inside one statement, a view for shared logic, a temporary table for results needed by several statements or needing an index.
+- An optimizer either inlines or materializes a CTE; `MATERIALIZED` and `NOT MATERIALIZED` hints exist in PostgreSQL 12+ and SQLite 3.35+.
+
+## Glossary
+
+- **Common table expression (CTE)** — a named, temporary query result defined with `WITH` and usable in the statement that follows.
+- **`WITH` clause** — the part of a statement that defines one or more CTEs.
+- **Derived table** — a subquery written in `FROM`, usable only at that one place.
+- **Pipeline** — a sequence of steps in which each step's output is the next step's input.
+- **Grain** — what one row of a table or result stands for.
+- **Temporary table** — a real table that exists only for the current session.
+- **Inlining** — substituting a CTE's definition into the query that uses it.
+- **Materialization** — computing a CTE once and storing the result for the duration of the statement.
+- **Optimization fence** — a boundary the optimizer cannot move filters across, such as a materialized CTE.
+- **Hint** — a keyword that tells the optimizer which strategy to use.
+- **Refactoring** — rewriting a query to make it clearer without changing its result.
 
 ```quiz
 [
-  {"q": "How long does a CTE exist?", "options": ["Until the session ends", "For the single statement it is defined in", "Until it is dropped", "Until the transaction commits"], "answer": 1, "explain": "A CTE's scope is its statement; nothing is stored."},
-  {"q": "How are multiple CTEs written?", "options": ["WITH a AS (...) WITH b AS (...)", "WITH a AS (...), b AS (...)", "WITH a AS (...); b AS (...)", "DEFINE a, b"], "answer": 1, "explain": "WITH appears once and the definitions are comma-separated."},
-  {"q": "Which can a CTE do that a derived table cannot?", "options": ["Contain GROUP BY", "Be referenced more than once in the same statement", "Use joins", "Return multiple columns"], "answer": 1, "explain": "A derived table exists only where it is written; a CTE's name can be reused (and can be recursive)."},
-  {"q": "A CTE b can reference CTE a when...", "options": ["a is defined before b in the WITH list", "a is defined after b", "Never", "Only if both are recursive"], "answer": 0, "explain": "Each CTE sees the ones defined earlier."},
-  {"q": "What did PostgreSQL versions before 12 always do with CTEs?", "options": ["Inline them", "Materialize them, acting as an optimization fence", "Reject them", "Cache them across queries"], "answer": 1, "explain": "That prevented predicate pushdown; since 12, simple single-use CTEs are inlined and hints control the choice."},
-  {"q": "Which construct is the best fit for logic shared by many different queries?", "options": ["CTE", "Derived table", "View", "Scalar subquery"], "answer": 2, "explain": "A view is stored in the catalog and usable by any query."},
-  {"q": "What is a good way to debug a long CTE chain?", "options": ["Rewrite as nested subqueries", "Select from each intermediate CTE and check its rows and counts", "Add DISTINCT everywhere", "Remove the WITH clause"], "answer": 1, "explain": "Inspecting each stage localises fan-outs and unexpected row loss."}
+  {"q": "How long does a CTE exist?", "options": ["Until the session ends", "For the single statement it is defined in", "Until it is dropped", "Until the transaction commits"], "answer": 1, "explain": "A CTE is visible only in its own statement; nothing is stored."},
+  {"q": "How are several CTEs written?", "options": ["WITH a AS (...) WITH b AS (...)", "WITH a AS (...), b AS (...)", "WITH a AS (...); b AS (...)", "DEFINE a, b"], "answer": 1, "explain": "WITH appears once and the definitions are separated by commas."},
+  {"q": "Which can a CTE do that a derived table cannot?", "options": ["Contain GROUP BY", "Be referred to more than once in the same statement", "Use joins", "Return several columns"], "answer": 1, "explain": "A derived table exists only where it is written; a CTE's name can be reused, and a CTE can also refer to itself."},
+  {"q": "A CTE b can refer to CTE a when...", "options": ["a is defined before b in the WITH list", "a is defined after b", "Never", "Only if both are recursive"], "answer": 0, "explain": "Each CTE sees the ones defined earlier in the list."},
+  {"q": "What did PostgreSQL versions before 12 always do with CTEs?", "options": ["Inline them", "Materialize them, which stopped filters from being pushed inside", "Reject them", "Keep them for later queries"], "answer": 1, "explain": "They acted as an optimization fence; since version 12, simple CTEs used once are inlined, and hints control the choice."},
+  {"q": "Which construct is the best fit for logic shared by many different queries?", "options": ["CTE", "Derived table", "View", "Scalar subquery"], "answer": 2, "explain": "A view is stored in the database and can be used by any query."},
+  {"q": "What is a good way to debug a long chain of CTEs?", "options": ["Rewrite it as nested subqueries", "Select from each intermediate CTE and check its rows and row count", "Add DISTINCT everywhere", "Remove the WITH clause"], "answer": 1, "explain": "Looking at each stage shows where rows were multiplied or lost."},
+  {"q": "Is a query written with CTEs faster than the same logic written with nested subqueries?", "options": ["Always", "Never", "Not in general; it is a readability tool, and speed depends on whether the database inlines or materializes it", "Only in SQLite"], "answer": 2, "explain": "The optimizer often produces the same plan for both; differences come from inlining versus materialization."}
 ]
 ```
 
-> **Source:** Beaulieu, *Learning SQL*, ch. 9 "Subqueries" — subqueries as data sources (2nd ed.) and "Common table expressions" (3rd ed.). SQLite documentation, "The WITH Clause"; PostgreSQL documentation, "WITH Queries (Common Table Expressions)".
+> **Source:** Beaulieu, *Learning SQL*, ch. 9 "Subqueries" (subqueries as data sources; common table expressions in the 3rd edition), restated in original wording with this guide's own datasets. SQLite documentation, "The WITH Clause"; PostgreSQL documentation, "WITH Queries (Common Table Expressions)".

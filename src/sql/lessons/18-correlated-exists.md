@@ -1,10 +1,22 @@
 # Correlated subqueries, EXISTS and subqueries as data sources
 
-Noncorrelated subqueries run once and hand a result to the containing statement. A **correlated subquery** is different: it refers to one or more columns of the containing statement, so it has no meaning on its own and is — conceptually — executed once for every candidate row. That makes it the natural way to ask "for each row, look something up about *this* row". This lesson covers correlated subqueries, the `EXISTS` operator, data manipulation with correlated subqueries, and then the three places the book says subqueries earn their keep: as **data sources**, in **filter conditions**, and as **expression generators**.
+> **Before this lesson:** you should know what a subquery is, the difference between a subquery that returns one value and one that returns a list, and why `NOT IN` fails when the list contains a NULL ([Noncorrelated subqueries](#/lesson/sql/noncorrelated)). Grouping with `GROUP BY` and `HAVING` is used throughout ([Aggregate functions and GROUP BY](#/lesson/sql/group-by)).
+
+## In plain words
+
+The subqueries in the last lesson were self-contained: the database could run each one once, on its own, and hand the answer to the outer query. Some questions do not work that way. "For each customer, how many accounts do *they* have?" needs a fresh answer for every customer. A subquery that mentions the row currently being examined by the outer query is called a **correlated subquery**. It cannot be run alone, because part of it is a blank that the outer query fills in, row by row.
+
+An everyday picture: a teacher going down the class register. For each pupil she opens the homework folder and counts *that pupil's* submissions. The folder check is the same small task each time, but it depends on whose name she is on. That is a correlated subquery. (The earlier kind was like looking up one fact, such as today's date, before starting on the register at all.)
+
+Often the teacher does not need a count, only a yes or no: "has this pupil handed in anything at all?" SQL has a keyword for exactly that question, `EXISTS`.
+
+The second half of the lesson looks at where subqueries are useful in general: as a stand-in for a table, as a filter, and as a way to compute one extra column.
+
+**Why it matters for a job.** `EXISTS` and `NOT EXISTS` are the safest way to ask "has a match" and "has no match", which are everyday questions (customers with no orders, products never sold). Correlated subqueries are also behind the classic "latest row per group" interview task. And interviewers like to ask how the same question can be written as a subquery, a join and a window function, which the last section answers.
 
 ## Correlated subqueries
 
-Count each customer's accounts, and keep customers with exactly two:
+Which customers have exactly two accounts?
 
 ```sql-run dataset=bank
 SELECT c.cust_id, c.cust_type_cd, c.city
@@ -14,9 +26,18 @@ WHERE 2 = (SELECT COUNT(*)
            WHERE a.cust_id = c.cust_id);
 ```
 
-The reference to `c.cust_id` inside the subquery is the **correlation**. The outer query retrieves the 40 customer rows; for each one, the subquery is evaluated with that customer's id plugged in, and the row is kept if the count equals 2. You cannot run the subquery alone — `c` is not defined there.
+Look inside the parentheses. The subquery counts rows of `account`, but its `WHERE` mentions `c.cust_id`, and `c` is the customer table of the *outer* query. That reference is the **correlation**.
 
-Correlated subqueries can use any comparison. The book's next example uses a range: customers whose total available balance lies between \$5,000 and \$10,000.
+Here is how to think about what happens:
+
+1. The outer query takes the first customer, say customer 1.
+2. The subquery is evaluated with `c.cust_id` replaced by 1: "count the accounts whose `cust_id` is 1". The answer is 2.
+3. The outer `WHERE` checks `2 = 2`. True, so customer 1 is kept.
+4. The same is repeated for customer 2, customer 3, and so on through all 40.
+
+Twelve customers pass. If you copy the subquery out and try to run it by itself, you get an error: `c` is not defined there.
+
+Any comparison can be used. Customers whose accounts hold between 5,000 and 10,000 in total:
 
 ```sql-run dataset=bank
 SELECT c.cust_id, c.cust_type_cd, c.city
@@ -26,10 +47,12 @@ WHERE (SELECT SUM(a.avail_balance)
        WHERE a.cust_id = c.cust_id) BETWEEN 5000 AND 10000;
 ```
 
-> [!NOTE]
-> "Executed once per row" is the *logical* model. Optimizers frequently **decorrelate** such queries into joins or semi-joins, and with an index on the correlation column (`account(cust_id)`) even the naive strategy is cheap. Without that index, a correlated subquery over large tables is an O(n × m) trap.
+For each customer the subquery adds up that customer's balances, and the outer query keeps the customer if the sum lies in the range.
 
-A correlated subquery is also a classic way to get *the latest row per group*:
+> [!NOTE]
+> "Evaluated once per outer row" is the way to *reason* about a correlated subquery. The database is free to get the same answer more cleverly, and optimizers often turn such queries into joins. What you should take care of is an **index** (a lookup structure) on the column used for the correlation, here `account(cust_id)`. With it, each small lookup is fast. Without it, the database may read the whole inner table once for every outer row: a million customers times a million accounts.
+
+A correlated subquery is the classic way to get **the latest row per group**:
 
 ```sql-run dataset=shop
 SELECT o.customer_id, o.order_id, o.order_date
@@ -41,13 +64,13 @@ ORDER BY o.customer_id
 LIMIT 8;
 ```
 
-"Keep this order if its date is the maximum date among orders of the same customer."
+The same table appears twice with different aliases. Read it as: "keep this order (`o`) if its date equals the latest date among all orders (`o2`) of the same customer." Customer 1's most recent order is number 171, placed on 2024-07-26.
 
 ## The EXISTS operator
 
-The most common operator used with correlated subqueries is `EXISTS`. It asks only whether the subquery returns **at least one row** — it does not care how many, or what they contain.
+`EXISTS (subquery)` is true when the subquery returns **at least one row**. It does not care how many rows, or what is in them.
 
-Accounts that had a transaction on a particular day:
+Which accounts had a transaction in the first three days of July 2024?
 
 ```sql-run dataset=bank
 SELECT a.account_id, a.product_cd, a.cust_id, a.avail_balance
@@ -58,9 +81,11 @@ WHERE EXISTS (SELECT 1
                 AND t.txn_date >= '2024-07-01' AND t.txn_date < '2024-07-04');
 ```
 
-Because EXISTS ignores the subquery's select list, the convention is `SELECT 1` (the book notes that `SELECT *` or anything else works equally well). The engine can stop at the first matching row — a **semi-join**.
+For each account, the subquery looks for transactions of *that account* in the date range. If it finds any, `EXISTS` is true and the account is kept. Five accounts qualify.
 
-`NOT EXISTS` finds rows *without* a match — an **anti-join**. Customers who are not businesses (no row in `business`):
+Why `SELECT 1`? Because `EXISTS` only checks whether a row comes back, the contents of the `SELECT` list are irrelevant. Writing the constant `1` is the convention that signals "I only care that a row exists". The database can stop searching as soon as it finds the first match. Keeping the rows of one table that have a match in another, without adding columns or copies, is called a **semi-join**.
+
+`NOT EXISTS` is true when the subquery returns **no rows**: it finds rows *without* a match. That is an **anti-join**. Accounts whose owner is not a business (no row for that customer in `business`):
 
 ```sql-run dataset=bank
 SELECT a.account_id, a.product_cd, a.cust_id
@@ -69,7 +94,7 @@ WHERE NOT EXISTS (SELECT 1 FROM business b WHERE b.cust_id = a.cust_id)
 LIMIT 6;
 ```
 
-Runs that logged no metrics at all:
+Training runs that recorded no measurements at all:
 
 ```sql-run dataset=mlops
 SELECT r.run_id, r.run_name, r.status
@@ -77,22 +102,21 @@ FROM runs r
 WHERE NOT EXISTS (SELECT 1 FROM metrics m WHERE m.run_id = r.run_id);
 ```
 
-(Unsurprisingly, those are the FAILED runs.)
+Eleven runs, every one with status `FAILED`, which makes sense: a run that crashed at the start measured nothing.
 
 ### EXISTS versus IN
 
 | | `IN (subquery)` | `EXISTS (correlated subquery)` |
 |---|---|---|
-| Compares | a value with a list | nothing — tests for any row |
-| Conditions | one column (or a row value) | anything: ranges, several columns, inequalities |
-| NULL in subquery | harmless for IN, **fatal for NOT IN** | no problem either way |
-| Typical plan | semi-join | semi-join |
+| What it does | compares a value with a list | tests whether any row comes back |
+| Conditions it can express | equality on one column, or on a group of columns | anything: ranges, several columns, inequalities |
+| NULL in the subquery's data | harmless for `IN`, **fatal for `NOT IN`** | no effect either way |
 
-Positive forms perform the same on modern optimizers. For the negative form, prefer `NOT EXISTS`: it is NULL-safe and usually planned as an efficient anti-join.
+For the positive form, modern databases run both equally fast. For the negative form, prefer `NOT EXISTS`: a NULL cannot break it.
 
-## Data manipulation using correlated subqueries
+## Changing data with correlated subqueries
 
-Correlated subqueries appear constantly in UPDATE and DELETE. The book refreshes every account's `last_activity_date` from its latest transaction:
+Correlated subqueries are common in `UPDATE` and `DELETE`. This block sets each account's `last_activity_date` to the date of its latest transaction, then shows a few rows. (Every Run starts from a fresh copy of the data.)
 
 ```sql-run dataset=bank
 UPDATE account
@@ -104,9 +128,9 @@ WHERE EXISTS (SELECT 1 FROM txn t WHERE t.account_id = account.account_id);
 SELECT account_id, last_activity_date FROM account LIMIT 5;
 ```
 
-The `WHERE EXISTS` is not decoration. Without it, accounts with no transactions would have the subquery return NULL and their date would be **overwritten with NULL**. The second subquery protects them.
+There are two correlated subqueries, and each refers to `account.account_id`, the row being updated. The first calculates the new value. The second, in `WHERE EXISTS`, limits the update to accounts that have transactions. It is not decoration. Without it, for an account with no transactions the first subquery would find nothing and return NULL, and the account's existing date would be **overwritten with NULL**.
 
-And a correlated DELETE — remove departments that have no employees:
+A correlated `DELETE`: add a department with no employees, then remove every department that has none.
 
 ```sql-run dataset=bank
 INSERT INTO department (name) VALUES ('Compliance');
@@ -115,16 +139,18 @@ WHERE NOT EXISTS (SELECT 1 FROM employee e WHERE e.dept_id = department.dept_id)
 SELECT * FROM department;
 ```
 
+The three original departments remain; "Compliance" was created and deleted again.
+
 > [!NOTE]
-> MySQL does not allow a table alias on the target of a `DELETE` when using a correlated subquery in the form shown in the book, and historically forbade selecting from the table being modified in a subquery. PostgreSQL and SQL Server offer `UPDATE ... FROM` / `DELETE ... USING` join syntax as an alternative.
+> Databases differ in the details here. MySQL restricts aliases on the table being deleted from, and for a long time did not allow a subquery to read the table being changed. PostgreSQL and SQL Server offer join forms (`UPDATE ... FROM`, `DELETE ... USING`) as alternatives.
 
-## When to use subqueries
+## Where subqueries earn their place
 
-### Subqueries as data sources
+### 1. As a data source
 
-Since a subquery returns a table, it can sit in the FROM clause as a **derived table**. The key restriction: a subquery in FROM must be **noncorrelated** — it is executed first and stays in memory for the duration of the query. (The exception is `LATERAL` in PostgreSQL/MySQL 8 and `CROSS APPLY` in SQL Server, which allow correlation in FROM.)
+A subquery returns a table, so it can stand where a table stands, in `FROM` or after `JOIN`. There it is called a **derived table**. One restriction: a derived table must be **noncorrelated**. It is computed first and cannot look at the outer rows. (PostgreSQL and MySQL 8 lift this with the keyword `LATERAL`; SQL Server has `CROSS APPLY`.)
 
-**Summarise, then join.** Pre-aggregate one table and join the summary to others:
+**Summarise, then join.**
 
 ```sql-run dataset=bank
 SELECT d.dept_id, d.name, e_cnt.how_many AS num_employees
@@ -135,7 +161,9 @@ JOIN (SELECT dept_id, COUNT(*) AS how_many
   ON d.dept_id = e_cnt.dept_id;
 ```
 
-**Data fabrication.** Sometimes the grouping you want does not exist in the database. The book defines customer groups by balance range *inside the query* and joins to them with a range condition:
+The derived table `e_cnt` holds one row per department with its head count; joining it to `department` adds the name. Operations has 15 employees, Loans 3.
+
+**Making up data inside the query.** Sometimes the groups you want are not stored anywhere. Here three customer tiers, defined by balance range, are built on the spot and joined with a range condition:
 
 ```sql-run dataset=bank
 SELECT grp.name AS tier, COUNT(*) AS num_customers
@@ -150,9 +178,9 @@ JOIN (SELECT 'Small Fry' AS name, 0 AS low_limit, 4999.99 AS high_limit
 GROUP BY grp.name;
 ```
 
-Two derived tables: one computes each customer's deposit balance; the other fabricates the three tiers. Whether tiers *should* live in a real table is a design question — if several queries need them, yes.
+Two derived tables. `cb` computes each customer's total deposits. `grp` is a three-row table of tiers made with `UNION ALL`. The join places each customer in the tier whose range contains their balance, and the outer query counts customers per tier: 13 "Average Joes", 11 "Heavy Hitters". If several queries need the tiers, they belong in a real table.
 
-**Task-oriented subqueries.** A report needs total deposit balances by product, branch and teller, with readable names. You could join five tables and group by all the name columns. The book's cleaner approach: do the grouping on the *ids* in a subquery, then join the small result to the lookup tables just for the names:
+**Group on ids, look up names afterwards.** A report needs total deposits per product, branch and employee, with readable names. One way joins four tables and groups by three long name columns. A tidier way groups by the three short id columns in a subquery, then joins the small result to the other tables only to fetch names:
 
 ```sql-run dataset=bank
 SELECT p.name AS product, b.name AS branch,
@@ -170,11 +198,11 @@ ORDER BY g.tot_deposits DESC
 LIMIT 8;
 ```
 
-The grouping now involves three compact columns instead of long strings, and the query reads as two clear steps. Today most people would write the inner step as a CTE (`WITH g AS (...)`), covered in its own module.
+The query reads as two clear steps. Today the inner step is often written with `WITH g AS (...)` ([Common table expressions](#/lesson/sql/ctes)).
 
-### Subqueries in filter conditions
+### 2. As a filter
 
-Subqueries are not limited to WHERE; they are just as useful in **HAVING**. Which teller opened the most accounts?
+Subqueries work in `HAVING` as well as in `WHERE`. Which employee opened the most accounts?
 
 ```sql-run dataset=bank
 SELECT open_emp_id, COUNT(*) AS how_many
@@ -184,13 +212,13 @@ HAVING COUNT(*) = (SELECT MAX(cnt)
                    FROM (SELECT COUNT(*) AS cnt FROM account GROUP BY open_emp_id));
 ```
 
-The innermost query counts accounts per employee, the middle one takes the maximum count, and HAVING keeps the group(s) matching it. (Standard SQL writes this as `>= ALL (SELECT COUNT(*) ...)`.)
+Read from the innermost part outward: count accounts per employee; take the largest of those counts; keep the group whose own count equals it. Employee 11, with 11 accounts.
 
-### Subqueries as expression generators
+### 3. As a calculated value
 
-Scalar subqueries can go anywhere an expression can: the select list, ORDER BY, even the VALUES of an INSERT.
+A subquery that returns one value can go anywhere a value can: the `SELECT` list, `ORDER BY`, the `VALUES` of an `INSERT`.
 
-In the **select list**, a correlated scalar subquery performs a lookup per row — an alternative to a join:
+In the **`SELECT` list**, a correlated subquery looks something up for each row, as an alternative to a join:
 
 ```sql-run dataset=bank
 SELECT a.account_id,
@@ -201,9 +229,9 @@ FROM account a
 WHERE a.cust_id IN (1, 2);
 ```
 
-The `txn_count` column shows the real advantage: it counts child rows **without changing the grain** of the outer query, so there is no fan-out and no GROUP BY. An account with no transactions shows 0, where an inner join would have dropped it.
+The `txn_count` column shows the real advantage. It counts related rows **without changing the grain** of the outer query: still one row per account, no multiplied rows, no `GROUP BY`. An account with no transactions shows 0, where an inner join to `txn` would have left it out.
 
-In **ORDER BY**, a subquery can sort by something not selected — employees ordered by their boss's last name:
+In **`ORDER BY`**, a subquery can sort by something that is not shown. Employees ordered by their manager's last name:
 
 ```sql-run dataset=bank
 SELECT e.emp_id, e.fname || ' ' || e.lname AS name
@@ -212,7 +240,9 @@ ORDER BY (SELECT boss.lname FROM employee boss WHERE boss.emp_id = e.superior_em
 LIMIT 8;
 ```
 
-In an **INSERT**, subqueries look up foreign keys from natural keys, so the statement needs no hard-coded ids:
+The president comes first: he has no manager, the subquery returns NULL for him, and SQLite sorts NULL before everything else.
+
+In an **`INSERT`**, subqueries find ids from human-readable values, so no id is typed by hand:
 
 ```sql
 INSERT INTO account (product_cd, cust_id, open_date, status, open_branch_id, open_emp_id)
@@ -223,32 +253,14 @@ VALUES ('SAV',
         (SELECT emp_id FROM employee WHERE lname = 'Portman' AND fname = 'Frank'));
 ```
 
-Beware: if a lookup finds nothing, NULL is inserted — which is why such columns should be `NOT NULL`.
+Take care: if a lookup finds nothing, NULL is inserted. Declaring such columns `NOT NULL` turns that silent mistake into an error.
 
-## Subquery wrap-up
+## Subquery, join or window function? Choosing a form
 
-The book closes the chapter with a summary worth repeating. Subqueries:
-
-- return a single value, a single column of rows, or multiple columns and rows;
-- are independent of the containing statement (noncorrelated) or reference its columns (correlated);
-- are used in conditions with comparison operators and with `IN`, `NOT IN`, `EXISTS`, `NOT EXISTS` (and `ANY`/`ALL`);
-- can be found in SELECT, UPDATE, DELETE and INSERT statements;
-- can serve as tables in FROM, as conditions in WHERE and HAVING, and as expressions in SELECT, ORDER BY and VALUES.
-
-## Pitfalls
-
-- **Correlated subquery without an index** on the correlation column — quadratic work.
-- **UPDATE … SET col = (correlated subquery)** without a guarding WHERE — overwrites non-matching rows with NULL.
-- **Scalar subquery in SELECT returning several rows** — error (or silent first row in SQLite).
-- **Trying to correlate a derived table** in FROM — not allowed without LATERAL.
-- **`MAX(date)` per group returning ties** — add a tie-breaker or use ROW_NUMBER.
-
-## Correlated subquery, join or window? Choosing a form
-
-The same question can usually be written three ways. Take *each account's balance compared with the average balance of its product*.
+One question can usually be written three ways. Take *each account's balance next to the average balance of its product*.
 
 ```sql-run dataset=bank
--- 1. Correlated scalar subquery: the average is looked up per row
+-- 1. Correlated subquery: the average is looked up for each row
 SELECT a.account_id, a.product_cd, a.avail_balance,
        ROUND((SELECT AVG(a2.avail_balance) FROM account a2 WHERE a2.product_cd = a.product_cd), 2) AS product_avg
 FROM account a
@@ -265,7 +277,7 @@ WHERE a.cust_id <= 3;
 ```
 
 ```sql-run dataset=bank
--- 3. Window function: no second reference to the table at all
+-- 3. Window function: the table is mentioned only once
 SELECT account_id, product_cd, avail_balance, product_avg
 FROM (SELECT account_id, cust_id, product_cd, avail_balance,
              ROUND(AVG(avail_balance) OVER (PARTITION BY product_cd), 2) AS product_avg
@@ -273,35 +285,62 @@ FROM (SELECT account_id, cust_id, product_cd, avail_balance,
 WHERE cust_id <= 3;
 ```
 
-All three return the same rows. Rules of thumb for choosing:
+All three return the same nine rows; account 101, a checking account holding 3820.42, sits beside the checking average of 5645.34. The third uses a **window function**, which computes a value over a set of related rows while keeping every row ([Window basics and ranking](#/lesson/sql/ranking)).
 
 | Situation | Prefer |
 |---|---|
-| A yes/no test against another table | `EXISTS` / `NOT EXISTS` |
-| One looked-up value for a handful of outer rows, with an index on the correlation column | correlated scalar subquery |
-| The same per-group statistic needed for many rows | derived table join, or a window function |
-| Statistic over the *same* table as the outer query | window function |
-| Need to keep outer rows that have no match | correlated subquery in SELECT, or LEFT JOIN |
+| A yes-or-no test against another table | `EXISTS` / `NOT EXISTS` |
+| One looked-up value for a few outer rows, with an index on the correlation column | correlated subquery |
+| The same per-group figure needed for many rows | join to a derived table, or a window function |
+| A figure over the *same* table as the outer query | window function |
+| Outer rows without a match must be kept | correlated subquery in `SELECT`, or `LEFT JOIN` |
 
-Note the subtle point in version 3: the filter `cust_id <= 3` had to move to an **outer** query. Had it been inside, the average would have been computed over those three customers' accounts only — windows see the rows that survive WHERE.
+A fine point in version 3: the filter `cust_id <= 3` had to move to an **outer** query. Inside, it would have been applied first, and the average would have been taken over those three customers' accounts only.
+
+> [!INTERVIEW]
+> "Find customers who have never placed an order." Write `NOT EXISTS` with a correlated subquery and say why you did not use `NOT IN`: a single NULL in the subquery's column would make `NOT IN` return nothing. Then mention the `LEFT JOIN ... WHERE right.key IS NULL` form as an equivalent. Offering two correct forms and one trap is a complete answer.
+
+## Pitfalls
+
+- **No index on the correlation column**: the inner table may be read once per outer row.
+- **`UPDATE ... SET col = (correlated subquery)` without a guarding `WHERE`**: rows with no match are overwritten with NULL.
+- **A subquery in the `SELECT` list that returns several rows**: an error on most databases, a silent first row in SQLite.
+- **Trying to correlate a derived table** in `FROM`: not allowed without `LATERAL`.
+- **Ties for the latest date**: `= (SELECT MAX(date) ...)` returns every tied row. Add a tie-breaker or use `ROW_NUMBER`.
 
 ## Summary
 
-- Correlated subqueries reference the outer row and are logically evaluated per row.
-- `EXISTS` / `NOT EXISTS` test for the presence or absence of matching rows — semi-join and anti-join — and are NULL-safe.
-- Correlated subqueries drive UPDATEs and DELETEs; guard UPDATEs with `WHERE EXISTS`.
-- Subqueries serve as data sources (derived tables: pre-aggregation, fabricated lookup data), filters (WHERE and HAVING) and expression generators (SELECT, ORDER BY, INSERT values).
+- A correlated subquery mentions the outer row and is, in effect, evaluated for each outer row.
+- `EXISTS` and `NOT EXISTS` test whether matching rows are present or absent (semi-join and anti-join) and are unaffected by NULLs.
+- Correlated subqueries drive `UPDATE` and `DELETE`; guard an `UPDATE` with `WHERE EXISTS`.
+- Subqueries serve as data sources (derived tables for totals and made-up lookup data), as filters (in `WHERE` and `HAVING`) and as calculated values (in `SELECT`, `ORDER BY` and `INSERT`).
+- The same question can often be a correlated subquery, a join to a derived table, or a window function; choose by clarity and by how many rows are involved.
+
+## Glossary
+
+- **Correlated subquery** — a subquery that refers to a column of the outer query and so depends on the current outer row.
+- **Correlation** — the reference inside a subquery to the outer query's row.
+- **`EXISTS`** — true when a subquery returns at least one row.
+- **`NOT EXISTS`** — true when a subquery returns no rows.
+- **Semi-join** — keeping rows of one table that have a match in another, without adding columns or copies.
+- **Anti-join** — keeping rows of one table that have no match in another.
+- **Derived table** — a subquery used in `FROM` in place of a table.
+- **`LATERAL`** — a keyword (PostgreSQL, MySQL 8) that lets a subquery in `FROM` refer to earlier tables in the same `FROM`.
+- **Latest row per group** — the task of picking, for each group, the row with the greatest date or value.
+- **Window function** — a function that computes over a set of related rows while keeping each row.
+- **Index** — a lookup structure that lets the database find rows by a column's value without reading the whole table.
 
 ```quiz
 [
-  {"q": "What makes a subquery correlated?", "options": ["It contains a join", "It references a column from the containing statement", "It returns several rows", "It appears in FROM"], "answer": 1, "explain": "The reference to the outer row means it cannot run on its own."},
-  {"q": "What does EXISTS (subquery) evaluate?", "options": ["Whether the subquery's first column is non-NULL", "Whether the subquery returns at least one row", "The number of rows returned", "Whether all rows match"], "answer": 1, "explain": "EXISTS only tests for the presence of any row; the select list is irrelevant."},
-  {"q": "Why add WHERE EXISTS (...) to an UPDATE that sets a column from a correlated subquery?", "options": ["For speed only", "To avoid setting the column to NULL for rows with no match", "It is required syntax", "To lock fewer tables"], "answer": 1, "explain": "A subquery with no rows yields NULL, which would overwrite existing values."},
-  {"q": "Which statement about subqueries in the FROM clause is true (without LATERAL)?", "options": ["They must be correlated", "They must be noncorrelated", "They can only return one row", "They cannot contain GROUP BY"], "answer": 1, "explain": "Derived tables are evaluated before the outer query, so they cannot reference its rows."},
-  {"q": "A correlated scalar subquery (SELECT COUNT(*) FROM txn t WHERE t.account_id = a.account_id) in the select list returns what for an account with no transactions?", "options": ["NULL", "0", "The row is dropped", "An error"], "answer": 1, "explain": "COUNT over zero rows is 0, and the outer row is kept - unlike an inner join."},
-  {"q": "Which is the NULL-safe way to find rows without a match?", "options": ["NOT IN (subquery)", "NOT EXISTS (correlated subquery)", "<> ALL (subquery)", "!= (subquery)"], "answer": 1, "explain": "NOT EXISTS is unaffected by NULLs in the subquery's data."},
-  {"q": "Which index most helps WHERE 2 = (SELECT COUNT(*) FROM account a WHERE a.cust_id = c.cust_id)?", "options": ["customer(city)", "account(cust_id)", "account(avail_balance)", "customer(cust_type_cd)"], "answer": 1, "explain": "The subquery is probed once per customer on a.cust_id."}
+  {"q": "What makes a subquery correlated?", "options": ["It contains a join", "It refers to a column from the containing statement", "It returns several rows", "It appears in FROM"], "answer": 1, "explain": "The reference to the outer row means it cannot be run on its own."},
+  {"q": "What does EXISTS (subquery) evaluate?", "options": ["Whether the subquery's first column is non-NULL", "Whether the subquery returns at least one row", "The number of rows returned", "Whether all rows match"], "answer": 1, "explain": "EXISTS only tests whether any row comes back; the SELECT list is irrelevant."},
+  {"q": "Why add WHERE EXISTS (...) to an UPDATE that sets a column from a correlated subquery?", "options": ["For speed only", "To avoid setting the column to NULL for rows with no match", "The syntax requires it", "To lock fewer tables"], "answer": 1, "explain": "A subquery that finds no rows yields NULL, which would overwrite existing values."},
+  {"q": "Which statement about subqueries in the FROM clause is true (without LATERAL)?", "options": ["They must be correlated", "They must be noncorrelated", "They can only return one row", "They cannot contain GROUP BY"], "answer": 1, "explain": "A derived table is computed before the outer query, so it cannot refer to the outer rows."},
+  {"q": "A correlated subquery (SELECT COUNT(*) FROM txn t WHERE t.account_id = a.account_id) in the SELECT list returns what for an account with no transactions?", "options": ["NULL", "0", "The row is dropped", "An error"], "answer": 1, "explain": "COUNT over no rows is 0, and the outer row is kept, unlike with an inner join."},
+  {"q": "Which is the NULL-safe way to find rows without a match?", "options": ["NOT IN (subquery)", "NOT EXISTS (correlated subquery)", "<> ALL (subquery)", "!= (subquery)"], "answer": 1, "explain": "NOT EXISTS is unaffected by NULLs in the subquery's data; NOT IN returns nothing if the list contains one."},
+  {"q": "Which index most helps WHERE 2 = (SELECT COUNT(*) FROM account a WHERE a.cust_id = c.cust_id)?", "options": ["customer(city)", "account(cust_id)", "account(avail_balance)", "customer(cust_type_cd)"], "answer": 1, "explain": "The subquery looks up accounts by a.cust_id once per customer, so that is the column to index."},
+  {"q": "WHERE o.order_date = (SELECT MAX(o2.order_date) FROM orders o2 WHERE o2.customer_id = o.customer_id) returns, for a customer with two orders on their latest date...", "options": ["One of them, chosen at random", "Both orders", "Neither order", "An error"], "answer": 1, "explain": "Every row whose date equals the maximum qualifies, so ties all come back."}
 ]
 ```
 
-> **Source:** Beaulieu, *Learning SQL*, ch. 9 "Subqueries" (correlated subqueries, the exists operator, data manipulation using correlated subqueries, subqueries as data sources, in filter conditions and as expression generators, subquery wrap-up).
+> **Source:** Beaulieu, *Learning SQL*, ch. 9 "Subqueries" (correlated subqueries, the exists operator, data manipulation using correlated subqueries, subqueries as data sources, in filter conditions and as expression generators), restated in original wording with this guide's own datasets.

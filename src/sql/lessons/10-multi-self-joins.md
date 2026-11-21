@@ -1,10 +1,24 @@
 # Three or more tables, self joins and non-equi joins
 
-Two-table joins are the building block; real queries chain several of them. This lesson covers joining three or more tables, using subqueries as tables inside a join, using the *same* table more than once, joining a table to *itself*, and joins whose condition is not a simple equality.
+> **Before this lesson:** you should be able to join two tables with `JOIN ... ON`, explain why an inner join leaves out rows without a partner, and say what the *grain* of a result is ([Inner joins](#/lesson/sql/inner-joins)). New terms are explained as they appear and listed in the glossary at the end.
 
-## Joining three or more tables
+## In plain words
 
-A three-table join has three tables in FROM, two join types and two ON clauses. The book's example lists each business account with the teller who opened it:
+The last lesson joined two tables. Real questions usually need more: "which customer bought which product in which category" already touches four or five. The good news is that there is no new mechanism to learn. A join of five tables is four two-table joins done one after another, each following one pointer from one table to the next.
+
+An everyday picture: finding a friend's desk in a large office. The staff list gives you their team, the team list gives you the floor, the floor plan gives you the desk. Three lists, two hops, the same "read a value here, find it there" move each time.
+
+This lesson also covers three variations that sound strange at first and turn out to be the same idea:
+
+- **Joining to the result of another query** instead of to a stored table.
+- **Joining a table to itself**, which is how you answer "who is each employee's manager?" when managers are employees too. It is like a family tree written as one list of people, where each person's row names their parent, who is another row in the same list.
+- **Joining on something other than "equals"**, such as "this date falls inside that period".
+
+**Why it matters for a job.** Multi-table joins are everyday work for anyone who touches a database. Self joins and range joins are favourite interview material ("employees who earn more than their manager", "which price was valid on that day") because they test whether you understand joins or only memorised one pattern.
+
+## Joining three tables
+
+Start with a question that needs three tables: *for each account owned by a business customer, which employee opened it?* The account is in `account`, the customer type in `customer`, and the employee's name in `employee`.
 
 ```sql-run dataset=bank
 SELECT a.account_id, c.fed_id, e.fname, e.lname
@@ -14,11 +28,20 @@ JOIN employee e ON a.open_emp_id = e.emp_id
 WHERE c.cust_type_cd = 'B';
 ```
 
-Think of it as a snowball: `account` joined to `customer` produces an intermediate result; that result is then joined to `employee`. Each `ON` clause may refer to any table already mentioned.
+Read it one line at a time:
 
-### Does the order matter?
+- `FROM account a` — begin with accounts.
+- `JOIN customer c ON a.cust_id = c.cust_id` — attach to each account the customer who owns it.
+- `JOIN employee e ON a.open_emp_id = e.emp_id` — then attach the employee whose id is stored in the account's `open_emp_id` column.
+- `WHERE c.cust_type_cd = 'B'` — keep only rows whose customer is a business (`'B'`).
 
-Rearrange the tables and the result is the same:
+The result has 16 rows, one per business account: its id, the owner's tax id (`fed_id`) and the first and last name of the employee who opened it. The first two rows both name Frank Portman, who opened accounts 169 and 170.
+
+A helpful picture is a snowball. `account` joined to `customer` makes a wider intermediate table; that table is then joined to `employee`, making it wider again. Each `ON` may mention any table that has already been named above it.
+
+### Does the written order matter?
+
+Put the tables in a different order and run it again:
 
 ```sql-run dataset=bank
 SELECT a.account_id, c.fed_id, e.fname, e.lname
@@ -28,11 +51,18 @@ JOIN customer c ON a.cust_id = c.cust_id
 WHERE c.cust_type_cd = 'B';
 ```
 
-The server picks a **driving table** and a join order using statistics; your FROM clause is a description, not a recipe. The only thing the written order must respect is that an `ON` clause can only mention tables that have already appeared.
+The same 16 rows. As the previous lesson said, the database's optimizer decides which table to read first (called the **driving table**) and in what order to visit the others. Your `FROM` clause describes the result; it is not a list of steps. The only rule for the written order is that an `ON` condition can mention only tables that already appeared.
 
 ### Walking a chain of foreign keys
 
-Many questions are just a walk along the schema's foreign keys. *Total value of delivered orders per top-level product, with the customer's country* touches four tables:
+Many questions are a walk along the pointers between tables. *Revenue from delivered orders, per customer country and product category* needs five tables in the shop dataset. Before writing anything, trace the path: a customer has orders, an order has items, an item names a product, a product belongs to a category.
+
+```mermaid
+flowchart LR
+    C[customers] --> O[orders] --> I[order_items] --> P[products] --> K[categories]
+```
+
+One arrow, one `JOIN ... ON`:
 
 ```sql-run dataset=shop
 SELECT c.country,
@@ -49,11 +79,15 @@ ORDER BY revenue DESC
 LIMIT 10;
 ```
 
-Before writing such a query, sketch the path on the ER diagram: customers → orders → order_items → products → categories. One `JOIN ... ON` per arrow.
+The four joins produce one row per order item, carrying the customer's country and the category name. `GROUP BY c.country, cat.name` then collects those rows into one group per country and category, and `SUM(...)` adds up quantity × price (less any discount) inside each group. Grouping is taught in full in [Aggregate functions and GROUP BY](#/lesson/sql/group-by). The top row is laptops sold to customers in Germany.
 
-## Using subqueries as tables
+Notice that five tables needed four `ON` conditions. In general *n* tables need at least *n − 1* conditions to be fully connected. Count them: a missing one gives the all-pairs Cartesian product.
 
-A join partner need not be a stored table. The book rewrites the earlier query so that the employee and branch filters are pushed into subqueries: find accounts opened by *experienced tellers* currently assigned to the *Woburn* branch.
+## Joining to the result of a query
+
+The thing after `JOIN` does not have to be a stored table. It can be a whole `SELECT` in parentheses, called a **subquery**. When a subquery is used in place of a table it is known as a **derived table**, and it must be given an alias so the rest of the query can refer to it.
+
+Question: *which accounts were opened by long-serving tellers who work at the Woburn branch?*
 
 ```sql-run dataset=bank
 SELECT a.account_id, a.cust_id, a.open_date, a.product_cd
@@ -69,9 +103,13 @@ JOIN (SELECT branch_id
   ON e.assigned_branch_id = b.branch_id;
 ```
 
-Each subquery produces a small derived table (`e` holds experienced tellers, `b` holds one branch) and the outer query joins them. There is no WHERE clause in the outer query; all filtering has moved inside the derived tables. Whether this is *faster* than the flat version depends on the optimizer — most will produce the same plan — but it is a powerful way to **structure** a query: build small, obviously-correct pieces and join them.
+Take it in pieces. The first parenthesised query, nicknamed `e`, is a small table of tellers who started before June 2021. The second, `b`, is a one-row table holding the Woburn branch. The outer query joins accounts to those two small tables and returns 25 accounts. There is no outer `WHERE`: all the filtering happened inside the derived tables.
 
-The most important use of this technique is **pre-aggregation**, which solves the fan-out problem from the last lesson. To get each order's item total *and* keep `shipping_fee` unduplicated, aggregate the items first, then join:
+Is this faster than writing three plain joins and one `WHERE`? Usually not; most optimizers turn both forms into the same plan. The benefit is to the reader. You build small pieces, check each one on its own (you can run a subquery by itself), and then connect them.
+
+### The most important use: totals first, join second
+
+The last lesson showed the fan-out problem: join `orders` to `order_items` and each order's `shipping_fee` is repeated on every item row. A derived table solves it. Add up the items **first**, so that the derived table has one row per order, and join afterwards. Totalling before joining is called **pre-aggregation**.
 
 ```sql-run dataset=shop
 SELECT o.order_id, o.shipping_fee, t.items, t.subtotal,
@@ -86,11 +124,11 @@ ORDER BY total DESC
 LIMIT 8;
 ```
 
-The derived table `t` has one row per order, so the join is one-to-one and nothing is double counted.
+The derived table `t` holds one row per order with its item count and subtotal. Joining it to `orders` is one-to-one, so the shipping fee appears once and `total` is correct. The largest order is number 119: seven items, 9023.00 plus 4.99 shipping.
 
 ## Using the same table twice
 
-Sometimes a table plays two different roles in one query. An account has an *opening branch*; the employee who opened it has an *assigned branch*. To show both names, join `branch` twice with different aliases:
+Sometimes one table plays two parts in a question. An account was opened at a branch (`account.open_branch_id`). The employee who opened it is assigned to a branch too (`employee.assigned_branch_id`). To show both branch names, `branch` must be joined twice, and each copy needs its own alias:
 
 ```sql-run dataset=bank
 SELECT a.account_id,
@@ -105,11 +143,21 @@ WHERE a.product_cd = 'CHK'
 LIMIT 10;
 ```
 
-Aliases are mandatory here: without them the server could not tell which `branch` you mean in each ON clause. Give role-based aliases (`b_a` for the account's branch, `b_e` for the employee's) rather than `b1`, `b2`.
+Treat `b_a` and `b_e` as two separate copies of the branch list: one is consulted for the account's branch, the other for the employee's. Without aliases the database could not tell which copy `branch.name` refers to and would report an error. Choose aliases that say the role (`b_a` for the account's branch, `b_e` for the employee's) instead of `b1` and `b2`.
 
 ## Self joins
 
-A table can also be joined **to itself**. This is natural whenever a table has a **self-referencing foreign key** — a column pointing at the same table's primary key. `employee.superior_emp_id` points at the manager's `emp_id`:
+A table can also be joined **to itself**. This comes up whenever a table has a **self-referencing foreign key**: a column that points at the primary key of the *same* table. In `employee`, the column `superior_emp_id` holds the `emp_id` of that person's manager, and the manager is another row of `employee`.
+
+Look at the raw columns first:
+
+```sql-run dataset=bank
+SELECT emp_id, fname, lname, superior_emp_id
+FROM employee
+WHERE emp_id <= 4;
+```
+
+Michael Smith (id 1) has an empty `superior_emp_id`: he is the president and reports to no one. Susan Barker and Robert Tyler both show 1, meaning their manager is employee 1. To replace that number with a name, look it up in the same table:
 
 ```sql-run dataset=bank
 SELECT e.fname || ' ' || e.lname AS employee,
@@ -120,9 +168,11 @@ JOIN employee mgr ON e.superior_emp_id = mgr.emp_id
 ORDER BY mgr.emp_id, e.emp_id;
 ```
 
-Read the two aliases as two different tables: `e` is "the employee", `mgr` is "their manager". Notice the result has 21 rows, not 22: the president has no superior (`superior_emp_id` is NULL), so the inner join drops him. An outer join keeps him; that is the *Joins revisited* module.
+The trick is to read the two aliases as two different tables. `e` is "the employee I am describing"; `mgr` is "the list in which I look up their manager". The condition says: the employee's `superior_emp_id` equals the manager's own `emp_id`.
 
-Other self-referencing structures in our datasets: `categories.parent_id`, `customers.referred_by`, `runs.parent_run_id`.
+The result has 21 rows although the bank has 22 employees. The missing one is the president. His `superior_emp_id` is NULL, no row can match NULL, and an inner join leaves out rows without a partner. An outer join would keep him ([Outer joins](#/lesson/sql/outer-joins)).
+
+The same shape appears in the other datasets: `categories.parent_id`, `customers.referred_by`, `runs.parent_run_id`. Here each product category is listed with the category it sits under:
 
 ```sql-run dataset=shop
 SELECT child.name AS category, parent.name AS parent_category
@@ -131,17 +181,17 @@ JOIN categories parent ON child.parent_id = parent.category_id
 ORDER BY parent.name, child.name;
 ```
 
-A self join climbs exactly **one level**. Walking a hierarchy of unknown depth needs a recursive CTE (see the CTE module).
+One self join climbs exactly **one level**. Walking a hierarchy whose depth you do not know in advance (manager, manager's manager, and so on to the top) needs a recursive query, taught in [Recursive CTEs](#/lesson/sql/recursive-ctes).
 
-Self joins don't require a self-referencing key. Any time you compare rows of a table with other rows of the same table — pairs of employees in the same branch, a customer's consecutive orders — you are self-joining.
+A self join does not require a self-referencing key. Any time you compare rows of a table with *other rows of the same table* (two products in the same category, two sign-ups with the same email) you are self-joining.
 
-## Equi-joins versus non-equi-joins
+## Joins that do not use "equals"
 
-All joins so far were **equi-joins**: the condition was an equality. A **non-equi-join** uses ranges or inequalities.
+Every join so far had an equality as its condition. Such a join is an **equi-join**. A **non-equi-join** uses a range or an inequality (`<`, `>=`, `BETWEEN`) instead.
 
 ### Range joins
 
-Which products were on offer when each account was opened? The condition is "open date between the product's offer and retirement dates" — and here there is no foreign key involved at all:
+Question: *which insurance products were on offer on the day each employee started?* There is no foreign key between `employee` and `product` at all. The link is a date falling inside a period:
 
 ```sql-run dataset=bank
 SELECT e.emp_id, e.fname, e.lname, e.start_date, p.name AS product_offered
@@ -152,7 +202,9 @@ JOIN product p
 WHERE p.product_type_cd = 'INSURANCE';
 ```
 
-Range joins appear constantly in analytics: matching an event to the price list in force at the time, a transaction to its fiscal period, a prediction to the model deployment that was live when it was made:
+The `ON` condition has two parts. The start date must be on or after the day the product was first offered, and it must be on or before the day the product was withdrawn. A product still on sale has NULL in `date_retired`, and a comparison with NULL is never true, so the condition needs the extra branch `p.date_retired IS NULL OR ...` to let those products through.
+
+Range joins are everywhere in reporting: matching a sale to the price list in force that day, a payment to its accounting period, a prediction to the model version that was running when it was made. A close relative is the **point-in-time** question, "what was live at this instant?":
 
 ```sql-run dataset=mlops
 SELECT d.deployment_id, m.name, m.version, d.deployed_at, d.retired_at
@@ -163,11 +215,11 @@ WHERE d.environment = 'production'
   AND (d.retired_at IS NULL OR d.retired_at > '2024-03-02 12:00:00');
 ```
 
-That is a **point-in-time** lookup: which production deployments were live at noon on 2 March.
+A **deployment** is a period during which a model version was serving users. Two production deployments were live at noon on 2 March 2024: each started before that moment and ended after it.
 
-### Self non-equi-joins: generating pairs
+### Self non-equi-joins: making pairs
 
-The book's chess-tournament example: pair every teller with every other teller. A first attempt with `e1.emp_id <> e2.emp_id` produces each pairing twice (A–B and B–A). Using `<` keeps exactly one of each:
+Suppose the four head tellers hold a chess tournament in which everyone plays everyone once. You need every pair. A self join with `e1.emp_id <> e2.emp_id` ("not the same person") gives each pairing twice, once as A against B and once as B against A. Using `<` keeps exactly one of the two:
 
 ```sql-run dataset=bank
 SELECT e1.fname || ' ' || e1.lname AS player_1,
@@ -178,33 +230,25 @@ JOIN employee e2 ON e1.emp_id < e2.emp_id
 WHERE e1.title = 'Head Teller' AND e2.title = 'Head Teller';
 ```
 
-Four head tellers give 4 × 3 / 2 = 6 matches. The `a.id < b.id` trick is the standard way to list unordered pairs — and to find duplicates (`a.email = b.email AND a.id < b.id`).
+Four players give 4 × 3 ÷ 2 = 6 games, and six rows come back. Why does `<` work? For any two different people, one has the smaller id, so the pair qualifies in one direction only; and nobody's id is smaller than itself, so no one plays themselves. The `a.id < b.id` condition is the standard way to list unordered pairs.
 
 > [!WARNING]
-> Non-equi-joins can be expensive. Hash and merge joins need an equality; a pure range condition often forces a nested loop over every pair of rows. On big tables add an equality where you can (same customer, same day bucket), or use window functions instead of self joins.
+> Non-equi-joins can be slow. The fast join methods (hash join and merge join) need an equality to work with. A condition made only of ranges often forces the database to test every pair of rows. On large tables, add an equality where one exists (same customer, same day), or use window functions instead of a self join.
 
-## Join conditions versus filter conditions, revisited
+## Where conditions go, revisited
 
-With several tables and subqueries, it is tempting to scatter conditions anywhere. Keep the discipline from the last lesson:
+With several tables and subqueries it is tempting to scatter conditions anywhere. Keep the rule from the last lesson:
 
-- **ON**: how this table relates to the tables already joined.
-- **WHERE**: which rows of the final combination you want.
+- **`ON`**: how this table connects to the ones already joined.
+- **`WHERE`**: which rows of the finished combination you want.
 
-For inner joins the placement doesn't change the result, but it changes how quickly a reader can verify the query — and for outer joins it will change the result.
+For inner joins the placement does not change the result, but it changes how fast a reader can check the query, and for outer joins it does change the result.
 
-## Pitfalls
+## Worked example: one question, four tables
 
-- **Forgetting an ON clause** in a five-table join multiplies rows silently (SQLite/MySQL). Count your joins: *n* tables need *n − 1* conditions.
-- **Reusing an alias** or not using aliases when a table appears twice.
-- **Symmetric duplicates** in pair generation — use `<`, not `<>`.
-- **Self join for deep hierarchies** — only one level per join.
-- **Joining an aggregated and a non-aggregated grain** without pre-aggregation.
+Long joins become manageable once you name the path. Question: *which tellers handled the most money in transactions on accounts they did not open themselves, and at which branch do they work?*
 
-## Worked example: one question, four tables, built in layers
-
-Multi-table queries become manageable when you name the path first. Question: *which tellers handled the most money in transactions on accounts they did not open themselves, and at which branch do they work?*
-
-The path through the schema: `txn` (the facts) → `employee` as **teller** (via `teller_emp_id`) → `branch` (the teller's assigned branch); and `txn` → `account` (via `account_id`) to learn who opened the account. `employee` is needed once (the teller); the opener is only compared by id, so no second copy is required.
+The path: `txn` holds the transactions; `txn.teller_emp_id` leads to `employee` (the teller); `employee.assigned_branch_id` leads to `branch`; and `txn.account_id` leads to `account`, which records who opened it.
 
 ```sql-run dataset=bank
 SELECT e.emp_id,
@@ -222,9 +266,9 @@ ORDER BY amount_handled DESC
 LIMIT 5;
 ```
 
-Check the grain at each stage: `txn` has one row per transaction; each of the three joins is many-to-one (a transaction has one teller, a teller one branch, a transaction one account), so the row count never grows — only the inner join on `teller_emp_id` shrinks it, dropping ATM/online transactions that have no teller. The WHERE clause then compares two columns from *different* tables, which is perfectly legal: after the joins, every column of every table is available on each row.
+Check the grain at each stage. `txn` has one row per transaction. Each of the three joins is many-to-one (a transaction has one teller, a teller one branch, a transaction one account), so the row count never grows. It shrinks once: the join on `teller_emp_id` leaves out cash-machine and online transactions, which have no teller. The `WHERE` clause then compares columns from two *different* tables, which is allowed: after the joins, every column of every joined table is available on each row. Thomas Ziegler of the Woburn branch heads the list.
 
-If we also wanted the **name** of the employee who opened the account, `employee` would appear a second time under a different alias — the "same table twice" pattern:
+If the **name** of the opening employee were wanted too, `employee` would appear a second time under another alias. That is the "same table twice" pattern again:
 
 ```sql-run dataset=bank
 SELECT t.txn_id, t.amount,
@@ -239,13 +283,13 @@ ORDER BY t.amount DESC
 LIMIT 5;
 ```
 
-Role-based aliases (`teller`, `opener`) make the query read like the sentence that describes it.
+Aliases named after roles (`teller`, `opener`) make the query read like the sentence that describes it.
 
 ## Self joins for comparing rows
 
-Self joins answer "compare each row with other rows of the same table". Three classic shapes.
+Three shapes come up again and again.
 
-**Rows sharing an attribute.** Pairs of products in the same category with the same price band — here, simply the same category and a price within \$10 of each other:
+**Rows that share a property.** Pairs of products in the same category whose prices are within 10 of each other:
 
 ```sql-run dataset=shop
 SELECT a.name AS product_a, b.name AS product_b, a.price AS price_a, b.price AS price_b
@@ -257,9 +301,9 @@ JOIN products b
 ORDER BY a.category_id, a.name;
 ```
 
-Three conditions in one ON clause: an equality (same category), an inequality that removes self-pairs and mirror pairs, and a range on a computed difference.
+The `ON` clause has three tests: an equality (same category), the `<` that removes self-pairs and mirror pairs, and a range on a calculated difference. `ABS` returns a number without its sign, so the test works whichever product is dearer.
 
-**Finding duplicates.** Two rows are suspected duplicates when they agree on a business key but have different ids:
+**Finding duplicates.** Two rows are suspected duplicates when they agree on a value that should be unique but have different ids. The `customer_imports` table holds sign-ups loaded from files, and some people were loaded more than once:
 
 ```sql-run dataset=shop
 SELECT a.import_id AS first_id, b.import_id AS duplicate_id, lower(trim(a.email)) AS email
@@ -271,11 +315,13 @@ ORDER BY email
 LIMIT 8;
 ```
 
-**Previous / next row.** Before window functions, "each order with the customer's previous order" was a self join on "the latest earlier order" — slow and awkward. You will see the one-line `LAG()` version in the window-functions module; knowing the self-join form helps you appreciate (and recognise) what LAG replaces.
+`trim` removes spaces at both ends and `lower` converts to lower case, so `" Ana@X.com"` and `"ana@x.com"` count as the same address.
 
-## Point-in-time joins: a worked ML example
+**Previous or next row.** "Each order next to the same customer's previous order" can be written as a self join on "the latest earlier order", but it is slow and awkward. The window function `LAG()` does it in one line ([LAG, LEAD, running totals and frames](#/lesson/sql/lag-lead-frames)). Knowing the self-join form helps you recognise what `LAG` replaces.
 
-Range joins are the backbone of **point-in-time correctness** in ML: when building a training set, each example may only use information that was available at that moment. The same logic attributes each prediction to the model version that was serving at that instant:
+## Point-in-time joins: a machine-learning example
+
+Range joins are the basis of **point-in-time correctness** in machine learning: when building training data, each example may use only information that existed at that moment. The same logic credits each prediction to the model version that was serving when it was made:
 
 ```sql-run dataset=mlops
 SELECT m.name || ':v' || m.version AS serving_model,
@@ -292,31 +338,53 @@ GROUP BY m.name, m.version
 ORDER BY first_prediction;
 ```
 
-The validity window is half-open — `deployed_at` inclusive, `retired_at` exclusive — so a prediction made at the exact moment of a hand-over belongs to exactly one deployment. Getting that boundary wrong (using `<=` on both ends) double-counts rows that fall on the boundary; using `<` on both ends loses them. An open-ended window (`retired_at IS NULL`) needs its own branch because a comparison with NULL would reject the row.
-
-> [!WARNING]
-> Range joins have no hashable equality, so on large tables combine them with an equality whenever one exists (here `deployment_id`), and index the range columns. A pure range join between two million-row tables can take hours.
+Look at the two ends of the period. The start uses `>=` (included) and the end uses `<` (excluded). A period written this way is called **half-open**, and it guarantees that a prediction made at the exact instant of a hand-over belongs to one deployment only. With `<=` at both ends such a row would be counted twice; with `<` at both ends it would be lost. A deployment that is still running has NULL in `retired_at` and needs its own `IS NULL` branch, for the same reason as before.
 
 > [!INTERVIEW]
-> Self-join classics to recognise: *employees earning more than their manager* (join on manager id, compare salaries), *pairs of rows with the same value* (`a.key = b.key AND a.id < b.id`), *consecutive rows* (`b.id = a.id + 1`). In each, say which alias plays which role before you write the ON clause.
+> Self-join classics to recognise: *employees who earn more than their manager* (join on the manager id, compare salaries), *pairs of rows with the same value* (`a.key = b.key AND a.id < b.id`), *consecutive rows* (`b.id = a.id + 1`). In each, say aloud which alias plays which role before you write the `ON` clause.
+
+## Pitfalls
+
+- **A forgotten `ON`** in a five-table join multiplies rows without any error in SQLite and MySQL. Count them: *n* tables need *n − 1* conditions.
+- **No alias, or the same alias twice,** when a table appears more than once.
+- **Mirror duplicates** when making pairs: use `<`, not `<>`.
+- **Expecting one self join to walk a whole hierarchy.** Each self join climbs one level.
+- **Mixing grains.** Joining per-order data to per-item data without totalling the items first double counts.
+- **Forgetting open-ended periods.** A NULL end date needs an explicit `IS NULL` branch in a range join.
 
 ## Summary
 
-- Multi-table joins chain two-table joins; written order doesn't dictate execution order.
-- Derived tables (subqueries in FROM) can be join partners; pre-aggregate in them to avoid fan-out.
+- A multi-table join is a chain of two-table joins; the written order does not dictate the order the database uses.
+- A derived table (a subquery in `FROM`) can be a join partner; total inside it first to avoid fan-out.
 - A table may appear several times under different aliases to play different roles.
-- **Self joins** relate rows of one table to other rows of the same table, typically through a self-referencing foreign key.
-- **Non-equi-joins** use ranges or inequalities: point-in-time lookups, pair generation.
+- A **self join** relates rows of a table to other rows of the same table, often through a self-referencing foreign key, and climbs one level per join.
+- A **non-equi-join** uses ranges or inequalities: validity periods, point-in-time lookups, making pairs.
+
+## Glossary
+
+- **Driving table** — the table the database chooses to read first when carrying out a join.
+- **Subquery** — a `SELECT` written inside another query, in parentheses.
+- **Derived table** — a subquery used in `FROM` or `JOIN` in place of a stored table; it needs an alias.
+- **Pre-aggregation** — totalling the "many" table down to one row per key before joining it.
+- **Self-referencing foreign key** — a column that points at the primary key of its own table, such as an employee's manager id.
+- **Self join** — a join of a table with itself, using two aliases.
+- **Equi-join** — a join whose condition is an equality.
+- **Non-equi-join** — a join whose condition is a range or an inequality.
+- **Range join** — a non-equi-join that matches a value to the period or band it falls in.
+- **Point-in-time lookup** — finding the row that was valid at a given moment.
+- **Half-open period** — a period that includes its start and excludes its end, so neighbouring periods never overlap.
+- **Deployment** — in the `mlops` dataset, a span of time during which one model version was serving predictions.
 
 ```quiz
 [
-  {"q": "How many ON conditions does a join of five tables need at minimum to avoid a Cartesian product?", "options": ["3", "4", "5", "10"], "answer": 1, "explain": "n tables need n-1 join conditions to connect them all."},
-  {"q": "Why does the employee-manager self join return 21 rows from 22 employees?", "options": ["A duplicate is removed", "The president has a NULL superior and the inner join drops him", "One employee left the bank", "LIMIT 21 is implied"], "answer": 1, "explain": "No manager row matches NULL, so the president's row vanishes."},
-  {"q": "Which condition lists each unordered pair of employees exactly once?", "options": ["e1.emp_id = e2.emp_id", "e1.emp_id <> e2.emp_id", "e1.emp_id < e2.emp_id", "No condition"], "answer": 2, "explain": "< keeps one of (A,B)/(B,A) and excludes (A,A)."},
-  {"q": "What is the main reason to join orders to a pre-aggregated subquery of order_items?", "options": ["It is required by SQLite", "To keep one row per order and avoid double-counting order-level columns", "Subqueries are always faster", "To avoid aliases"], "answer": 1, "explain": "Pre-aggregating restores a one-to-one grain."},
-  {"q": "Joining branch twice in one query requires...", "options": ["A view", "Two different table aliases", "A UNION", "A temporary table"], "answer": 1, "explain": "Each role needs its own alias so columns can be told apart."},
-  {"q": "A join with the condition e.start_date BETWEEN p.date_offered AND p.date_retired is a...", "options": ["Equi-join", "Non-equi-join", "Natural join", "Cross join"], "answer": 1, "explain": "The condition is a range, not an equality."}
+  {"q": "How many ON conditions does a join of five tables need at minimum to avoid a Cartesian product?", "options": ["3", "4", "5", "10"], "answer": 1, "explain": "n tables need n-1 join conditions to connect them all, so five tables need four."},
+  {"q": "Why does the employee-manager self join return 21 rows from 22 employees?", "options": ["A duplicate is removed", "The president's superior_emp_id is NULL, so he has no partner and the inner join leaves him out", "One employee left the bank", "LIMIT 21 is implied"], "answer": 1, "explain": "No manager row can match NULL, and an inner join keeps only rows with a partner."},
+  {"q": "Which condition lists each unordered pair of employees exactly once?", "options": ["e1.emp_id = e2.emp_id", "e1.emp_id <> e2.emp_id", "e1.emp_id < e2.emp_id", "No condition"], "answer": 2, "explain": "< keeps one of (A,B) and (B,A) and excludes (A,A); <> would keep both directions."},
+  {"q": "What is the main reason to join orders to a pre-aggregated subquery of order_items?", "options": ["SQLite requires it", "To keep one row per order and avoid double-counting order-level columns", "Subqueries are always faster", "To avoid aliases"], "answer": 1, "explain": "Totalling items first gives one row per order, so the join is one-to-one and shipping_fee is not repeated."},
+  {"q": "Joining branch twice in one query requires...", "options": ["A view", "Two different table aliases", "A UNION", "A temporary table"], "answer": 1, "explain": "Each role needs its own alias so the database can tell the two copies apart."},
+  {"q": "A join with the condition e.start_date BETWEEN p.date_offered AND p.date_retired is a...", "options": ["Equi-join", "Non-equi-join", "Natural join", "Cross join"], "answer": 1, "explain": "The condition is a range, not an equality."},
+  {"q": "A validity period is tested with p.predicted_at >= d.deployed_at AND p.predicted_at < d.retired_at. Why is the end excluded?", "options": ["SQLite cannot compare dates with <=", "So that a row falling exactly on a hand-over belongs to one period only", "To make the query use an index", "Because retired_at may be NULL"], "answer": 1, "explain": "A half-open period includes its start and excludes its end, so neighbouring periods never both claim the same instant."}
 ]
 ```
 
-> **Source:** Beaulieu, *Learning SQL*, ch. 5 "Querying Multiple Tables" (joining three or more tables, using subqueries as tables, using the same table twice, self-joins, equi-joins versus non-equi-joins).
+> **Source:** Beaulieu, *Learning SQL*, ch. 5 "Querying Multiple Tables" (joining three or more tables, subqueries as tables, using the same table twice, self-joins, equi-joins versus non-equi-joins), restated in original wording with this guide's own datasets.

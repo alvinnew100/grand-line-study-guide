@@ -1,10 +1,20 @@
 # The CASE expression
 
-Sometimes you want SQL to branch: show one thing for individual customers and another for businesses, label balances as low or high, treat credits and debits differently in the same sum. **Conditional logic** is the ability to take one of several paths depending on the values in a row, and in SQL it is provided by the `CASE` expression. CASE is part of the SQL-92 standard, works identically in every major database, and can be used in SELECT, INSERT, UPDATE and DELETE statements — almost anywhere an expression is allowed. This lesson covers its two forms and their rules; the next applies them to the classic patterns.
+> **Before this lesson:** you should be able to write conditions with comparisons, `AND`, `OR`, `IN` and `IS NULL` ([Building conditions](#/lesson/sql/conditions), [NULL: the four-letter word](#/lesson/sql/null-logic)), use aggregates with `GROUP BY` ([Aggregate functions and GROUP BY](#/lesson/sql/group-by)) and read a `LEFT JOIN` ([Outer joins](#/lesson/sql/outer-joins)).
 
-## What is conditional logic?
+## In plain words
 
-The bank has two kinds of customer, with names stored in different subtype tables. With outer joins you can fetch both names in separate columns:
+So far every column in a result was either copied from a table or calculated the same way for every row. Often the calculation should *depend on the row*: show a person's name for one kind of customer and a company's name for another; call a balance "low" or "high"; count a deposit as plus and a withdrawal as minus. Choosing between alternatives according to a test is called **conditional logic**, and in SQL it is written with the `CASE` expression.
+
+`CASE` is SQL's "if ... then ... otherwise". An everyday picture: the sorting rule at a post office. *If* the parcel weighs under one kilo, it goes in the small bin; *otherwise, if* it weighs under ten kilos, the medium bin; *otherwise* the large bin. The clerk checks the rules from the top and stops at the first one that fits. `CASE` works in exactly that way, once for each row.
+
+If you have used a spreadsheet, `CASE` does the job of the `IF` function.
+
+**Why it matters for a job.** Business rules ("customers with over 10,000 are Premier") reach the data through `CASE`. It is part of the SQL standard and is written the same way on every major database. In interviews it often arrives in disguise: "put customers into tiers", "count the passes and the fails in separate columns", "swap two values in one statement". This lesson covers the two forms of `CASE` and their rules; the next applies them to the classic patterns.
+
+## A first example: one name column from two tables
+
+The bank has two kinds of customer. A person's name is stored in the `individual` table and a company's name in `business`. With two left joins both can be fetched, each in its own column:
 
 ```sql-run dataset=bank
 SELECT c.cust_id, c.fed_id, c.cust_type_cd,
@@ -16,7 +26,7 @@ LEFT JOIN business b   ON c.cust_id = b.cust_id
 WHERE c.cust_id BETWEEN 28 AND 33;
 ```
 
-The caller must now look at two columns to find the name. With conditional logic the query decides which one to return:
+Customers 28 to 30 are people (type `I`): they have an `indiv_name` and NULL as `business_name`. Customers 31 to 33 are companies (type `B`) and it is the other way round. Whoever reads the result has to look in two places. `CASE` lets the query choose:
 
 ```sql-run dataset=bank
 SELECT c.cust_id, c.fed_id,
@@ -31,40 +41,48 @@ LEFT JOIN business b   ON c.cust_id = b.cust_id
 WHERE c.cust_id BETWEEN 28 AND 33;
 ```
 
-One `name` column, filled from the right source for each row.
+Read the `CASE` part word by word:
+
+- `CASE` opens the expression.
+- `WHEN c.cust_type_cd = 'I' THEN i.fname || ' ' || i.lname` — if this customer is a person, the result is the first and last name joined with a space.
+- `WHEN c.cust_type_cd = 'B' THEN b.name` — otherwise, if the customer is a company, the result is the company name.
+- `ELSE 'Unknown'` — if neither test was true, the result is the text `Unknown`.
+- `END` closes the expression, and `AS name` names the resulting column.
+
+One `name` column, filled from the right source on each row.
 
 > [!NOTE]
-> Many databases have their own conditional functions — Oracle's `DECODE`, MySQL's `IF()`, SQL Server's `IIF` and `COALESCE`'s cousins, SQLite's `iif()`. The book recommends CASE over all of them, because it is standard, runs everywhere, and reads clearly. `iif(cond, a, b)` in SQLite is simply shorthand for `CASE WHEN cond THEN a ELSE b END`.
+> Several databases have their own shortcuts: `DECODE` in Oracle, `IF()` in MySQL, `IIF` in SQL Server, `iif()` in SQLite. `iif(test, a, b)` is short for `CASE WHEN test THEN a ELSE b END`. Prefer `CASE`: it is standard, works everywhere and reads clearly.
 
-## Searched CASE expressions
+## The searched CASE
 
-The form used above is the **searched** case expression:
+The form above is called the **searched** `CASE`. Each `WHEN` carries a complete condition of its own:
 
 ```
 CASE
-  WHEN condition_1 THEN expression_1
-  WHEN condition_2 THEN expression_2
+  WHEN condition_1 THEN result_1
+  WHEN condition_2 THEN result_2
   ...
-  [ELSE default_expression]
+  [ELSE default_result]
 END
 ```
 
-Rules:
+The rules:
 
-1. Conditions are evaluated **in order, top to bottom**.
-2. As soon as one evaluates to TRUE, the corresponding expression is returned and **no further WHEN clauses are evaluated**.
-3. If none is true, the `ELSE` expression is returned. If there is no ELSE, the result is **NULL**.
-4. All result expressions should return the **same type** (strings, numbers, dates…). PostgreSQL enforces this; SQLite, being dynamically typed, will let you mix and leave you to deal with the consequences.
+1. The conditions are checked **in order, from top to bottom**.
+2. At the first condition that is true, its result is returned and **the remaining `WHEN` lines are not looked at**.
+3. If none is true, the `ELSE` result is returned. If there is no `ELSE`, the result is **NULL**.
+4. All the results should be of the **same type** (all text, or all numbers). PostgreSQL insists; SQLite lets you mix and leaves you with the consequences.
 
-Each condition is a full boolean expression: comparisons, `AND`/`OR`, `IN`, `LIKE`, `IS NULL`, even subqueries.
+A condition can be anything you could write in `WHERE`: comparisons, `AND` and `OR`, `IN`, `LIKE`, `IS NULL`, even a subquery.
 
-Because the first true branch wins, order matters when conditions overlap. This lets you write thresholds compactly:
+Because the first true line wins, order matters when conditions overlap. That allows compact thresholds:
 
 ```sql-run dataset=shop
 SELECT name, price,
        CASE
          WHEN price >= 1000 THEN 'premium'
-         WHEN price >= 100  THEN 'mid-range'     -- implicitly: and price < 1000
+         WHEN price >= 100  THEN 'mid-range'     -- reached only if price < 1000
          WHEN price >= 20   THEN 'budget'
          ELSE 'impulse'
        END AS tier
@@ -73,11 +91,13 @@ ORDER BY price DESC
 LIMIT 10;
 ```
 
-Reverse the order — test `price >= 20` first — and nearly everything would be labelled "budget". When a CASE gives unexpected labels, check the order of its branches first.
+A product priced 1799.00 passes the first test and is labelled `premium`; the other lines are never checked for it. A product at 349.00 fails the first test and passes the second: `mid-range`. The second line does not need to say "and below 1000", because any row that reaches it has already failed `price >= 1000`.
 
-### The missing ELSE
+Put `price >= 20` first, and nearly every product would be labelled "budget", since almost every price is at least 20. When a `CASE` gives unexpected labels, check the order of its lines before anything else.
 
-Without ELSE, unmatched rows get NULL. Sometimes that is a bug, and sometimes it is exactly what you want — it is the key to conditional aggregation, because aggregates ignore NULLs:
+### What a missing ELSE does
+
+Without `ELSE`, a row that matches no line gets NULL. Sometimes that is a mistake. Sometimes it is exactly what you want, because aggregate functions ignore NULLs:
 
 ```sql-run dataset=bank
 SELECT COUNT(*) AS accounts,
@@ -87,11 +107,13 @@ SELECT COUNT(*) AS accounts,
 FROM account;
 ```
 
-`AVG(CASE WHEN product_cd = 'CHK' THEN avail_balance END)` averages only checking balances: the other rows yield NULL and are skipped. With `ELSE 0` the average would be dragged down by all the zeros — a subtle and common mistake.
+Take the second column. For an active account the `CASE` gives 1; for any other it gives NULL (no `ELSE`). `COUNT` counts only values that are not NULL, so it counts the active accounts: 70 of 84. The same trick counts the 5 frozen ones.
 
-### Subqueries inside CASE
+The last column averages checking balances only: rows of other products give NULL and are skipped, leaving 5645.34. Had the `CASE` said `ELSE 0`, every non-checking account would have entered the average as a zero and dragged it down. That is a subtle and common mistake.
 
-The branches can contain scalar subqueries. The book rewrites the name query without any outer joins, fetching the name with a correlated subquery chosen by customer type:
+### A subquery inside a CASE
+
+A result can be a subquery that returns one value. The name query again, this time without joins; the name is fetched by a correlated subquery ([Correlated subqueries, EXISTS and subqueries as data sources](#/lesson/sql/correlated-exists)) chosen by customer type:
 
 ```sql-run dataset=bank
 SELECT c.cust_id, c.fed_id,
@@ -106,11 +128,11 @@ FROM customer c
 WHERE c.cust_id BETWEEN 28 AND 33;
 ```
 
-Only the subquery of the branch that fires is executed for each row, so only the relevant table is touched.
+For each row only the subquery of the line that matched is run, so only the relevant table is read.
 
-## Simple CASE expressions
+## The simple CASE
 
-The **simple** case expression compares one expression with a list of values:
+The **simple** `CASE` names one expression after the word `CASE` and compares it with a list of values:
 
 ```
 CASE expression
@@ -132,9 +154,9 @@ FROM customer c
 WHERE c.cust_id BETWEEN 28 AND 33;
 ```
 
-It is less flexible than the searched form — it can only test **equality** against the one expression — and therefore, the book notes, less useful: no ranges, no multiple columns. Use it for straightforward code-to-label translation; reach for the searched form for everything else.
+It reads "take `cust_type_cd`; when it equals `'I'` give 'Individual'; when it equals `'B'` give 'Business'". It is shorter, and less flexible: it can only test whether the one expression **equals** each value. No ranges, no second column. Use it to translate codes into labels, and the searched form for everything else.
 
-One trap: a simple CASE can never match NULL, because it uses `=`.
+One trap. A simple `CASE` can never match NULL, because it compares with `=` and nothing equals NULL:
 
 ```sql-run dataset=bank
 SELECT txn_id,
@@ -144,15 +166,15 @@ FROM txn
 LIMIT 6;
 ```
 
-`WHEN NULL` compares `teller_emp_id = NULL`, which is never TRUE.
+The `wrong` column says "branch" on every row, including transactions with no teller. `WHEN NULL` means `teller_emp_id = NULL`, which is never true. The `right` column uses the searched form with `IS NULL`.
 
-## CASE is an expression, not a statement
+## CASE produces a value, so it can go anywhere a value can
 
-In procedural languages `if` controls which statements run. SQL's CASE is an **expression**: it produces a value. So it can appear anywhere a value can.
+In many programming languages `if` decides which instructions are carried out. SQL's `CASE` is different: it is an **expression**, something that produces a value. It can therefore appear wherever a value is allowed.
 
-**In the select list** — every example so far.
+**In the `SELECT` list**: every example so far.
 
-**In ORDER BY** — custom sort orders:
+**In `ORDER BY`**, for a custom sort order. Titles sorted by rank instead of alphabetically:
 
 ```sql-run dataset=bank
 SELECT emp_id, fname, lname, title
@@ -166,7 +188,9 @@ ORDER BY CASE title
 LIMIT 8;
 ```
 
-**In GROUP BY** — group by a derived category:
+The `CASE` turns each title into a number; the rows are sorted by that number and then by last name.
+
+**In `GROUP BY`**, to group by a category that is worked out on the spot:
 
 ```sql-run dataset=mlops
 SELECT CASE
@@ -181,27 +205,29 @@ GROUP BY family
 ORDER BY runs DESC;
 ```
 
-**In WHERE** — possible, but usually a plain boolean expression is clearer and more index-friendly. `WHERE CASE WHEN type = 'I' THEN a ELSE b END > 10` is better written as `WHERE (type = 'I' AND a > 10) OR (type <> 'I' AND b > 10)`.
+Each training run is assigned to one of three families by its model type, and the runs are then counted per family: 50 tree-ensemble runs, 21 deep-learning runs.
 
-**Inside aggregate functions** — the most important placement, covered in the next lesson.
+**In `WHERE`**: allowed, but a plain condition is usually clearer and lets the database use an index. `WHERE CASE WHEN type = 'I' THEN a ELSE b END > 10` is better written `WHERE (type = 'I' AND a > 10) OR (type <> 'I' AND b > 10)`.
 
-**In UPDATE … SET** — conditional updates in a single pass:
+**Inside an aggregate function**: the most important place of all, and the subject of the next lesson.
+
+**In `UPDATE ... SET`**, to change different rows in different ways in one pass. (Each Run starts from a fresh copy of the data.)
 
 ```sql-run dataset=shop
 UPDATE products
 SET price = CASE
               WHEN discontinued = 1 THEN ROUND(price * 0.70, 2)   -- clearance
-              WHEN price >= 1000    THEN ROUND(price * 0.95, 2)   -- premium promo
+              WHEN price >= 1000    THEN ROUND(price * 0.95, 2)   -- premium promotion
               ELSE price
             END;
 SELECT name, price, discontinued FROM products ORDER BY product_id LIMIT 6;
 ```
 
-Note the `ELSE price`. Without it, every product matching neither branch would have its price set to NULL.
+Discontinued products are cut by 30%, products at 1000 or more by 5%, and the rest keep their price. Note `ELSE price`. Without it, every product matching neither line would have its price set to NULL.
 
-## Nesting and readability
+## When the rules are really data
 
-CASE expressions can be nested, and a long chain of WHENs is fine. When they grow, consider whether the logic is really *data*: a mapping from codes to labels or thresholds to tiers belongs in a **lookup table** that you join to, so that changing a threshold is an UPDATE rather than a code change in twenty queries.
+`CASE` expressions can be nested, and a long list of `WHEN` lines is fine. When one grows large, ask whether the logic is really *data*. A mapping from thresholds to tiers can live in a small **lookup table** that you join to, so that changing a threshold means changing one row instead of editing twenty queries:
 
 ```sql-run dataset=bank
 WITH tier(name, low, high) AS (
@@ -213,34 +239,25 @@ JOIN tier t ON a.avail_balance BETWEEN t.low AND t.high
 GROUP BY t.name;
 ```
 
-## Related shorthand functions
+Here the three tiers are written as a temporary three-row table with `WITH ... VALUES`, and each account is joined to the tier whose range contains its balance.
 
-Three standard functions are special cases of CASE:
+## Shorthand functions that are CASE in disguise
 
-| Function | Equivalent CASE |
+| Function | The same thing as a CASE |
 |---|---|
 | `COALESCE(a, b, c)` | `CASE WHEN a IS NOT NULL THEN a WHEN b IS NOT NULL THEN b ELSE c END` |
 | `NULLIF(a, b)` | `CASE WHEN a = b THEN NULL ELSE a END` |
-| `iif(c, x, y)` (SQLite, SQL Server) / `IF(c, x, y)` (MySQL) | `CASE WHEN c THEN x ELSE y END` |
+| `iif(c, x, y)` (SQLite, SQL Server), `IF(c, x, y)` (MySQL) | `CASE WHEN c THEN x ELSE y END` |
 
-Use them when they fit; they are shorter and express intent.
+Use them when they fit; they are shorter and say what you mean.
 
-## Pitfalls
+## Worked example: a written policy turned into a CASE
 
-- **Branch order** — first true WHEN wins.
-- **Missing ELSE** — NULL results; fatal in UPDATE, useful in aggregates.
-- **`ELSE 0` inside AVG / COUNT** — changes the meaning.
-- **Simple CASE with NULL** — never matches; use the searched form with `IS NULL`.
-- **Mixed result types** — errors in strict engines, surprising sorts in SQLite.
-- **CASE in WHERE on big tables** — hides columns from the optimizer.
+Practise turning a policy into SQL. The bank's rule for the label shown to customers:
 
-## Worked example: business rules as a CASE expression
+> Closed accounts show "Closed". Frozen accounts show "Contact branch". Otherwise, loans show "Loan"; deposit accounts show "Premier" at 10,000 or more, "Standard" from 1,000, and "Basic" below that. An account with no balance on file shows "Pending".
 
-CASE is where business rules meet data, so practise turning a written policy into one. The bank's rule for a customer-facing account label:
-
-> Closed accounts show "Closed". Frozen accounts show "Contact branch". Otherwise, loans show "Loan"; deposit accounts show "Premier" at \$10,000 or more, "Standard" from \$1,000, and "Basic" below that. An account with no balance on file shows "Pending".
-
-Order the branches from the most specific override to the general case, and decide where NULL goes:
+Arrange the lines from the most specific override down to the general case, and decide where NULL goes:
 
 ```sql-run dataset=bank
 SELECT account_id, product_cd, status, avail_balance,
@@ -258,13 +275,13 @@ WHERE account_id IN (101, 104, 107, 108, 120, 131, 142, 171)
 ORDER BY account_id;
 ```
 
-Three design decisions are visible in the order of the branches:
+Account 101, an active checking account with 3820.42, is "Standard"; account 104, with 10000, is "Premier". Three decisions are visible in the order of the lines:
 
-1. **Status overrides everything**, so those tests come first; a closed loan is "Closed", not "Loan".
-2. **The NULL test precedes the numeric tests.** Without it, a NULL balance would fail both `>=` comparisons (UNKNOWN) and fall through to ELSE — quietly labelled "Basic". An explicit `IS NULL` branch makes missing data visible.
-3. **Thresholds descend**, so each branch may assume the earlier ones failed (`>= 1000` means "between 1,000 and 9,999.99").
+1. **Status overrides everything**, so those tests come first. A closed loan is "Closed", not "Loan".
+2. **The NULL test comes before the numeric tests.** Without it, a NULL balance would fail both `>=` comparisons (a comparison with NULL is never true) and drop through to `ELSE`, quietly labelled "Basic". An explicit `IS NULL` line makes missing data visible.
+3. **The thresholds go downward**, so each line may assume the earlier ones failed: `>= 1000` here means "from 1,000 up to 9,999.99".
 
-Then check the rule against the whole table — a CASE is code, and deserves a test:
+A `CASE` is a piece of logic and deserves a test. Group by its result and look at the smallest and largest balance under each label:
 
 ```sql-run dataset=bank
 SELECT CASE
@@ -284,11 +301,11 @@ GROUP BY label
 ORDER BY accounts DESC;
 ```
 
-The min and max per label confirm the boundaries: no "Standard" account below 1,000 or at 10,000 and above. Grouping by the CASE result is the quickest way to audit it.
+The 42 "Standard" accounts range from 1290.22 to 8989.19: none below 1,000 and none at 10,000 or above, so the boundaries hold. Grouping by a `CASE` is the quickest way to check it.
 
 ## CASE and data types
 
-Every branch of a CASE should produce the same type, because the expression has *one* type. Mixing them is an error in PostgreSQL and a source of odd behaviour in SQLite:
+A `CASE` expression has *one* type, so every line should produce the same kind of value. Mixing is an error in PostgreSQL and a source of odd behaviour in SQLite:
 
 ```sql-run dataset=bank
 SELECT account_id,
@@ -299,11 +316,11 @@ FROM account
 WHERE account_id IN (107, 108, 110, 112);
 ```
 
-`mixed_types` is sometimes a number and sometimes text; sort or sum that column and the results are unpredictable. Convert explicitly so that all branches agree — text for display, or NULL (which fits any type) instead of a placeholder when the column will be used in further arithmetic.
+`typeof` reports the type of a value. The `mixed_types` column is a number (`real`) on one row and text on the next. Sort or add up such a column and the result is unpredictable. Make all lines agree: convert numbers to text when the column is for display (third column), or use NULL instead of a placeholder when the column will be used in further arithmetic, since NULL fits any type.
 
-## Short-circuit evaluation
+## Stopping at the first match is a guarantee
 
-CASE guarantees that branches are tested in order and that evaluation **stops at the first match**. You can rely on this to guard an expression that would otherwise fail:
+`CASE` promises that its lines are tested in order and that checking **stops at the first match**. This is called **short-circuit evaluation**, and you can rely on it to protect a calculation that would otherwise fail:
 
 ```sql-run dataset=bank
 SELECT account_id, avail_balance, pending_balance,
@@ -317,37 +334,61 @@ ORDER BY account_id
 LIMIT 8;
 ```
 
-The division is only reached when the balance is non-zero. (By contrast, the order in which `AND`/`OR` operands inside a WHERE clause are evaluated is **not** guaranteed — the optimizer may reorder them — so `WHERE x <> 0 AND y / x > 2` is not a safe guard in every engine. CASE is.)
+The division is reached only when the balance is not zero. By contrast, the order in which the parts of an `AND` or `OR` in `WHERE` are tested is **not** guaranteed, because the optimizer may rearrange them. `WHERE x <> 0 AND y / x > 2` is therefore not a safe guard on every database. `CASE` is.
 
-## CASE across dialects
+## CASE on different databases
 
 | Feature | SQLite | MySQL | PostgreSQL |
 |---|---|---|---|
-| Searched and simple CASE | yes | yes | yes |
-| Shorthand | `iif(c, a, b)` | `IF(c, a, b)` | — (use CASE) |
-| Conditional aggregate | `SUM(CASE…)`, `FILTER (WHERE …)` | `SUM(CASE…)`, `SUM(cond)` | `SUM(CASE…)`, `FILTER (WHERE …)` |
-| Branch type checking | lenient | lenient (coerces) | strict |
+| Searched and simple `CASE` | yes | yes | yes |
+| Shorthand | `iif(c, a, b)` | `IF(c, a, b)` | none; use `CASE` |
+| Counting rows that meet a condition | `SUM(CASE ...)`, `FILTER (WHERE ...)` | `SUM(CASE ...)`, `SUM(condition)` | `SUM(CASE ...)`, `FILTER (WHERE ...)` |
+| Checking that all results share a type | lenient | lenient | strict |
 
 > [!INTERVIEW]
-> CASE questions usually arrive in disguise: "categorise customers into tiers", "swap the values M and F in one UPDATE" (`SET sex = CASE sex WHEN 'M' THEN 'F' ELSE 'M' END`), "count X and Y in separate columns". The follow-up is nearly always about a boundary value or a NULL — so state which branch catches each.
+> `CASE` questions usually arrive in disguise: "put customers into tiers", "swap the values M and F in one `UPDATE`" (`SET sex = CASE sex WHEN 'M' THEN 'F' ELSE 'M' END`), "count X and Y in separate columns". The follow-up is nearly always about a boundary value or a NULL, so say which line catches each.
+
+## Pitfalls
+
+- **The order of the lines.** The first true `WHEN` wins.
+- **A missing `ELSE`** gives NULL: fatal in an `UPDATE`, useful inside an aggregate.
+- **`ELSE 0` inside `AVG` or `COUNT`** changes the meaning.
+- **A simple `CASE` with NULL** never matches; use the searched form with `IS NULL`.
+- **Results of mixed types**: an error on strict databases, strange sorting in SQLite.
+- **`CASE` in `WHERE` on a large table** hides the columns from the optimizer.
 
 ## Summary
 
-- CASE is SQL's standard conditional expression; it returns a value and can be used almost anywhere.
-- **Searched CASE** evaluates arbitrary conditions top-down and returns the first match; **simple CASE** tests one expression for equality.
-- No match and no ELSE yields NULL.
-- Use CASE in SELECT for labels, in ORDER BY for custom sorts, in GROUP BY for derived categories, in UPDATE for conditional changes, and inside aggregates for conditional totals.
+- `CASE` is SQL's standard conditional expression; it returns a value and can be used almost anywhere.
+- The **searched** form checks any conditions from top to bottom and returns the first match; the **simple** form tests one expression for equality.
+- No match and no `ELSE` gives NULL.
+- Use `CASE` in `SELECT` for labels, in `ORDER BY` for custom sorting, in `GROUP BY` for categories worked out on the spot, in `UPDATE` for conditional changes, and inside aggregates for conditional totals.
+
+## Glossary
+
+- **Conditional logic** — choosing between alternatives according to a test.
+- **Expression** — any piece of SQL that produces a value: a column, a calculation, a function call, a `CASE`.
+- **`CASE` expression** — SQL's "if ... then ... else": it returns one of several values depending on conditions.
+- **Searched `CASE`** — the form in which each `WHEN` has its own full condition.
+- **Simple `CASE`** — the form that compares one expression for equality with a list of values.
+- **`WHEN` / `THEN` / `ELSE` / `END`** — a test / the result if the test is true / the result if no test is true / the end of the expression.
+- **Branch** — one `WHEN ... THEN ...` line, or the `ELSE`.
+- **Short-circuit evaluation** — stopping at the first branch that matches without evaluating the rest.
+- **Lookup table** — a small table that maps codes or ranges to labels, used by joining.
+- **`iif` / `IF`** — two-way shorthand for `CASE` in SQLite and SQL Server / MySQL.
+- **`typeof`** — an SQLite function that reports the data type of a value.
 
 ```quiz
 [
-  {"q": "What does a CASE expression return when no WHEN matches and there is no ELSE?", "options": ["0", "An empty string", "NULL", "An error"], "answer": 2, "explain": "The implicit ELSE is NULL."},
-  {"q": "For price = 1500, what does CASE WHEN price >= 20 THEN 'budget' WHEN price >= 1000 THEN 'premium' END return?", "options": ["premium", "budget", "NULL", "Both"], "answer": 1, "explain": "Branches are tested in order and the first true one wins."},
-  {"q": "Why does CASE x WHEN NULL THEN 'missing' END never return 'missing'?", "options": ["NULL is not allowed in CASE", "Simple CASE compares with =, and x = NULL is never TRUE", "ELSE is required", "It does return it"], "answer": 1, "explain": "Use the searched form: CASE WHEN x IS NULL THEN ..."},
-  {"q": "AVG(CASE WHEN product_cd = 'CHK' THEN avail_balance END) computes...", "options": ["The average of all balances", "The average checking balance", "Zero", "The count of checking accounts"], "answer": 1, "explain": "Non-checking rows yield NULL, which AVG ignores."},
-  {"q": "What is the danger of omitting ELSE in UPDATE t SET price = CASE WHEN ... THEN ... END?", "options": ["Nothing", "Rows matching no branch get price = NULL", "The update is skipped", "A syntax error"], "answer": 1, "explain": "Add ELSE price to leave other rows unchanged."},
-  {"q": "Which form can test ranges such as balance < 1000?", "options": ["Simple CASE", "Searched CASE", "Both", "Neither"], "answer": 1, "explain": "Simple CASE only tests equality against one expression."},
-  {"q": "NULLIF(a, b) is shorthand for...", "options": ["CASE WHEN a IS NULL THEN b ELSE a END", "CASE WHEN a = b THEN NULL ELSE a END", "CASE WHEN b IS NULL THEN a END", "COALESCE(a, b)"], "answer": 1, "explain": "It returns NULL when the two arguments are equal."}
+  {"q": "What does a CASE expression return when no WHEN matches and there is no ELSE?", "options": ["0", "An empty string", "NULL", "An error"], "answer": 2, "explain": "A missing ELSE behaves as ELSE NULL."},
+  {"q": "For price = 1500, what does CASE WHEN price >= 20 THEN 'budget' WHEN price >= 1000 THEN 'premium' END return?", "options": ["premium", "budget", "NULL", "Both"], "answer": 1, "explain": "Branches are tested in order and the first true one wins; 1500 >= 20 is true."},
+  {"q": "Why does CASE x WHEN NULL THEN 'missing' END never return 'missing'?", "options": ["NULL is not allowed in CASE", "A simple CASE compares with =, and x = NULL is never true", "ELSE is required", "It does return it"], "answer": 1, "explain": "Use the searched form: CASE WHEN x IS NULL THEN ..."},
+  {"q": "AVG(CASE WHEN product_cd = 'CHK' THEN avail_balance END) computes...", "options": ["The average of all balances", "The average checking balance", "Zero", "The number of checking accounts"], "answer": 1, "explain": "Rows of other products give NULL, which AVG ignores."},
+  {"q": "What is the danger of omitting ELSE in UPDATE t SET price = CASE WHEN ... THEN ... END?", "options": ["Nothing", "Rows matching no branch get price = NULL", "The update is skipped", "A syntax error"], "answer": 1, "explain": "Add ELSE price so that other rows keep their value."},
+  {"q": "Which form can test ranges such as balance < 1000?", "options": ["Simple CASE", "Searched CASE", "Both", "Neither"], "answer": 1, "explain": "A simple CASE only tests equality against one expression."},
+  {"q": "NULLIF(a, b) is shorthand for...", "options": ["CASE WHEN a IS NULL THEN b ELSE a END", "CASE WHEN a = b THEN NULL ELSE a END", "CASE WHEN b IS NULL THEN a END", "COALESCE(a, b)"], "answer": 1, "explain": "It returns NULL when the two arguments are equal, and a otherwise."},
+  {"q": "In a CASE that labels balances, why put WHEN avail_balance IS NULL before WHEN avail_balance >= 10000?", "options": ["IS NULL is faster", "Otherwise a NULL balance fails every comparison and falls through to ELSE unnoticed", "SQL requires NULL tests first", "It makes no difference"], "answer": 1, "explain": "Comparisons with NULL are never true, so without an explicit branch the missing value would get the ELSE label."}
 ]
 ```
 
-> **Source:** Beaulieu, *Learning SQL*, ch. 11 "Conditional Logic" (what is conditional logic, the case expression, searched and simple case expressions).
+> **Source:** Beaulieu, *Learning SQL*, ch. 11 "Conditional Logic" (what conditional logic is, the case expression, searched and simple case expressions), restated in original wording with this guide's own datasets.

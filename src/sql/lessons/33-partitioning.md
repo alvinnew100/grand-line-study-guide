@@ -1,24 +1,34 @@
 # Partitioning
 
-Everything so far has assumed tables that fit comfortably on one server and that an index can tame. Then the tables grow. The bank's `txn` table, at a few hundred rows here, would hold billions of rows after a decade at a real bank; the `predictions` table of a busy model server gains millions of rows a day. At that scale new problems appear that no amount of query cleverness solves: full scans take hours, indexes are too large for memory, deleting old data locks the table, backups never finish. The first tool for managing very large tables is **partitioning**: splitting one logical table into many physical pieces. This lesson covers the concepts, the partitioning methods (range, list, hash, composite), partition pruning, maintenance benefits, and how to choose a partition key. The next lesson moves beyond one server.
+> **Before this lesson:** you should know what an index and a table scan are and why a function around a column stops an index from being used ([Indexes and query plans](#/lesson/sql/indexes)), how a view with `UNION ALL` can present several tables as one ([Views](#/lesson/sql/views)), and what a primary key and a unique constraint are ([Constraints and cascading](#/lesson/sql/constraints)).
+
+## In plain words
+
+Everything so far assumed tables that fit comfortably on one computer and that an index can keep fast. Then the tables grow. The bank's `txn` table has a few hundred rows here; at a real bank it would hold billions after ten years. At that size, new problems appear that no clever query can solve: reading the whole table takes hours, the indexes no longer fit in memory, and deleting old data keeps the table busy for a day.
+
+The first tool for very large tables is **partitioning**: storing one table as many smaller pieces, according to a rule. To the people and programs that query it, it is still one table.
+
+An everyday picture: a filing cabinet for invoices. One huge drawer with every invoice ever issued would be miserable to search. So the office uses one drawer per year. To find an invoice from March 2024 you open the 2024 drawer and ignore the others. When invoices older than seven years may be thrown away, you empty one whole drawer instead of picking papers out one by one. And the office still thinks of it as "the invoice cabinet", a single thing.
+
+Those two benefits, skipping the drawers you do not need and removing a whole drawer at once, are exactly what database partitioning gives.
+
+**Why it matters for a job.** Partitioning is a standard topic in data-engineering and system-design interviews: "this table has ten billion rows and the queries are slow; what do you do?". In analytics databases that charge by the amount of data read, partitioning directly reduces the bill.
 
 ## What goes wrong with very large tables
 
-Three kinds of pain, each with a different cure:
+Three kinds of pain:
 
-1. **Query time.** A query that must examine most of a table grows linearly with it. An index helps selective lookups, but a B-tree over ten billion rows is itself hundreds of gigabytes — index maintenance slows every insert, and range scans touch pages scattered all over the disk.
-2. **Maintenance time.** Purging data older than seven years with `DELETE FROM txn WHERE txn_date < …` removes hundreds of millions of rows one at a time, generating enormous logs and holding locks. Rebuilding an index or adding a column takes hours.
-3. **Storage and cost.** Old data is rarely read but sits on the same expensive fast storage as today's data.
+1. **Query time.** A query that has to look at most of a table gets slower in step with the table's size. An index helps when a query wants a few rows. But an index over ten billion rows is itself hundreds of gigabytes; keeping it up to date slows every insert.
+2. **Maintenance time.** Removing data older than seven years with `DELETE FROM txn WHERE txn_date < ...` deletes hundreds of millions of rows one at a time, writing an enormous log and holding locks. Rebuilding an index or adding a column takes hours.
+3. **Storage cost.** Old data is seldom read, yet it sits on the same fast, expensive disks as today's data.
 
-Partitioning addresses all three by exploiting a fact about most large tables: **queries and maintenance operations are usually confined to a small, predictable slice of the data** — typically the most recent.
+Partitioning eases all three by using one fact about most large tables: **queries and maintenance usually concern a small, predictable slice of the data**, most often the newest.
 
-## The partitioning concept
+## The idea
 
-A **partitioned table** is a single logical table whose rows are stored in several physical pieces called **partitions**. Every partition has the same columns and (usually) the same indexes, but each is its own storage object. A rule based on one or more columns — the **partition key** — decides which partition each row belongs to.
+A **partitioned table** is one table, as far as queries are concerned, whose rows are physically stored in several pieces called **partitions**. Every partition has the same columns. A rule based on one or more columns, the **partition key**, decides which partition each row belongs to.
 
-To applications, nothing changes: they select from and insert into `txn` as before. The database routes each row to the right partition and, crucially, can **skip partitions that cannot contain the rows a query asks for**.
-
-This is **horizontal partitioning** — splitting by rows. (**Vertical partitioning** splits by *columns*: moving rarely used or bulky columns, such as a large text or image column, into a separate table that shares the primary key. That is a schema-design technique rather than a database feature, and columnar storage — next lesson — takes it to its logical conclusion.)
+Programs notice nothing: they read from and insert into `txn` as before. The database sends each new row to the right partition and, more importantly, can **skip partitions that cannot contain the rows a query asks for**.
 
 ```mermaid
 flowchart TD
@@ -29,11 +39,15 @@ flowchart TD
     T -.skipped.-> P4[txn_2024q4]
 ```
 
+Splitting a table by rows in this way is **horizontal partitioning**. There is also **vertical partitioning**, which splits by *columns*: rarely used or bulky columns (a long text, an image) are moved to a second table that shares the primary key. That is a design decision you make yourself, not a feature the database provides.
+
 ## Partitioning methods
+
+The examples in this section are for PostgreSQL and MySQL. SQLite has no partitioning, so they are shown as static code; a hand-made imitation in SQLite follows.
 
 ### Range partitioning
 
-Each partition holds a contiguous **range** of key values. By far the most common scheme, and nearly always on a date or timestamp.
+Each partition holds a continuous **range** of key values. It is by far the most common method, nearly always on a date.
 
 ```sql
 -- PostgreSQL
@@ -51,6 +65,8 @@ CREATE TABLE txn_2024q3 PARTITION OF txn FOR VALUES FROM ('2024-07-01') TO ('202
 CREATE TABLE txn_2024q4 PARTITION OF txn FOR VALUES FROM ('2024-10-01') TO ('2025-01-01');
 ```
 
+The first statement creates the table and says it will be partitioned by ranges of `txn_date`. Each of the next four creates one partition and states the range it holds: one per quarter of 2024.
+
 ```sql
 -- MySQL
 CREATE TABLE txn ( ... )
@@ -63,11 +79,11 @@ PARTITION BY RANGE (YEAR(txn_date) * 100 + QUARTER(txn_date)) (
 );
 ```
 
-Ranges are half-open (`FROM` inclusive, `TO` exclusive) so that every value maps to exactly one partition. New partitions must be created ahead of time (or automatically, with tools like `pg_partman` or Oracle's *interval partitioning*); a row whose key fits no partition is rejected unless a default/`MAXVALUE` partition catches it.
+The ranges include their start and exclude their end, so every value belongs to exactly one partition. Partitions for future periods must be created in advance, by hand or by a tool. A row whose key fits no partition is rejected, unless a catch-all partition exists (`DEFAULT` in PostgreSQL, `MAXVALUE` above).
 
 ### List partitioning
 
-Each partition holds an explicit **list** of key values. Use it for a low-cardinality category that queries filter on: region, country, tenant, status.
+Each partition holds an explicit **list** of key values. Use it for a column with few different values that queries filter on: region, country, customer organisation, status.
 
 ```sql
 -- PostgreSQL
@@ -77,11 +93,11 @@ CREATE TABLE customers_eu   PARTITION OF customers FOR VALUES IN ('UK', 'Germany
 CREATE TABLE customers_rest PARTITION OF customers DEFAULT;
 ```
 
-List partitioning also supports data-residency requirements: the EU partition can live on storage physically located in the EU.
+List partitioning also helps with laws about where data may be kept: the European partition can be stored on machines located in Europe.
 
 ### Hash partitioning
 
-When there is no natural range or list — or the goal is simply to **spread rows evenly** — the database applies a hash function to the key and uses the result modulo N to pick one of N partitions.
+Sometimes there is no natural range or list, and the aim is to **spread rows evenly**. A **hash function** is a calculation that turns any value into a number that looks random but is always the same for the same input. The database applies one to the key, divides the result by the number of partitions, and uses the remainder to pick the partition.
 
 ```sql
 -- PostgreSQL
@@ -90,15 +106,15 @@ CREATE TABLE predictions_p0 PARTITION OF predictions FOR VALUES WITH (MODULUS 4,
 -- ... p1, p2, p3
 ```
 
-Hash partitioning gives balanced partitions and helps equality lookups on the key, but it does **nothing for range queries** (neighbouring key values land in different partitions), and you cannot drop "old" data by dropping a partition. Changing the number of partitions means redistributing rows.
+Hash partitioning gives partitions of similar size and helps lookups of one exact key value. It does **nothing for range queries**, because neighbouring key values land in different partitions, and there is no "oldest" partition to drop. Changing the number of partitions means moving rows around.
 
 ### Composite partitioning
 
-Two methods can be combined: **partition** by one key and **subpartition** by another — typically range by date, then hash or list within each period. Useful when both dimensions appear in queries (time range *and* tenant), at the price of many more physical pieces to manage.
+Two methods can be combined: partition by one key and divide each partition again, into **subpartitions**, by another. Typically range by date, then hash or list within each period. It is useful when queries filter on both, at the price of many more pieces to look after.
 
-### Simulating partitions in SQLite
+### Imitating partitions in SQLite
 
-SQLite has no native partitioning — it targets data sizes where it is not needed. But the idea is easy to see by hand: separate tables plus a `UNION ALL` view, which is precisely the "joining partitioned data" use of views from the book.
+SQLite is meant for sizes at which partitioning is not needed. The idea can still be shown by hand: separate tables, and a view that stacks them with `UNION ALL`.
 
 ```sql-run dataset=bank
 CREATE TABLE txn_2024h1 AS SELECT * FROM txn WHERE txn_date <  '2024-07-01';
@@ -114,11 +130,11 @@ UNION ALL SELECT 'h2', COUNT(*) FROM txn_2024h2
 UNION ALL SELECT 'view', COUNT(*) FROM txn_all;
 ```
 
-Before native partitioning existed (and still, in some warehouse designs), this is how it was done — except that the application or the view had to know which table to read, which is the bookkeeping a partitioned table automates.
+The first two statements copy the transactions of each half-year into a table of their own. The view presents the two as one. The final query counts each piece: 236 rows in the first half, 248 in the second, and 484 through the view, the same as the original table. Before databases had partitioning built in, this was how it was done. The drawback is that inserts must be sent to the right table by the program, which is the bookkeeping a partitioned table does for you.
 
 ## Partition pruning
 
-The performance benefit comes from **partition pruning** (also called partition elimination): when a query's WHERE clause constrains the partition key, the optimizer determines which partitions could contain matching rows and **never opens the others**.
+The speed benefit comes from **partition pruning**: when a query's `WHERE` clause restricts the partition key, the optimizer works out which partitions could hold matching rows and **never opens the others**. ("Pruning" is the gardener's word for cutting away branches.)
 
 ```sql
 SELECT SUM(amount)
@@ -126,20 +142,20 @@ FROM txn
 WHERE txn_date >= '2024-07-01' AND txn_date < '2024-10-01';
 ```
 
-With quarterly range partitions, only `txn_2024q3` is read — a quarter of the data in a one-year table, a fortieth in a ten-year table — regardless of indexes. `EXPLAIN` shows which partitions are scanned.
+With quarterly partitions, only `txn_2024q3` is read. That is a quarter of the data if the table holds one year, and one fortieth if it holds ten years, with or without an index.
 
-Pruning has the same requirement as index use: the predicate must be on the **bare partition key**.
+Pruning has the same requirement as index use: the condition must be on the **bare partition key**.
 
-| Predicate | Pruned? |
+| Condition | Pruned? |
 |---|---|
 | `txn_date >= '2024-07-01' AND txn_date < '2024-10-01'` | yes |
 | `txn_date = '2024-08-15'` | yes |
-| `EXTRACT(YEAR FROM txn_date) = 2024` | usually **no** — function hides the key |
-| `account_id = 157` (not the partition key) | **no** — every partition is searched |
+| `EXTRACT(YEAR FROM txn_date) = 2024` | usually **no**: the function hides the key |
+| `account_id = 157` (not the partition key) | **no**: every partition is searched |
 
-That last row is the price of partitioning: a query that does *not* filter on the partition key must probe **every** partition (each with its own index), and can be *slower* than on an unpartitioned table. Partitioning helps the queries that align with the key and taxes those that do not.
+The last row is the price of partitioning. A query that does *not* filter on the partition key must look in **every** partition, each with its own index, and can be *slower* than on an unpartitioned table. Partitioning helps queries that fit the key and taxes those that do not.
 
-Before partitioning a table, it pays to profile what the partitions would look like. The query from the problem set does this for quarters:
+Before partitioning a table, look at what the partitions would be. This query shows the size of each would-be quarterly partition:
 
 ```sql-run dataset=bank
 SELECT strftime('%Y', txn_date) || 'Q' || ((CAST(strftime('%m', txn_date) AS INTEGER) + 2) / 3) AS partition_key,
@@ -151,7 +167,9 @@ GROUP BY partition_key
 ORDER BY partition_key;
 ```
 
-Roughly even partitions are the goal. Compare a list scheme by branch, where one "partition" is everything without a branch:
+The first column builds a label such as `2024Q1` from the year and the quarter number (months 1 to 3 give 1, and so on). `SUM(COUNT(*)) OVER ()` is a window function over the grouped rows: the total of all the counts, used to turn each count into a percentage. The four quarters hold 21.9%, 26.9%, 24.8% and 26.4% of the rows. Roughly equal partitions like these are the goal.
+
+Compare a list scheme by branch:
 
 ```sql-run dataset=bank
 SELECT COALESCE(CAST(execution_branch_id AS TEXT), 'none (ATM/online)') AS branch_partition,
@@ -162,72 +180,95 @@ GROUP BY execution_branch_id
 ORDER BY row_count DESC;
 ```
 
-Uneven distribution like this is **skew**; a heavily skewed key gives one giant partition and several tiny ones, which defeats the purpose.
+Here the largest "partition", at 30%, would be the transactions with no branch at all, while the smallest branch holds only about 9%. An uneven spread is called **skew**. A badly skewed key gives one giant partition and several tiny ones, which defeats the purpose.
 
 ## Maintenance benefits
 
-For many teams the operational advantages outweigh the query speed-up.
+For many teams the practical advantages matter more than the faster queries.
 
-- **Instant data retirement.** Dropping a partition is a metadata operation: `ALTER TABLE txn DROP PARTITION q2017_1` (MySQL) or `DROP TABLE txn_2017q1` (PostgreSQL) removes a quarter of a billion rows in milliseconds, with no row-by-row delete, no bloat, no long locks. Retention policies ("keep 7 years") become trivial.
-- **Archiving and tiered storage.** Old partitions can be detached, moved to cheap storage, compressed or made read-only, while recent partitions stay on fast disks.
-- **Bulk loading by exchange.** Load and index a new period in a standalone table, verify it, then attach it as a partition (`ATTACH PARTITION`, `EXCHANGE PARTITION`) — an atomic, near-instant publish.
-- **Smaller maintenance units.** Vacuuming, statistics, index rebuilds and backups operate per partition; only the active partition changes, so only it needs frequent attention.
-- **Local indexes.** Each partition has its own, smaller B-tree; the active partition's index fits in memory even if the whole table's would not.
+- **Removing old data in an instant.** Dropping a partition does not touch its rows one by one. The database only updates its own records of which pieces exist. `ALTER TABLE txn DROP PARTITION q2017_1` (MySQL) or `DROP TABLE txn_2017q1` (PostgreSQL) removes a quarter of a billion rows in milliseconds. A rule such as "keep seven years" becomes easy to enforce.
+- **Archiving and cheaper storage.** Old partitions can be moved to slow, cheap disks, compressed or made read-only, while recent ones stay on fast disks.
+- **Loading in bulk.** Load and index a new period in a separate table, check it, then attach it as a partition (`ATTACH PARTITION`). The new data appears all at once.
+- **Smaller units of upkeep.** Refreshing statistics, rebuilding indexes and taking backups work partition by partition, and only the active partition changes.
+- **Local indexes.** Each partition has its own smaller index. The active partition's index fits in memory even when an index over the whole table would not.
 
-## Constraints and indexes on partitioned tables
+## Keys on partitioned tables
 
 Partitioning interacts with keys in ways that surprise people:
 
-- A **unique or primary key constraint must include the partition key** (MySQL, PostgreSQL). The engine can only enforce uniqueness within a partition cheaply; a "global" unique index across partitions would undo the benefits. So `txn`'s primary key becomes `(txn_id, txn_date)`. (Oracle supports global indexes, with maintenance costs when partitions are dropped.)
-- **Foreign keys** to and from partitioned tables have restrictions (MySQL does not support them at all for partitioned InnoDB tables; PostgreSQL added support gradually in versions 11–12).
-- Updating a row's partition key moves it between partitions — a delete plus an insert.
+- A **unique or primary key must include the partition key** (MySQL, PostgreSQL). The database can cheaply guarantee uniqueness only within one partition. So the primary key of `txn` becomes `(txn_id, txn_date)`. (Oracle offers indexes that span all partitions, at a cost whenever a partition is dropped.)
+- **Foreign keys** to and from partitioned tables are restricted. MySQL does not allow them on partitioned InnoDB tables.
+- Changing a row's partition key moves it to another partition, which is a delete followed by an insert.
 
 ## Choosing a partition key
 
-Ask, in order:
+Ask, in this order:
 
-1. **What do most queries filter on?** If nearly every query has a time range, partition by time. If every query is for one tenant, consider tenant.
-2. **How will data be retired?** If by age, range-partition by date so that expiry is a partition drop.
-3. **Is the distribution even?** Avoid skew; avoid keys with unbounded growth of one value.
-4. **How many partitions?** Enough that each is manageable (often 10–100 GB), not so many that planning slows down and file handles run out. Hundreds are fine; tens of thousands usually are not. Daily partitions kept for ten years is 3,650 — consider monthly.
+1. **What do most queries filter on?** If nearly every query has a date range, partition by date.
+2. **How will data be removed?** If by age, range-partition by date, so that removal is the dropping of a partition.
+3. **Is the spread even?** Avoid skew.
+4. **How many partitions?** Enough that each is manageable, not so many that planning queries becomes slow. Hundreds are fine; tens of thousands usually are not. Daily partitions kept for ten years are 3,650; monthly ones are 120.
 
-And first ask whether you need it at all. A well-indexed table of a few hundred million rows is routine for PostgreSQL or MySQL. Partitioning adds real complexity; adopt it when maintenance or scan times actually hurt, not because the table "sounds big".
+And first ask whether you need it at all. A well-indexed table of a few hundred million rows is routine for PostgreSQL or MySQL. Partitioning adds real complexity. Adopt it when maintenance or scan times hurt, not because the table sounds big.
 
-## Partitioning in data warehouses and lakes
+## Partitioning in analytics databases and data lakes
 
-The idea is even more central in analytics systems:
+The idea matters even more in systems built for analysis:
 
-- **BigQuery** and **Snowflake** bill by data scanned; partitioning (BigQuery: `PARTITION BY DATE(ts)`; Snowflake: automatic micro-partitions with clustering keys) and pruning directly cut cost.
-- **Data lakes** (Hive, Spark, Athena, Delta/Iceberg) partition by directory: `s3://bucket/predictions/dt=2024-03-07/part-000.parquet`. A filter on `dt` prunes whole directories. The classic mistake is over-partitioning (by user id, by minute) and producing millions of tiny files.
-- For ML pipelines, date-partitioned tables make **incremental processing** natural: each daily job reads and writes exactly one partition, and a failed day can be re-run idempotently by overwriting that partition.
+- **BigQuery** and **Snowflake** charge according to the data a query reads. Partitioning and pruning cut the cost directly.
+- A **data lake** is a large collection of data files kept in cheap storage and queried with tools such as Spark or Athena. There, partitions are folders: `s3://bucket/predictions/dt=2024-03-07/part-000.parquet`. A filter on `dt` skips whole folders. The classic mistake is to partition too finely (by user, by minute) and end up with millions of tiny files.
+- In data pipelines, date-partitioned tables make **incremental processing** natural: each daily job reads and writes exactly one partition, and a failed day can be run again by overwriting that one partition.
+
+> [!INTERVIEW]
+> "A ten-billion-row events table is slow. What do you do?" A solid answer: ask what the queries filter on (almost always time); range-partition by date so that pruning skips old partitions; keep the filter on the bare column; drop old partitions for retention; and name the cost, which is that queries without the partition key read every partition and that unique keys must include the partition key.
 
 ## Pitfalls
 
-- **Queries that omit the partition key** scan every partition.
-- **Functions on the key** in WHERE prevent pruning.
-- **Skewed keys** create one hot, huge partition.
-- **Too many partitions** — planning overhead, tiny files.
-- **Forgetting to create future partitions** — inserts fail at midnight on the first of the month.
-- **Expecting global uniqueness** on a column that is not part of the partition key.
+- **Queries that omit the partition key** read every partition.
+- **A function around the key** in `WHERE` prevents pruning.
+- **A skewed key** creates one huge, busy partition.
+- **Too many partitions**: slow planning and tiny files.
+- **Forgetting to create future partitions**: inserts fail at midnight on the first day of the new period.
+- **Expecting a column to be unique across the table** when it is not part of the partition key.
 
 ## Summary
 
-- Partitioning stores one logical table as many physical pieces chosen by a **partition key**; applications see a single table.
-- Methods: **range** (dates), **list** (categories), **hash** (even spread), **composite**.
-- **Partition pruning** skips partitions that cannot match a filter on the bare key; queries without such a filter touch all partitions.
-- Maintenance wins: drop/attach/archive partitions instantly, smaller local indexes, per-partition upkeep.
-- Unique keys must include the partition key. Choose the key from query patterns, retention needs and data distribution — and only partition when size demands it.
+- Partitioning stores one table as many pieces chosen by a **partition key**; programs still see a single table.
+- Methods: **range** (dates), **list** (categories), **hash** (an even spread), **composite**.
+- **Partition pruning** skips partitions that cannot match a filter on the bare key; queries without such a filter touch every partition.
+- Maintenance gains: dropping, attaching and archiving whole partitions at once, smaller local indexes, upkeep partition by partition.
+- Unique keys must include the partition key. Choose the key from the query patterns, the retention rule and the spread of the data, and partition only when size demands it.
+
+## Glossary
+
+- **Partitioning** — storing one table as several physical pieces while it still behaves as one table.
+- **Partition** — one of those pieces.
+- **Partition key** — the column or columns whose value decides which partition a row goes to.
+- **Horizontal partitioning** — splitting a table by rows.
+- **Vertical partitioning** — splitting a table by columns into tables that share a key.
+- **Range partitioning** — each partition holds a continuous range of key values.
+- **List partitioning** — each partition holds a stated list of key values.
+- **Hash function** — a calculation that turns a value into a seemingly random but repeatable number.
+- **Hash partitioning** — choosing the partition from a hash of the key, to spread rows evenly.
+- **Composite partitioning / subpartition** — partitioning by one key and dividing each partition again by another.
+- **Partition pruning** — the optimizer skipping partitions that cannot contain matching rows.
+- **Skew** — an uneven spread of rows among partitions.
+- **Retention** — the rule for how long data is kept before it is removed.
+- **Local index** — an index that covers a single partition.
+- **Data lake** — a large store of data files queried by separate tools, usually organised in folders.
+- **Incremental processing** — handling only the newest slice of data in each run of a pipeline.
 
 ```quiz
 [
-  {"q": "What is partition pruning?", "options": ["Deleting old partitions", "The optimizer skipping partitions that cannot contain rows matching the query's filter", "Merging small partitions", "Compressing partitions"], "answer": 1, "explain": "A filter on the partition key lets the planner avoid opening irrelevant partitions."},
-  {"q": "Which partitioning method is the natural choice for a table queried by date range and purged by age?", "options": ["Hash", "List", "Range", "Vertical"], "answer": 2, "explain": "Range partitions on the date align with both the queries and the retention policy."},
+  {"q": "What is partition pruning?", "options": ["Deleting old partitions", "The optimizer skipping partitions that cannot contain rows matching the query's filter", "Merging small partitions", "Compressing partitions"], "answer": 1, "explain": "A filter on the partition key lets the database avoid opening partitions that cannot match."},
+  {"q": "Which partitioning method is the natural choice for a table queried by date range and cleared out by age?", "options": ["Hash", "List", "Range", "Vertical"], "answer": 2, "explain": "Range partitions on the date fit both the queries and the retention rule."},
   {"q": "A table is range-partitioned by txn_date. Which query must examine every partition?", "options": ["WHERE txn_date >= '2024-07-01'", "WHERE txn_date = '2024-08-15'", "WHERE account_id = 157", "WHERE txn_date < '2024-02-01'"], "answer": 2, "explain": "account_id is not the partition key, so no partition can be ruled out."},
-  {"q": "Why is dropping a partition better than DELETE for retiring old data?", "options": ["DELETE is not allowed on large tables", "It is a near-instant metadata operation instead of removing rows one by one", "It keeps the data", "It rebuilds indexes"], "answer": 1, "explain": "No per-row logging, locking or bloat."},
-  {"q": "What is a drawback of hash partitioning?", "options": ["Uneven partitions", "It cannot be used with integers", "Range queries on the key get no pruning", "It requires a date column"], "answer": 2, "explain": "Adjacent key values hash to different partitions, so ranges span all of them."},
-  {"q": "In MySQL and PostgreSQL, a primary key on a partitioned table must...", "options": ["Be an integer", "Include the partition key column(s)", "Be dropped", "Be a hash of all columns"], "answer": 1, "explain": "Uniqueness is enforced per partition, so the key must determine the partition."},
-  {"q": "What is vertical partitioning?", "options": ["Splitting a table by rows", "Splitting a table by columns into separate tables", "Sorting a table", "Replicating a table"], "answer": 1, "explain": "Rarely used or large columns move to another table sharing the key."}
+  {"q": "Why is dropping a partition better than DELETE for removing old data?", "options": ["DELETE is not allowed on large tables", "It is a near-instant change to the database's own records instead of removing rows one by one", "It keeps the data", "It rebuilds indexes"], "answer": 1, "explain": "There is no row-by-row logging and no long-held lock."},
+  {"q": "What is a drawback of hash partitioning?", "options": ["Uneven partitions", "It cannot be used with whole numbers", "Range queries on the key cannot be pruned", "It requires a date column"], "answer": 2, "explain": "Neighbouring key values hash to different partitions, so a range spans all of them."},
+  {"q": "In MySQL and PostgreSQL, a primary key on a partitioned table must...", "options": ["Be a whole number", "Include the partition key column or columns", "Be dropped", "Be a hash of all columns"], "answer": 1, "explain": "Uniqueness is enforced within each partition, so the key must determine the partition."},
+  {"q": "What is vertical partitioning?", "options": ["Splitting a table by rows", "Splitting a table by columns into separate tables", "Sorting a table", "Copying a table to another server"], "answer": 1, "explain": "Rarely used or bulky columns move to another table that shares the key."},
+  {"q": "A table is range-partitioned by txn_date. Why does WHERE EXTRACT(YEAR FROM txn_date) = 2024 usually read every partition?", "options": ["EXTRACT is not allowed on partitioned tables", "The function hides the bare partition key, so the optimizer cannot match the condition to partition ranges", "2024 has too many rows", "It does not; it is pruned"], "answer": 1, "explain": "Pruning, like index use, needs a condition on the bare key; write a range on txn_date instead."}
 ]
 ```
 
-> **Source:** Beaulieu, *Learning SQL*, 3rd ed., ch. 17 "Working with Large Databases" (partitioning concepts, table and index partitioning, partitioning methods, pruning, benefits); 2nd ed. ch. 14 "Joining Partitioned Data". PostgreSQL manual, "Table Partitioning"; MySQL manual, "Partitioning".
+> **Source:** Beaulieu, *Learning SQL*, 3rd ed., ch. 17 "Working with Large Databases" (partitioning concepts, table and index partitioning, partitioning methods, pruning, benefits), restated in original wording with this guide's own datasets. PostgreSQL manual, "Table Partitioning"; MySQL manual, "Partitioning".
