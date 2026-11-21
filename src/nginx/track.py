@@ -1,0 +1,107 @@
+import pathlib as _pl
+import re as _re
+
+_HERE = _pl.Path(__file__).parent
+_DEFINED = set()
+for _f in (_HERE / "problems").glob("*.py"):
+    _DEFINED.update(_re.findall(r'^\s*id="(nginx-[a-z0-9-]+)"', _f.read_text(encoding="utf-8"), _re.M))
+
+
+def _m(mid, title, summary, lessons, problems=()):
+    return dict(
+        id=mid, title=title, summary=summary,
+        lessons=[dict(id=i, title=t, file=f) for i, t, f in lessons if (_HERE / "lessons" / f).exists()],
+        problems=[p for p in problems if p in _DEFINED],
+    )
+
+
+TRACK = dict(
+    id="nginx",
+    title="NGINX: Web Server, Reverse Proxy & Load Balancer",
+    icon="🚦",
+    color="#009639",
+    group="Cloud & DevOps",
+    blurb="NGINX from zero: what a web server, reverse proxy and load balancer are, how nginx.conf is put together, "
+          "location matching, load balancing, rate limiting, caching, TLS, authentication, HTTP/2 and HTTP/3, "
+          "containers and cloud, monitoring, logs, tuning, a full worked deployment and interview answers.",
+    sources=[
+        "Derek DeJonghe, NGINX Cookbook (O'Reilly), ch. 1-17",
+        "Official docs: nginx.org/en/docs (core, proxy, upstream, limit_req, limit_conn, cache, ssl, v2, v3, stream, njs, otel)",
+        "Official docs: docs.nginx.com (NGINX Plus features), letsencrypt.org, kubernetes.io (Ingress)",
+    ],
+    modules=[
+        _m("web-servers-zero", "1. Web servers from zero",
+           "What a web server, reverse proxy and load balancer are, how NGINX is built, how to install it, read nginx.conf and serve a first site.",
+           [("what-nginx-is", "Web servers, reverse proxies and load balancers from zero", "01-what-nginx-is.md"),
+            ("install-and-config", "Installing NGINX and reading nginx.conf", "02-install-and-config.md"),
+            ("first-static-site", "Serving a first static site and choosing a server block", "03-first-static-site.md")],
+           ["nginx-variable-expand", "nginx-server-block-select", "nginx-directive-inheritance"]),
+        _m("location-rewrites", "2. Location matching and rewrites in depth",
+           "The full location selection algorithm, try_files, rewrite versus return, and the classic mistakes.",
+           [("location-matching", "How NGINX picks a location block", "04-location-matching.md"),
+            ("try-files-rewrite-return", "try_files, return, rewrite and the proxy_pass slash", "05-try-files-rewrite-return.md")],
+           ["nginx-location-match", "nginx-try-files", "nginx-proxy-pass-uri", "nginx-rewrite-eval"]),
+        _m("load-balancing", "3. High-performance load balancing",
+           "Reverse proxying to a pool of servers over HTTP, TCP and UDP, the balancing methods, sticky sessions and health checks.",
+           [("lb-http-upstreams", "HTTP load balancing and the balancing methods", "06-lb-http-upstreams.md"),
+            ("lb-tcp-udp-sticky", "TCP and UDP load balancing and sticky sessions", "07-lb-tcp-udp-sticky.md"),
+            ("lb-health-checks", "Health checks, retries, draining and slow start", "08-lb-health-checks.md")],
+           ["nginx-smooth-wrr", "nginx-least-conn", "nginx-hash-select", "nginx-passive-health"]),
+        _m("traffic-management", "4. Traffic management",
+           "Splitting traffic for experiments, deciding by country or address, and limiting request rate, connections and bandwidth.",
+           [("split-geo-map", "A/B testing, map, geo and finding the real client", "09-split-geo-map.md"),
+            ("rate-conn-limits", "Limiting request rate, connections and bandwidth", "10-rate-conn-limits.md")],
+           ["nginx-map-eval", "nginx-split-clients", "nginx-limit-conn", "nginx-limit-req"]),
+        _m("caching", "5. Massively scalable content caching",
+           "Cache zones and keys, how a hit and a miss travel, bypass and purge, cache locking, stale content and slicing.",
+           [("cache-basics", "Proxy caching: zones, keys and validity", "11-cache-basics.md"),
+            ("cache-advanced", "Bypass, purge, locking, stale content and slicing", "12-cache-advanced.md")],
+           ["nginx-cache-control-ttl", "nginx-cache-decision"]),
+        _m("programmability", "6. Programmability and automation",
+           "Extending NGINX with njs and Lua, generating configuration with templates and tools, and changing it at run time through an API.",
+           [("njs-lua", "Extending NGINX with njs and Lua", "13-njs-lua.md"),
+            ("automation-api", "Configuration management, templating and the API", "14-automation-api.md")],
+           ["nginx-config-lint"]),
+        _m("authentication", "7. Authentication",
+           "Passwords with HTTP basic auth, delegating the decision with auth subrequests, validating JWTs and OpenID Connect.",
+           [("basic-auth-subrequests", "HTTP basic authentication and auth subrequests", "15-basic-auth-subrequests.md"),
+            ("jwt-oidc", "JSON Web Tokens and OpenID Connect", "16-jwt-oidc.md")],
+           ["nginx-basic-auth", "nginx-jwt-check"]),
+        _m("security", "8. Security controls",
+           "Access by address, CORS, TLS towards clients and upstreams, HTTPS redirects and HSTS, secure links, DDoS basics and WAFs.",
+           [("access-cors-secure-links", "Access rules, satisfy, CORS and secure links", "17-access-cors-secure-links.md"),
+            ("tls-https-hsts", "TLS, HTTPS redirects, HSTS and upstream encryption", "18-tls-https-hsts.md"),
+            ("ddos-waf", "DDoS mitigation basics and web application firewalls", "19-ddos-waf.md")],
+           ["nginx-access-control", "nginx-cors-preflight", "nginx-https-hsts"]),
+        _m("protocols-media", "9. HTTP/2, HTTP/3, gRPC and media streaming",
+           "Newer HTTP versions, the story of server push, proxying gRPC and WebSocket, and serving video.",
+           [("http2-http3-grpc", "HTTP/2, HTTP/3, server push and gRPC", "20-http2-http3-grpc.md"),
+            ("media-streaming", "Media streaming: MP4, HLS and bandwidth control", "21-media-streaming.md")],
+           ["nginx-range-request"]),
+        _m("cloud-containers-ha", "10. Cloud, containers and high availability",
+           "Auto-provisioning, sitting behind cloud load balancers, API gateways, Docker images, Kubernetes Ingress and failover pairs.",
+           [("cloud-deployments", "Cloud deployments: provisioning, cloud load balancers and DNS", "22-cloud-deployments.md"),
+            ("containers-microservices", "Containers and microservices: gateway, images and Ingress", "23-containers-microservices.md"),
+            ("high-availability", "High-availability deployment modes", "24-high-availability.md")],
+           ["nginx-vrrp-master"]),
+        _m("monitoring-debugging", "11. Monitoring, logging and troubleshooting",
+           "Stub status, dashboards and OpenTelemetry, access and error logs, request IDs and a method for finding faults.",
+           [("activity-monitoring", "Activity monitoring: stub status, dashboards and OpenTelemetry", "25-activity-monitoring.md"),
+            ("logging", "Access logs, error logs and request tracing", "26-logging.md"),
+            ("troubleshooting", "A troubleshooting method and the gateway status codes", "27-troubleshooting.md")],
+           ["nginx-log-parse", "nginx-log-topn", "nginx-status-diagnosis"]),
+        _m("performance", "12. Performance tuning",
+           "Workers and connections, keepalive on both sides, buffering, sendfile, compression, file caches and the operating system.",
+           [("perf-connections", "Workers, connections, keepalive and OS tuning", "28-perf-connections.md"),
+            ("perf-buffers-compression", "Buffering, sendfile, gzip, brotli and file caches", "29-perf-buffers-compression.md")],
+           ["nginx-worker-capacity", "nginx-gzip-decision"]),
+        _m("worked-project", "13. A worked project",
+           "Put NGINX in front of a FastAPI or Node application on one small server, with TLS, redirects, limits, WebSockets and operations.",
+           [("project-proxy-tls", "Project part 1: reverse proxy, TLS and redirects", "30-project-proxy-tls.md"),
+            ("project-hardening-ops", "Project part 2: static files, limits, WebSockets and operations", "31-project-hardening-ops.md")]),
+        _m("interview", "14. NGINX interview essentials",
+           "Worked answers to the questions interviewers ask about proxies, concurrency, balancing, gateway errors and precedence.",
+           [("interview-concepts", "Interview essentials: concepts and comparisons", "32-interview-concepts.md"),
+            ("interview-debugging", "Interview essentials: 502, 504 and location puzzles", "33-interview-debugging.md")]),
+    ],
+)

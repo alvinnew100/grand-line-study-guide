@@ -487,10 +487,10 @@
    "Official docs: nginx.org/en/docs (core, proxy, upstream, limit_req, limit_conn, cache, ssl, v2, v3, stream, njs, otel)",
    "Official docs: docs.nginx.com (NGINX Plus features), letsencrypt.org, kubernetes.io (Ingress)"
   ],
-  "words": 116601,
+  "words": 116630,
   "modules": 14,
   "lessons": 33,
-  "problems": 28
+  "problems": 30
  },
  {
   "id": "networking",
@@ -710,5 +710,22 @@
   "modules": 10,
   "lessons": 29,
   "problems": 30
+ },
+ {
+  "id": "js-testing",
+  "title": "JavaScript Testing and TDD",
+  "icon": "🧪",
+  "blurb": "Automated testing and test-driven development in JavaScript, from a twenty-line test runner to fake timers, test doubles, Vitest and Jest, Testing Library, Playwright, coverage and CI, with runnable examples and judged problems.",
+  "color": "#2f9e6e",
+  "sources": [
+   "Johansen, Test-Driven JavaScript Development (Addison-Wesley, 2010), ch. 1-17",
+   "Meszaros, xUnit Test Patterns (terminology for test doubles and test smells)",
+   "Vitest, Jest, node:test, Testing Library and Playwright documentation",
+   "MDN Web Docs (developer.mozilla.org)"
+  ],
+  "words": 118794,
+  "modules": 12,
+  "lessons": 27,
+  "problems": 27
  }
 ]
