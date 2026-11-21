@@ -483,7 +483,7 @@ gateways (lesson 33). Alerts tell you after the money is spent; limits stop it b
    "answer": 1, "explain": "Attribution turns a total into decisions someone owns."},
   {"q": "In the churn cost review, what produced the single largest saving?",
    "options": ["Quantizing the model", "Auto-stopping idle GPU notebooks", "Buying a three-year reservation", "Switching to gRPC"],
-   "answer": 1, "explain": "Removing waste ($1,725 of $5,080) beat every ML-specific optimisation in the first review."}
+   "answer": 1, "explain": "Removing waste (\\$1,725 of \\$5,080) beat every ML-specific optimisation in the first review."}
 ]
 ```
 
