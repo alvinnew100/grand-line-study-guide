@@ -173,6 +173,129 @@ Rich-text comments or a blog editor cannot be encoded wholesale, or the formatti
 
 Do **not** write a sanitiser with regular expressions. Browsers parse malformed HTML in surprising ways, and home-made filters are bypassed routinely. Use a maintained library that works on a real parser — DOMPurify in the browser, `nh3` or `bleach` in Python — keep it updated, and sanitise as close to the sink as possible. An alternative that avoids HTML input entirely is a restricted format such as Markdown, rendered by a library with raw HTML disabled.
 
+## Sanitising HTML safely, and the sinks that bite
+
+The previous section said "use a library". This one explains *why* the advice is so firm, which dangerous places in the browser deserve your suspicion, and what to use instead.
+
+### Why a home-made filter fails
+
+A sanitiser has to answer one question about a stranger's HTML: "which parts may stay?" Writing that with regular expressions (patterns that match text) means you are guessing how a browser will read the text by looking at the *characters*. But the browser does not look at characters. It runs a very forgiving **parser**, a program that turns text into a tree of elements, and that parser has hundreds of special cases for broken markup: missing closing tags, odd attribute quoting, tags that are only legal inside other tags, text that is treated as raw script or style content, and more. A pattern that removes `<script>` says nothing about the dozens of other ways the parser can produce an element that runs code. Every home-made filter is an attempt to describe the parser in a sentence, and the parser is longer than a sentence.
+
+A real sanitiser avoids the guesswork by using a real parser. It follows four steps:
+
+1. **Parse** the untrusted text into a tree (the same kind of tree the browser builds).
+2. **Walk** the tree and delete every element and attribute that is not on an allow-list.
+3. **Check** values that carry meaning, for example that an `href` uses a safe scheme.
+4. **Return** the cleaned result, either as a tree or as text produced by **serialising** the tree (turning the tree back into HTML text).
+
+DOMPurify is the widely used JavaScript library that does this in the browser. Its everyday use is one call:
+
+```javascript
+// clean is a string that contains only allow-listed markup
+const clean = DOMPurify.sanitize(dirtyHtml, {
+  ALLOWED_TAGS: ["b", "i", "em", "strong", "p", "ul", "ol", "li", "a"],
+  ALLOWED_ATTR: ["href"],
+});
+commentBox.innerHTML = clean;
+```
+
+`dirtyHtml` is the untrusted text. The two options narrow the allow-list further than the library's defaults, which is good practice: allow only what your feature needs. Server-side equivalents exist (`nh3` and `bleach` in Python, for example). Keep any such library up to date, because browsers change and sanitisers are patched when researchers find a gap.
+
+### Mutation XSS: when cleaning changes the meaning
+
+There is a subtle failure that even careful designs have suffered, called **mutation XSS** (mXSS). The word *mutation* describes the key fact: the HTML is changed by being parsed and written out again, and the changed version can behave differently from the version that was checked.
+
+Think of a photocopier and a forger. You inspect a document, find it harmless, and then send it through a copier that slightly alters it. If the copy does something the original did not, your inspection was of the wrong thing.
+
+In browser terms the sequence is:
+
+```mermaid
+flowchart LR
+    A[Untrusted text] --> B[Sanitiser parses it into tree 1]
+    B --> C[Tree 1 checked and judged safe]
+    C --> D[Serialised back to text]
+    D --> E[Page code assigns text to innerHTML]
+    E --> F[Browser parses text into tree 2]
+    F --> G{Is tree 2 the same as tree 1}
+```
+
+The danger lives at the last step. Parsing text and writing it back out is **not guaranteed to give the same tree**. The parser reads the same characters differently depending on *where in the document* the text lands (inside a table, inside an SVG or MathML section, inside a style or noscript element) and on whether scripting is enabled in the context that did the checking. Some inputs therefore produce a harmless tree 1 and a dangerous tree 2. The details are technical and change with browser versions, so this lesson will not catalogue them; what matters is the pattern and the rules that defeat it:
+
+- **Do not touch sanitised output.** No string replacements, no extra "cleaning", no concatenating it into a larger HTML string. Any edit after sanitising re-opens the question the sanitiser answered.
+- **Avoid the round trip where you can.** DOMPurify can return the cleaned *tree* (the option `RETURN_DOM_FRAGMENT`) so you insert nodes directly instead of re-parsing a string.
+- **Sanitise for the place you will use the result.** Output cleaned for an element body must not be reused inside an attribute or a different parent element.
+- **Sanitise late and keep the library current.** Most mXSS holes are closed by updates; an outdated copy in a bundle nobody rebuilds is the usual way they reach production.
+- **Add a second layer.** A strict Content Security Policy and Trusted Types (below) mean that even a sanitiser bug does not automatically become running script.
+
+### The Sanitizer API: the browser does it for you
+
+Browsers have been adding a built-in answer, the **Sanitizer API**. Its central idea is a method called `setHTML` on an element: instead of "parse this string and insert it", you say "parse this string *for this element*, strip anything unsafe, and insert the result". Because the browser knows the target element, the parsing context matches and the mutation gap shrinks, and scripts and event-handler attributes are removed even if your configuration forgets to ask.
+
+```javascript
+// Safe by default: unsafe parts are removed before insertion
+commentBox.setHTML(userHtml);
+```
+
+This is a newer standard and support is still rolling out across browsers and versions, so check current compatibility before depending on it, and keep DOMPurify as the fallback. The direction of travel is clear: the platform does the dangerous work, and developers stop re-implementing it.
+
+### Dangerous sinks and their safe alternatives
+
+Recall that a **sink** is an operation that can turn data into code. These are the ones to know, and each has a safer substitute.
+
+| Sink | Why it is dangerous | Safer alternative |
+|---|---|---|
+| `element.innerHTML = text` (also `outerHTML`, `insertAdjacentHTML`, `document.write`) | Parses the string as markup, so tags and event attributes become live | `element.textContent = text` for plain text; sanitise first when HTML is wanted |
+| `DOMParser` and `parseFromString` | The parsed document is inert, so scripts do not run there. The risk starts when you *move* its nodes into your live page | Sanitise before parsing, or insert only the sanitiser's output |
+| SVG content (inline `<svg>`, or an SVG file opened as a page) | SVG is a markup language of its own that may contain scripts and event handlers | Show uploaded SVG only through `<img>` (scripts are disabled there), or sanitise it with an SVG-aware profile, or serve it from a separate origin |
+| Blob URLs (`URL.createObjectURL(blob)`) | A `blob:` address carries the origin of the page that made it. A hostile HTML or SVG blob opened in a tab runs with your site's rights | Do not turn untrusted content into HTML blobs; serve user files from a different origin with `Content-Disposition: attachment` |
+| `javascript:` in a hyperlink (`<a href>`, `location`, `window.open`) | HTML encoding cannot help, because the scheme itself is the instruction | Allow-list the URL (below) |
+| `eval`, `new Function`, `setTimeout("string")` | Execute text as code | Do not use them with data; pass real functions |
+
+A **blob** is a chunk of raw data held in the browser's memory, and a **blob URL** is a temporary address that points to it. The origin inheritance is what turns a convenient feature into a sink: the browser treats the content as belonging to your site.
+
+**URL allow-listing** means testing the *result of parsing* a URL, never searching the raw text for bad words. Parsing first matters because the URL parser strips things such as leading spaces and tabs and is case-insensitive about schemes, so a text search is easy to fool.
+
+```javascript
+function safeHref(value) {
+  try {
+    const u = new URL(value, "https://shop.example/");   // second argument resolves relative links
+    return ["https:", "http:", "mailto:"].includes(u.protocol) ? u.href : "#";
+  } catch {
+    return "#";                                           // unparsable input gets a harmless link
+  }
+}
+link.href = safeHref(profile.website);
+```
+
+`new URL(value, base)` parses the text and throws an error if it cannot. `u.protocol` is the scheme with a colon, for example `"https:"`. Anything not on the list, including `javascript:` and `data:`, is replaced with `"#"`. The browser's own parser did the interpreting, so there is no gap between what you checked and what the link will do.
+
+### Trusted Types: making unsafe assignments impossible
+
+The earlier list mentioned Trusted Types in one line. Here is how it works. It is a browser feature, switched on by a Content Security Policy header, which changes what the dangerous sinks will accept:
+
+```text
+Content-Security-Policy: require-trusted-types-for 'script'; trusted-types sanitize-policy
+```
+
+With this header, assigning a plain string to `innerHTML` throws an error. Sinks accept only special **trusted** objects, and those can be created in one place: a named **policy** that your code registers.
+
+```javascript
+const policy = trustedTypes.createPolicy("sanitize-policy", {
+  createHTML: (input) => DOMPurify.sanitize(input),
+});
+
+commentBox.innerHTML = policy.createHTML(userHtml);   // allowed
+commentBox.innerHTML = userHtml;                      // blocked: a plain string
+```
+
+The policy is the single door. A reviewer no longer has to read every line of a large application for a stray `innerHTML`; they audit the one policy function, and the browser refuses everything that bypasses it. A good rollout is to start in report-only mode (the header `Content-Security-Policy-Report-Only`), read the reports to find every existing sink, fix them, and then enforce.
+
+> [!WARNING]
+> Trusted Types protects the *dangerous assignments*. It does not make a weak policy strong: a policy that returns its input unchanged turns the protection off. The policy must call a real sanitiser.
+
+> [!INTERVIEW]
+> "Why not sanitise with regular expressions?" Because the browser's parser is far more permissive than a pattern can describe, and sanitise-then-reparse can even change the tree (mutation XSS). Use a maintained sanitiser built on a real parser, do not edit its output, prefer `textContent` where HTML is not needed, and enforce with CSP and Trusted Types.
+
 ## Defence in depth
 
 Encoding is the primary control. Because a single forgotten spot is enough, add layers that limit the damage when one is missed.
@@ -240,6 +363,13 @@ Remember stored data shown in *other* places: admin dashboards, emails, PDF expo
 - **Sanitisation** — removing everything except an allow-list of safe HTML.
 - **Content Security Policy (CSP)** — a header restricting which scripts and resources a page may load.
 - **Trusted Types** — a browser mechanism forcing values through approved functions before reaching dangerous sinks.
+- **Parser** — the program that turns HTML text into a tree of elements.
+- **Serialise** — turn a tree back into text.
+- **Mutation XSS (mXSS)** — an attack that exploits the difference between a sanitised tree and the tree produced when the cleaned text is parsed again.
+- **Sanitizer API** — a built-in browser feature (`setHTML`) that sanitises HTML for the element receiving it.
+- **Blob URL** — a temporary `blob:` address for data in browser memory; it inherits the creating page's origin.
+- **URL allow-listing** — accepting a link only when its parsed scheme is on an approved list.
+- **Trusted Types policy** — a named function, registered once, that is the only way to create values that dangerous sinks will accept.
 
 ```quiz
 [
@@ -266,7 +396,22 @@ Remember stored data shown in *other* places: admin dashboards, emails, PDF expo
    "explain": "It is a damage-limiting layer. The script can still act as the user while the page is open."},
   {"q": "In a React code base, which construct should a security reviewer search for first?",
    "options": ["useState", "className", "dangerouslySetInnerHTML", "key props"], "answer": 2,
-   "explain": "JSX encodes by default. dangerouslySetInnerHTML is the explicit opt-out through which unencoded HTML reaches the DOM."}
+   "explain": "JSX encodes by default. dangerouslySetInnerHTML is the explicit opt-out through which unencoded HTML reaches the DOM."},
+  {"q": "What is mutation XSS?",
+   "options": ["Script injected through a mutated cookie", "Markup that was judged safe by a sanitiser but behaves differently once the cleaned text is parsed again", "A virus that changes browser settings", "An XSS that only works on mobile"], "answer": 1,
+   "explain": "Parsing and serialising HTML does not always round-trip to the same tree, so the tree that was checked and the tree that runs can differ."},
+  {"q": "After DOMPurify returns clean HTML, a developer runs a string replacement on it to add a CSS class, then assigns it to innerHTML. What is wrong?",
+   "options": ["Nothing", "Editing sanitised output re-opens the question the sanitiser answered and can reintroduce danger", "innerHTML is faster than the sanitiser", "The class name is too long"], "answer": 1,
+   "explain": "Treat sanitiser output as final. Change the allow-list or the sanitiser configuration instead of editing the result."},
+  {"q": "Which approach correctly allows a user-supplied website link to be placed in an anchor?",
+   "options": ["Remove the text javascript from the value", "Parse it with new URL and accept only http, https or mailto schemes", "HTML-encode it and trust the result", "Convert it to lower case"], "answer": 1,
+   "explain": "The scheme is what matters. Parse the URL and allow-list the parsed protocol rather than searching raw text."},
+  {"q": "Why can an uploaded SVG file be riskier than an uploaded PNG?",
+   "options": ["SVG files are larger", "SVG is markup that can contain script, which runs if the file is opened as a page in your origin", "PNG files are encrypted", "SVG cannot be shown in img tags"], "answer": 1,
+   "explain": "Show untrusted SVG through img (scripts disabled) or serve it from another origin with a download or sandbox policy."},
+  {"q": "What does Trusted Types change when require-trusted-types-for is enabled?",
+   "options": ["Cookies become HttpOnly", "Assigning a plain string to a sink such as innerHTML is blocked unless it came from a registered policy", "All JavaScript is disabled", "HTML encoding becomes optional"], "answer": 1,
+   "explain": "Sinks accept only trusted objects. Your policy function becomes the single reviewed door to dangerous assignments."}
 ]
 ```
 

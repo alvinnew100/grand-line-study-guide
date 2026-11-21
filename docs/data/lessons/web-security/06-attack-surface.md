@@ -176,6 +176,46 @@ For registration and password reset, the equivalent fix is to always say the sam
 > [!WARNING]
 > Sequential identifiers leak too. If your order confirmation says "Order 10482" today and "Order 10530" tomorrow, a competitor knows you took 48 orders. More seriously, sequential IDs make it trivial to request every record in turn if an authorisation check is missing. Random identifiers (UUIDs) reduce guessing, but they are **not** an authorisation control — a leaked or shared ID still works.
 
+### 7. Two quiet sources: DNS zone transfers and cached copies
+
+Two more places leak names and content without anyone touching your application. Both are about *copies* of information that you may have forgotten exist.
+
+#### DNS zone transfers
+
+The **Domain Name System (DNS)** is the internet's phone book: it turns a name such as `shop.example` into the address of a server. The records for your domain, every name you have defined and where it points, are kept in a file-like collection called a **zone**, served by **name servers**. For reliability a domain normally has at least two name servers, a **primary** that holds the master copy and **secondary** servers that keep copies. So that the secondaries can stay up to date, DNS includes a request type that means "send me your entire zone". It is called a **zone transfer**, and its request type is **AXFR**.
+
+That feature is correct and necessary, between your own servers. The mistake is **a name server that answers a zone-transfer request from anyone**. The reply is the whole list: `www`, `api`, `staging`, `vpn`, `jenkins`, `old-crm`, internal hostnames, mail servers, and the addresses behind them. It is the forgotten-doors inventory from section 5, handed over in one answer, including names that were never linked anywhere and would not appear in certificate logs.
+
+An everyday comparison: the receptionist will gladly tell a visitor where the meeting room is, but the building directory with every tenant's office number is meant for the building's own staff. A misconfigured name server hands the full directory to any passer-by.
+
+The defence is configuration, and it is quick:
+
+1. **Restrict transfers to your own secondary servers.** Every name server product has an "allow transfer" setting; list the specific addresses of your secondaries (for BIND, the `allow-transfer` option) and nothing else. Check the default of your software and your hosting provider rather than assuming it.
+2. **Authenticate the transfers.** Use TSIG (transaction signatures, a shared secret that signs the exchange) so that only a server holding the key is served, even if an address is spoofed.
+3. **Keep internal names out of the public zone.** Use **split-horizon DNS**: the internal name servers answer with the internal names, the public ones publish only what outsiders need. Then even a leak shows little.
+4. **Do not rely on obscurity.** Treat every name in a public zone as discoverable by other means as well; the control is that nothing sensitive is reachable, not that the name is unknown.
+5. **Test your own domain.** From a machine you control, ask each of your name servers for a transfer of your own zone with a standard tool such as `dig`. The correct answer is a refusal. Add the check to your periodic attack-surface review. Only test domains and servers you are responsible for.
+
+#### Search-engine caches and web archives
+
+Search engines keep a stored copy of pages they have crawled, and public **web archives** (the Internet Archive's Wayback Machine is the best known) keep snapshots over many years. A page you removed last week may still exist in several of them. Some search engines have reduced or removed their visible "cached" links, but archives and other copies persist, and **scrapers and AI-training crawlers keep their own**.
+
+Why this matters to a defender:
+
+- A document that was public for an afternoon (a configuration file in the web root, an internal price list, an admin page with a key in its source) can be read later from a copy even after you delete the original.
+- Old versions of your site show **old routes, old subdomains, old comments and old API keys**, which is exactly the forgotten-door inventory again.
+- Advanced search operators let anyone query the engines for file types and path patterns on your domain, so exposed backups and listings are found at scale.
+
+The defence has two halves, and the order matters:
+
+1. **Prevent the exposure in the first place.** Nothing secret in the web root, in front-end code, or behind only an unlinked URL. If something sensitive was ever public, assume it was copied.
+2. **Respond properly when it leaked.** *Rotate every secret that was exposed* (keys, tokens, passwords) because deleting the page does not un-leak them. Then remove the copies you can: ask search engines to remove the URL through their removal tools, and ask archives to exclude it through their takedown process. These requests take time and are not guaranteed.
+
+Useful but limited controls: the `noindex` robots meta tag asks engines not to list a page, and `noarchive` asks them not to keep a cached copy, but both are requests to polite crawlers and only work if the page is crawlable when the tag is read. Authentication is the real control: a page behind a login cannot be crawled. For pages that should not be stored by shared caches and proxies, send `Cache-Control: no-store`.
+
+> [!TIP]
+> Treat "we deleted it" as the start of the response, not the end. The question to ask is "what could someone have learned from the copy, and what must change so that knowledge is useless?"
+
 ## Mapping your own attack surface
 
 The **attack surface** is the sum of every point where someone outside can send input to, or obtain output from, your system. You reduce risk by making that sum smaller and by knowing exactly what is in it.
@@ -281,6 +321,13 @@ Only ever against systems you own or are authorised to test.
 - **User enumeration** — discovering which accounts exist from differing responses.
 - **Side channel** — information leaked through behaviour such as timing instead of content.
 - **Staging environment** — a copy of the application used for testing before release.
+- **DNS (Domain Name System)** — the system that turns names into server addresses.
+- **Zone / name server** — the set of DNS records for a domain / a server that answers questions about it.
+- **Zone transfer (AXFR)** — a DNS request for a whole zone, meant for copying it to secondary servers.
+- **TSIG** — a shared-secret signature that authenticates DNS exchanges such as zone transfers.
+- **Split-horizon DNS** — answering with different records to internal and external askers.
+- **Web archive** — a public service that stores dated snapshots of web pages.
+- **`noindex` / `noarchive`** — requests asking search engines not to list or not to keep a copy of a page.
 
 ```quiz
 [
@@ -307,7 +354,19 @@ Only ever against systems you own or are authorised to test.
    "explain": "Deny-by-default routing means an overlooked route is closed. An inventory makes new exposure visible."},
   {"q": "Replacing sequential order numbers with random UUIDs achieves what?",
    "options": ["It replaces the need for authorisation checks", "It makes identifiers harder to guess and hides volume, but authorisation is still required", "It encrypts the orders", "Nothing useful"], "answer": 1,
-   "explain": "Unpredictable identifiers are a helpful layer. Anyone who obtains an identifier can still use it unless the server checks permission."}
+   "explain": "Unpredictable identifiers are a helpful layer. Anyone who obtains an identifier can still use it unless the server checks permission."},
+  {"q": "What is the security problem with a name server that allows zone transfers to anyone?",
+   "options": ["It slows down email", "It hands over the complete list of the domain's records, including unlinked and internal-looking hostnames", "It disables HTTPS", "It lets users change the records"], "answer": 1,
+   "explain": "AXFR returns the whole zone. Restrict it to your own secondary servers and authenticate with TSIG."},
+  {"q": "Which is the correct way to check your own domain for this weakness?",
+   "options": ["Ask each of your name servers for a zone transfer from an outside machine and expect a refusal", "Scan other companies' name servers", "Delete the DNS zone", "Block port 80"], "answer": 0,
+   "explain": "A properly configured server refuses transfers to unlisted requesters. Only test servers you are responsible for."},
+  {"q": "A page containing an API key was public for an hour and then deleted. What must you do first?",
+   "options": ["Nothing, it is gone", "Rotate the key, because copies in caches and archives may exist", "Add the page to robots.txt", "Rename the page"], "answer": 1,
+   "explain": "Deleting a page does not un-leak what it contained. Rotating the secret makes any copy useless."},
+  {"q": "Why is noarchive not a real access control?",
+   "options": ["It is a request that only polite crawlers honour", "It encrypts the page", "It blocks the Internet Archive by law", "It only works on images"], "answer": 0,
+   "explain": "Meta tags ask crawlers to behave. Authentication, not crawler hints, keeps content out of copies."}
 ]
 ```
 

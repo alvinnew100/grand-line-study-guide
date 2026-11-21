@@ -261,6 +261,149 @@ Each finding starts at its reported severity; two context rules can raise it. Th
 
 **Record.** Keep a register: what, where, severity, owner, dates, decision. Risks accepted instead of fixed are recorded with an owner and a review date.
 
+### CVSS in depth
+
+The severity step above mentioned CVSS in one paragraph. Since vulnerability reports, advisories and scanner output all quote it, you should be able to read it fluently and know its limits.
+
+**CVSS** (Common Vulnerability Scoring System) is maintained by FIRST, a forum of security teams. It turns a description of a flaw into a number from 0.0 to 10.0 and a compact text code called a **vector string**. The point is a shared language: two teams reading "CVSS 9.8" mean the same *kind* of flaw. This section describes version 3.1, the one you will meet most often, and then notes how version 4.0 differs.
+
+#### Three groups of metrics
+
+A **metric** is one question with a fixed set of answers. CVSS arranges its questions in three groups, each building on the one before.
+
+| Group | Describes | Who fills it in | Changes over time? |
+|---|---|---|---|
+| **Base** | The flaw itself, independent of any organisation | The reporter or the software vendor | No (it is the permanent score) |
+| **Temporal** (called **Threat** in v4.0) | The state of the world around the flaw: is exploit code available, is a fix released, how sure are we it is real | Updated by whoever tracks it | Yes |
+| **Environmental** | How the flaw lands in *your* environment: how important the affected system is, and what protections you already have | You | Per organisation |
+
+Think of a fire-safety rating for a type of heater. The *base* rating says how dangerous the heater is in general. The *temporal* part says whether a recall is out and whether fires have been reported. The *environmental* part says whether you put the heater in a stone cellar or beside the curtains.
+
+#### The base metrics, one by one
+
+Eight questions make the base score. Learn them in two sets: how the attack is carried out (exploitability), and what it achieves (impact).
+
+**How it is carried out**
+
+- **Attack Vector (AV)** — from where can the attacker reach the flaw? *Network* (N: across the internet), *Adjacent* (A: same local network segment), *Local* (L: on the machine itself), *Physical* (P: touching the device). Network scores highest because the most people can try it.
+- **Attack Complexity (AC)** — does success depend on conditions the attacker cannot control? *Low* (L: repeatable at will) or *High* (H: needs a race, a special configuration or other luck).
+- **Privileges Required (PR)** — what access must the attacker already have? *None* (N), *Low* (L: an ordinary account) or *High* (H: administrator).
+- **User Interaction (UI)** — must a human do something, such as click a link? *None* (N) or *Required* (R).
+- **Scope (S)** — can the flaw affect resources *beyond* the component that holds it? *Unchanged* (U) or *Changed* (C). A flaw in a web page that lets the attacker act inside the user's browser session crosses a security boundary, which is why many XSS flaws are marked Changed.
+
+**What it achieves**
+
+- **Confidentiality (C)**, **Integrity (I)** and **Availability (A)**, each *None*, *Low* or *High*: how much data can be read, how much can be altered, how much can the service be disrupted. These are the three goals of security from the first lesson of this track.
+
+#### Reading a vector string
+
+The vector string lists every base metric as `abbreviation:value`, separated by slashes, after a version tag:
+
+```text
+CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H     score 9.8  Critical
+CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N     score 6.1  Medium
+```
+
+Read the first one aloud: "attackable over the network, low complexity, no privileges needed, no user interaction, scope unchanged, high impact on confidentiality, integrity and availability". That is the shape of an unauthenticated remote takeover, and it is why such flaws sit at the top of every list. The second reads: "network, easy, no account, but a user must click, and it crosses into the browser session with low confidentiality and integrity impact": the classic profile of a reflected XSS, and a typical Medium.
+
+The vector is better than the number for communication, because it shows *why* a score is what it is and lets you spot a disagreement ("you rated privileges as none, but an account is needed").
+
+#### From metrics to a score
+
+The base score is computed with a published formula: exploitability is a product of the weights for AV, AC, PR and UI; impact comes from C, I and A (with a different curve when scope is Changed); the two are combined and rounded up to one decimal place. You never need to do it by hand, but the following small program shows that it is just arithmetic. It implements the version 3.1 base formula.
+
+```python-run
+import math
+
+AV = {"N": 0.85, "A": 0.62, "L": 0.55, "P": 0.20}
+AC = {"L": 0.77, "H": 0.44}
+UI = {"N": 0.85, "R": 0.62}
+CIA = {"H": 0.56, "L": 0.22, "N": 0.0}
+
+def roundup(x):
+    # CVSS rounds UP to one decimal, using integers to avoid float noise
+    n = round(x * 100000)
+    return n / 100000.0 if n % 10000 == 0 else (math.floor(n / 10000) + 1) / 10.0
+
+def base_score(vector):
+    m = dict(p.split(":") for p in vector.split("/")[1:])
+    changed = m["S"] == "C"
+    pr = {"N": 0.85, "L": 0.68 if changed else 0.62, "H": 0.50 if changed else 0.27}[m["PR"]]
+    iss = 1 - (1 - CIA[m["C"]]) * (1 - CIA[m["I"]]) * (1 - CIA[m["A"]])
+    if changed:
+        impact = 7.52 * (iss - 0.029) - 3.25 * (iss - 0.02) ** 15
+    else:
+        impact = 6.42 * iss
+    expl = 8.22 * AV[m["AV"]] * AC[m["AC"]] * pr * UI[m["UI"]]
+    if impact <= 0:
+        return 0.0
+    total = impact + expl
+    return roundup(min((1.08 if changed else 1.0) * total, 10))
+
+def band(score):
+    if score == 0: return "None"
+    if score < 4: return "Low"
+    if score < 7: return "Medium"
+    if score < 9: return "High"
+    return "Critical"
+
+for v in ["CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+          "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N",
+          "CVSS:3.1/AV:L/AC:H/PR:H/UI:R/S:U/C:L/I:N/A:N"]:
+    s = base_score(v)
+    print(s, band(s), v)
+```
+
+`dict(p.split(":") for p in ...)` turns each `AV:N` piece into a key and a value. The `iss` ("impact sub-score") grows as more of C, I and A are affected. When scope is Changed, two things differ: the impact curve and the weight for privileges, because crossing a boundary makes a low-privilege attacker more dangerous. The first two vectors print 9.8 and 6.1, matching the published scores for those profiles; the third, a local flaw needing high privileges, a click and a rare condition, lands near the bottom of the Low band.
+
+#### Severity bands
+
+The qualitative labels in version 3.x are:
+
+| Score | Rating |
+|---|---|
+| 0.0 | None |
+| 0.1 – 3.9 | Low |
+| 4.0 – 6.9 | Medium |
+| 7.0 – 8.9 | High |
+| 9.0 – 10.0 | Critical |
+
+#### Temporal and environmental metrics
+
+**Temporal** metrics adjust the base score *downward* (never above the base) for facts that change:
+
+- **Exploit Code Maturity (E)** — is there no known exploit, a proof of concept, a functional exploit, or a high-reliability one?
+- **Remediation Level (RL)** — is there an official fix, a temporary fix, a workaround, or nothing?
+- **Report Confidence (RC)** — how certain is it that the flaw is real and understood?
+
+**Environmental** metrics let you restate the base metrics for your setting (the "Modified" base metrics, for example Modified Attack Vector when a service is only reachable from an internal network) and add three *requirements* ratings, Confidentiality, Integrity and Availability Requirement (CR, IR, AR), saying how much each goal matters to the affected system. A flaw that leaks data from a system holding nothing sensitive deserves a lower environmental score than the same flaw in a payments database.
+
+#### What changed in CVSS 4.0
+
+Version 4.0 (2023) keeps the idea and tightens the naming, so you will see both in the wild:
+
+- Scores are labelled by which groups are included: **CVSS-B** (base only), **CVSS-BT** (base plus threat), **CVSS-BE** (base plus environmental) and **CVSS-BTE** (all three). The label tells you how much context the number contains; a plain "CVSS 9.8" with no label is almost always base only.
+- *Temporal* is renamed **Threat**, and it is reduced to one metric, Exploit Maturity.
+- A new base metric, **Attack Requirements (AT)**, separates "the target must be in a particular state" from complexity.
+- User Interaction distinguishes *Passive* from *Active* involvement.
+- **Scope is removed.** Impact is instead stated twice: for the **vulnerable system** itself and for **subsequent systems** that are affected downstream, which expresses boundary-crossing more precisely.
+- A **Supplemental** group adds extra information (such as whether the flaw is automatable or how urgent a provider considers it) that does not change the score.
+- The vector starts with `CVSS:4.0/` and uses metric names such as `VC`, `VI` and `VA`.
+
+#### CVSS is not risk
+
+This is the single most important point, and a common interview question. **Severity** answers "how bad is this class of flaw in general?". **Risk** answers "how likely is harm *to us*, and how large would it be?". Risk combines *likelihood* (is it reachable, is it being exploited, are our controls in the way?) with *business impact* (what does this system hold and do?). CVSS base scores contain neither your exposure nor your assets.
+
+So the habit is to use CVSS as **one input**:
+
+1. Start from the base score and vector to understand the flaw.
+2. Add threat intelligence: is it on a known-exploited list, what does a probability score such as EPSS say?
+3. Add your context: internet-facing or internal, what data, which compensating controls.
+4. Record the final priority and the reasoning, so a later reader can see why a 9.8 was scheduled behind a 6.5.
+
+> [!WARNING]
+> Do not turn "Critical means fix today, Medium means fix someday" into the whole policy. Teams that rely only on the base number spend their effort on flaws that are unreachable for them and neglect moderate ones that are being exploited right now.
+
 ### Responsible disclosure
 
 Sooner or later someone outside your organisation will find a flaw. Whether they tell *you* depends on how easy and safe you make it.
@@ -367,6 +510,14 @@ And from the other side — if *you* stumble on a flaw in someone else's product
 - **Bug bounty** — a programme rewarding outside reports of vulnerabilities.
 - **`security.txt`** — a standard file publishing an organisation's security contact.
 - **Safe harbour** — a promise not to take legal action against good-faith research within the policy.
+- **Metric** — one scoring question with a fixed set of answers.
+- **Base / Temporal (Threat) / Environmental metrics** — CVSS groups describing the flaw itself / its changing real-world state / its effect in your setting.
+- **Vector string** — a compact text code listing every metric value, such as `CVSS:3.1/AV:N/AC:L/...`.
+- **Attack Vector, Attack Complexity, Privileges Required, User Interaction** — base metrics describing how an attack is carried out.
+- **Scope** — whether a flaw can affect components beyond the vulnerable one (CVSS 3.1).
+- **Exploit Code Maturity / Remediation Level / Report Confidence** — the temporal metrics.
+- **EPSS** — a probability score estimating the chance a flaw will be exploited soon.
+- **Risk** — likelihood of harm to your organisation combined with its business impact; not the same as severity.
 
 ```quiz
 [
@@ -393,7 +544,22 @@ And from the other side — if *you* stumble on a flaw in someone else's product
    "explain": "Courteous, prompt handling encourages responsible reporting. Reproduction confirms and scopes the issue."},
   {"q": "After fixing a reported SQL injection in one endpoint, what else should be done?",
    "options": ["Nothing", "Search for the same pattern elsewhere, remove the possibility with a safe data-access pattern, and add a regression test", "Disable logging", "Lower the severity"], "answer": 1,
-   "explain": "One instance usually signals a class. Fix the class and guard the fix with a test."}
+   "explain": "One instance usually signals a class. Fix the class and guard the fix with a test."},
+  {"q": "In the vector CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H, what does AV:N mean?",
+   "options": ["The attacker must be at the keyboard", "The flaw can be attacked remotely across a network", "No availability impact", "The flaw needs no patch"], "answer": 1,
+   "explain": "Attack Vector Network means it is reachable over a network, the widest and highest-scoring reach."},
+  {"q": "Which CVSS group describes how the flaw lands in your own environment, including how important the affected system is?",
+   "options": ["Base", "Temporal or Threat", "Environmental", "Supplemental"], "answer": 2,
+   "explain": "Environmental metrics restate base values for your setting and add Confidentiality, Integrity and Availability Requirements."},
+  {"q": "A vendor publishes a patch and there is no known exploit. Which group's metrics change as a result?",
+   "options": ["Base metrics", "Temporal (Threat in v4.0) metrics", "Scope", "None, CVSS never changes"], "answer": 1,
+   "explain": "Exploit maturity and remediation level are temporal facts that change over time; the base score stays fixed."},
+  {"q": "What does the label CVSS-BT tell you in CVSS 4.0?",
+   "options": ["The score includes base and threat metrics", "The score is for a batch of tests", "The flaw is in Bluetooth", "The score was computed twice"], "answer": 0,
+   "explain": "v4.0 names scores by the groups they include: B, BT, BE or BTE."},
+  {"q": "Why is CVSS not the same as risk?",
+   "options": ["It is calculated incorrectly", "It describes the flaw generically and contains neither your exposure nor the value of your assets", "It only covers old software", "Risk is always lower"], "answer": 1,
+   "explain": "Risk needs likelihood and business impact in your context. CVSS is one input alongside exploitation data and your own exposure."}
 ]
 ```
 

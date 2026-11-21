@@ -136,6 +136,108 @@ def update_me(changes: ProfileUpdate, user=Depends(current_user)):
 > [!WARNING]
 > "The front end never sends that field" and "the front end never shows that field" are not security properties. The API is the product; the front end is merely one of its clients.
 
+## Prototype pollution: when merged JSON reaches the object blueprint
+
+The two mistakes above are about *which fields* a client may send. There is a JavaScript-specific cousin that is about *which object* the fields land on. It matters whenever your back end or front end is written in JavaScript (Node.js, for example), and it is a favourite interview topic because it needs a little language knowledge to understand.
+
+### First, what a prototype is
+
+In JavaScript almost every object has a hidden link to another object called its **prototype**, which acts as a shared blueprint. When you read a property that the object itself does not have, JavaScript does not give up. It follows the link and looks in the prototype, then in the prototype's prototype, and so on until the chain ends. This lookup path is the **prototype chain**.
+
+An everyday comparison: you ask an employee for the office wifi password. They do not know it, so they say "ask my manager". The manager does not know either and says "ask the front desk". The question climbs a chain of people until someone answers or there is nobody left.
+
+```javascript
+const user = { name: "Ann" };
+
+user.name;        // "Ann"      found on the object itself
+user.toString;    // a function found one step up, on Object.prototype
+user.isAdmin;     // undefined  nobody in the chain has it
+```
+
+`toString` was never written on `user`, yet it works, because `user` is linked to **`Object.prototype`**, the blueprint that nearly every plain object inherits from. The name `__proto__` is a special property that exposes that link: `user.__proto__` is `Object.prototype`. (`constructor.prototype` is another route to the same place.)
+
+The consequence that makes this a security topic: **`Object.prototype` is shared by every plain object in the whole program.** If something adds a property to it, every object that does not define that property itself suddenly appears to have it.
+
+### How the pollution happens
+
+**Prototype pollution** is a bug where attacker-controlled data ends up *writing into a prototype* instead of into an ordinary object. The usual route is a **merge** (also called deep merge or "extend") function: code that copies every key of one object into another, descending into nested objects. Settings loaders, "update my profile" handlers and utility libraries all contain one.
+
+```javascript
+// VULNERABLE: copies keys without asking which keys they are
+function merge(target, source) {
+  for (const key in source) {
+    if (typeof source[key] === "object" && source[key] !== null) {
+      target[key] = merge(target[key] || {}, source[key]);   // descend
+    } else {
+      target[key] = source[key];                             // copy
+    }
+  }
+  return target;
+}
+
+const settings = merge({}, JSON.parse(requestBody));
+```
+
+Walk through what a normal body does: `{"theme": "dark"}` copies one key. Now think about a body whose key is the special name `__proto__` with a nested object as its value. `JSON.parse` happily creates an ordinary property with that name. The merge sees an object, so it descends: `target["__proto__"]` does not hold a new empty object, it resolves to the **real `Object.prototype`**, and the merge then writes the nested keys straight onto it. From then on:
+
+```javascript
+const someOtherObject = {};
+someOtherObject.isAdmin;   // now true, although nobody ever set it on this object
+```
+
+The attacker never touched `someOtherObject`. They changed the blueprint, and every object inherited the change until the process restarts.
+
+```mermaid
+flowchart TD
+    A[Untrusted JSON with a __proto__ key] --> B[Merge function descends into it]
+    B --> C[target dot __proto__ resolves to Object.prototype]
+    C --> D[New properties are written onto the shared blueprint]
+    D --> E[Every plain object inherits them]
+    E --> F[Code that checks a missing property is fooled]
+```
+
+### Why it matters: the impact
+
+On its own, adding a property seems harmless. The damage comes from code that **reads a property that is normally absent** and trusts a present value:
+
+- **Authorisation bypass.** A check such as `if (user.isAdmin)` is true for any user object without its own `isAdmin` once the prototype has one.
+- **Denial of service.** Overwriting a built-in such as `toString` with a value that is not a function makes ordinary operations throw errors in every request until the server is restarted.
+- **Changed behaviour of libraries.** Code that reads optional settings (`options.timeout`, `options.template`) takes the polluted defaults. In some applications this has been chained into much worse outcomes, including code execution through template engines or process-spawning options. Those chains depend on the specific library, which is why the root cause is treated as serious in itself.
+- **In the browser**, polluted properties can reach XSS sinks, linking this topic to the previous lesson.
+
+Because the state is **process-wide and persistent**, one request can change the behaviour of all later requests from all users. That is what separates it from most input bugs, which affect one request.
+
+### Prevention
+
+No single trick covers everything, so use several layers.
+
+1. **Validate against a schema before merging.** Define exactly which fields are allowed and reject everything else, exactly as the `extra="forbid"` example did for mass assignment. In JavaScript this is what libraries such as Zod, Ajv (JSON Schema) and Joi are for. A strict schema simply never lets a `__proto__` key through.
+2. **Never use a generic recursive merge on untrusted input.** Copy a short list of named fields instead. If you must merge, skip the dangerous keys (`__proto__`, `constructor`, `prototype`) and use a well-maintained library that already does, kept up to date.
+3. **Use objects that have no prototype.** `Object.create(null)` makes an object with no link at all, so there is no shared blueprint to reach.
+4. **Use a `Map` for dictionaries keyed by user data.** A `Map` stores entries separately from its properties, so a key named `__proto__` is just a key.
+5. **Check ownership when reading.** `Object.hasOwn(obj, "isAdmin")` is true only for a property on the object itself, so inherited (polluted) values are ignored.
+6. **Freeze the blueprint.** `Object.freeze(Object.prototype)` at start-up makes writes to it fail. This is a useful safety net, but test it: some old libraries modify built-ins and will break. Node.js also offers a start-up flag that removes the `__proto__` accessor, `--disable-proto=delete`, for applications that do not need it.
+7. **Keep dependencies updated.** Most real-world cases were bugs in popular merge and query-string libraries, found and fixed one by one; the lesson on dependencies covers how to keep up.
+
+```javascript
+// SAFER: a prototype-free dictionary, a Map, and a schema-checked update
+const counts = Object.create(null);          // no inherited keys at all
+counts[userKey] = (counts[userKey] ?? 0) + 1;
+
+const byName = new Map();                    // user keys are never confused with properties
+byName.set(userKey, profile);
+
+const update = ProfileSchema.strict().parse(JSON.parse(requestBody));   // unknown keys rejected
+```
+
+`counts[userKey] ?? 0` means "use the stored number, or 0 if absent". `.strict()` is the schema library's way of saying that keys not listed are an error.
+
+> [!NOTE]
+> The same family of bug exists wherever a language lets data choose *which attribute or key it writes to* on a shared structure. The habit that prevents it is the one this lesson keeps repeating: decide the allowed keys on the server, never let the client name them.
+
+> [!INTERVIEW]
+> "What is prototype pollution?" Untrusted data reaches a merge or assignment that writes into `Object.prototype` through a key such as `__proto__`, so every object in the process inherits attacker-chosen properties. It leads to authorisation bypass, denial of service or worse. Prevent with schema validation, no generic merges on untrusted input, `Object.create(null)` or `Map`, `Object.hasOwn`, and updated libraries.
+
 ## GraphQL: one endpoint, many questions
 
 **GraphQL** is an alternative to REST in which the client sends a *query* describing exactly which fields it wants, usually to a single address such as `/graphql`:
@@ -280,6 +382,13 @@ The idea behind the table is consistency. Where a project solves a security prob
 - **Dependency / transitive dependency** — a library you use / a library your library uses.
 - **Webhook** — an HTTP request another service sends to your application.
 - **Architecture review** — examining a system's design for structural weaknesses.
+- **Prototype** — the object another object is linked to and inherits missing properties from.
+- **Prototype chain** — the sequence of links JavaScript follows when looking up a property.
+- **`Object.prototype`** — the blueprint shared by almost every plain JavaScript object.
+- **Prototype pollution** — writing attacker-chosen properties onto a shared prototype, usually through a merge of untrusted data.
+- **Deep merge** — copying one object's keys into another, descending into nested objects.
+- **`Object.create(null)`** — makes an object with no prototype.
+- **`Map`** — a key-value collection that keeps entries separate from object properties.
 
 ```quiz
 [
@@ -306,7 +415,19 @@ The idea behind the table is consistency. Where a project solves a security prob
    "explain": "Inconsistency means the problem was solved many times, and some solutions will be flawed. Centralised mechanisms are a sign of health."},
   {"q": "Which is the best first step when asked to assess an unfamiliar application's security?",
    "options": ["Run random payloads against the login form", "Map components, data flows, entry points and dependencies", "Rewrite the authentication system", "Enable every scanner at once and read nothing"], "answer": 1,
-   "explain": "You cannot prioritise or defend what you have not mapped. The map tells you where the valuable assets and exposed entry points are."}
+   "explain": "You cannot prioritise or defend what you have not mapped. The map tells you where the valuable assets and exposed entry points are."},
+  {"q": "What makes prototype pollution more serious than many input bugs?",
+   "options": ["It only affects the attacker", "It changes a blueprint shared by all objects, so the effect is process-wide and lasts until restart", "It requires physical access", "It only breaks the logging"], "answer": 1,
+   "explain": "Object.prototype is shared. One polluted request can alter behaviour for every later request and every user in that process."},
+  {"q": "Which request body key is the classic route into Object.prototype through a vulnerable merge?",
+   "options": ["name", "__proto__", "email", "id"], "answer": 1,
+   "explain": "__proto__ exposes the link to the prototype, so a merge that descends into it writes onto the shared blueprint."},
+  {"q": "Which choice avoids the problem for a dictionary keyed by user-supplied names?",
+   "options": ["A plain object literal", "A Map or Object.create(null)", "A longer variable name", "JSON.stringify on every key"], "answer": 1,
+   "explain": "A Map keeps entries apart from properties, and Object.create(null) has no prototype to reach."},
+  {"q": "Why does a check like if (user.isAdmin) become dangerous after pollution?",
+   "options": ["isAdmin is a reserved word", "Objects without their own isAdmin inherit the polluted value and pass the check", "The check runs slower", "It throws an error"], "answer": 1,
+   "explain": "Code that reads a normally absent property trusts whatever the prototype chain returns. Use Object.hasOwn or explicit fields."}
 ]
 ```
 
