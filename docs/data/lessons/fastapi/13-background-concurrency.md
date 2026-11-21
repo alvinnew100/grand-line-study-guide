@@ -1,12 +1,35 @@
 # Background tasks and concurrency limits
 
-Two practical questions follow from the event-loop model. First: *how do I do work after responding* —
-send the confirmation email, write an audit log, kick off a model retrain — without making the client wait?
-Second: *how do I stop my service from overwhelming itself or its dependencies* when a thousand requests
-arrive at once? This lesson covers FastAPI's `BackgroundTasks`, when you need a real task queue instead,
-and the standard tools for bounding concurrency: semaphores, timeouts, queues and backpressure.
+> **Before this lesson:** you should understand coroutines, `await`, `asyncio.gather` and why a
+> blocking call freezes the event loop ([lesson 12](#/lesson/fastapi/async-fundamentals)), and know
+> the lifespan and `app.state` from [lesson 11](#/lesson/fastapi/yield-deps).
+
+## In plain words
+
+Two practical questions follow from the way an async server works.
+
+The first: **how do I do work after I have answered?** A client who signs up should get the reply
+"done" at once. Sending the welcome email, writing an audit record or starting a long calculation
+can happen afterwards. Work of that kind is called a **background task**.
+
+The second: **how do I stop my server from taking on more than it can handle?** An async server
+will cheerfully accept ten thousand requests at once. If every one of them then asks the database
+for a connection, the database falls over. Accepting work you cannot finish helps nobody.
+
+An everyday picture: a restaurant. The waiter takes your order and says "thank you" straight away;
+the kitchen cooks after that. That is background work. The restaurant also has a fixed number of
+tables, a short bench by the door for people waiting, and a host who says "sorry, we are full, try
+in half an hour" when the bench is occupied. Those three things have technical names that this lesson
+teaches: a **semaphore** (the tables), a **bounded queue** (the bench) and **load shedding** (the
+polite refusal).
+
+Why this matters for a job: "when would you use FastAPI's `BackgroundTasks` and when a real task
+queue?" is a standard interview question, and the limits in the second half are what keep a
+production service standing during a rush.
 
 ## BackgroundTasks
+
+FastAPI has a small built-in tool for running a function after the response has gone out:
 
 ```python
 from fastapi import BackgroundTasks, FastAPI
@@ -23,28 +46,42 @@ async def send_notification(email: str, background_tasks: BackgroundTasks):
     return {"message": "Notification sent in the background"}
 ```
 
-- Declare a `BackgroundTasks` parameter (in an endpoint *or* a dependency — FastAPI merges them into one
-  list).
-- `add_task(func, *args, **kwargs)` queues work. The function may be `def` (run in the thread pool) or
-  `async def` (run on the loop).
-- Tasks run **after the response has been sent**, sequentially in the order added, **in the same process**.
+- `write_notification` is an ordinary function that appends a line to a file. It stands in for
+  sending an email.
+- The endpoint declares a parameter of type `BackgroundTasks`. As with `Request` and `Response`,
+  FastAPI recognises the type and passes in an object.
+- `background_tasks.add_task(write_notification, email, message="...")` does not call the function.
+  It notes "call this, with these arguments, later".
+- The endpoint returns immediately with status `202 Accepted`, the code for "received, not yet
+  done".
 
-What they are good for: small, non-critical follow-ups — emails, cache invalidation, metrics, webhooks.
+The rules:
+
+- The `BackgroundTasks` parameter may be declared in an endpoint *or* in a dependency; FastAPI
+  merges them into one list.
+- The function may be a plain `def` (run in the thread pool) or an `async def` (run on the loop).
+- Tasks run **after the response has been sent**, one after another in the order they were added,
+  **inside the same server process**.
+
+They are good for small follow-up work that is not critical: emails, clearing a cache entry,
+recording a metric, notifying another system.
 
 What they are **not**:
 
 | Limitation | Consequence |
 |---|---|
-| In-process, in-memory | If the worker crashes or is redeployed mid-task, the task is **lost** — no retry |
-| No persistence/queue | No visibility, no rate control, no scheduling |
-| Shares the worker's resources | A CPU-heavy task (in `async def`) blocks the loop; a long task holds up shutdown |
-| Runs after response | Errors can't reach the client; they just get logged |
+| Held only in the process's memory | If the worker crashes or is restarted during a task, the task is **lost**; nothing retries it |
+| No stored queue | You cannot see what is waiting, control the rate, or schedule for later |
+| Shares the worker's resources | A CPU-heavy `async def` task blocks the loop; a long task delays shut-down |
+| Runs after the response | An error cannot reach the client; it only appears in the log |
 
-For anything that must not be lost, is heavy, or needs retries, use a **task queue**: Celery, RQ, Dramatiq,
-Arq or a cloud queue (SQS, Pub/Sub) with separate worker processes. The endpoint enqueues a job and returns
-`202 Accepted` with a job ID; a `GET /jobs/{id}` endpoint reports progress. Lubanovic's production chapter
-lists queues among the standard performance tools for exactly this reason: they move slow work off the
-request path.
+For anything that must not be lost, is heavy, or needs retries, use a **task queue**: a separate
+piece of software that stores jobs safely and hands them to separate **worker** programs. Common
+ones are Celery, RQ, Dramatiq and Arq, or a cloud queue such as SQS or Pub/Sub. A job stored that
+way is **durable**: it survives a crash or restart of your web server. The endpoint puts a job on
+the queue and returns `202 Accepted` with a job ID; a `GET /jobs/{id}` endpoint reports progress.
+Lubanovic's production chapter lists queues among the standard performance tools for this reason:
+they take slow work out of the path of the request.
 
 ```mermaid
 graph LR
@@ -58,13 +95,22 @@ graph LR
     A --> DB
 ```
 
+Follow the arrows: the client posts a job; FastAPI stores it in a queue (kept in Redis or RabbitMQ)
+and answers at once with a job id; workers take jobs from the queue and write results to a store;
+the client later asks FastAPI for the status, which FastAPI reads from that store.
+
 ## Why you need limits
 
-An async server will happily accept 10,000 concurrent requests. If each one opens a DB connection, calls a
-rate-limited upstream API, or sends a tensor to one GPU, something downstream collapses: the pool is
-exhausted, the upstream bans you, memory runs out. **Unbounded concurrency is a bug.** The tools:
+Suppose 10,000 requests arrive together and each one opens a database connection, or calls another
+company's API that allows you 50 calls at a time, or sends data to the single graphics card running
+your model. Something further down the line collapses: the connections run out, the other company
+blocks you, memory is exhausted. **Unlimited concurrency is a bug.** Here are the tools for limiting
+it.
 
-### Semaphore — "at most N at once"
+### Semaphore: "at most N at once"
+
+A **semaphore** is a counter of free slots. Entering takes a slot; leaving gives it back; when no
+slot is free, newcomers wait their turn.
 
 ```python-run
 import asyncio, time
@@ -87,8 +133,20 @@ print("peak concurrency:", peak)
 print("elapsed:", round(time.perf_counter() - t, 2), "s  (10 calls / 3 at a time x 0.1s = ~0.4s)")
 ```
 
-The problem *Simulate a Concurrency Limit* asks you to predict exactly this timing. A semaphore created in
-the lifespan and stored on `app.state` is a simple way to protect a model or upstream:
+- `sem = asyncio.Semaphore(3)` creates three slots.
+- `async with sem:` takes a slot on the way in and returns it on the way out, even if an error
+  occurs inside. With three coroutines already inside, a fourth pauses at this line until one leaves.
+- `active` counts how many are inside at this moment, and `peak` records the highest value seen.
+- `asyncio.gather` starts ten calls at once.
+
+The output shows all ten results, `peak concurrency: 3`, and an elapsed time of about 0.4 seconds:
+the calls went through in groups of three, three, three and one, each group taking 0.1 seconds.
+Without the semaphore the peak would be 10 and the time 0.1 seconds, and the fragile service on the
+other side would have received all ten at once.
+
+The problem *Simulate a Concurrency Limit* asks you to predict timings of exactly this kind. A
+semaphore created in the lifespan and kept on `app.state` is a straightforward way to protect a
+model or an outside service:
 
 ```python
 @asynccontextmanager
@@ -102,10 +160,15 @@ async def predict(req: Req, request: Request):
         return await run_in_threadpool(model.predict, req.features)
 ```
 
-### Timeouts — "don't wait forever"
+One semaphore with two slots is created at start-up. Every `/predict` request must take a slot
+before running the model, so at most two predictions run at a time and the rest wait in line.
 
-A semaphore queue without a timeout just moves the pile-up. Combine them and **shed load** when the wait
-is too long — a fast `503` is better than a slow timeout for everyone:
+### Timeouts: "don't wait forever"
+
+A semaphore alone only moves the pile-up from the outside service to your own waiting line. Combine
+it with a timeout, and refuse requests whose wait would be too long. Refusing work on purpose to
+protect the rest is called **load shedding**. A quick `503` is better for everyone than a slow
+failure:
 
 ```python-run
 import asyncio
@@ -124,11 +187,18 @@ async def handle(i):
 print(*await asyncio.gather(*(handle(i) for i in range(4))), sep="\n")
 ```
 
-### Bounded queues — backpressure
+There is one slot. Each request allows itself 0.15 seconds in total for waiting plus working, and
+the work takes 0.1 seconds. Request 0 gets the slot and finishes: `req 0: 200`. Request 1 waits 0.1
+seconds for the slot, which leaves too little time to do its own work, so it times out. Requests 2
+and 3 never get the slot at all. All three print `503 busy, Retry-After: 1`. Each client learns
+within 0.15 seconds that it should come back later, instead of hanging.
 
-A producer/consumer queue with `maxsize` makes producers wait (or fail fast with `put_nowait` →
-`QueueFull`) when consumers can't keep up. This is the backbone of the micro-batching pattern in the ML
-module:
+### Bounded queues: backpressure
+
+A **queue** is a waiting line between code that produces items and code that consumes them. A
+**bounded** queue has a maximum length. When it is full, the producer must wait, or is refused
+immediately. This pushing back against the source of the work is called **backpressure**. It is the
+basis of the batching pattern in the machine-learning module.
 
 ```python-run
 import asyncio
@@ -160,23 +230,41 @@ print("rejected (shed):", rejected)
 print("processed:", sorted(i for _, i in out))
 ```
 
+- `asyncio.Queue(maxsize=2)` holds at most two waiting items.
+- Two `worker` tasks run for ever: take an item with `await q.get()`, spend 0.05 seconds on it,
+  record it, and report it finished with `q.task_done()`.
+- The main loop tries to add eight items, one every 0.01 seconds, with `put_nowait`, which raises
+  `QueueFull` instead of waiting when there is no room.
+- `await q.join()` waits until every accepted item has been processed, and then the workers are
+  cancelled.
+
+Items arrive five times faster than two workers can process them, so the queue fills. The first few
+items are accepted, the next ones are rejected while both workers are busy and the queue is full,
+and later ones are accepted again as the workers catch up. (The exact numbers can vary slightly with
+timing.) The `processed` line always matches the `accepted` line: nothing that was accepted is lost,
+and nothing that was rejected is silently dropped, because the producer was told.
+
 ### Other limits in the stack
 
-- **Thread pool size**: sync endpoints share AnyIO's 40-thread limiter. You can change it in the lifespan
-  (`anyio.to_thread.current_default_thread_limiter().total_tokens = 100`), but more threads isn't always
-  better — match it to what downstream can take.
-- **DB connection pool**: SQLAlchemy defaults to `pool_size=5`, `max_overflow=10` per process. With 40
-  threads and 15 connections, requests queue for connections; with `pool_timeout` they fail after 30 s.
-  Size the pool with `workers × (pool_size + max_overflow) ≤ database max connections`.
-- **HTTP client pool**: `httpx.Limits(max_connections=100, max_keepalive_connections=20)`.
-- **Server-level**: Uvicorn's `--limit-concurrency N` returns 503 beyond N in-flight connections;
-  `--backlog`, `--timeout-keep-alive`.
-- **Per-client rate limits**: token buckets (security module) protect against a single noisy client.
+- **Thread pool size.** Synchronous endpoints share the 40-thread limit from lesson 12. It can be
+  changed in the lifespan
+  (`anyio.to_thread.current_default_thread_limiter().total_tokens = 100`), but more threads are not
+  automatically better; match the number to what the systems behind you can take.
+- **Database connection pool.** A *pool* is a set of open connections that are reused. SQLAlchemy's
+  defaults are `pool_size=5` and `max_overflow=10` for each process. With 40 threads and 15
+  connections, requests wait in line for a connection, and with `pool_timeout` they fail after 30
+  seconds. Size the pool so that `workers × (pool_size + max_overflow)` stays within the database's
+  own connection limit.
+- **HTTP client pool.** `httpx.Limits(max_connections=100, max_keepalive_connections=20)`.
+- **The server itself.** Uvicorn's `--limit-concurrency N` answers 503 when more than N connections
+  are in progress; see also `--backlog` and `--timeout-keep-alive`.
+- **Limits per client.** Token buckets (security module) protect against one noisy client.
 
 ## Gathering safely
 
-`asyncio.gather(*many)` over an unbounded list is itself a concurrency bug — 10,000 simultaneous upstream
-calls. Bound it with a semaphore (above) or process in chunks. Also decide what a single failure means:
+`asyncio.gather(*many)` over a list of unlimited length is itself a concurrency bug: 10,000 calls
+launched together. Limit it with a semaphore, as above, or work through the list in chunks. You must
+also decide what one failure should mean for the rest:
 
 ```python-run
 import asyncio
@@ -199,10 +287,22 @@ except* ValueError as eg:
     print("task group failed:", [str(e) for e in eg.exceptions])
 ```
 
+`job(2)` raises an error; the other three succeed.
+
+- With `return_exceptions=True`, `gather` puts the error object into the result list in place of a
+  value: `[0, 1, ValueError('job 2 failed'), 9]`. You keep the three good results and can inspect the
+  failure.
+- With a `TaskGroup`, the first failure cancels the remaining tasks and the group raises. The
+  `except*` form (note the star) catches errors from a group, and the demo prints
+  `task group failed: ['job 2 failed']`.
+
+Choose the first when partial results are useful, and the second when the results only make sense
+all together.
+
 ## Fire-and-forget, done properly
 
-If you spawn your own long-running task (a batch-collector loop, a periodic refresh), start it in the
-lifespan, keep a reference, and cancel it on shutdown:
+If you start a long-running task of your own (a loop that collects batches, a periodic refresh),
+start it in the lifespan, keep a reference to it, and cancel it at shut-down:
 
 ```python
 @asynccontextmanager
@@ -214,21 +314,26 @@ async def lifespan(app):
         await task
 ```
 
-Remember that with several worker processes, **each worker runs its own copy** — a "run every hour" loop
-runs N times. Scheduled jobs belong in a dedicated scheduler/worker, not in the web processes.
+`asyncio.create_task` starts the coroutine running alongside everything else. After the `yield`,
+at shut-down, the task is cancelled and then awaited so that it can finish cleaning up;
+`contextlib.suppress` ignores the expected `CancelledError`.
+
+Remember that with several worker processes, **each worker runs its own copy**. A loop meant to
+"run every hour" runs once in each of them. Scheduled jobs belong in one dedicated scheduler or
+worker, not in the web processes.
 
 > [!INTERVIEW]
-> "When would you use FastAPI's BackgroundTasks versus Celery (or another queue)?" — `BackgroundTasks` for
-> light, best-effort work after the response where losing the task on a crash is acceptable (notification,
-> log, cache warm). A real queue when the work is heavy or long, must survive restarts, needs retries,
-> scheduling, rate limiting, or should scale independently of the web tier. With a queue the API returns
-> 202 and a job ID for polling or a webhook.
+> "When would you use FastAPI's BackgroundTasks versus Celery (or another queue)?" —
+> `BackgroundTasks` for light, best-effort work after the response, where losing the task in a crash
+> is acceptable (a notification, a log entry, warming a cache). A real queue when the work is heavy
+> or long, must survive restarts, needs retries, scheduling or rate limiting, or should scale
+> separately from the web servers. With a queue the API returns 202 and a job ID, which the client
+> polls or is told about through a webhook.
 
 ## Worked example: the 202 job pattern end to end
 
-Here is the complete shape of an API for work that is too slow for a request: submit, poll, fetch the
-result. The queue and worker are in-process here so the cell can run; in production the queue would be
-Redis/SQS and the worker a separate process, but the HTTP contract is identical.
+Here is the full shape of an API for work that is too slow to finish inside a request: submit, poll,
+fetch the result. First the two endpoints as they would look in a real application:
 
 ```python
 @router.post("/reports", status_code=status.HTTP_202_ACCEPTED, response_model=JobStatus)
@@ -245,6 +350,15 @@ async def job_status(job_id: str, jobs: JobsDep, user: CurrentUser):
         raise HTTPException(status_code=404, detail="Job not found")
     return job                                        # status: queued | running | succeeded | failed
 ```
+
+`submit_report` puts a job on the queue and answers `202` with two helpful headers: `Location` (the
+address at which to ask about this job) and `Retry-After` (how many seconds to wait before asking).
+`job_status` returns the job's current state, and answers 404 if the job does not exist or belongs
+to someone else.
+
+Now a runnable model. The queue and the worker live inside the same process here so that the cell
+can run; in production the queue would be Redis or SQS and the worker a separate program, but what
+the client sees over HTTP is identical.
 
 ```python-run
 import asyncio, itertools
@@ -309,19 +423,43 @@ for j in store.jobs.values():
     print(j["id"], j["status"], "attempts:", j["attempts"], "|", j["result"] or j.get("error"))
 ```
 
-What the run demonstrates: the fourth submission is **shed** because the bounded queue is full; the
-flaky job succeeds on its third attempt thanks to retry with backoff; the poison job fails permanently
-after the attempt limit instead of blocking the queue forever. A real system sends such jobs to a
-**dead-letter queue** for inspection.
+Reading the model:
 
-Requirements a production version adds:
+- `JobStore` holds a bounded queue (three places) and a dictionary of job records. `enqueue`
+  returns `None` when the queue is full, which the API would turn into a 503.
+- `worker` takes jobs one at a time and tries each up to three times. After a failure it waits
+  before trying again, and the wait doubles each time (`0.01 * 2 ** attempt`). Waiting longer after
+  each failure is called **exponential backoff**; it gives a struggling service time to recover.
+- `build_report` is the actual work. A payload marked `flaky` fails twice and then succeeds, like a
+  service with a temporary problem. A payload marked `poison` always fails, like input that is
+  wrong in itself.
 
-- **Durability**: the queue and job records live outside the process, so a deploy loses nothing.
-- **Idempotent handlers**: most queues deliver *at least once* — a worker can crash after doing the work
-  but before acknowledging it, and the job runs again. Handlers must tolerate repeats (upserts, dedup keys).
-- **Visibility timeouts / heartbeats**: a job whose worker died becomes available again.
-- **Completion signals** beyond polling: a webhook callback, or SSE/WebSocket progress events.
-- **Ownership checks** on the status endpoint (job IDs must not be guessable or cross-tenant readable).
+What the run shows:
+
+- The submit line prints `202 job-1`, `202 job-2`, `202 job-3` and `503 queue full`. The fourth
+  submission is **shed** because the queue is full.
+- The polling lines show the statuses moving through `queued`, `running`, `retrying` and finally
+  `succeeded` or `failed`.
+- In the summary, job 1 succeeded at the first attempt; job 2 (flaky) succeeded on its third attempt
+  thanks to the retries; job 3 (poison) is `failed` after three attempts with the error
+  `malformed input`. It did not block the queue for ever.
+
+A real system moves jobs like job 3 to a **dead-letter queue**: a separate holding area for failed
+jobs, where a person can inspect them.
+
+What a production version adds:
+
+- **Durability.** The queue and the job records live outside the process, so a new release loses
+  nothing.
+- **Idempotent handlers.** Most queues promise delivery *at least once*. A worker can crash after
+  doing the work but before reporting it done, and the job is then run a second time. A handler must
+  tolerate repeats, which is the idempotency of lesson 1 applied to jobs.
+- **Visibility timeouts or heartbeats**, so that a job whose worker died becomes available to
+  another worker.
+- **Completion signals** other than polling: a webhook call, or progress events pushed to the client
+  (lesson 24).
+- **Ownership checks** on the status endpoint. Job IDs must not be guessable, and one customer must
+  not be able to read another's job.
 
 ## Choosing where work runs
 
@@ -337,38 +475,61 @@ Requirements a production version adds:
 
 ## Sizing limits: worked arithmetic
 
-Suppose each worker process has a thread pool of 40, a DB pool of 10 (+5 overflow), and an upstream API
-that allows your service 50 concurrent calls in total. You run 4 workers.
+Suppose each worker process has a thread pool of 40 and a database pool of 10 connections (plus 5
+overflow), and an outside API allows your whole service 50 calls at a time. You run 4 workers.
 
-- Sync endpoints that use the DB: up to 40 threads want a connection but only 15 exist per worker → up to
-  25 requests per worker wait for the pool (and fail after `pool_timeout`). Either raise the pool —
-  checking `4 × 15 = 60` against the database's connection limit — or lower the thread limiter so
-  queueing happens in one visible place.
-- Upstream calls: a per-process `Semaphore(12)` gives `4 × 12 = 48 ≤ 50`. A semaphore of 50 per process
-  would allow 200 and get you throttled. When the worker count autoscales, a per-process semaphore is no
-  longer a reliable global limit — use a Redis-based distributed limiter instead.
-- Queue length: with service time 100 ms and 12 slots, a worker completes ~120 calls/s. If you are willing
-  to let a request wait at most 500 ms, the queue should hold about `0.5 × 120 = 60` items; beyond that,
-  reject. **Bounded wait = queue length ÷ service rate** is the calculation behind every `maxsize`.
+- **Synchronous endpoints that use the database.** Up to 40 threads want a connection, but only 15
+  exist in each worker, so up to 25 requests per worker wait for the pool (and fail after
+  `pool_timeout`). Either enlarge the pool, checking `4 × 15 = 60` against the database's connection
+  limit, or lower the thread limit so that the waiting happens in one visible place.
+- **Calls to the outside API.** A semaphore of 12 in each process gives `4 × 12 = 48`, which is
+  within 50. A semaphore of 50 in each process would allow 200 and get you blocked. If the number of
+  workers changes automatically with load, a semaphore per process is no longer a reliable overall
+  limit; use a limiter shared through Redis.
+- **Queue length.** If one call takes 100 milliseconds and there are 12 slots, a worker completes
+  about 120 calls a second. If you are willing to let a request wait at most 500 milliseconds, the
+  queue should hold about `0.5 × 120 = 60` items, and anything beyond that should be refused.
+  **Longest wait = queue length ÷ completion rate** is the calculation behind every `maxsize`.
 
-Requests that arrive faster than the service rate for a sustained period cannot be saved by any queue;
-the queue only absorbs bursts. Deciding *what to refuse, and how politely* (429/503 with `Retry-After`) is
-the real design decision.
+No queue can rescue a service when requests keep arriving faster than they can be completed. A queue
+only smooths out short bursts. The real design decision is *what to refuse, and how politely* (429 or
+503 with `Retry-After`).
 
 ## Pitfalls
 
 - Treating `BackgroundTasks` as durable.
-- Passing request-scoped resources (DB session) into a background task — open a new one inside.
-- Unbounded `gather` / unbounded queues: memory grows until the process dies.
-- Limits per process forgotten: 4 workers × semaphore(10) = 40 concurrent calls upstream.
-- Timers/schedulers in the web app running once per worker.
+- Passing a resource that belongs to the request (a database session) into a background task. Open
+  a new one inside the task.
+- `gather` over unlimited lists, and queues with no maximum: memory grows until the process dies.
+- Forgetting that limits are per process: 4 workers × a semaphore of 10 = 40 simultaneous calls.
+- Timers and schedulers inside the web app, which then run once in every worker.
 
 ## Summary
 
-- `BackgroundTasks` runs small jobs after the response, in-process, with no durability.
-- Durable/heavy/retriable work needs a task queue and the 202 + job-status pattern.
-- Bound concurrency everywhere: semaphores, pools, bounded queues; add timeouts and shed load early.
-- Remember limits multiply by the number of worker processes.
+- `BackgroundTasks` runs small jobs after the response, inside the same process, with no durability.
+- Work that is heavy, must not be lost or needs retries calls for a task queue and the 202 plus
+  job-status pattern.
+- Limit concurrency everywhere: semaphores, pools, bounded queues. Add timeouts and shed load early.
+- Remember that limits multiply by the number of worker processes.
+
+## Glossary
+
+- **Background task** — work that runs after the response has been sent.
+- **`BackgroundTasks`** — FastAPI's built-in, in-process way to run such work.
+- **Task queue** — separate software that stores jobs and hands them to worker programs.
+- **Worker** — a program (or process) that takes jobs from a queue and runs them.
+- **Durable** — stored so that it survives a crash or restart.
+- **Semaphore** — a counter of free slots that limits how many tasks run a section at once.
+- **Timeout** — a maximum time to wait.
+- **Load shedding** — refusing some requests quickly to protect the rest.
+- **Queue / bounded queue** — a waiting line / one with a maximum length.
+- **Backpressure** — a full queue pushing back on whatever is producing work.
+- **Connection pool** — a set of open connections kept for reuse.
+- **Retry** — attempting failed work again.
+- **Exponential backoff** — waiting twice as long after each failed attempt.
+- **Dead-letter queue** — a holding area for jobs that failed permanently.
+- **At-least-once delivery** — a job is never lost but may run more than once.
+- **Polling** — the client asking repeatedly whether a job is finished.
 
 ```quiz
 [

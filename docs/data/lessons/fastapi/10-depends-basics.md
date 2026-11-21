@@ -1,22 +1,48 @@
 # Depends, Annotated and sub-dependencies
 
-FastAPI's **dependency injection** (DI) system is the feature that scales your app from a toy to a real
-service. Database sessions, the current user, settings, pagination parameters, rate limits, feature flags —
-anything that several endpoints need, that you want to test in isolation, or that needs setup and teardown,
-becomes a dependency.
+> **Before this lesson:** you should be able to write endpoints with path, query and header
+> parameters ([lesson 4](#/lesson/fastapi/first-app), [lesson 6](#/lesson/fastapi/openapi-docs)),
+> raise `HTTPException` ([lesson 5](#/lesson/fastapi/body-responses)) and know what `Annotated` does.
+> In Python you need functions that take other functions as arguments, and classes with `__init__`.
+
+## In plain words
+
+Most endpoints need a few things before they can do their real work: a connection to the database,
+the identity of the person calling, the application's settings, the page number being asked for.
+Anything a piece of code needs in order to run is called a **dependency** of that code.
+
+The direct way to get those things is for each endpoint to fetch them itself. With thirty endpoints
+that is thirty copies of the same fetching code, and thirty places to make a mistake.
+
+**Dependency injection** (often shortened to DI) turns this around. Each endpoint only *declares*
+what it needs, in its parameter list, and FastAPI fetches those things and passes them in.
+
+An everyday picture: a surgeon does not walk to the store room to collect instruments before each
+operation. The surgeon's list says "scalpel, clamps, sutures", and the theatre staff lay them out,
+sterilised, before the operation begins, and clear them away afterwards. The surgeon concentrates on
+the operation, and the hospital can change supplier without retraining any surgeon. Your endpoint is
+the surgeon; FastAPI is the theatre staff; the list is the function signature.
+
+Why this matters for a job: dependencies are how real FastAPI projects share database sessions,
+login checks and settings, and how they swap real resources for fake ones in tests. "What are
+dependencies good for and how are they resolved?" is one of the most common FastAPI interview
+questions.
 
 ## What is a dependency?
 
-Lubanovic's chapter 6 defines it simply: a dependency is specific information you need at some point in
-your code. The traditional way to get it is to write code that fetches it *inside* the function — open a
-DB connection, parse a header, read a config file. The problems he lists:
+Lubanovic's chapter 6 gives a short definition: a dependency is specific information that your code
+needs at some point. The traditional way to obtain it is to write the fetching code *inside* the
+function: open a database connection, pick apart a header, read a configuration file. He lists the
+problems with that:
 
-- **Testing**: you can't easily substitute a fake when the function fetches its own resources.
-- **Hidden coupling**: the function's signature doesn't reveal what it needs.
-- **Duplication**: the same fetching code appears in many endpoints.
+- **Testing.** When a function fetches its own resources, a test cannot easily hand it a fake one.
+- **Hidden coupling.** *Coupling* means how much one piece of code relies on the details of another.
+  A function that reaches out for things on its own relies on them invisibly: nothing in its
+  signature says what it needs.
+- **Duplication.** The same fetching code appears in many endpoints.
 
-**Dependency injection** inverts this: the function *declares* what it needs, and something else (the
-"injector") supplies it. In FastAPI, the declaration is a parameter with `Depends(...)`:
+With dependency injection the function *declares* what it needs and something else, the **injector**,
+supplies it. In FastAPI the declaration is a parameter marked with `Depends(...)`:
 
 ```python
 from typing import Annotated
@@ -36,21 +62,36 @@ def read_users(commons: Annotated[dict, Depends(common_parameters)]):
     return commons
 ```
 
-Things to notice:
+Reading it:
 
-- `common_parameters` is an ordinary function. **Its own parameters are resolved exactly like an
-  endpoint's**: `q`, `skip`, `limit` become query parameters, validated and documented. A dependency can
-  declare path, query, header, cookie and body parameters, `Request`, and other dependencies.
-- You pass the function itself (`Depends(common_parameters)`), not a call.
-- FastAPI calls it per request and injects the result.
-- Both endpoints' OpenAPI docs show `q`, `skip`, `limit` — the dependency's parameters are merged into the
-  endpoint's signature.
+- `common_parameters` is an ordinary function. It takes three values and returns them in a
+  dictionary.
+- In `read_items`, the parameter `commons` is annotated
+  `Annotated[dict, Depends(common_parameters)]`. Read that as "a `dict`, which FastAPI obtains by
+  calling `common_parameters`".
+- `read_users` declares exactly the same need.
+
+What happens for a request such as `GET /items/?skip=20`: FastAPI sees that `read_items` depends on
+`common_parameters`, calls it, and passes the result to the endpoint, which returns
+`{"q": null, "skip": 20, "limit": 100}`.
+
+Four things to notice:
+
+- **The dependency's own parameters are treated exactly like an endpoint's.** `q`, `skip` and `limit`
+  become query parameters, validated and documented. A dependency may declare path, query, header,
+  cookie and body parameters, the raw `Request`, and other dependencies.
+- You pass the function itself, `Depends(common_parameters)`, with no brackets after its name. You
+  are handing FastAPI the function to call later, not calling it now.
+- FastAPI calls it once for every request and passes in ("injects") the result.
+- The documentation for both endpoints shows `q`, `skip` and `limit`. The dependency's parameters are
+  merged into the endpoint's.
 
 ## `Annotated` and reusable aliases
 
-Older code writes `commons: dict = Depends(common_parameters)`. The modern, recommended style puts
-`Depends` inside `Annotated`, which has two advantages: the default slot stays free, and you can name the
-whole thing once:
+Older code writes `commons: dict = Depends(common_parameters)`, putting `Depends` where a default
+value would go. The current recommended style puts `Depends` inside `Annotated`. That has two
+advantages: the default-value position stays free for real defaults, and the whole annotation can be
+given a name and reused:
 
 ```python
 CommonsDep = Annotated[dict, Depends(common_parameters)]
@@ -62,14 +103,16 @@ def read_items(commons: CommonsDep): ...
 def read_users(commons: CommonsDep): ...
 ```
 
-You'll see this pattern everywhere in modern FastAPI codebases: `SessionDep`, `CurrentUser`,
-`SettingsDep`. The type part (`dict`, `Session`, `User`) is just for your editor and type checker —
-FastAPI uses the `Depends(...)` part.
+`CommonsDep` is called a *type alias*: a short name for a longer type expression. You will see this
+pattern throughout modern FastAPI code: `SessionDep`, `CurrentUser`, `SettingsDep`. The first part of
+the `Annotated` (`dict`, `Session`, `User`) is there for your editor and type checker; FastAPI acts
+on the `Depends(...)` part.
 
 ## Classes as dependencies
 
-`Depends` accepts any **callable**. A class is callable (calling it creates an instance), and FastAPI
-inspects its `__init__` parameters:
+`Depends` accepts any **callable**, meaning anything that can be called with brackets. A function is
+callable. So is a class: calling a class creates an instance. FastAPI looks at the parameters of the
+class's `__init__` method, the method that sets up a new instance:
 
 ```python
 class CommonQueryParams:
@@ -82,8 +125,13 @@ def read_items(commons: Annotated[CommonQueryParams, Depends()]):
     return {"q": commons.q, "items": fake_db[commons.skip : commons.skip + commons.limit]}
 ```
 
-Benefits over a dict: attribute access and editor completion. Callable *instances* also work — useful for
-**parameterised** dependencies:
+`CommonQueryParams.__init__` takes the same three query parameters and stores them as attributes.
+In the endpoint, `Depends()` with empty brackets is shorthand for "use the class named in the
+annotation", that is, `Depends(CommonQueryParams)`. The advantage over a dictionary is that the
+endpoint writes `commons.skip`, and the editor knows which attributes exist.
+
+*Instances* can be callable too, when their class defines the special method `__call__`. This is
+useful for dependencies that take a setting, known as **parameterised** dependencies:
 
 ```python
 class RequireRole:
@@ -99,9 +147,14 @@ class RequireRole:
 def delete_item(item_id: int, admin: Annotated[User, Depends(RequireRole("admin"))]): ...
 ```
 
+`RequireRole("admin")` creates an object that remembers the role. Because the class defines
+`__call__`, that object can be called like a function, and FastAPI inspects the parameters of
+`__call__` (here a `CurrentUser`, a dependency defined below). If the user lacks the role, the
+dependency raises `403`. One class thus yields a different check for every role name you give it.
+
 ## Sub-dependencies
 
-Dependencies can depend on other dependencies, forming a tree (more precisely a DAG):
+A dependency can have dependencies of its own. These are **sub-dependencies**:
 
 ```python
 def get_token(authorization: Annotated[str | None, Header()] = None) -> str:
@@ -122,6 +175,14 @@ def me(user: CurrentUser):
     return user
 ```
 
+- `get_token` reads the `Authorization` header. If it is missing or does not begin with `Bearer `,
+  it raises `401`; otherwise it returns the token with that prefix removed.
+- `get_current_user` depends on `get_token` and on a database session (`SessionDep`, defined
+  elsewhere as another alias). It looks the user up and raises `401` if there is none.
+- `CurrentUser` names that dependency, and the `/me` endpoint asks for it.
+
+The endpoint asks for one thing and FastAPI works out the rest:
+
 ```mermaid
 graph TD
     E[me endpoint] --> U[get_current_user]
@@ -130,18 +191,24 @@ graph TD
     T --> H[Authorization header]
 ```
 
+The arrows read "needs". The shape is a tree, or more exactly a **DAG** (directed acyclic graph):
+arrows have a direction and never lead back round in a circle, though two branches may share a node.
+
 ### Caching within a request
 
-If several dependencies in the same request depend on the same sub-dependency (say, `get_db`), FastAPI
-calls it **once** and shares the result — so the endpoint and `get_current_user` use the *same* DB session.
-To opt out (rare), use `Depends(dep, use_cache=False)`. The problem *Dependency Injection Resolver* asks you
-to implement exactly this ordering and caching.
+Suppose two dependencies used in the same request both need the database session. FastAPI calls the
+session dependency **once** and gives the same result to both, so the endpoint and
+`get_current_user` use the *same* session. A stored result that is reused in this way is a **cache**;
+this one lasts for a single request. To switch it off for one use (rarely needed), write
+`Depends(dep, use_cache=False)`. The problem *Dependency Injection Resolver* asks you to implement
+this ordering and caching yourself.
 
 ## How FastAPI resolves dependencies: a working model
 
-The mechanism is less magical than it looks. At route registration, FastAPI inspects the signature; for
-each request, it resolves the graph depth-first, caching results. Here is a toy implementation using
-`Annotated` metadata:
+The mechanism is less mysterious than it looks. When a route is registered, FastAPI inspects the
+function's signature. For each request it then works through the graph, going as deep as possible
+along each branch before backing up (this is called *depth-first*), and remembers results. Here is a
+toy version that reads `Annotated` hints in the same way:
 
 ```python-run
 import inspect
@@ -200,15 +267,36 @@ def endpoint(user: Annotated[dict, Depends(get_user)],
 print(solve(endpoint, {"token": "abc", "skip": "20"}, cache={}))
 ```
 
-`get_db` runs once even though both `get_user` and the endpoint ask for it, and the class `Pagination`
-pulls `skip`/`limit` from the "query". Real FastAPI does the analysis once at startup, validates with
-Pydantic, supports async dependencies, and handles `yield` (next lesson).
+How to read the toy:
+
+- `Depends` is a small class holding the function to call and the cache switch.
+- `solve(func, request, cache)` produces the arguments for `func` and then calls it. For each
+  parameter it reads the hint. If the hint is `Annotated[..., Depends(...)]`, the parameter is a
+  dependency; otherwise it is a plain value read from the `request` dictionary (playing the query
+  string) and converted to the hinted type.
+- For a dependency, `solve` first checks the cache. If the function has already run during this
+  request it prints `(cached)` and reuses the result. Otherwise it calls `solve` *on the dependency
+  itself*, which is how sub-dependencies get resolved, and stores the result.
+- At the bottom are three dependency functions, a class dependency and an endpoint that needs a
+  user, a database session and pagination.
+
+The printed trace shows the order of work. To build `user`, `solve` needs `get_user`, which needs
+`get_db`, which needs `get_settings`. The deepest is called first, so the lines read
+`called get_settings`, `called get_db`, `called get_user`, indented by depth. Next the endpoint's own
+`db` parameter is resolved, and the line `(cached) get_db` appears: the function is not run again.
+Finally `Pagination` is called. The result is
+`{'user': 'ann', 'same_session': True, 'skip': 20, 'limit': 10}`: `same_session` is true because of
+the cache, and `skip` arrived as the number 20 from the text `"20"`.
+
+Real FastAPI does the signature analysis once at start-up, validates with Pydantic, supports `async`
+dependencies, and handles dependencies with clean-up code (next lesson).
 
 ## Dependency scope: where dependencies apply
 
-The book's "Dependency Scope" section shows three levels:
+The book's "Dependency Scope" section shows three levels at which a dependency can be attached.
 
-**Single path** — a parameter, as above. Or, when you need the side effect but not the value, the decorator:
+**One path.** As a parameter, as above. Or, when you want the dependency to run but have no use for
+its return value, list it in the decorator:
 
 ```python
 async def verify_key(x_key: Annotated[str, Header()]):
@@ -219,40 +307,48 @@ async def verify_key(x_key: Annotated[str, Header()]):
 def read_items(): ...
 ```
 
-**Multiple paths** — on a router, applying to every route in it:
+`verify_key` checks a header and raises an error if it is wrong; it returns nothing useful.
+`dependencies=[Depends(verify_key)]` makes it run before `read_items` anyway.
+
+**A group of paths.** On a router (a group of routes, lesson 14), where it applies to every route in
+the group:
 
 ```python
 router = APIRouter(prefix="/admin", dependencies=[Depends(require_admin)])
 ```
 
-**Global** — on the app, applying to every route:
+**Every path.** On the app itself:
 
 ```python
 app = FastAPI(dependencies=[Depends(verify_key)])
 ```
 
-Dependencies in `dependencies=[...]` run for their side effects (validation, raising 401/403, logging,
-rate-limiting); their return values are discarded.
+Dependencies listed in `dependencies=[...]` run for their **side effects**, meaning what they *do*
+as opposed to what they return: checking input, raising 401 or 403, logging, counting requests. Their
+return values are thrown away.
 
 ## `async def` or `def` dependencies?
 
-Same rule as endpoints: `async def` dependencies run on the event loop; `def` dependencies run in the
-thread pool. You can mix them freely — a `def` endpoint can depend on an `async def` dependency and vice
-versa. Use `async def` only if you `await` something inside, or if the work is trivial (no blocking I/O);
-otherwise a blocking call would stall the loop.
+The rule is the same as for endpoints (lesson 4): `async def` dependencies run on the event loop and
+`def` dependencies run in the thread pool. They can be mixed freely; a `def` endpoint may depend on
+an `async def` dependency and the reverse. Use `async def` only when you `await` something inside, or
+when the work is trivial and does no blocking input/output. Otherwise a blocking call would stall the
+loop for every request.
 
 > [!INTERVIEW]
-> "What are FastAPI dependencies good for, and how are they resolved?" — Sharing logic (auth, DB sessions,
-> pagination, settings), enforcing preconditions (raising 401/403 before the endpoint runs), managing
-> resources (setup/teardown with `yield`), and testability (`app.dependency_overrides`). FastAPI builds a
-> graph from `Depends` declarations at startup; per request it resolves it depth-first, calls each
-> dependency at most once (cached per request unless `use_cache=False`), merges their parameters into the
-> endpoint's validation and OpenAPI docs, and injects results as arguments.
+> "What are FastAPI dependencies good for, and how are they resolved?" — Sharing logic (login checks,
+> database sessions, pagination, settings), enforcing preconditions (raising 401/403 before the
+> endpoint runs), managing resources (set-up and clean-up with `yield`), and testability
+> (`app.dependency_overrides`). FastAPI builds a graph from the `Depends` declarations at start-up;
+> for each request it resolves the graph depth-first, calls each dependency at most once (cached per
+> request unless `use_cache=False`), merges their parameters into the endpoint's validation and
+> documentation, and passes the results in as arguments.
 
 ## Worked example: the dependency stack of a real endpoint
 
-Here is the kind of dependency module almost every production FastAPI service ends up with. Read it
-bottom-up: each alias builds on the ones above it.
+Here is the kind of dependency module that almost every production FastAPI service ends up with.
+Several pieces belong to later lessons (database sessions in lessons 11 and 16, tokens in lesson
+19); read it for the *structure*. Each numbered block builds on the ones above it.
 
 ```python
 # app/deps.py
@@ -315,7 +411,20 @@ def get_order_or_404(order_id: int, session: SessionDep, user: CurrentUser) -> O
 OrderDep = Annotated[Order, Depends(get_order_or_404)]
 ```
 
-With that in place endpoints become declarations of intent:
+Block by block:
+
+1. **Configuration.** `SettingsDep` is the settings dependency from lesson 9.
+2. **Per-request resources.** `get_session` opens a database session and hands it over with `yield`
+   (a form explained in the next lesson; for now, "provides the session, then closes it afterwards").
+3. **Identity.** `get_token` extracts the token from the `Authorization` header or raises 401.
+   `get_current_user` turns the token into a user, using the session and the settings.
+4. **Authorization** (what the user may do). `require_role("admin")` returns a dependency that checks
+   for a role and raises 403.
+5. **Reusable request shapes.** `Page` bundles `limit` and `offset` with their limits.
+6. **Load or 404.** `get_order_or_404` fetches an order and raises 404 if it does not exist *or*
+   belongs to another user.
+
+With that module in place, endpoints become short statements of intent:
 
 ```python
 @router.get("/orders", response_model=list[OrderPublic])
@@ -335,28 +444,31 @@ def stats(admin: AdminUser, session: SessionDep): ...
 
 Trace `GET /orders/9` with a valid token belonging to user 7:
 
-1. FastAPI sees `read_order` needs `get_order_or_404`, which needs `order_id` (path), `get_session` and
-   `get_current_user`; the latter needs `get_token`, `get_session` and `get_settings`.
-2. Resolution order (depth-first, each once): `get_session` → `get_token` → `get_settings` →
-   `get_current_user` → `get_order_or_404` → endpoint. The single session is shared by the user lookup
-   and the order lookup because of per-request caching.
-3. If the `Authorization` header is missing, `get_token` raises 401 and **nothing further runs** — no
+1. FastAPI sees that `read_order` needs `get_order_or_404`, which needs `order_id` (from the path),
+   `get_session` and `get_current_user`. The latter needs `get_token`, `get_session` and
+   `get_settings`.
+2. Each is resolved depth-first and called once: `get_session`, `get_token`, `get_settings`,
+   `get_current_user`, `get_order_or_404`, and then the endpoint. One session serves both the user
+   lookup and the order lookup, thanks to the per-request cache.
+3. If the `Authorization` header is missing, `get_token` raises 401 and **nothing further runs**: no
    database query for the order, no endpoint code.
-4. If order 9 belongs to someone else, the dependency raises 404 (not 403, so its existence isn't
-   revealed).
-5. After the response, `get_session`'s cleanup closes the session.
+4. If order 9 belongs to someone else, the dependency raises 404 (not 403, so that the order's
+   existence is not revealed).
+5. After the response, the clean-up part of `get_session` closes the session.
 
-Notice `get_order_or_404` uses the path parameter `order_id` itself: a dependency may declare a path
-parameter of the route it is used on. This "load or 404, with ownership check" dependency removes the
-most-duplicated five lines in CRUD code and makes forgetting the ownership check structurally harder.
+Notice that `get_order_or_404` declares the path parameter `order_id` itself. A dependency may
+declare a path parameter of the route it is used on. This "load it or answer 404, and check the
+owner" dependency removes the five most-repeated lines in CRUD code, and makes it much harder to
+forget the ownership check.
 
 ### Two styles of parameterised dependency
 
-`require_role("admin")` above is a **closure**: an outer function captures the argument and returns the
-real dependency. The class version from earlier (`RequireRole("admin")` with `__call__`) is equivalent.
-A subtlety: every call to `require_role("admin")` creates a *new* function object, and the per-request
-cache and `dependency_overrides` are keyed by the callable. So create each variant once and reuse it —
-which is exactly what the `AdminUser` alias does.
+`require_role("admin")` above is a **closure**: an outer function receives the argument and returns
+an inner function that remembers it. The class version shown earlier (`RequireRole("admin")` with
+`__call__`) does the same job. One subtlety: every call to `require_role("admin")` creates a *new*
+function object, and both the per-request cache and `dependency_overrides` identify a dependency by
+the function object. So create each variant once and reuse it, which is exactly what the `AdminUser`
+alias does.
 
 ## Dependency or something else?
 
@@ -368,9 +480,9 @@ which is exactly what the `AdminUser` alias does.
 | Middleware | every request, untyped | request IDs, timing, CORS |
 | Plain function call | wherever you call it | logic that needs no request data |
 
-A helpful test: *does it need something from the request, or need cleanup per request, or need to be
-swapped in tests?* If yes, make it a dependency. If it is just a computation on values you already have,
-call a normal function — not everything needs to be injected.
+A helpful test: *does it need something from the request, or need clean-up after each request, or
+need to be replaced in tests?* If yes, make it a dependency. If it is a calculation on values you
+already hold, call an ordinary function. Not everything needs to be injected.
 
 ## Debugging dependency problems
 
@@ -384,26 +496,49 @@ call a normal function — not everything needs to be injected.
 | Startup error "Invalid args for response field" | the dependency's *return* type isn't the issue — a route return annotation is; use `response_model=None` |
 | Slow health checks | an expensive global dependency also applies to `/health` |
 
-To see what a route will resolve, inspect its dependant tree: `route.dependant.dependencies` on any
-`APIRoute` in `app.routes` lists the callables FastAPI discovered, recursively.
+To see what a route will resolve, look at `route.dependant.dependencies` on any `APIRoute` in
+`app.routes`. It lists the callables FastAPI discovered, and each entry has its own list in turn.
 
 ## Pitfalls
 
-- `Depends(get_db())` — calling the function instead of passing it.
-- Heavy work in a dependency used globally (it runs for *every* request, including health checks).
-- Blocking I/O in an `async def` dependency.
-- Expecting a dependency result to persist *across* requests — it's per request. Long-lived objects
-  (model, HTTP client, connection pool) belong in the lifespan / `app.state`.
-- Circular dependencies (A depends on B depends on A) — FastAPI fails with a recursion error.
+- `Depends(get_db())`: calling the function instead of passing it.
+- Heavy work in a dependency that is attached globally. It runs for *every* request, health checks
+  included.
+- Blocking input/output in an `async def` dependency.
+- Expecting a dependency's result to survive *between* requests. It exists for one request. Objects
+  that should live for the whole run of the program (a model, an HTTP client, a pool of database
+  connections) belong in the lifespan and `app.state`.
+- Circular dependencies (A needs B, B needs A). FastAPI fails with a recursion error.
 
 ## Summary
 
-- `Depends(callable)` declares a dependency; FastAPI calls it per request and injects the result.
-- Dependencies declare their own parameters (query, headers, other dependencies) — they're merged into
-  validation and docs.
+- `Depends(callable)` declares a dependency; FastAPI calls it for each request and injects the result.
+- Dependencies declare their own parameters (query, headers, other dependencies), which are merged
+  into validation and documentation.
 - `Annotated[T, Depends(f)]` aliases (`SessionDep`, `CurrentUser`) keep signatures short and consistent.
-- Classes and callable instances work as dependencies (`Depends()` shorthand, parameterised checks).
-- Sub-dependency results are cached per request; scope dependencies to a path, router or the whole app.
+- Classes and callable instances work as dependencies (the `Depends()` shorthand, parameterised
+  checks).
+- Sub-dependency results are cached per request; attach dependencies to one path, a router or the
+  whole app.
+
+## Glossary
+
+- **Dependency** — something a piece of code needs in order to run.
+- **Dependency injection (DI)** — code declares what it needs and a framework supplies it.
+- **Injector** — the part that supplies dependencies; here, FastAPI.
+- **`Depends`** — the marker that declares a parameter to be a dependency.
+- **Callable** — anything that can be called with brackets: a function, a class, an object with
+  `__call__`.
+- **Coupling** — how much one piece of code relies on the details of another.
+- **Type alias** — a short name for a longer type, such as `SessionDep`.
+- **Sub-dependency** — a dependency of a dependency.
+- **DAG** — a directed acyclic graph: arrows with direction and no cycles.
+- **Depth-first** — following one branch to its end before starting the next.
+- **Per-request cache** — a dependency runs at most once per request and its result is shared.
+- **Parameterised dependency** — a dependency built from an argument, such as `require_role("admin")`.
+- **Closure** — an inner function that remembers values from the function that created it.
+- **Side effect** — something a function does beyond returning a value.
+- **Scope** — where a dependency applies: one path, a router, or the whole app.
 
 ```quiz
 [

@@ -1,16 +1,40 @@
 # Files, forms and static content
 
-JSON isn't the only thing that crosses an API. Users upload images and CSVs, download reports, submit
-HTML forms; ML services receive audio, PDFs and datasets. These travel as **form data** and
-**multipart** bodies rather than JSON, and large ones must be handled without loading everything into
-memory. Lubanovic covers the mechanics in two short chapters ("Files", "Forms and Templates"); this
-lesson follows them and adds the production concerns.
+> **Before this lesson:** you should know JSON request bodies and the `Content-Type` header
+> ([lesson 1](#/lesson/fastapi/http-basics), [lesson 5](#/lesson/fastapi/body-responses)), the input
+> markers `Query()`, `Header()` and `Body()` ([lesson 6](#/lesson/fastapi/openapi-docs)), and
+> generators with `yield` ([lesson 11](#/lesson/fastapi/yield-deps)).
+
+## In plain words
+
+Until now every request body has been JSON. A great deal of what people send to servers is not
+JSON: a login form on a web page, a profile photo, a spreadsheet, a video. And much of what servers
+send back is not JSON either: a PDF report, a CSV export, the images and style sheets of a website.
+
+Two things make these different. They use different **encodings** (ways of laying out the bytes of a
+body), designed in the early days of the web for HTML forms. And files can be *large*. A JSON body
+of a few hundred bytes can be read into memory without a thought. A 2-gigabyte video cannot; it must
+be handled a piece at a time.
+
+An everyday picture: a post office. A letter (JSON) is dropped in the slot and read in one go. A
+parcel goes to a different counter with a different form. A truckload of furniture is not carried in
+through the front door at all: it is unloaded piece by piece at the loading dock, or better still
+delivered straight to the warehouse while the office only handles the paperwork. Those three cases
+are form fields, small uploads, and large uploads that stream or bypass the API entirely.
+
+Lubanovic covers the mechanics in two short chapters ("Files", "Forms and Templates"). This lesson
+follows them and adds what matters once real users, and real attackers, send you files.
+
+Why this matters for a job: almost every product accepts uploads somewhere, and an upload endpoint
+is the classic place for security holes. "How would you accept a 2 GB video upload?" is a standard
+interview question.
 
 ## Form data
 
-HTML forms (and the OAuth2 token endpoint) send bodies encoded as
-`application/x-www-form-urlencoded` — `username=ann&password=secret` — not JSON. Declare fields with
-`Form()`. This requires the `python-multipart` package (included in `fastapi[standard]`):
+An HTML form (and the OAuth2 token endpoint of lesson 19) sends its fields in an encoding called
+`application/x-www-form-urlencoded`. The body looks like a query string:
+`username=ann&password=secret`. To read such fields, mark parameters with `Form()`. This needs the
+`python-multipart` package, which `fastapi[standard]` includes.
 
 ```python
 from typing import Annotated
@@ -23,8 +47,11 @@ async def login(username: Annotated[str, Form()], password: Annotated[str, Form(
     return {"username": username}
 ```
 
-`Form` supports the same validation as `Query`/`Body` (`min_length`, `pattern`, ...). You can also group
-fields in a Pydantic model (FastAPI ≥ 0.113):
+`username: Annotated[str, Form()]` means "a required text value, taken from a form field named
+`username`". It is the same pattern as `Query()` and `Header()`, with a different source.
+
+`Form` supports the same validation options as `Query` and `Body` (`min_length`, `pattern` and so
+on). Form fields can also be grouped in a Pydantic model (FastAPI 0.113 and later):
 
 ```python
 class LoginForm(BaseModel):
@@ -37,18 +64,18 @@ async def login(data: Annotated[LoginForm, Form()]):
     return {"username": data.username}
 ```
 
-One HTTP rule to remember: a request has **one body with one encoding**. You cannot declare both a JSON
-`Body` model and `Form`/`File` fields on the same endpoint. To send structured metadata alongside a file,
-either use additional form fields or a form field containing a JSON string that you parse yourself.
+One rule of HTTP to remember: a request has **one body in one encoding**. An endpoint cannot declare
+both a JSON model and `Form` or `File` fields. To send structured information along with a file,
+either use additional form fields, or put a JSON string in one form field and parse it yourself.
 
-The book demonstrates a small but instructive trap: a `GET` form submits its fields as **query
-parameters**, while a `POST` form submits them in the body — so the `Form()` declaration only works for
-the latter.
+The book demonstrates a small and instructive trap. An HTML form that uses the `GET` method sends
+its fields as **query parameters**, while a `POST` form sends them in the body. A `Form()`
+declaration therefore only works for the second.
 
 ## What multipart looks like
 
-File uploads use `multipart/form-data`: the body is split into parts by a boundary string, each part with
-its own headers:
+File uploads use a second encoding, `multipart/form-data`. The body is divided into **parts**
+separated by a marker line called the **boundary**, and each part has small headers of its own:
 
 ```text
 POST /upload HTTP/1.1
@@ -66,6 +93,13 @@ region,revenue
 EMEA,1200
 ------X--
 ```
+
+The `Content-Type` header of the request names the boundary (`----X`). Each part starts with `--`
+plus the boundary. The first part is an ordinary field named `description`. The second is a file: it
+has a `filename`, a content type of its own, and then the file's bytes. The final line, the boundary
+followed by `--`, ends the body.
+
+Python can take such a body apart with a module from the standard library:
 
 ```python-run
 from email.parser import BytesParser
@@ -93,9 +127,16 @@ for part in msg.iter_parts():
     print(f"field={name!r} filename={filename!r} type={part.get_content_type()} bytes={len(payload)}")
 ```
 
+The code builds the same body by hand. HTTP requires each line to end with `\r\n` (carriage return
+plus line feed). A multipart body follows the rules of MIME, the format of email attachments, so the
+email parser can read it. The loop prints one line per part: the field `description` with no
+filename and 17 bytes, then the field `file` with the filename `q3.csv` and the type `text/csv`.
+FastAPI does this parsing for you, with `python-multipart`.
+
 ## Uploading files
 
-FastAPI offers two declarations, which the book contrasts as `File()` versus `UploadFile`:
+FastAPI offers two ways to declare a file parameter, which the book contrasts as `File()` and
+`UploadFile`:
 
 ```python
 from fastapi import File, UploadFile
@@ -116,7 +157,11 @@ async def upload_big(file: UploadFile):
 | Interface | bytes | async file-like: `await read(n)`, `seek`, `write`, `close`; `.file` is the underlying sync file |
 | Use for | tiny payloads | everything else |
 
-Process large uploads in chunks so memory stays flat:
+"Spooled" in the table means the data is held in memory while it is small and moved to a temporary
+file on disk once it grows past a threshold.
+
+Process large uploads in **chunks** (pieces of a fixed size), so that memory use stays flat however
+large the file is:
 
 ```python
 import hashlib
@@ -134,7 +179,17 @@ async def upload(file: UploadFile, description: Annotated[str, Form()] = ""):
     return {"sha256": sha.hexdigest(), "size": size, "description": description}
 ```
 
-Multiple files: `files: list[UploadFile]`. Optional: `file: UploadFile | None = None`.
+- `file: UploadFile` is the upload, and `description` is an ordinary form field sent alongside it.
+- `hashlib.sha256()` starts a running fingerprint of the content.
+- `while chunk := await file.read(1024 * 1024):` reads up to one megabyte at a time and stops when
+  `read` returns nothing.
+- Each chunk is counted. If the running total passes the limit, the endpoint raises
+  `413 Payload Too Large` at once, without reading the rest.
+- Otherwise the chunk is added to the fingerprint and written to the output file.
+
+Several files: `files: list[UploadFile]`. An optional file: `file: UploadFile | None = None`.
+
+The same loop in a form you can run:
 
 ```python-run
 import hashlib, io
@@ -153,23 +208,36 @@ print(process_in_chunks(io.BytesIO(b"hello world")))
 print(process_in_chunks(io.BytesIO(b"x" * 1000)))
 ```
 
+`io.BytesIO(...)` wraps bytes in an object that behaves like an open file. The chunk size is 4 bytes
+and the limit is 20. The first call reads the 11 bytes of `hello world` in three chunks and returns
+`(200, {'size': 11, 'sha256': ...})`. The second is given 1,000 bytes and returns
+`(413, 'File too large')` after reading only 24 of them. Memory use is bounded by the chunk size,
+not by the size of the file.
+
 ### Upload security checklist
 
-Uploads are attacker-controlled bytes with attacker-controlled names:
+An upload consists of bytes chosen by the sender under a name chosen by the sender. Treat both as
+hostile:
 
-- **Size limits.** Enforce at the reverse proxy (`client_max_body_size` in nginx) *and* in code while
-  streaming. `Content-Length` can lie or be absent.
-- **Never trust `filename`.** `../../etc/cron.d/x` is a filename. Generate your own storage name
-  (UUID) and keep the original only as metadata.
-- **Never trust `content_type`.** It's whatever the client claims. Sniff magic bytes or actually parse the
-  file (open the image with Pillow, the CSV with a parser).
-- **Don't serve uploads from your app's origin** as HTML/SVG/JS — that's stored XSS. Use a separate
-  domain/bucket and `Content-Disposition: attachment`.
-- **Store outside the container filesystem** — object storage (S3/GCS/Azure Blob). Containers are
-  ephemeral and replicas don't share disks. For big files, give the client a **pre-signed URL** so it
-  uploads directly to storage and your API only handles metadata.
-- Scan untrusted files (antivirus, image re-encoding) if they'll be shown to other users.
-- Decompression bombs: cap decompressed size and image dimensions.
+- **Size limits.** Enforce them at the reverse proxy (the setting is `client_max_body_size` in
+  nginx) *and* in your code while reading. The `Content-Length` header can be wrong or missing.
+- **Never trust `filename`.** `../../etc/cron.d/x` is a legal filename, and using it as a path would
+  write outside your upload folder (path traversal, lesson 20). Generate a storage name of your own,
+  such as a UUID, and keep the original only as information.
+- **Never trust `content_type`.** It is whatever the client claims. Look at the first bytes of the
+  content, or really parse the file (open an image with an imaging library, a CSV with a CSV
+  parser).
+- **Do not serve uploads from your application's own origin** as HTML, SVG or JavaScript. A browser
+  would run them as part of your site, which is stored cross-site scripting. Use a separate domain
+  or storage bucket and the header `Content-Disposition: attachment`.
+- **Store uploads outside the container's file system.** Use **object storage**, a service that
+  stores files under keys (Amazon S3, Google Cloud Storage, Azure Blob Storage). Containers are
+  thrown away and recreated, and replicas do not share disks. For large files, give the client a
+  **pre-signed URL**: a temporary address at which it may upload directly to the storage service, so
+  that your API handles only the description of the file.
+- Scan untrusted files (antivirus, re-encoding images) if other users will see them.
+- Beware of "decompression bombs", tiny compressed files that expand enormously. Limit the
+  uncompressed size and the dimensions of images.
 
 ```python-run
 from pathlib import PurePosixPath
@@ -188,10 +256,17 @@ for name in ["report.csv", "../../etc/passwd", "photo.JPG", "evil.php", "C:\\Use
         print(f"{name!r:28} -> rejected: {e}")
 ```
 
+`safe_storage_name` takes the client's filename, extracts only the extension (the part after the
+last dot, lower-cased), checks it against an allow-list, and returns a brand-new random name with
+that extension. The five test names give: `report.csv` becomes a random name ending in `.csv`;
+`../../etc/passwd` is rejected because it has no allowed extension; `photo.JPG` becomes a random
+`.jpg`; `evil.php` is rejected; and the Windows path ending in `a.png` becomes a random `.png`.
+Nothing of the client's path survives.
+
 ## Downloading files
 
-**`FileResponse`** sends a file from disk, streaming it in chunks and setting `Content-Length`,
-`Last-Modified` and `ETag` for you:
+**`FileResponse`** sends a file that exists on disk. It sends the file in chunks and sets the
+`Content-Length`, `Last-Modified` and `ETag` headers for you:
 
 ```python
 from fastapi.responses import FileResponse
@@ -203,8 +278,12 @@ def download_report(report_id: int, user: CurrentUser):
                         filename=f"report-{report_id}.pdf")   # sets Content-Disposition: attachment
 ```
 
-**`StreamingResponse`** sends content produced on the fly by an iterator/async iterator — an export being
-generated, a file proxied from object storage, a database cursor:
+The comment in the code is the important part: check that this user may have this report *before*
+returning it. The `filename=` argument produces a `Content-Disposition: attachment` header, which
+tells a browser to save the file instead of displaying it.
+
+**`StreamingResponse`** sends content that is produced as it goes, by a generator: an export being
+generated, a file passed along from object storage, the rows of a database query.
 
 ```python
 from fastapi.responses import StreamingResponse
@@ -225,12 +304,18 @@ def export_items(session: SessionDep):
                              headers={"Content-Disposition": 'attachment; filename="items.csv"'})
 ```
 
-The book's guidance: `FileResponse` when you have a file and want it delivered in one go;
-`StreamingResponse` for large content you'd rather send in pieces. With a plain (sync) generator,
-Starlette iterates it in the thread pool; with an async generator, on the event loop — so don't do
-blocking I/O inside an async generator.
+`csv_rows` is a generator. It writes the header row, then loops over the items from the database
+(`yield_per(1000)` fetches them a thousand at a time instead of all at once). After each row it
+yields the text written so far and empties the buffer. The endpoint wraps the generator in a
+`StreamingResponse`, so each yielded piece is sent to the client immediately. The whole table is
+never in memory.
 
-When serving files by user-supplied path, block **path traversal**:
+The book's guidance: `FileResponse` when you have a file and want it delivered whole;
+`StreamingResponse` for large content that is better sent in pieces. With an ordinary generator,
+Starlette runs it in the thread pool; with an async generator, on the event loop, so do no blocking
+I/O inside an async generator.
+
+When serving files by a path the user supplies, block **path traversal**:
 
 ```python
 BASE = Path("/srv/files").resolve()
@@ -243,9 +328,15 @@ def get_file(file_path: str):
     return FileResponse(target)
 ```
 
+`(BASE / file_path).resolve()` joins the base folder and the requested path and then *resolves* the
+result, which removes every `..`. `is_relative_to(BASE)` then checks that the result is still inside
+the base folder. A request for `../../etc/passwd` resolves to `/etc/passwd`, fails the check, and
+gets a 404.
+
 ## Static files
 
-Mount a directory of static assets (CSS, JS, images) as a sub-application:
+**Static files** are files served exactly as they are, such as style sheets, scripts and images.
+Mount a folder of them as a sub-application (lesson 14):
 
 ```python
 from fastapi.staticfiles import StaticFiles
@@ -254,14 +345,15 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 # html=True also serves index.html for directories - handy for a small bundled frontend
 ```
 
-Mounted apps are separate from your routes (not in OpenAPI). In production, a CDN or the reverse proxy
-usually serves static content more efficiently than Python; `StaticFiles` is ideal for development,
-internal tools and small deployments.
+A mounted app is separate from your routes and does not appear in the OpenAPI document. In
+production a CDN or the reverse proxy usually serves static content more efficiently than Python
+does. `StaticFiles` is ideal for development, internal tools and small deployments.
 
 ## Templates
 
-For server-rendered HTML, FastAPI integrates Jinja2 through Starlette — the book builds a small
-creature-listing page this way:
+A **template** is an HTML file with placeholders that are filled in with data for each request. For
+HTML generated on the server in this way, FastAPI works with the Jinja2 template library through
+Starlette. The book builds a small page listing creatures like this:
 
 ```python
 from fastapi.templating import Jinja2Templates
@@ -274,20 +366,24 @@ def list_creatures(request: Request):
                                       context={"creatures": service.get_all()})
 ```
 
-Jinja2 autoescapes HTML in `.html` templates, which is your XSS defence — never mark user content `|safe`.
+`TemplateResponse` fills the template `list.html` with the `creatures` data and returns HTML. Jinja2
+**autoescapes** values in `.html` templates: characters such as `<` are converted so that they
+display as text and cannot act as HTML. That is your defence against cross-site scripting. Never
+mark user-supplied content `|safe`, which switches the protection off.
 
 > [!INTERVIEW]
-> "How would you accept a 2 GB video upload?" — Not through the API process if avoidable: issue a
-> pre-signed URL (or multipart-upload session) so the client uploads straight to object storage, then
-> notify the API, which validates and enqueues processing. If it must pass through the API: `UploadFile`
-> with chunked streaming to storage, size limits at proxy and app level, a generated storage name,
-> content verification, and timeouts — never `bytes = File()` or `await file.read()` of the whole thing.
-> Return 202 and process asynchronously.
+> "How would you accept a 2 GB video upload?" — Not through the API process if that can be avoided:
+> issue a pre-signed URL (or a multi-part upload session) so that the client uploads straight to
+> object storage, and then tells the API, which validates the result and queues the processing. If
+> the bytes must pass through the API: `UploadFile` with chunked streaming to storage, size limits at
+> both the proxy and the application, a generated storage name, verification of the content, and
+> timeouts. Never `bytes = File()`, and never `await file.read()` of the whole thing. Return 202 and
+> process in the background.
 
 ## Worked example: a hardened upload endpoint
 
-All the checklist items in one endpoint, in the order they should execute — cheapest rejections first,
-nothing trusted, nothing unbounded:
+Every item of the checklist in one endpoint, in the order the checks should run: the cheapest
+rejections first, nothing trusted, nothing unlimited.
 
 ```python
 MAX_BYTES = 10 * 1024 * 1024
@@ -333,8 +429,19 @@ async def upload_document(
     return doc
 ```
 
-The type sniffing and the size-capped streaming loop are the two parts people get wrong, so here they are
-in runnable form:
+The four numbered steps:
+
+1. **A cheap early look at `Content-Length`.** If the client itself announces a body that is too
+   large, refuse immediately. This is only advisory, since the header may be absent or false.
+2. **Detect the real type from the first eight bytes**, ignoring the claimed type and the extension.
+   An unknown type gets `415 Unsupported Media Type`.
+3. **Stream to storage under a generated key**, counting bytes as they pass. If the limit is
+   exceeded, abort the upload so that no partial object is left behind, and raise 413.
+4. **Record the details** in the database. The original filename is stored as data, cut to 255
+   characters, and is never used as a path.
+
+The type detection and the size-limited loop are the two parts people get wrong, so here they are in
+runnable form:
 
 ```python-run
 import hashlib, io
@@ -378,13 +485,26 @@ for label, stream, claimed, name in uploads:
     print(f"{label:20} ->", *handle_upload(stream, claimed, name))
 ```
 
-Three of the five uploads lie about what they are, and the declared content type and extension would have
-waved every one of them through. Only the bytes tell the truth — and the oversized file is cut off after
-reading barely more than the limit, not after buffering all of it.
+Most file formats begin with a fixed sequence of bytes, a signature known as its **magic number**: a
+PNG image starts with `\x89PNG`, a PDF with `%PDF-`. `sniff` compares the first bytes against a list
+of signatures. `handle_upload` then follows the steps above with a limit of 64 bytes.
+
+Five uploads are tried:
+
+- **honest png**: `201`, type `image/png`, 38 bytes.
+- **script named .png**: `415`. It claimed `image/png` and was named `avatar.png`; its actual type
+  is `None`, because the bytes are a PHP script.
+- **html claiming pdf**: `415`, actual type `None`.
+- **zip bomb as jpeg**: `415`, actual type `application/zip`.
+- **oversized real pdf**: `413`, `rejected after reading 72 bytes (limit 64)`.
+
+Three of the five lie about what they are, and the claimed content type and the extension would
+have let every one of them through. Only the bytes tell the truth. And the oversized file was cut
+off after reading barely more than the limit, not after all 500 bytes had been collected.
 
 ## What happens on the wire and in memory
 
-Tracing a 50 MB upload through the stack clarifies where limits actually apply:
+Tracing a 50 MB upload through the layers of lesson 3 shows where each limit really takes effect:
 
 1. The client sends headers, then the multipart body in TCP segments. Nothing is "uploaded first and then
    delivered"; bytes arrive over time.
@@ -420,11 +540,17 @@ sequenceDiagram
     A-->>C: 200 document ready, processing queued
 ```
 
-The API never handles the bytes, so its workers stay free and small. The pre-signed URL is a
-time-limited capability scoped to one object key; conditions in the signature can pin content type and
-maximum length. The `complete` step exists because the API can't trust that the upload happened or was
-what the client claimed — it verifies against storage, then enqueues scanning or processing. Pending
-records that are never completed are cleaned up by a scheduled job (and a storage lifecycle rule).
+Read it as three steps. First, the client tells the API what it wants to upload, and the API
+checks permission, creates a "pending" record and returns a pre-signed URL. Second, the client sends
+the bytes straight to the storage service. Third, the client tells the API it has finished, and the
+API asks the storage service whether the object is really there, with the promised size.
+
+The API never handles the bytes, so its workers stay free and small. The pre-signed URL grants
+permission for one object key for a limited time, and conditions in its signature can fix the
+content type and the maximum length. The `complete` step exists because the API cannot trust that
+the upload happened, or that it was what the client said; it checks with the storage service and
+then queues scanning or processing. Pending records that are never completed are removed by a
+scheduled job.
 
 ## Download details that matter
 
@@ -443,22 +569,43 @@ records that are never completed are cleaned up by a scheduled job (and a storag
 
 ## Pitfalls
 
-- `python-multipart` not installed → runtime error on the first form/file route.
-- Mixing JSON body models with `Form`/`File` parameters.
-- `await file.read()` without a size cap.
+- `python-multipart` not installed, which gives a runtime error on the first form or file route.
+- Mixing JSON body models with `Form` or `File` parameters.
+- `await file.read()` with no size limit.
 - Using the client's filename as a path; trusting the claimed content type.
-- Writing uploads to the container's local disk in a multi-replica deployment.
-- Blocking file I/O in `async def` handlers for big files (use `def`, chunked async reads, or a thread).
+- Writing uploads to the container's local disk when there are several replicas.
+- Blocking file I/O in `async def` handlers for large files. Use `def`, chunked async reads, or a
+  thread.
 
 ## Summary
 
-- Forms: `Form()` fields (urlencoded); files: multipart with `UploadFile` (spooled, chunked) or `bytes`
-  (tiny only).
+- Forms: `Form()` fields (urlencoded). Files: multipart, with `UploadFile` (spooled, read in chunks)
+  or `bytes` (tiny files only).
 - One body encoding per request: JSON *or* form/multipart.
-- Enforce size limits, generate storage names, verify content, store in object storage.
-- `FileResponse` for files on disk, `StreamingResponse` for generated/large content; guard against path
-  traversal.
-- `StaticFiles` mounts assets; Jinja2 templates render HTML with autoescaping.
+- Enforce size limits, generate storage names, verify the content, store in object storage.
+- `FileResponse` for files on disk, `StreamingResponse` for generated or large content; guard
+  against path traversal.
+- `StaticFiles` mounts assets; Jinja2 templates produce HTML with autoescaping.
+
+## Glossary
+
+- **Encoding (of a body)** — the layout of a request body's bytes: JSON, urlencoded, multipart.
+- **Form data** — fields sent in the encodings HTML forms use.
+- **`application/x-www-form-urlencoded`** — the form encoding that looks like `a=1&b=2`.
+- **Multipart** — the encoding that splits a body into parts, used for file uploads.
+- **Boundary** — the marker line separating the parts of a multipart body.
+- **`UploadFile`** — FastAPI's file object: file-like, with a name, a type and a size.
+- **Spooled** — kept in memory while small, moved to a temporary disk file when large.
+- **Chunk** — one fixed-size piece of a larger stream of data.
+- **Magic number** — the first bytes of a file, which identify its real format.
+- **Object storage** — a service that stores files under keys, such as S3.
+- **Pre-signed URL** — a temporary address permitting a direct upload or download.
+- **`FileResponse` / `StreamingResponse`** — send a file from disk / send content as it is generated.
+- **`Content-Disposition`** — the header saying whether to display or download, and under what name.
+- **Path traversal** — escaping the intended folder with `..`.
+- **Static files** — files served exactly as stored (CSS, JavaScript, images).
+- **Template / autoescaping** — HTML with placeholders / automatic neutralising of HTML characters in
+  inserted values.
 
 ```quiz
 [

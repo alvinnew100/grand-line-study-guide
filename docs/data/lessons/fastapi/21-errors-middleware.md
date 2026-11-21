@@ -1,9 +1,33 @@
 # Errors, exception handlers and middleware
 
-A production API is judged less by its happy path than by how it fails: are errors consistent and
-informative for clients, invisible to attackers, and loud for operators? This lesson covers FastAPI's
-error machinery (`HTTPException`, validation errors, custom handlers), **middleware** for cross-cutting
-behaviour, and **structured logging** with request IDs that ties it all together.
+> **Before this lesson:** you should know how to raise `HTTPException`
+> ([lesson 5](#/lesson/fastapi/body-responses)), what domain exceptions such as `Missing` are and
+> why lower layers raise them ([lesson 15](#/lesson/fastapi/layers)), and how ASGI middleware wraps
+> an app ([lesson 3](#/lesson/fastapi/asgi-stack)). In Python you need `try` / `except` and class
+> inheritance.
+
+## In plain words
+
+Things go wrong in every program: a record is missing, the input is malformed, a bug divides by
+zero. An API is judged less by what it does when all is well than by how it fails. A good failure
+has three properties. The client gets a clear and *consistent* message it can act on. An attacker
+learns nothing useful from it. And the people who run the service are told loudly, with enough
+detail to find the cause.
+
+This lesson has three parts, and each maps onto a familiar picture, a hospital.
+
+- **Exception handlers** are the triage desk. However a patient arrives and whatever is wrong, one
+  desk classifies the case and sends it the right way. You write the rule "this kind of error
+  becomes that kind of response" once, not in every endpoint.
+- **Middleware** is the reception everyone walks through on the way in and again on the way out:
+  sign the visitor book, get a wristband. It is the place for things that must happen for *every*
+  request, such as timing it and labelling it.
+- **Structured logging with request IDs** is the wristband number written on every form and test
+  result, so that all the paperwork for one visit can be pulled together later.
+
+Why this matters for a job: debugging in production means finding the handful of log lines that
+belong to one failed request among millions. Interviewers ask "middleware or dependency?" and "what
+should a 500 response contain?", and both are answered here.
 
 ## HTTPException recap
 
@@ -17,13 +41,15 @@ raise HTTPException(
 )
 ```
 
-FastAPI catches it and returns `{"detail": ...}` with that status. It's the right tool **in the web
-layer**. Deeper layers should raise *domain* exceptions (the book's `Missing`, `Duplicate`) that know
-nothing about HTTP.
+FastAPI catches the exception and sends `{"detail": ...}` with the given status and headers. This is
+the right tool **in the web layer**. Deeper layers should raise *domain* exceptions (the book's
+`Missing` and `Duplicate`, lesson 15), which know nothing about HTTP. The question is how those
+become responses without a `try` / `except` in every endpoint.
 
 ## Custom exception handlers
 
-Instead of `try/except` in every endpoint, register a translation once:
+An **exception handler** is a function you register with the app for one exception class. Whenever
+that exception escapes from any endpoint, FastAPI calls the handler and sends what it returns:
 
 ```python
 from fastapi import FastAPI, Request
@@ -46,14 +72,21 @@ async def duplicate_handler(request: Request, exc: Duplicate):
     return JSONResponse(status_code=409, content={"detail": exc.msg})
 ```
 
-Now any endpoint can simply call `service.get_one(name)`; a `Missing` raised three layers down becomes a
-clean 404. Handlers are matched by class, most specific first (a handler for a base class catches its
-subclasses).
+- `Missing` and `Duplicate` are the domain exceptions, each carrying a message.
+- `@app.exception_handler(Missing)` registers the function below it for that class.
+- The handler receives the request and the exception object, and returns a `JSONResponse` with
+  status 404 and the message.
+- The second handler does the same for `Duplicate`, with 409.
+
+Now an endpoint can call `service.get_one(name)` with no `try` / `except` at all. A `Missing` raised
+three layers down becomes a clean 404. Handlers are chosen by class, the most specific first, and a
+handler registered for a base class also catches its subclasses.
 
 ### Overriding the built-in handlers
 
-FastAPI installs default handlers for `HTTPException`, `RequestValidationError` (→ 422) and
-`ResponseValidationError`. Override them to enforce a house error format, e.g. RFC 9457 problem details:
+FastAPI installs handlers of its own for `HTTPException`, for `RequestValidationError` (the 422
+case) and for `ResponseValidationError`. You can replace them to impose a single error format for
+your whole API, for example the RFC 9457 "problem details" format from lesson 2:
 
 ```python
 from fastapi.exceptions import RequestValidationError
@@ -76,16 +109,25 @@ async def http_handler(request, exc):                # router-generated 404/405s
                         headers=exc.headers)
 ```
 
-Don't echo `exc.body` back in production (it may contain secrets the client mistyped into the wrong
-field), and never include stack traces.
+The first handler replaces the default 422 body. `exc.errors()` is Pydantic's list of problems, and
+`jsonable_encoder` makes sure it can be written as JSON. The second is registered for *Starlette's*
+`HTTPException` class. That detail matters: the 404 for an unknown address and the 405 for a wrong
+method are raised by Starlette's router with Starlette's class. FastAPI's `HTTPException` is a
+subclass of it, so a handler for the Starlette class catches both.
+
+Do not send `exc.body` back to the client in production, since it may contain a password that was
+typed into the wrong field. And never include a **stack trace** (also called a traceback): the list
+of function calls that led to an error. It is exactly what you want in a log and exactly what an
+attacker wants in a response.
 
 ### The catch-all
 
-Unhandled exceptions become a plain `500 Internal Server Error`, with the traceback logged by the server.
-You can register `@app.exception_handler(Exception)` to shape the 500 body (e.g. include a request ID),
-but keep the message generic — details go to logs, not clients.
+An exception that no handler claims becomes a plain `500 Internal Server Error`, and the server
+writes the traceback to its log. You may register `@app.exception_handler(Exception)` to shape the
+body of that 500, for example to include a request ID. Keep the message general: details belong in
+logs, not in responses.
 
-A model of the dispatch logic:
+A model of how the right handler is found:
 
 ```python-run
 class HTTPException(Exception):
@@ -123,11 +165,25 @@ for ep in (ok, missing, dup, forbidden, invalid, bug):
     print(ep.__name__, "->", call(ep))
 ```
 
+- The four exception classes at the top stand in for the real ones.
+- `handlers` maps each class to a small function returning a (status, body) pair.
+- `call(endpoint)` runs the endpoint. If an exception escapes, it walks through
+  `type(exc).__mro__`, which is the exception's class followed by its parent classes in order, and
+  uses the first class that has a handler. That is the "most specific first" rule.
+- If no class matches, it prints a log line and returns a general 500.
+
+The output shows each case: `ok` gives 200; `missing` gives 404 with its message; `dup` gives 409;
+`forbidden` gives 403; `invalid` gives 422 with the list of errors. The last endpoint has a real bug
+(`1 / 0`). A log line reports `ZeroDivisionError('division by zero')`, and the client sees only
+`(500, {'detail': 'Internal Server Error'})`.
+
 ## Middleware
 
-**Middleware** wraps *every* request: code runs before the route is matched and after the response is
-produced. Lubanovic introduces it in the security chapter, with CORS as the first example; other uses are
-logging, timing, request IDs, compression, security headers and authentication gateways.
+**Middleware** is code that wraps *every* request: part of it runs before the route is even chosen,
+and part after the response has been produced. Lubanovic introduces it in his security chapter with
+CORS as the first example. Other uses are logging, timing, request IDs, compression, security
+headers and blanket checks. Tasks like these, which cut across all endpoints instead of belonging to
+one, are called **cross-cutting concerns**.
 
 ```python
 import time
@@ -141,7 +197,13 @@ async def add_process_time_header(request: Request, call_next):
     return response
 ```
 
-Built-in middleware you'll actually add:
+- `@app.middleware("http")` registers the function as middleware for HTTP requests.
+- The function receives the request and `call_next`, a function that runs "everything further in":
+  other middleware, the routing and the endpoint.
+- The lines before `await call_next(request)` run on the way in; here they note the start time.
+- The lines after it run on the way out; here they add an `X-Process-Time` header.
+
+Ready-made middleware you will really add:
 
 ```python
 from fastapi.middleware.cors import CORSMiddleware
@@ -153,10 +215,13 @@ app.add_middleware(TrustedHostMiddleware, allowed_hosts=["api.example.com", "*.e
 app.add_middleware(CORSMiddleware, allow_origins=[...])
 ```
 
+`GZipMiddleware` compresses large responses. `TrustedHostMiddleware` rejects requests whose `Host`
+header is not one of yours. `CORSMiddleware` is the subject of lesson 20.
+
 ### Order: the onion
 
-Each `add_middleware` wraps the existing stack, so **the last one added is the outermost** — it sees the
-request first and the response last:
+Each `add_middleware` call wraps everything added so far. Therefore **the one added last is the
+outermost**: it sees the request first and the response last.
 
 ```mermaid
 graph LR
@@ -167,10 +232,11 @@ graph LR
     E --> EP[Endpoint]
 ```
 
-That's why CORS is usually added last (outermost): its headers must be on *every* response, including
-errors generated by inner layers. Starlette also always wraps everything in `ServerErrorMiddleware`
-(outermost; turns unhandled exceptions into 500) and puts `ExceptionMiddleware` (which runs your exception
-handlers) innermost, just outside the router.
+This is why CORS is usually added last, making it outermost: its headers must be on *every*
+response, including errors produced by inner layers. Starlette also always wraps everything in a
+`ServerErrorMiddleware`, at the very outside, which turns exceptions nobody handled into 500
+responses. And it places an `ExceptionMiddleware`, which runs your exception handlers, at the very
+inside, directly around the router.
 
 ```python-run
 def make_app(order_log):
@@ -198,9 +264,19 @@ print("\n".join(log))
 print(resp)
 ```
 
+`make_app` builds the onion from plain functions. `middleware(name, inner)` returns a handler that
+logs "before", calls the inner handler, logs "after" and adds a header. The loop wraps the endpoint
+in `gzip`, then `trustedhost`, then `cors`, in the same order as three `add_middleware` calls.
+
+The printed log reads `cors: before`, `trustedhost: before`, `gzip: before`, `endpoint`,
+`gzip: after`, `trustedhost: after`, `cors: after`. The middleware added last ran first on the way
+in and last on the way out. The response carries all three headers.
+
 The problem *Middleware Onion* extends this with short-circuiting and error handling.
 
 ### Middleware vs dependencies
+
+Both run code around your endpoint, so which should you use?
 
 | | Middleware | Dependency |
 |---|---|---|
@@ -210,20 +286,24 @@ The problem *Middleware Onion* extends this with short-circuiting and error hand
 | In OpenAPI docs | no | yes (parameters, security) |
 | Good for | logging, timing, IDs, headers, compression, CORS | auth, DB sessions, per-route limits |
 
-Rule of thumb: **truly global, HTTP-level concerns → middleware; anything about business inputs or
-selectively applied → dependencies.**
+A rule of thumb: **concerns that are truly global and belong to HTTP itself go in middleware;
+anything to do with the application's inputs, or applied only to some routes, goes in
+dependencies.**
 
 > [!WARNING]
-> `@app.middleware("http")` (Starlette's `BaseHTTPMiddleware`) is convenient but has costs: it adds
-> overhead per request and has historically interfered with streaming responses, background tasks and
-> `contextvars` propagation. For hot paths or streaming-heavy apps, write **pure ASGI middleware** (a
-> class with `async def __call__(self, scope, receive, send)`) — which is also how the built-ins are
-> written. And never read the request body in middleware unless you must: it consumes the stream.
+> `@app.middleware("http")` (Starlette's `BaseHTTPMiddleware`) is convenient but has costs. It adds
+> overhead to every request, and it has a history of interfering with streaming responses,
+> background tasks and context variables. For heavily used paths, or apps that stream a lot, write
+> **pure ASGI middleware**: a class with `async def __call__(self, scope, receive, send)`, as in
+> lesson 3. The built-in middleware is written that way. And never read the request body in
+> middleware unless you must, because reading it uses it up.
 
 ## Logging with request IDs
 
-When a user reports "error at 14:32", you need to find *that request's* log lines among thousands. Give
-every request an ID, put it in every log line, and return it in a header:
+A **log** is the running record a program writes of what it is doing. When a user reports "I got an
+error at 14:32", you need to find the lines for *that request* among thousands. The method: give
+every request an identifier, put it in every log line, and return it in a response header so the
+user can quote it.
 
 ```python
 import contextvars, logging, uuid
@@ -254,9 +334,20 @@ async def request_context(request: Request, call_next):
     return response
 ```
 
-`contextvars` are the async-safe replacement for thread-locals: each request's task sees its own value,
-even though all share one thread. Emit logs as **JSON, one object per line, to stdout** so the platform's
-log collector can index fields:
+- `request_id_var` is a **context variable**. A plain global variable would not work here, because
+  many requests are in progress at the same time on one thread and would overwrite each other's
+  value. A `ContextVar` holds a separate value for each task, so each request sees its own ID.
+- `RequestIdFilter` copies the current ID onto every log record.
+- The middleware takes the ID from an incoming `X-Request-ID` header if there is one (so that an ID
+  can follow a request across several services), and otherwise invents one. It stores the ID, calls
+  the rest of the app, logs any exception together with its traceback, and finally restores the
+  variable.
+- On the way out it adds the header and writes one log line with the method, path, status and
+  duration.
+
+Write logs as **JSON, one object per line, to standard output**. Logging in a format that machines
+can parse is called **structured logging**, and it lets the platform's log collector search by
+field, for example "all lines where `status` is 500".
 
 ```python-run
 import contextvars, io, json, logging
@@ -288,24 +379,35 @@ except ZeroDivisionError:
 print(stream.getvalue())
 ```
 
-Logging hygiene: never log passwords, tokens, full request bodies or personal data; use levels
-consistently (INFO for requests, WARNING for handled anomalies, ERROR with traceback for bugs); and avoid
-logging inside tight loops. Lubanovic's service-layer chapter groups logging with metrics and tracing as
-the three ways you'll understand a running system — the deployment module returns to these.
+`JsonFormatter` turns each log record into a dictionary (level, logger name, message, request ID and
+any extra fields) and writes it as JSON. If the record carries an exception, the last line of the
+traceback is included. The demo sets the request ID to `3f2a9c` and logs two events.
+
+The output is two JSON lines. The first is an `INFO` line with `"request_id": "3f2a9c"`,
+`"method": "GET"`, `"path": "/items/42"`, `"status": 200` and `"duration_ms": 12.3`. The second is
+an `ERROR` line with the same request ID and `"exc": "ZeroDivisionError: division by zero"`. Because
+they share an ID, a search for it finds both.
+
+Logging hygiene: never log passwords, tokens, complete request bodies or personal data. Use the
+**levels** consistently: INFO for ordinary requests, WARNING for oddities that were handled, ERROR
+with a traceback for bugs. Avoid logging inside tight loops. Lubanovic's service-layer chapter
+groups logging with metrics and tracing as the three ways of understanding a running system; the
+deployment module returns to them.
 
 > [!INTERVIEW]
-> "Middleware or dependency for authentication?" — Usually a dependency: it's typed, composable
-> (`CurrentUser`), documented in OpenAPI (the Authorize button), overridable in tests, and can be applied
-> per route or router, leaving health/docs/login open. Middleware suits blanket HTTP-level concerns —
-> request IDs, logging, timing, CORS, compression, security headers — or a coarse gate in front of
-> everything (e.g. a shared-secret check for an internal service). The two also differ in ordering:
-> middleware runs before routing; dependencies after.
+> "Middleware or dependency for authentication?" — Usually a dependency: it is typed, it composes
+> (`CurrentUser`), it is documented in OpenAPI (the Authorize button), it can be overridden in
+> tests, and it can be applied per route or router, leaving health, docs and login endpoints open.
+> Middleware suits blanket concerns at the HTTP level (request IDs, logging, timing, CORS,
+> compression, security headers) or a coarse gate in front of everything, such as a shared-secret
+> check for an internal service. The two also differ in order: middleware runs before routing, and
+> dependencies after it.
 
 ## Worked example: one error contract for the whole API
 
-A complete, production-shaped setup: a small hierarchy of domain errors, a single handler that renders
-all of them, and overrides for validation errors and unexpected failures so that **every** error response
-has the same shape and carries the request ID.
+Here is a complete setup of the kind used in production: a small family of domain errors, one
+handler that renders all of them, and replacements for the validation handler and the catch-all, so
+that **every** error response has the same shape and carries the request ID.
 
 ```python
 # app/errors.py
@@ -351,8 +453,18 @@ def register_exception_handlers(app: FastAPI) -> None:
                             status_code=500)
 ```
 
-Services now simply `raise NotFound("Order 9 not found")` or `raise RateLimited("Slow down",
-retry_after=30)`. The same logic, runnable, with the responses a client would see:
+- `AppError` is the base class for failures a client is meant to see. Each subclass sets two class
+  attributes: an HTTP status and a short machine-readable `code`.
+- `error_body` builds the one shape used everywhere:
+  `{"error": {"code", "message", "status", "request_id", ...}}`.
+- `register_exception_handlers` installs four handlers: one for `AppError`, which covers every
+  subclass; one that flattens validation errors into a list of fields; one for HTTP exceptions,
+  including the router's 404 and 405; and one for everything unexpected, which logs the full
+  traceback and answers with a general 500.
+
+A service can now write `raise NotFound("Order 9 not found")` or
+`raise RateLimited("Slow down", retry_after=30)` and nothing more. Here is the same logic in
+runnable form, showing the responses a client would receive:
 
 ```python-run
 import json
@@ -393,20 +505,30 @@ for ep in (missing, dup, limited, invalid, bug):
     print(status, json.dumps(payload))
 ```
 
-Design points worth copying: a stable machine-readable `code` separate from the human `message`; the
-request ID in every error so a user can quote it to support; validation errors flattened into a
-predictable `fields` list; and exactly one place where an unexpected exception is logged in full while the
-client sees nothing internal.
+The five lines of output:
+
+- `404` with code `not_found`.
+- `409` with code `conflict` and the extra key `"field": "email"`.
+- `429` with code `rate_limited` and `"retry_after": 30`.
+- `422` with code `validation_failed` and a `fields` list. The location
+  `("body", "items", 1, "quantity")` has become `{"field": "items.1.quantity", "in": "body", ...}`.
+- A server log line naming the `KeyError`, followed by `500` with code `internal_error`. Nothing
+  about the key appears in the response.
+
+Every body has the same outer shape and the same `request_id`. Points worth copying: a stable `code`
+for programs, kept apart from the `message` for people; the request ID in every error, so that a
+user can quote it to support staff; validation errors flattened into a predictable list; and exactly
+one place where an unexpected exception is logged in full while the client sees nothing internal.
 
 > [!NOTE]
-> A handler registered for `Exception` runs inside Starlette's outermost `ServerErrorMiddleware`, so the
-> response it returns does **not** pass back through your other middleware. If CORS headers or a request
-> ID header must appear on 500 responses too, add them in that handler (or catch exceptions inside your
-> own middleware instead).
+> A handler registered for `Exception` runs inside Starlette's outermost `ServerErrorMiddleware`, so
+> the response it returns does **not** travel back through your other middleware. If CORS headers or
+> a request-ID header must appear on 500 responses too, add them in that handler, or catch
+> exceptions inside your own middleware.
 
 ## Where does an exception get caught?
 
-The layering inside Starlette determines who sees what, from the outside in:
+The layering inside Starlette decides who sees what, from the outside inwards:
 
 ```text
 ServerErrorMiddleware          <- catches anything that escapes: logs it, returns 500
@@ -418,15 +540,16 @@ ServerErrorMiddleware          <- catches anything that escapes: logs it, return
 
 Consequences:
 
-1. An exception with a registered handler is converted into a response *inside* your middleware, so
-   middleware written as `response = await call_next(request)` just sees a normal 404/409 response — it
-   never sees the exception.
-2. An exception *without* a handler propagates out through `call_next`, so `try/except` in a middleware
-   can observe it (useful for logging and metrics) but should re-raise.
-3. Exceptions raised **in middleware itself** are outside `ExceptionMiddleware`: your
-   `@app.exception_handler(NotFound)` will *not* handle a `NotFound` raised from middleware. Return a
-   response from the middleware directly instead of raising.
-4. Errors in `yield`-dependency cleanup that runs after the response can only be logged.
+1. An exception *with* a registered handler is converted into a response inside your middleware. A
+   middleware written as `response = await call_next(request)` receives an ordinary 404 or 409
+   response and never sees the exception.
+2. An exception *without* a handler travels outwards through `call_next`. A `try` / `except` in
+   middleware can observe it, which is useful for logging and metrics, and should re-raise it.
+3. Exceptions raised **by middleware itself** are outside `ExceptionMiddleware`. Your
+   `@app.exception_handler(NotFound)` will *not* handle a `NotFound` raised in middleware. Return a
+   response from the middleware directly.
+4. Errors in the clean-up part of a `yield` dependency that runs after the response has been sent
+   (lesson 11) can only be logged.
 
 ## Debugging error-handling problems
 
@@ -442,21 +565,41 @@ Consequences:
 
 ## Pitfalls
 
-- `try/except Exception: return {"error": ...}` with status 200 — hides failures from monitoring.
-- Leaking tracebacks or SQL errors in responses.
-- Adding CORS middleware first (innermost) so error responses from outer layers lack CORS headers.
-- Heavy work or body reads in middleware — it taxes every request.
-- Registering a handler for FastAPI's `HTTPException` but missing Starlette's (router 404s keep the old
-  format).
-- Logging secrets; no request ID.
+- `try: ... except Exception: return {"error": ...}` with status 200. Monitoring tools never see the
+  failure.
+- Tracebacks or SQL errors leaking into responses.
+- Adding the CORS middleware first, which makes it innermost, so that error responses from outer
+  layers lack CORS headers.
+- Heavy work, or reading the body, in middleware. Every request pays for it.
+- Registering a handler for FastAPI's `HTTPException` and missing Starlette's, so that the router's
+  404s keep the old format.
+- Logging secrets; having no request ID.
 
 ## Summary
 
 - Raise domain exceptions below the web layer; map them to HTTP once with `@app.exception_handler`.
-- Override `RequestValidationError`/`HTTPException` handlers for a uniform error format; keep 500s generic.
-- Middleware wraps all requests like an onion — last added is outermost.
-- Global HTTP concerns → middleware; typed, per-route concerns → dependencies.
-- Structured JSON logs with a per-request ID (via `contextvars`) make production debuggable.
+- Override the `RequestValidationError` and `HTTPException` handlers for one error format
+  everywhere; keep 500s general.
+- Middleware wraps all requests like an onion, and the one added last is outermost.
+- Global HTTP concerns go in middleware; typed, per-route concerns go in dependencies.
+- Structured JSON logs with an ID per request (through `contextvars`) make production debuggable.
+
+## Glossary
+
+- **Exception handler** — a function registered for an exception class that turns it into a response.
+- **Domain exception** — an error class in the application's own vocabulary, free of HTTP details.
+- **Stack trace (traceback)** — the chain of function calls that led to an error.
+- **Catch-all** — a handler for `Exception`, covering whatever nothing else handled.
+- **MRO** — a class followed by its parent classes, in the order Python searches them.
+- **Middleware** — code that wraps every request and response.
+- **Cross-cutting concern** — a task that applies to all endpoints, such as logging.
+- **`call_next`** — in middleware, the function that runs the rest of the app.
+- **Onion model** — middleware as nested layers; the one added last is outermost.
+- **Log / log level** — the running record a program writes / the severity label on each entry.
+- **Structured logging** — logging in a machine-readable format, usually one JSON object per line.
+- **Request ID** — an identifier given to one request and written on all its log lines.
+- **Context variable** — a variable with a separate value for each concurrent task.
+- **Error contract** — the one agreed shape for every error response of an API.
 
 ```quiz
 [

@@ -21,7 +21,7 @@ TRACK = dict(
                 dict(id="rest-json", title="REST design and JSON", file="02-rest-json.md"),
                 dict(id="asgi-stack", title="WSGI vs ASGI, Starlette and Uvicorn", file="03-asgi-stack.md"),
             ],
-            problems=["api-status-class", "api-etag-check"],
+            problems=["api-status-class", "api-etag-check", "fastapi-content-negotiation"],
         ),
         dict(
             id="fastapi-tour",
@@ -32,7 +32,7 @@ TRACK = dict(
                 dict(id="body-responses", title="Request bodies, responses and status codes", file="05-body-responses.md"),
                 dict(id="openapi-docs", title="Headers, cookies, forms of input and automatic docs", file="06-openapi-docs.md"),
             ],
-            problems=["api-route-match", "api-query-parse"],
+            problems=["api-route-match", "api-query-parse", "fastapi-crud-store"],
         ),
         dict(
             id="pydantic",
@@ -43,7 +43,7 @@ TRACK = dict(
                 dict(id="pydantic-validators", title="Validators and serialization", file="08-pydantic-validators.md"),
                 dict(id="pydantic-settings", title="Settings and configuration management", file="09-pydantic-settings.md"),
             ],
-            problems=["api-validate-schema"],
+            problems=["api-validate-schema", "fastapi-settings-from-env"],
         ),
         dict(
             id="dependencies",
@@ -53,7 +53,7 @@ TRACK = dict(
                 dict(id="depends-basics", title="Depends, Annotated and sub-dependencies", file="10-depends-basics.md"),
                 dict(id="yield-deps", title="Yield dependencies, scopes and test overrides", file="11-yield-deps.md"),
             ],
-            problems=["api-di-resolver"],
+            problems=["api-di-resolver", "fastapi-yield-teardown"],
         ),
         dict(
             id="async",
@@ -73,7 +73,7 @@ TRACK = dict(
                 dict(id="routers", title="APIRouter and bigger applications", file="14-routers.md"),
                 dict(id="layers", title="Layered architecture: web, service, data", file="15-layers.md"),
             ],
-            problems=["api-pagination"],
+            problems=["api-pagination", "fastapi-router-include"],
         ),
         dict(
             id="databases",
@@ -94,7 +94,7 @@ TRACK = dict(
                 dict(id="oauth2-jwt", title="OAuth2 password flow, hashing and JWT", file="19-oauth2-jwt.md"),
                 dict(id="authz-cors", title="Authorization, CORS, rate limiting and common vulnerabilities", file="20-authz-cors.md"),
             ],
-            problems=["api-password-hash", "api-jwt-hs256", "api-token-bucket", "api-cors-preflight"],
+            problems=["api-password-hash", "api-jwt-hs256", "fastapi-token-claims", "api-token-bucket", "api-cors-preflight"],
         ),
         dict(
             id="errors-testing",
@@ -104,7 +104,7 @@ TRACK = dict(
                 dict(id="errors-middleware", title="Errors, exception handlers and middleware", file="21-errors-middleware.md"),
                 dict(id="testing", title="Testing FastAPI apps", file="22-testing.md"),
             ],
-            problems=["api-middleware-chain"],
+            problems=["api-middleware-chain", "fastapi-error-mapper"],
         ),
         dict(
             id="files-streaming",
@@ -114,7 +114,7 @@ TRACK = dict(
                 dict(id="files-forms", title="Files, forms and static content", file="23-files-forms.md"),
                 dict(id="websockets-streaming", title="WebSockets, streaming and Server-Sent Events", file="24-websockets-streaming.md"),
             ],
-            problems=["api-sse-parse"],
+            problems=["api-sse-parse", "fastapi-sse-encode", "fastapi-chat-rooms"],
         ),
         dict(
             id="deployment",
@@ -124,7 +124,7 @@ TRACK = dict(
                 dict(id="deploy-docker", title="Workers, Docker and running in production", file="25-deploy-docker.md"),
                 dict(id="observability", title="Health checks, logging and observability", file="26-observability.md"),
             ],
-            problems=["api-retry-backoff"],
+            problems=["api-retry-backoff", "fastapi-circuit-breaker", "fastapi-latency-histogram"],
         ),
         dict(
             id="ml-serving",
@@ -135,7 +135,7 @@ TRACK = dict(
                 dict(id="llm-streaming-versioning", title="Streaming LLM output and versioned endpoints", file="28-llm-streaming.md"),
                 dict(id="ml-project", title="End-to-end project: a production model service", file="29-ml-project.md"),
             ],
-            problems=["api-micro-batcher"],
+            problems=["api-micro-batcher", "fastapi-token-budget"],
         ),
     ],
 )

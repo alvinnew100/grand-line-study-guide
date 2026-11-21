@@ -1,11 +1,36 @@
 # Request bodies, responses and status codes
 
-Path and query parameters carry small, flat values. Anything structured — a new user, an order with line
-items, a batch of feature vectors for a model — travels in the **request body**, almost always as JSON.
-On the way out, you want just as much control: which fields the client sees, which status code, which
-headers. This lesson covers both directions.
+> **Before this lesson:** you should be able to write a FastAPI endpoint with path and query
+> parameters ([lesson 4](#/lesson/fastapi/first-app)) and know the common status codes and what JSON
+> looks like ([lesson 1](#/lesson/fastapi/http-basics), [lesson 2](#/lesson/fastapi/rest-json)). In
+> Python you need to have seen a `class` once; classes are used here only as a way to list fields.
+
+## In plain words
+
+Path and query parameters are fine for small single values such as an id or a page number. Anything
+with structure (a new user with a name, an email and a password; an order with ten lines) will not fit
+comfortably in an address. It travels in the **request body**: the block of content after the headers
+in an HTTP message, almost always written as JSON.
+
+The other half of the lesson is the reply. You decide which fields the client gets to see, which
+status code is sent, and which headers.
+
+An everyday picture: a parcel counter. A customer hands over a parcel with a customs form. The clerk
+checks the form against the rules (is every required box filled? is the weight a number?) and refuses
+it on the spot if something is wrong. Later, when a parcel is handed *out*, the clerk removes the
+internal routing stickers so the customer sees only what is meant for them. In FastAPI the "customs
+form" is a small class called a **model**, and one model describes what may come in while another
+describes what may go out.
+
+Why this matters for a job: nearly every real endpoint accepts or returns structured data, and the
+most common security mistake in API code is sending out a field that should have stayed private, such
+as a password hash. Interviewers ask about exactly this.
 
 ## Declaring a body with a Pydantic model
+
+**Pydantic** is the Python library FastAPI uses for describing and checking data. You describe a
+shape by writing a class that inherits from `BaseModel` and listing the fields with type hints. Such a
+class is called a **model**.
 
 ```python
 from fastapi import FastAPI
@@ -27,22 +52,39 @@ def create_item(item: Item):
     return data
 ```
 
-Because `item` is annotated with a `BaseModel` subclass, FastAPI will:
+Reading it from the top:
 
-1. Read the body and parse it as JSON (invalid JSON → 422 with `"type": "json_invalid"`).
-2. Validate it against `Item`: `name` and `price` required, the others optional, types coerced
-   (`"9.5"` → `9.5` in Pydantic's default *lax* mode).
-3. Give your function a real `Item` instance — attribute access, editor completion, type checking.
-4. Add a JSON Schema for `Item` to OpenAPI, so `/docs` shows an example body.
+- `class Item(BaseModel):` defines a model named `Item`.
+- `name: str` is a required text field. `price: float` is a required number.
+- `description: str | None = None` and `tax: float | None = None` are optional: they may be text (or a
+  number) or absent, and default to `None`.
+- `@app.post("/items/")` registers the function for `POST` requests, the method used for creating.
+- `def create_item(item: Item):` has one parameter whose type hint is the model. That hint is the
+  whole trick: because `Item` is a model, FastAPI knows the value must come from the body.
+- `item.model_dump()` converts the model object into an ordinary dictionary. The function then adds a
+  computed field when a tax was given, and returns the dictionary.
 
-A body like `{"name": "Hammer", "price": "abc"}` never reaches your code; the client gets:
+Because of that single hint, FastAPI will:
+
+1. Read the body and parse it as JSON. Text that is not legal JSON gives a 422 with
+   `"type": "json_invalid"`.
+2. Check the result against `Item`: `name` and `price` must be present, the others may be missing.
+   Values are converted where that is sensible (`"9.5"` becomes `9.5`; Pydantic calls this tolerant
+   default *lax mode*).
+3. Hand your function a real `Item` object, an **instance** of the class, so you write `item.price`
+   and your editor can complete the field names.
+4. Add a description of `Item` to the automatic documentation, so `/docs` shows an example body.
+
+A body such as `{"name": "Hammer", "price": "abc"}` never reaches your code. The client receives:
 
 ```json
 {"detail": [{"type": "float_parsing", "loc": ["body", "price"],
              "msg": "Input should be a valid number, unable to parse string as a number", "input": "abc"}]}
 ```
 
-Here is the same mechanism, run directly with Pydantic:
+The `loc` value `["body", "price"]` says the problem is in the body, in the field `price`.
+
+Here is the same mechanism without a web server, using Pydantic directly. Run it:
 
 ```python-run
 from pydantic import BaseModel, ValidationError
@@ -65,12 +107,26 @@ except ValidationError as e:
 print(Item.model_validate_json('{"name": "Saw", "price": 12}').model_dump())
 ```
 
-Notice the unknown field `colour` was silently ignored — Pydantic's default is `extra="ignore"`. Set
-`model_config = ConfigDict(extra="forbid")` to reject unknown fields (useful to catch client typos).
+Step by step:
+
+- `Item.model_validate({...})` checks a dictionary against the model and returns an `Item`. The first
+  call succeeds and prints `name='Hammer' description=None price=9.5 tax=None`: the text `"9.5"` was
+  converted to a number.
+- The second call has no `name`, a `price` that is not a number, and an unknown field `colour`.
+  Pydantic raises `ValidationError`. The `except` block loops over `e.errors()` and prints each one
+  the way FastAPI would report it. Two lines appear: `name` is `missing` and `price` is
+  `float_parsing`. Both problems are reported at once.
+- `model_validate_json` does the same starting from JSON text, and `.model_dump()` turns the result
+  into a dictionary.
+
+Notice what did *not* produce an error: the unknown field `colour` was dropped without comment.
+Pydantic's default setting is `extra="ignore"`. Add `model_config = ConfigDict(extra="forbid")` to a
+model to reject unknown fields, which is useful for catching spelling mistakes made by clients.
 
 ### Mixing body, path and query
 
-FastAPI decides by type: Pydantic model → body, name in path → path, simple type → query.
+One function can take all three kinds of input. FastAPI sorts them by the rule from lesson 4: a model
+means body, a name in the path template means path, any other basic type means query.
 
 ```python
 @app.put("/items/{item_id}")
@@ -78,9 +134,13 @@ def update_item(item_id: int, item: Item, q: str | None = None):
     return {"item_id": item_id, **item.model_dump(), "q": q}
 ```
 
+Here `item_id` comes from the path, `item` from the JSON body and `q` from the query string. The
+`**item.model_dump()` in the return line unpacks the item's fields into the surrounding dictionary.
+
 ### Multiple bodies and singular body values
 
-Two model parameters make FastAPI expect a JSON object keyed by parameter name:
+A request has only one body, so what happens when a function asks for two models? FastAPI then
+expects a JSON object with one key per parameter:
 
 ```python
 class User(BaseModel):
@@ -93,13 +153,16 @@ def update_item(item_id: int, item: Item, user: User, importance: Annotated[int,
 # expects: {"item": {...}, "user": {...}, "importance": 5}
 ```
 
-`Body()` turns a simple type into a body key instead of a query parameter. With a *single* model,
-`Annotated[Item, Body(embed=True)]` makes FastAPI expect `{"item": {...}}` rather than the bare object.
+`Body()` is a marker like `Query()` and `Path()`. It says "this basic value lives in the body", which
+is how `importance` (a plain integer that would otherwise be read from the query) joins the other
+two. With a *single* model, `Annotated[Item, Body(embed=True)]` makes FastAPI expect
+`{"item": {...}}` in place of the bare object.
 
 ### Nested models
 
-Models compose. Lists, dicts, sets and other models nest arbitrarily, and validation errors report the
-full path (`["body", "items", 2, "price"]`):
+Models can contain other models, and lists of them. When validation fails deep inside, the error
+gives the full route to the bad value, such as `["body", "items", 2, "price"]` (the `price` of the
+third item, since counting starts at 0):
 
 ```python
 class Image(BaseModel):
@@ -112,15 +175,19 @@ class Offer(BaseModel):
     images: list[Image] | None = None
 ```
 
-Lubanovic's chapter 3 notes the practical upshot: once your data shapes are models, FastAPI handles
-parsing, checking and documenting them for you, and the same models can be passed between the book's
-web, service and data layers.
+`Offer` has a list of `Item` objects and an optional list of `Image` objects. `HttpUrl` is a Pydantic
+type that accepts only well-formed web addresses.
+
+Lubanovic's chapter 3 points out the practical result: once your data shapes are models, FastAPI
+parses, checks and documents them for you, and the same models can be handed between the different
+parts of a larger program (lesson 15).
 
 ## Response models: controlling the output
 
-The return value of an endpoint is serialised to JSON. What fields end up in that JSON is something you
-must control explicitly — the classic bug is returning a database user object and leaking its
-`hashed_password`. FastAPI offers two ways to declare the output shape.
+Whatever your function returns is converted to JSON. *Which fields* end up in that JSON is something
+you must control on purpose. The classic bug is returning the stored record of a user and thereby
+sending the client its `hashed_password` (a scrambled form of the password, lesson 19). FastAPI offers
+two ways to declare the shape of the output. A model used this way is a **response model**.
 
 ### Return type annotation
 
@@ -134,13 +201,15 @@ def read_item(item_id: int) -> ItemOut:
     return ItemOut(name="Hammer", price=9.5)
 ```
 
-FastAPI uses the annotation to **validate** the return value, **filter** it to the declared fields,
-**serialise** it and **document** it in OpenAPI.
+The `-> ItemOut` after the parameter list is a return type hint. FastAPI uses it to **validate** the
+value you return, **filter** it down to the declared fields, **serialise** it to JSON and **document**
+it.
 
 ### `response_model` parameter
 
-When the function returns something different from what you want to declare (e.g. a dict or a database
-object), use `response_model` in the decorator — it takes priority over the annotation:
+Sometimes the function returns something other than the declared shape, for example a dictionary or
+an object from the database. In that case put `response_model` in the decorator. It takes priority
+over the return hint:
 
 ```python
 class UserIn(BaseModel):
@@ -158,10 +227,13 @@ def create_user(user: UserIn) -> Any:
     return saved                  # filtered down to username + email
 ```
 
-Even though `saved` has more attributes, the client receives only `username` and `email`. This
-**filtering** is a security feature. A common pattern (used by the SQLModel tutorial as well) is a family
-of models: `UserBase` with shared fields, `UserCreate(UserBase)` adding `password`, `UserPublic(UserBase)`
-adding `id`, `UserInDB(UserBase)` adding `hashed_password`.
+`UserIn` describes what a client sends: it includes `password`. `UserOut` describes what a client
+receives: it does not. (`EmailStr` is a Pydantic type that accepts only valid email addresses.) Even
+though `saved` carries more attributes, the client receives only `username` and `email`. This
+**filtering** is a security feature, not a convenience.
+
+A widely used pattern is a small *family* of models built by inheritance: a base model with the shared
+fields, plus one subclass for each situation.
 
 ```python-run
 from pydantic import BaseModel
@@ -186,19 +258,26 @@ public = UserPublic.model_validate(stored.model_dump())
 print(public.model_dump_json())
 ```
 
+`UserBase` holds what all variants share. `UserCreate` adds `password` (what the client sends).
+`UserInDB` adds `id` and `hashed_password` (what is stored). `UserPublic` adds only `id` (what the
+client may see). The last three lines do by hand what `response_model=UserPublic` does: take the
+stored object's data, validate it as `UserPublic`, and print the JSON. The output is
+`{"username":"ann","email":"ann@example.com","id":1}`, with no trace of the hash.
+
 ### Trimming defaults and unset fields
 
 Decorator options shape the JSON further:
 
-- `response_model_exclude_unset=True` — omit fields that were never explicitly set (great for sparse
-  documents).
-- `response_model_exclude_none=True` — omit `None` values.
-- `response_model_include={"name"}` / `response_model_exclude={"tax"}` — quick ad-hoc filters (prefer
-  separate models for anything permanent).
+- `response_model_exclude_unset=True` leaves out fields that were never explicitly given a value,
+  which keeps sparse records small.
+- `response_model_exclude_none=True` leaves out fields whose value is `None`.
+- `response_model_include={"name"}` and `response_model_exclude={"tax"}` are quick one-off filters.
+  For anything permanent, prefer a separate model.
 
 ## Status codes
 
-Set the default success status in the decorator:
+A successful endpoint answers `200` unless told otherwise. Set a different success code in the
+decorator:
 
 ```python
 from fastapi import status
@@ -210,7 +289,11 @@ def create_item(item: Item) -> Item: ...
 def delete_item(item_id: int) -> None: ...
 ```
 
-For **errors**, raise `HTTPException`:
+`status.HTTP_201_CREATED` is the number 201 under a readable name. The `...` in the function bodies
+is a Python placeholder meaning "code omitted here".
+
+For **errors**, raise `HTTPException`. An **exception** is Python's mechanism for abandoning the
+current work and reporting a problem; `raise` triggers one.
 
 ```python
 from fastapi import HTTPException
@@ -224,13 +307,18 @@ def read_item(item_id: int) -> Item:
     return item
 ```
 
-Raising (not returning) matters: it immediately aborts the endpoint *and* any calling helper functions,
-so deep service code can signal "not found" without threading return values back up. (The book argues
-for keeping HTTP details in the web layer, so its service layer raises domain exceptions like
-`Missing`, which the web layer translates into `HTTPException` — more in the layers lesson.)
+The function looks the item up in a dictionary. If nothing is found, it raises an `HTTPException`
+with the status, a `detail` message (which becomes `{"detail": "Item not found"}` in the body) and
+optional extra headers.
 
-To choose the status *dynamically* (e.g. 200 if updated, 201 if created), declare a `Response`
-parameter and set `response.status_code`:
+Raising, as opposed to returning, matters. A raised exception stops the endpoint immediately *and*
+stops every helper function that was in the middle of being called, so code several calls deep can
+report "not found" without passing special return values back up. (The book argues for keeping HTTP
+details at the edge of the program, so its inner code raises its own exception types such as
+`Missing`, which the outer layer translates into `HTTPException`. Lesson 15 develops this.)
+
+To choose the status *while the function runs* (for example 200 when something was updated and 201
+when it was created), declare a parameter of type `Response` and set its `status_code`:
 
 ```python
 from fastapi import Response
@@ -243,9 +331,14 @@ def upsert(item_id: int, item: Item, response: Response) -> Item:
     return item
 ```
 
+FastAPI notices the `Response` type and passes in an object that represents the response being
+built. This endpoint is an *upsert* (update or insert): a `PUT` that creates the item when it does
+not exist yet, in which case the status is changed to 201.
+
 ## Response headers and cookies
 
-The same injected `Response` lets you add headers and cookies while still returning data normally:
+The same `Response` parameter lets you add headers and cookies while still returning data in the
+normal way:
 
 ```python
 @app.get("/report")
@@ -255,10 +348,15 @@ def report(response: Response):
     return {"ok": True}
 ```
 
+The first line sets a caching header. The second asks the browser to store a cookie. Its three flags
+are safety settings: `httponly` hides the cookie from JavaScript running in the page, `secure` sends
+it only over encrypted connections, and `samesite` limits when it is sent along with requests coming
+from other websites.
+
 ## Returning a Response directly
 
-You can bypass serialisation entirely by returning a `Response` (or subclass). FastAPI sends it as-is —
-no `response_model` validation or filtering:
+You can skip FastAPI's conversion entirely by returning a `Response` object (or one of its
+subclasses). FastAPI sends it exactly as it is, with no response-model checking or filtering:
 
 ```python
 from fastapi.responses import JSONResponse, HTMLResponse, PlainTextResponse, RedirectResponse
@@ -272,25 +370,29 @@ def go():
     return RedirectResponse("/docs")
 ```
 
-Use this for non-JSON responses (HTML, CSV, images), redirects, or fine-grained control. For streaming
-and files see the files/streaming module. `response_class=ORJSONResponse` or `HTMLResponse` on the
-decorator changes the default response type and its documented media type.
+`JSONResponse` lets you set the status, content and headers yourself. `RedirectResponse` tells the
+client to go to another address. Use direct responses for content that is not JSON (HTML, CSV text,
+images), for redirects, or when you need full control. Streaming and files are covered in the
+files/streaming module. Writing `response_class=HTMLResponse` (or `ORJSONResponse`, a faster JSON
+encoder) in the decorator changes the default response type and the media type shown in the docs.
 
 > [!INTERVIEW]
-> "How do you prevent an API from leaking sensitive fields like password hashes?" — Never return internal
-> objects unfiltered. Declare an output schema (`response_model=UserPublic` or a return annotation); FastAPI
-> validates the return value against it and drops any field not declared. Keep separate input, storage and
-> output models so a sensitive field can only exist where it belongs. Add a test asserting the field is
-> absent from the JSON.
+> "How do you prevent an API from leaking sensitive fields like password hashes?" — Never return
+> internal objects unfiltered. Declare an output shape (`response_model=UserPublic` or a return
+> annotation); FastAPI validates the return value against it and drops any field not declared. Keep
+> separate input, storage and output models so that a sensitive field can only exist where it belongs.
+> Add a test asserting the field is absent from the JSON.
 
 ## What really happens to your return value
 
 1. If you returned a `Response`, it is sent unchanged.
-2. Otherwise, if there is a response model, FastAPI validates the value against it (a mismatch is a
-   **server** bug → 500 `ResponseValidationError`, not a 422).
-3. The validated data is serialised with Pydantic (`model_dump(mode="json")` semantics: datetimes to ISO
-   strings, UUIDs to strings, etc.), or with `jsonable_encoder` when there is no model.
+2. Otherwise, if there is a response model, FastAPI validates the value against it. A mismatch is a
+   bug in the **server**, so the result is a 500 (`ResponseValidationError`), not a 422.
+3. The validated data is converted with Pydantic into JSON-compatible values: datetimes become ISO
+   strings, UUIDs become strings, and so on. With no model, a helper named `jsonable_encoder` does it.
 4. The bytes are wrapped in a `JSONResponse` with your status code and headers.
+
+Step 3 is easy to see directly:
 
 ```python-run
 from datetime import datetime, timezone
@@ -309,10 +411,16 @@ print(p.model_dump())               # Python objects
 print(p.model_dump(mode="json"))    # JSON-compatible types: what goes on the wire
 ```
 
+The first `print` shows Python objects: a `UUID(...)` and a `datetime.datetime(...)`. The second,
+with `mode="json"`, shows what goes on the wire: the id as the string
+`'00000000-0000-0000-0000-00000000002a'` and the time as `'2025-01-15T09:30:00Z'`.
+
 ## Worked example: a complete resource with model families
 
-Putting the pieces together for one resource — distinct models for each direction, correct status codes,
-and a partial update:
+Now everything together for one resource: a separate model for each direction, correct status codes,
+and a partial update. `Field(...)` attaches rules to a field (`min_length`, `gt` for "greater than");
+lesson 7 covers it fully. `repo` stands for some storage object with `insert`, `get`, `save` and
+`delete` methods.
 
 ```python
 class ItemBase(BaseModel):
@@ -356,15 +464,21 @@ def delete_item(item_id: int) -> None:
         raise HTTPException(status_code=404, detail="Item not found")
 ```
 
-Trace `POST /items` with `{"name": "Hammer", "price": 9.5, "cost_price": 1}`:
+Trace `POST /items` with the body `{"name": "Hammer", "price": 9.5, "cost_price": 1}`:
 
-1. Body parsed as JSON; validated against `ItemCreate`. `cost_price` is not a field of `ItemCreate`, so it
-   is dropped (default `extra="ignore"`) — the client cannot set an internal field. With
-   `extra="forbid"` the request would be rejected with 422 instead, which is stricter and often better.
-2. `repo.insert` returns an `ItemInDB` with `id`, `created_at`, `cost_price`, `supplier_id`.
+1. The body is parsed as JSON and validated against `ItemCreate`. `cost_price` is not a field of
+   `ItemCreate`, so it is dropped (the default `extra="ignore"`). The client cannot set an internal
+   field. With `extra="forbid"` the request would be refused with 422, which is stricter and often
+   better.
+2. `repo.insert` returns an `ItemInDB` with `id`, `created_at`, `cost_price` and `supplier_id`.
 3. The response model `ItemPublic` validates and filters: the client receives `id`, `name`, `price`,
-   `description`, `created_at` — nothing else.
-4. Status `201` and the `Location` header come from the decorator and the injected `Response`.
+   `description` and `created_at`, and nothing else.
+4. Status `201` comes from the decorator and the `Location` header from the injected `Response`.
+
+The `PATCH` endpoint deserves a second look. `patch.model_dump(exclude_unset=True)` produces a
+dictionary of *only the fields the client actually sent*. `stored.model_copy(update=...)` makes a copy
+of the stored item with those fields replaced. A client that sends `{"price": 11.0}` changes the
+price and leaves the name alone, which is the meaning of PATCH from lesson 1.
 
 The whole filtering mechanism can be reproduced, and tested, with Pydantic alone:
 
@@ -408,8 +522,13 @@ leaked = set(ItemInDB.model_fields) - set(ItemPublic.model_fields)
 print("fields that must never appear in responses:", sorted(leaked))
 ```
 
-That last line is a useful unit test in real projects: assert that the set difference between storage and
-public models contains exactly the fields you intend to keep private.
+The first line of output shows the client's view: no `cost_price`, no `supplier_id`. The second shows
+the price changed to 11.0 after the patch while the name stayed. The third confirms the internal
+fields are still on the stored object. The fourth computes, with a set difference, the fields that
+exist in storage but not in the public model: `['cost_price', 'supplier_id']`.
+
+That last line makes a useful automated test in a real project: assert that the difference between
+the storage model and the public model is exactly the set of fields you intend to keep private.
 
 ## Choosing the response style
 
@@ -423,27 +542,47 @@ public models contains exactly the fields you intend to keep private.
 | full manual control, no validation | return `JSONResponse(...)` |
 | document extra outcomes in OpenAPI | `responses={404: {"model": ErrorModel}}` on the decorator |
 
-A subtle interaction: when both a return annotation and `response_model` are given, `response_model`
-wins for validation, filtering and docs, while the annotation still serves your type checker. Setting
-`response_model=None` disables FastAPI's handling when the annotation isn't a valid Pydantic type (for
-example a union including `Response`).
+A subtle interaction: when both a return annotation and `response_model` are present,
+`response_model` wins for validation, filtering and documentation, while the annotation still serves
+your type checker. Setting `response_model=None` switches FastAPI's handling off when the annotation
+is not something Pydantic can use (for example a union that includes `Response`).
 
 ## Pitfalls
 
-- Returning ORM/DB objects without a response model → leaks fields, or fails serialisation.
-- Using `return HTTPException(...)` instead of `raise` — you just return an exception object as JSON.
-- Forgetting that a response model mismatch produces a 500, which is *your* bug.
-- Declaring `status_code=204` but returning a body.
+- Returning database objects without a response model: fields leak, or the conversion to JSON fails.
+- Writing `return HTTPException(...)` instead of `raise`. The exception object is then treated as
+  ordinary data and sent with status 200.
+- Forgetting that a response-model mismatch produces a 500, which is *your* bug and not the client's.
+- Declaring `status_code=204` and then returning a body.
 - Reusing one model for input and output, then adding a sensitive field to it later.
 
 ## Summary
 
-- A `BaseModel` parameter is the JSON body: parsed, validated, documented, given to you as an object.
-- `Body()` handles singular values and embedding; models nest freely.
-- Declare outputs with a return annotation or `response_model` — it validates, **filters** and documents.
-- Use input/stored/public model families to keep secrets out of responses.
-- `status_code=` for defaults, `HTTPException` for errors, an injected `Response` for dynamic status,
-  headers and cookies, or return a `Response` subclass for full control.
+- A `BaseModel` parameter is the JSON body: parsed, validated, documented, and handed to you as an
+  object.
+- `Body()` handles single values and embedding; models nest freely.
+- Declare outputs with a return annotation or `response_model`; it validates, **filters** and documents.
+- Use input / stored / public model families to keep secrets out of responses.
+- `status_code=` for defaults, `HTTPException` for errors, an injected `Response` for a status chosen
+  at run time and for headers and cookies, or return a `Response` subclass for full control.
+
+## Glossary
+
+- **Request body** — the content after the headers of a request, usually JSON.
+- **Pydantic** — the library FastAPI uses to describe, check and convert data.
+- **Model** — a class inheriting from `BaseModel` that lists fields and their types.
+- **Instance** — one object created from a class.
+- **Field** — one named, typed entry in a model.
+- **Lax mode** — Pydantic's default willingness to convert sensible inputs (`"9.5"` to `9.5`).
+- **`extra="ignore"` / `"forbid"`** — drop unknown fields without comment / reject them.
+- **Nested model** — a model used as the type of a field in another model.
+- **Response model** — the model that defines, checks and filters what an endpoint sends back.
+- **Filtering** — removing every field not declared in the response model.
+- **Model family** — related models (create, stored, public) built from one base by inheritance.
+- **Exception / raise** — Python's way to abandon the current work and report a problem.
+- **`HTTPException`** — the exception FastAPI turns into an error response with a chosen status.
+- **Upsert** — update the record if it exists, insert it if it does not.
+- **Redirect** — a response telling the client to request a different address.
 
 ```quiz
 [
@@ -456,7 +595,7 @@ example a union including `Response`).
   {"q": "How do you make a single model expect {\"item\": {...}} instead of the bare object?", "options": ["item: Item = Query()", "item: Annotated[Item, Body(embed=True)]", "response_model_exclude_unset=True", "item: dict"], "answer": 1,
    "explain": "Body(embed=True) wraps the body under a key named after the parameter."},
   {"q": "Why raise HTTPException rather than return it?", "options": ["Returning is slower", "Raising aborts execution immediately, even from nested helper functions, and FastAPI converts it into an error response", "Returned exceptions become 404s", "There is no difference"], "answer": 1,
-   "explain": "A returned exception object would simply be serialised as data with status 200. Raising unwinds the stack to FastAPI's handler."},
+   "explain": "A returned exception object would be serialised as data with status 200. Raising unwinds the stack to FastAPI's handler."},
   {"q": "What is Pydantic's default behaviour for unknown fields in the body?", "options": ["Reject with 422", "Ignore them", "Keep them as attributes", "Raise a 500"], "answer": 1,
    "explain": "The default extra='ignore' drops unknown fields; use extra='forbid' to reject them."},
   {"q": "If you return a JSONResponse object directly, which is true?", "options": ["response_model filtering still applies", "It is sent as-is without response_model validation", "FastAPI converts it to a dict first", "It must be wrapped in HTTPException"], "answer": 1,

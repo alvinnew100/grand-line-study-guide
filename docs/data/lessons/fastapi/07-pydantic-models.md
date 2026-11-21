@@ -1,13 +1,38 @@
 # Pydantic models, types and Field
 
-FastAPI does not validate data itself — it delegates to **Pydantic**. Every 422 you see, every response
-that gets filtered, every JSON Schema in `/docs` comes from Pydantic. Pydantic v2 (2023) rewrote the core
-in Rust (`pydantic-core`), making validation 5–50× faster than v1, and changed several method names. This
-module teaches Pydantic on its own terms; everything here runs without FastAPI, so the examples are live.
+> **Before this lesson:** you should have seen a Pydantic model used as a request body and as a
+> response model in [lesson 5](#/lesson/fastapi/body-responses), and know what a type hint is
+> ([lesson 4](#/lesson/fastapi/first-app)). In Python you need classes at the level of "a class lists
+> some fields", dictionaries and `try` / `except`.
+
+## In plain words
+
+Data that arrives from outside your program cannot be trusted to have the right shape. A client may
+send text where a number belongs, leave a field out, or misspell a name. **Pydantic** is the Python
+library that stands at the door and checks. You describe the shape you expect by writing a small
+class with type hints, and Pydantic compares every incoming piece of data against that description,
+converts what can sensibly be converted, and reports everything that is wrong.
+
+An everyday picture: the security check at an airport. Every bag goes through the same scanner
+before it is allowed into the building. Bags that pass are known to be safe from then on, so nobody
+inside has to check again. Pydantic is that scanner for data, and a value that has passed through it
+is known to have the right types everywhere after.
+
+FastAPI does not check data itself; it hands the job to Pydantic. Every `422` response you have seen,
+every field filtered out of a response and every description on the `/docs` page was produced by
+Pydantic. This module studies Pydantic by itself. Nothing here needs a web server, so every example
+runs live in your browser.
+
+Why this matters for a job: models are where most of the daily work in a FastAPI codebase happens,
+and "why does FastAPI use Pydantic?" and "what changed in version 2?" are common interview questions.
+Version 2 (2023) rewrote the checking engine in the fast compiled language Rust (the engine is called
+`pydantic-core`), which made validation roughly 5 to 50 times faster than version 1, and it renamed
+several methods. Old tutorials still show the old names; a table below translates them.
 
 ## Why type hints need a runtime library
 
-Lubanovic's chapter 5 starts from the observation that Python's type hints are *ignored at runtime*:
+Lubanovic's chapter 5 begins with an observation that surprises many newcomers. Python *ignores* type
+hints while a program runs:
 
 ```python-run
 def double(n: int) -> int:
@@ -16,13 +41,18 @@ def double(n: int) -> int:
 print(double("ha"))      # no error: hints are documentation for tools, not runtime checks
 ```
 
-Static checkers (mypy, pyright) catch some bugs in *your* code, but they cannot check data arriving from
-the network at runtime. That is the gap Pydantic fills: it **reads the same type hints at runtime** and
-enforces them on incoming data, converting where sensible.
+The hint says `n` should be an `int`, yet calling `double("ha")` raises no error. Python multiplies
+the text by two and prints `haha`. **Runtime** means "while the program is running", and at runtime a
+hint is only a comment with nicer syntax.
 
-The book walks through the alternatives for grouping data — tuples, dicts, `namedtuple`, dataclasses,
-`attrs` — and lands on Pydantic because it combines a class-like definition with validation, conversion,
-and JSON (de)serialisation.
+Tools called static checkers (mypy, pyright) read hints *before* the program runs and catch some
+mistakes in your own code. They cannot inspect data that arrives from the network later. That is the
+gap Pydantic fills: it **reads the same hints while the program runs** and enforces them on incoming
+data.
+
+The book walks through the other ways Python can group related values (tuples, dictionaries,
+`namedtuple`, dataclasses, the `attrs` library) and settles on Pydantic because it alone combines a
+class-style definition with checking, conversion, and translation to and from JSON.
 
 ## A first model
 
@@ -49,16 +79,37 @@ except ValidationError as e:
     print(e)
 ```
 
-Key behaviours:
+Reading the code:
 
-- Fields without defaults are **required**; with defaults are optional.
-- Values are **converted** where unambiguous (`"1951-11-08"` → `date`, `"5"` → `5` for `int`).
-- Errors are collected for **all** fields, not just the first, in one `ValidationError`.
-- Mutable defaults like `[]` are safe — Pydantic copies them per instance (unlike plain function defaults).
+- `class Creature(BaseModel):` defines a model. (The book's running example is a catalogue of
+  legendary creatures.) Each line below it declares one **field**: a name, a type and possibly a
+  default.
+- `name: str` and `country: str` have no default, so they are required.
+- `area: str | None = None` may be text or nothing, and is nothing unless given.
+- `description: str = ""` and `aka: list[str] = []` default to empty text and an empty list.
+- `first_seen: date | None = None` is an optional calendar date.
+- `Creature(name="yeti", ...)` creates an instance. Note that `first_seen` is given as the *text*
+  `"1951-11-08"`.
+
+The output shows four things. The printed object lists every field, with `first_seen` now a real
+`datetime.date(1951, 11, 8)`. The second line confirms it: the text was parsed into a `date`.
+`model_dump()` gives the same data as a plain dictionary. Finally, creating a creature without a
+`country` raises `ValidationError`, whose message says `country` and `Field required`.
+
+The behaviours to remember:
+
+- A field without a default is **required**; a field with one is optional.
+- Values are **converted** when the meaning is unambiguous (`"1951-11-08"` to a date, `"5"` to `5`).
+- Errors are collected for **all** fields in one `ValidationError`; checking does not stop at the
+  first problem.
+- A mutable default such as `[]` is safe. Pydantic makes a fresh copy for each instance, which plain
+  Python function defaults do not.
 
 ## Lax versus strict mode
 
-By default Pydantic is **lax**: it coerces compatible inputs. Some coercions it accepts and rejects:
+By default Pydantic is **lax**: it converts inputs that are compatible with the declared type. The
+technical word for such conversion is **coercion**. It is worth seeing exactly where the line is
+drawn:
 
 ```python-run
 from pydantic import BaseModel, ValidationError, ConfigDict
@@ -88,32 +139,48 @@ except ValidationError as e:
     print("strict:", e.errors()[0]["type"])
 ```
 
-Note that `4.0` → `4` is allowed (no information lost) but `"4.5"` → `int` is not, and `123` is *not*
-coerced to `"123"` for a `str` field. Strictness can be set per model (`ConfigDict(strict=True)`), per field
-(`Field(strict=True)`), or per call (`model_validate(data, strict=True)`). In JSON mode, strict mode still
-accepts JSON-native forms like ISO date strings.
+The first `print` shows `i=42 f=3.5 b=True s='hello'`: text became an integer, a float and a boolean.
+Then three bad inputs are tried, and for each the code prints the field and the error type:
+
+- `"4.5"` for an `int` fails with `int_parsing`. Turning 4.5 into a whole number would lose
+  information, so Pydantic refuses.
+- `"maybe"` for a `bool` fails with `bool_parsing`. In the same input, `4.0` for the `int` was
+  accepted without complaint, because 4.0 is exactly 4.
+- `123` for a `str` fails with `string_type`. Numbers are *not* silently turned into text.
+
+The last part defines a model in **strict** mode, where no conversion is done at all: the text `"42"`
+is rejected for an `int` field with the error type `int_type`.
+
+Strictness can be chosen for a whole model (`ConfigDict(strict=True)`), for one field
+(`Field(strict=True)`) or for one call (`model_validate(data, strict=True)`). When the input is JSON
+text, strict mode still accepts the forms JSON has no alternative for, such as a date written as an
+ISO string.
 
 ## The type vocabulary
 
-Pydantic understands standard and many special types:
+Pydantic understands Python's standard types and adds many of its own:
 
 | Category | Examples |
 |---|---|
-| Builtins | `int`, `float`, `str`, `bool`, `bytes`, `list[T]`, `dict[K, V]`, `set[T]`, `tuple[int, str]` |
-| Optionals/unions | `str \| None`, `int \| str` (smart union: picks the best match) |
-| Literals & enums | `Literal["asc", "desc"]`, `Enum` subclasses |
-| Time | `datetime`, `date`, `time`, `timedelta` (ISO 8601 strings parsed) |
-| IDs & numbers | `UUID`, `Decimal` |
-| Pydantic types | `EmailStr` (needs `email-validator`), `HttpUrl`, `AnyUrl`, `SecretStr`, `PositiveInt`, `conint`, `constr`, `IPvAnyAddress`, `Json[T]` |
-| Nested | other `BaseModel` classes, arbitrarily deep |
-| Discriminated unions | `Annotated[Cat \| Dog, Field(discriminator="kind")]` |
+| Built-in | `int`, `float`, `str`, `bool`, `bytes`, `list[T]`, `dict[K, V]`, `set[T]`, `tuple[int, str]` |
+| "Or" types (unions) | `str \| None`, `int \| str` |
+| Fixed choices | `Literal["asc", "desc"]`, `Enum` subclasses |
+| Time | `datetime`, `date`, `time`, `timedelta` (ISO 8601 text is parsed) |
+| IDs and exact numbers | `UUID`, `Decimal` |
+| Pydantic's own | `EmailStr` (needs the `email-validator` package), `HttpUrl`, `AnyUrl`, `SecretStr`, `PositiveInt`, `IPvAnyAddress`, `Json[T]` |
+| Nested | other `BaseModel` classes, to any depth |
+| Tagged unions | `Annotated[Cat \| Dog, Field(discriminator="kind")]` (next lesson) |
 
-`SecretStr` deserves a mention: it hides its value in `repr` and logs (`SecretStr('**********')`) — use it
-for API keys and passwords in settings.
+In the table `T`, `K` and `V` stand for "any type you choose": `list[int]` is a list of integers.
+A **union**, written with `|`, means "one of these types".
+
+`SecretStr` deserves a mention. It hides its value whenever it is printed or logged (it shows as
+`SecretStr('**********')`), so use it for passwords and API keys.
 
 ## `Field`: constraints and metadata
 
-`Field` attaches validation constraints and documentation to a field:
+A type says what *kind* of value is allowed. A **constraint** narrows it further: "a number, and at
+least 18". `Field` attaches constraints and documentation to a field:
 
 ```python-run
 from pydantic import BaseModel, Field, ValidationError
@@ -133,18 +200,30 @@ except ValidationError as e:
         print(err["loc"], err["type"], "-", err["msg"])
 ```
 
-Constraint vocabulary: numbers `gt`, `ge`, `lt`, `le`, `multiple_of`; strings `min_length`, `max_length`,
-`pattern`; collections `min_length`, `max_length`; decimals `max_digits`, `decimal_places`. Metadata:
-`title`, `description`, `examples`, `alias`, `exclude`, `deprecated`. Defaults: `default=` or
-`default_factory=` (a callable, for lists/dicts/timestamps).
+- `name` must be 2 to 50 characters long.
+- `country` must match the regular expression `^[A-Z]{2}$`, which means "exactly two capital letters".
+- `age` must be from 18 to 120 (`ge` is "greater than or equal", `le` is "less than or equal").
+- `rating` defaults to 0.0 and must be from 0 to 5.
+- `tags` defaults to a new empty list (`default_factory=list` means "call `list()` to make the
+  default") and may hold at most 10 entries.
 
-Lubanovic's "Validate Values" section does the same with the older `constr`/`conint` helpers and
-`Field(..., min_length=2)`; in v2 the `Field` / `Annotated` style is preferred.
+The valid explorer prints normally. The invalid one produces four errors, one per broken rule:
+`string_too_short` for the name, `string_pattern_mismatch` for the country,
+`greater_than_equal` for the age and `less_than_equal` for the rating, each with a readable message.
+
+The constraint vocabulary: for numbers `gt`, `ge`, `lt`, `le`, `multiple_of`; for text `min_length`,
+`max_length`, `pattern`; for lists and other collections `min_length`, `max_length`; for decimals
+`max_digits`, `decimal_places`. Documentation options: `title`, `description`, `examples`, `alias`,
+`exclude`, `deprecated`. Defaults: `default=` for a fixed value, or `default_factory=` for a function
+that produces one (needed for lists, dictionaries and timestamps).
+
+Lubanovic's "Validate Values" section does the same with older helper functions (`constr`, `conint`)
+and `Field(..., min_length=2)`. In version 2 the `Field` and `Annotated` style shown here is preferred.
 
 ### `Annotated` constraints: reusable types
 
-You can bake constraints into a reusable type alias with `Annotated`, which is exactly the same mechanism
-FastAPI uses for `Query()` and `Depends()`:
+With `Annotated` you can attach constraints to a type once, give the result a name, and reuse it. It
+is the same mechanism FastAPI uses for `Query()` and `Path()`:
 
 ```python-run
 from typing import Annotated
@@ -169,9 +248,20 @@ except ValidationError as e:
     print(e.errors()[0]["loc"], e.errors()[0]["type"])
 ```
 
+`CountryCode` is now a name for "text made of two capital letters", and `Probability` for "a float
+from 0 to 1". The model `Detection` uses them like any other type, including inside a dictionary:
+every value of `class_scores` must be a probability.
+
+The second half introduces `TypeAdapter`. A model checks a group of named fields; a `TypeAdapter`
+checks *any* type without a model class. Here it validates "a list of probabilities".
+`["0.5", 1]` is accepted and comes back as `[0.5, 1.0]`. `[0.2, 1.5]` is rejected, and the printed
+location `(1,)` points at the element at position 1 (the second one), with the type `less_than_equal`.
+
 ## Aliases: Python names vs wire names
 
-JSON from a JavaScript client may use `camelCase` or names that aren't valid identifiers:
+Python style writes field names as `customer_name`. JSON produced by JavaScript programs usually
+writes `customerName`, and sometimes a name is not a legal Python name at all. An **alias** is a
+second name for a field, used "on the wire", meaning in the JSON that travels over the network:
 
 ```python-run
 from pydantic import BaseModel, ConfigDict, Field
@@ -189,20 +279,28 @@ print(o.model_dump())                 # Python names
 print(o.model_dump(by_alias=True))    # wire names
 ```
 
-FastAPI serialises response models **by alias** by default, so the client sees camelCase while your
-Python code stays snake_case.
+- `alias_generator=to_camel` gives every field a camelCase alias automatically.
+- `populate_by_name=True` allows the Python name to be used as well when creating the model.
+- `total_usd` gets a hand-written alias because the automatic one would be `totalUsd`.
+
+`model_validate` reads the camelCase keys, and the code then uses the Python names
+(`o.order_id`). `model_dump()` prints the Python names; `model_dump(by_alias=True)` prints the wire
+names. FastAPI sends response models **by alias** by default, so the client sees camelCase while your
+Python code keeps snake_case.
 
 ## Model configuration
 
-`model_config = ConfigDict(...)` controls model-wide behaviour. The options you'll use most:
+`model_config = ConfigDict(...)` sets behaviour for the whole model. The options used most often:
 
-- `extra="ignore" | "forbid" | "allow"` — what to do with unknown fields.
-- `str_strip_whitespace=True`, `str_to_lower=True` — normalise strings.
-- `frozen=True` — immutable, hashable instances.
-- `from_attributes=True` — validate from arbitrary objects' attributes (ORM rows) via
-  `Model.model_validate(orm_obj)`. (v1 called this `orm_mode`.)
-- `validate_assignment=True` — re-validate when attributes are set after creation.
-- `strict=True`, `populate_by_name=True`, `alias_generator=...`.
+- `extra="ignore" | "forbid" | "allow"`: what to do with fields that were not declared.
+- `str_strip_whitespace=True`, `str_to_lower=True`: tidy up text automatically.
+- `frozen=True`: instances cannot be changed after creation (and can be used as dictionary keys).
+- `from_attributes=True`: allow `Model.model_validate(obj)` to read the *attributes* of any object,
+  not only the keys of a dictionary. This is how database rows become models; an **ORM**
+  (object-relational mapper, lesson 16) is a library that presents database rows as Python objects.
+  Version 1 called this option `orm_mode`.
+- `validate_assignment=True`: check again whenever a field is assigned after creation.
+- `strict=True`, `populate_by_name=True`, `alias_generator=...`, all seen above.
 
 ```python-run
 from pydantic import BaseModel, ConfigDict, ValidationError
@@ -225,10 +323,17 @@ except ValidationError as e:
     print("frozen:", e.errors()[0]["type"])
 ```
 
+`Row` imitates a database row object: it has attributes, including a `hashed_password` that must not
+leak and an email with stray spaces and capitals. `UserPublic.model_validate(Row())` reads the
+attributes it has fields for, strips and lower-cases the text, and prints
+`id=1 email='ann@example.com'`. The password attribute is not a declared field, so it is not copied.
+Because the model is frozen, the assignment `u.email = "x"` raises an error of type
+`frozen_instance`.
+
 ## v1 → v2 cheat sheet
 
-Old tutorials and Stack Overflow answers still show v1 names. The book's examples straddle both eras; here
-is the mapping you'll need:
+Old tutorials and forum answers still show version 1 names, and the book's examples sit across both
+eras. This is the translation table:
 
 | Pydantic v1 | Pydantic v2 |
 |---|---|
@@ -244,15 +349,17 @@ is the mapping you'll need:
 
 > [!INTERVIEW]
 > "Why does FastAPI use Pydantic, and what changed in v2?" — Pydantic turns type hints into runtime
-> validation, conversion, serialisation and JSON Schema, which gives FastAPI request validation, response
-> filtering and OpenAPI for free. v2 moved the core into Rust (pydantic-core), making validation much
-> faster, introduced strict mode, `model_*` method names, `field_validator`/`model_validator`, `ConfigDict`,
-> `TypeAdapter`, and split settings into `pydantic-settings`.
+> validation, conversion, serialisation and JSON Schema, which gives FastAPI request validation,
+> response filtering and OpenAPI documentation at no extra effort. Version 2 moved the core into Rust
+> (pydantic-core), making validation much faster, and introduced strict mode, the `model_*` method
+> names, `field_validator` / `model_validator`, `ConfigDict` and `TypeAdapter`, and moved settings
+> into the separate `pydantic-settings` package.
 
 ## Nested models and reading error locations
 
-Real payloads are trees. Pydantic validates the whole tree in one pass and reports each problem with a
-**path** (`loc`) into it — the same path FastAPI returns to clients with `"body"` prepended:
+Real request bodies are trees: an order contains an address and a list of items. Pydantic checks the
+whole tree in one pass and reports each problem with a **path** (`loc`) leading to it. It is the same
+path FastAPI returns to clients, with `"body"` added at the front:
 
 ```python-run
 from pydantic import BaseModel, Field, ValidationError
@@ -289,11 +396,18 @@ except ValidationError as e:
         print(".".join(str(p) for p in err["loc"]).ljust(22), err["type"])
 ```
 
-Read `items.1.quantity` as "in `items`, element index 1, field `quantity`". Five independent problems —
-in a nested object, in a list element, in a dict value — are found and located in a single validation,
-which is what lets a frontend highlight every bad form field at once.
+The payload contains five mistakes on purpose, and the output lists all five:
 
-A valid payload round-trips through nested objects with real types, and conversion back is one call:
+- `shipping.postcode` (`string_pattern_mismatch`): `ABCDE` is not five digits.
+- `items.1.sku` (`string_too_short`), `items.1.quantity` (`greater_than_equal`) and
+  `items.1.unit_price` (`float_parsing`): three faults in the second item.
+- `notes.gift` (`string_type`): the value `1` is a number where text is required.
+
+Read `items.1.quantity` as "in `items`, the element at index 1, the field `quantity`" (indexes start
+at 0, so that is the second item). Finding and locating every problem in one pass is what allows a
+web form to highlight all the bad boxes at once.
+
+A valid payload becomes nested objects with real types, and going back to dictionaries is one call:
 
 ```python-run
 from pydantic import BaseModel
@@ -313,10 +427,17 @@ copy.addresses[0].city = "Denver"
 print(u.addresses[0].city, "|", copy.addresses[0].city)          # deep copy is independent
 ```
 
+The first line prints `Address Boston`: the entries of `addresses` are real `Address` objects, not
+dictionaries. `model_dump()` converts the whole tree back to plain dictionaries and lists. The last
+three lines make a *deep copy* (a copy that also copies everything nested inside) and change the
+copy; the original still says `Austin`.
+
 ## Unions: how Pydantic chooses
 
-For `int | str`, v1 tried types left to right, so the *order* silently changed results. v2 uses **smart
-mode**: it prefers a member the input already matches exactly, and only then falls back to coercion.
+For a field declared `int | str`, which type wins when the input is `"5"`? Version 1 tried the types
+from left to right, so the *order you wrote them in* silently changed the result. Version 2 uses a
+**smart mode**: it first looks for a member type that the input already matches exactly, and only if
+there is none does it try conversion.
 
 ```python-run
 from pydantic import BaseModel
@@ -332,20 +453,25 @@ print(M(a="5", b=5, c=3, d="12"))
 print(M(a=5, b="x", c=3.5, d=["1", 2]))
 ```
 
-When members are models, prefer a **discriminated union** (next lesson) so the choice is explicit rather
-than inferred.
+In the first line every input already matches one member, so nothing is converted:
+`a='5' b=5 c=3 d='12'`. In the second, `a=5` stays an integer, `b="x"` stays text, `c=3.5` stays a
+float, and `d=["1", 2]` becomes `[1, 2]` because a list was given and its elements could be converted.
+
+When the members of a union are models, prefer a **discriminated union** (next lesson), where a
+field in the data states outright which model is meant.
 
 ## Validating things that aren't model fields
 
-Three tools cover data that doesn't arrive as a model instance:
+Four tools cover data that does not arrive as a ready-made model instance:
 
-- `Model.model_validate(obj)` — from a dict or (with `from_attributes=True`) an object.
-- `Model.model_validate_json(text)` — parse and validate JSON in one step in Rust; faster than
-  `json.loads` followed by `model_validate`, and stricter about JSON-specific rules.
-- `TypeAdapter(T)` — the same engine for any type: `TypeAdapter(list[Order])`, `TypeAdapter(dict[str,
-  float])`, a union.
-- `@validate_call` — validates a plain function's arguments (and optionally its return value) against its
-  hints: runtime checking for internal functions that receive untrusted data.
+- `Model.model_validate(obj)`: from a dictionary, or from any object when `from_attributes=True`.
+- `Model.model_validate_json(text)`: parse and check JSON text in one step inside the Rust engine. It
+  is faster than `json.loads` followed by `model_validate`.
+- `TypeAdapter(T)`: the same engine for any type, such as `TypeAdapter(list[Order])` or
+  `TypeAdapter(dict[str, float])`.
+- `@validate_call`: a decorator that checks an ordinary function's arguments (and optionally its
+  return value) against its hints. It gives runtime checking to internal functions that receive
+  untrusted data.
 
 ```python-run
 from pydantic import ValidationError, validate_call, Field
@@ -363,20 +489,33 @@ except ValidationError as e:
     print([(err["loc"], err["type"]) for err in e.errors()])
 ```
 
+`resize` is a normal function whose parameters carry constraints. Thanks to `@validate_call`, the
+first call converts its arguments as a model would (`"640"` to `640`, `"no"` to `False`) and prints
+`640x480 keep_ratio=False`. The second call breaks two rules, a width of 0 and a height above 4096,
+and both are reported in one `ValidationError`. This is the fix for the `double("ha")` problem at the
+top of the lesson.
+
 ## Cost model: where validation time goes
 
-Validation is fast (compiled Rust), but not free, and the model is built once per class, not per request:
+Validation is fast, since it runs as compiled Rust, but it is not free:
 
-- **Class creation** compiles a validator and serializer — a one-off cost at import.
-- **Per call** cost grows with the size of the data. Ten thousand nested objects per request are ten
-  thousand validations; for bulk numeric payloads (feature matrices, embeddings) prefer flat
-  `list[list[float]]` with length limits, or binary formats, over a list of tiny models.
-- `model_construct()` builds an instance **without validation** — only for data you have already
-  validated (for example rows you wrote yourself); using it on client input removes the safety net.
+- **Creating the class** builds a validator and a serialiser for it. This happens once, when the
+  module is imported.
+- **Each call** costs time in proportion to the amount of data. Ten thousand nested objects in a
+  request means ten thousand validations. For bulk numeric input (tables of features, embedding
+  vectors) prefer a flat `list[list[float]]` with length limits, or a binary format, over a list of
+  tiny models.
+- `model_construct()` builds an instance **without any checking**. Use it only for data you have
+  already validated, such as rows you wrote yourself. Using it on client input removes the safety
+  net.
 - In FastAPI a response model is validated *again* on the way out. For very large responses that you
-  trust, returning a `Response` directly skips that cost — at the price of losing filtering.
+  trust, returning a `Response` directly avoids that cost, at the price of losing the filtering.
 
 ## Dataclasses, TypedDict or BaseModel?
+
+Python has two lighter ways to describe a record. A `dataclass` is a standard-library shortcut for
+writing a class that mostly holds fields. A `TypedDict` is a hint describing which keys a dictionary
+should have.
 
 | | `dataclass` | `TypedDict` | Pydantic `BaseModel` |
 |---|---|---|---|
@@ -387,27 +526,50 @@ Validation is fast (compiled Rust), but not free, and the model is built once pe
 | Overhead | lowest | none (a dict) | small |
 | Use for | internal value objects | typing existing dicts | **data crossing a trust boundary** |
 
-That last cell is the rule of thumb the book arrives at: use Pydantic wherever data enters or leaves the
-system (requests, responses, config, messages from queues, rows from files), and feel free to use lighter
-structures deep inside.
+The last row is the rule of thumb the book arrives at. A **trust boundary** is any point where data
+enters or leaves your program: requests, responses, configuration, messages from queues, rows read
+from files. Use Pydantic there, and feel free to use lighter structures deep inside.
 
 ## Pitfalls
 
-- Assuming hints are checked at runtime in plain functions — only Pydantic (or similar) checks them.
-- Optional vs nullable: `x: int | None` without a default is **required** but may be `null`. Optional
-  means "has a default".
-- Expecting `str` fields to coerce numbers (`123` → `"123"`): v2 rejects this.
-- Using v1 methods (`.dict()`) — they still exist but are deprecated and emit warnings.
-- Mutating a model and expecting validation, without `validate_assignment=True`.
+- Assuming hints are checked at runtime in plain functions. Only Pydantic (or a similar library)
+  checks them.
+- Confusing optional with nullable. `x: int | None` with no default is **required**; the client must
+  send it, though the value may be `null`. "Optional" means "has a default".
+- Expecting a `str` field to accept a number (`123` to `"123"`). Version 2 rejects this.
+- Using version 1 methods such as `.dict()`. They still exist but are deprecated and print warnings.
+- Changing a field after creation and expecting it to be checked, without `validate_assignment=True`.
 
 ## Summary
 
-- Pydantic enforces type hints on data at runtime: it validates, converts, collects all errors.
-- Lax mode coerces safe conversions; strict mode demands exact types.
-- `Field` and `Annotated` add constraints (`ge`, `max_length`, `pattern`) and docs metadata.
+- Pydantic enforces type hints on data at runtime: it validates, converts, and collects all errors.
+- Lax mode performs safe conversions; strict mode demands exact types.
+- `Field` and `Annotated` add constraints (`ge`, `max_length`, `pattern`) and documentation.
 - Aliases separate Python names from wire names; `ConfigDict` sets model-wide behaviour (`extra`,
   `from_attributes`, `frozen`).
 - Know the v1 → v2 renames.
+
+## Glossary
+
+- **Runtime** — the time during which a program is running.
+- **Static checker** — a tool (mypy, pyright) that inspects hints before the program runs.
+- **Model** — a class inheriting from `BaseModel`; a description of a data shape.
+- **Field** — one named, typed entry in a model.
+- **`ValidationError`** — the exception Pydantic raises, listing every problem found.
+- **Coercion** — converting an input to the declared type (`"42"` to `42`).
+- **Lax / strict mode** — allow safe conversions / demand exactly the declared type.
+- **Union** — a type meaning "one of these", written `int | str`.
+- **Constraint** — an extra rule on a value, such as `ge=18` or `max_length=50`.
+- **`Field`** — the function that attaches constraints, defaults and documentation to a field.
+- **`default_factory`** — a function called to produce a fresh default value.
+- **`Annotated`** — a hint that carries extra information, used to build reusable constrained types.
+- **`TypeAdapter`** — validates any type without defining a model class.
+- **Alias** — a field's external name in JSON, as opposed to its Python name.
+- **`ConfigDict` / `model_config`** — settings that apply to a whole model.
+- **`from_attributes`** — the setting that lets a model be built from an object's attributes.
+- **ORM** — a library that presents database rows as Python objects.
+- **`loc`** — the path to the location of an error inside nested data.
+- **Trust boundary** — a point where data enters or leaves your program.
 
 ```quiz
 [

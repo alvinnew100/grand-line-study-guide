@@ -1,12 +1,34 @@
 # Headers, cookies, forms of input and automatic docs
 
-You have seen path, query and body inputs. This lesson rounds out the input story — headers, cookies,
-and how FastAPI combines all sources — and then looks closely at what may be FastAPI's most loved
-feature: the **OpenAPI schema** and the interactive documentation generated from your code.
+> **Before this lesson:** you should be able to declare path and query parameters
+> ([lesson 4](#/lesson/fastapi/first-app)) and a JSON body with a Pydantic model
+> ([lesson 5](#/lesson/fastapi/body-responses)), and know what headers and cookies are in an HTTP
+> message ([lesson 1](#/lesson/fastapi/http-basics)).
+
+## In plain words
+
+A request can carry information in five places: the path, the query string, the body, the headers
+and the cookies. You already know the first three. The first half of this lesson covers the remaining
+two and gives you one table for all of them.
+
+The second half is about a feature many people name as their favourite thing in FastAPI. Your program
+can describe itself. From the functions and models you have written, FastAPI produces a complete,
+machine-readable description of the API, and from that description a web page where anyone can read
+about each endpoint and try it out.
+
+An everyday picture: a restaurant whose printed menu is produced automatically from the kitchen's own
+recipe cards. Change a recipe and the menu changes with it; the menu can never promise a dish the
+kitchen no longer makes. The description of your API is that menu, and its standard format is called
+**OpenAPI**.
+
+Why this matters for a job: other teams will use your API by reading that page, and tools will
+generate code from the description. Interviewers ask "what is OpenAPI and how does FastAPI produce
+it?" because the answer shows whether you understand what the framework does with your type hints.
 
 ## Headers
 
-Declare a header like a query parameter, but with `Header()`:
+Recall that a header is a `Name: value` line of metadata in the request. To read one, declare a
+parameter as you would a query parameter, and mark it with `Header()`:
 
 ```python
 from typing import Annotated
@@ -19,19 +41,29 @@ def get_agent(user_agent: Annotated[str | None, Header()] = None):
     return {"User-Agent": user_agent}
 ```
 
-Two conveniences:
+- `from fastapi import FastAPI, Header` loads the marker.
+- `user_agent: Annotated[str | None, Header()] = None` means: an optional piece of text, taken from
+  the request headers, `None` when the header was not sent.
+- The function returns the value so that you can see it. A browser would produce something like
+  `{"User-Agent": "Mozilla/5.0 ..."}`.
 
-- **Underscore conversion**: Python identifiers can't contain `-`, so FastAPI converts `user_agent` to the
-  `user-agent` header. Disable with `Header(convert_underscores=False)` (rarely wise — some proxies drop
-  headers with underscores).
-- **Case-insensitivity**: header names are matched case-insensitively, as HTTP requires.
+Two conveniences are at work:
 
-Duplicate headers become a list with `x_token: Annotated[list[str] | None, Header()] = None`.
-Lubanovic's tour uses a header to pass the same "who" value he earlier sent via path, query and body —
-then notes that headers are the natural home for *metadata* (auth tokens, content types, request IDs),
-not business data.
+- **Underscore conversion.** A Python name cannot contain a hyphen, but header names are full of
+  them. FastAPI therefore converts `user_agent` into the header name `user-agent`. You can turn this
+  off with `Header(convert_underscores=False)`, though that is rarely wise: some proxies throw away
+  headers whose names contain underscores.
+- **Case does not matter.** `User-Agent`, `user-agent` and `USER-AGENT` all match, as HTTP requires.
 
-Group related headers in a Pydantic model (FastAPI ≥ 0.115):
+A header that appears several times in one request can be collected as a list:
+`x_token: Annotated[list[str] | None, Header()] = None`.
+
+Lubanovic's tour uses a header to pass the same "who" value that he earlier sent through the path,
+the query and the body, and then observes that headers are the natural home for *metadata* (login
+tokens, content types, request IDs) and not for the data your application is about.
+
+Related headers can be grouped in a Pydantic model (FastAPI 0.115 and later), exactly as query
+parameters were grouped in lesson 4:
 
 ```python
 class CommonHeaders(BaseModel):
@@ -46,7 +78,14 @@ def read_items(headers: Annotated[CommonHeaders, Header()]):
     return headers
 ```
 
+Each field of `CommonHeaders` is one header: `save_data` reads `save-data`, `if_modified_since` reads
+`if-modified-since`, and `x_tag` gathers every `x-tag` header into a list.
+
 ## Cookies
+
+A cookie is a small named value that the server asks a browser to keep and send back with every later
+request to the same site. Reading one looks the same as reading a header, with `Cookie()` as the
+marker:
 
 ```python
 from fastapi import Cookie
@@ -56,14 +95,18 @@ def read_items(session_id: Annotated[str | None, Cookie()] = None):
     return {"session_id": session_id}
 ```
 
-Set cookies with `response.set_cookie(...)`. Always set `httponly=True` (JavaScript can't read it — limits
-XSS damage), `secure=True` (HTTPS only) and an appropriate `samesite` (`"lax"` or `"strict"`) for session
-cookies.
+Here the endpoint reads a cookie named `session_id`. A **session** is the server's record of one
+logged-in visit, and the cookie holds the ticket number for it.
+
+Cookies are *set* with `response.set_cookie(...)`, shown in lesson 5. For a session cookie always pass
+`httponly=True` (JavaScript in the page cannot read it, which limits the damage of an attack called
+cross-site scripting, or XSS, where an attacker manages to run their own script in your page),
+`secure=True` (sent over HTTPS only) and a suitable `samesite` value (`"lax"` or `"strict"`).
 
 ## Accessing the raw `Request`
 
-Sometimes you need something FastAPI doesn't model — the client IP, the raw body bytes, all headers.
-Declare a `Request` parameter:
+Occasionally you need something that FastAPI's declarations do not cover: the client's network
+address, the body as untouched bytes, or every header at once. Declare a parameter of type `Request`:
 
 ```python
 from fastapi import Request
@@ -76,9 +119,18 @@ async def webhook(request: Request):
     return {"bytes": len(raw), "ip": ip}
 ```
 
-Data read this way is **not** validated or documented — use it sparingly. Webhook signature verification is
-a legitimate case: the signature is computed over the *exact* bytes, so you must not re-serialise parsed
-JSON.
+- `async def` is used because reading the body is an operation that must be awaited.
+- `await request.body()` returns the body as raw bytes.
+- `request.headers.get("x-signature")` reads one header by name, giving `None` if it is absent.
+- `request.client.host` is the client's address, when known.
+
+Data read this way is **not** validated and does **not** appear in the documentation, so use it
+sparingly. One legitimate case is a **webhook**: a request that another company's system sends *to
+you* when something happens (a payment succeeded, for instance). Webhooks are usually signed. The
+sender computes a keyed fingerprint of the body, called an **HMAC** (hash-based message authentication
+code), and puts it in a header; you recompute it to prove the message is authentic. The fingerprint is
+calculated over the *exact* bytes sent, so you must verify against the raw body. Parsing the JSON and
+writing it out again could change spacing or key order and break the check.
 
 ## The full input decision table
 
@@ -93,22 +145,33 @@ JSON.
 | Files | `File()` / `UploadFile` | yes | yes |
 | Anything | `Request` | **no** | **no** |
 
-Lubanovic's "Which Method Is Best?" section concludes much as this table suggests: use path for
-identity, query for modifiers, body for data, headers for metadata — and let FastAPI's declarations
-document the choice.
+Lubanovic's "Which Method Is Best?" discussion arrives at the same place as this table: path for
+identity, query for adjustments, body for data, headers for metadata. Declaring them in the function
+signature also documents the choice, which brings us to the second half.
 
 ## OpenAPI: the contract generated from your code
 
-**OpenAPI** (formerly Swagger) is a standard, language-agnostic JSON/YAML description of an HTTP API:
-paths, operations, parameters, request bodies, responses, schemas, security schemes. FastAPI builds this
-document from your declarations and serves it at `/openapi.json`. Two UIs render it:
+A **schema** is a formal description of the shape of some data: which fields exist, their types and
+their rules. **OpenAPI** (formerly called Swagger) is a standard for describing a whole HTTP API in
+one document, written in JSON or in YAML (a more human-friendly notation for the same kind of data).
+It lists the paths, the methods allowed on each, every parameter, the request bodies, the possible
+responses and the login methods. Because it is a standard and not tied to Python, tools written in
+any language can read it.
 
-- **Swagger UI** at `/docs` — interactive: "Try it out" sends real requests, including auth flows.
-- **ReDoc** at `/redoc` — clean, three-column reference docs.
+FastAPI builds this document from your declarations and serves it at `/openapi.json`. Two ready-made
+web pages display it:
 
-Because models are expressed as **JSON Schema** (generated by Pydantic), the docs show exact types,
-constraints (`minLength`, `maximum`, `pattern`), enums and examples. Lubanovic highlights this in chapter 3:
-the documentation is not a separate artefact that drifts out of date — it *is* the code.
+- **Swagger UI** at `/docs` is interactive. Its "Try it out" button sends real requests, including
+  logging in.
+- **ReDoc** at `/redoc` is a tidy three-column reference manual.
+
+The shapes of your models are written in **JSON Schema**, a companion standard for describing JSON
+data, which Pydantic generates. That is why the docs can show exact types, limits (`minLength`,
+`maximum`, `pattern`), allowed values and examples. Lubanovic stresses the consequence in chapter 3:
+the documentation is not a separate file that slowly falls out of date. It is produced from the code,
+so it cannot disagree with the code.
+
+See the JSON Schema of a model for yourself:
 
 ```python-run
 import json
@@ -126,9 +189,22 @@ class PredictRequest(BaseModel):
 print(json.dumps(PredictRequest.model_json_schema(), indent=2))
 ```
 
+What to look for in the output:
+
+- `"description": "Features for a single house."` came from the **docstring**, the text in triple
+  quotes directly under the `class` line.
+- Under `"properties"` there is one entry per field. `sqft` has `"exclusiveMinimum": 0.0` (from
+  `gt=0`), its description and its example. `bedrooms` has `"minimum": 0` and `"maximum": 20`.
+  `city` has `"enum": ["Austin", "Boston", "Denver"]`, from the `Literal`.
+- `"required": ["sqft", "bedrooms", "city"]` lists the fields with no default. `tags` is absent from
+  that list because it has one.
+
+FastAPI places exactly this structure inside `/openapi.json`.
+
 ### Enriching the docs
 
-Everything below changes only the documentation (and sometimes behaviour), never requiring separate files:
+Everything below changes the documentation from within your Python code. No separate documentation
+files are needed:
 
 ```python
 app = FastAPI(
@@ -159,12 +235,17 @@ def predict(req: PredictRequest) -> PredictResponse:
     """
 ```
 
-- **Docstrings** become the operation description (Markdown).
-- **`tags`** group operations in the UI.
-- **`responses`** documents additional status codes (and can attach a model for error bodies).
-- **`examples`** on fields or `Body(openapi_examples=...)` provide sample payloads in Swagger UI.
-- **`deprecated=True`** greys out an operation — useful during API version transitions.
-- **`include_in_schema=False`** hides internal endpoints (health checks, admin hooks).
+The first call describes the API as a whole: a title, a one-line summary, a longer description, a
+version number, a contact and a licence. The decorator then describes one endpoint.
+
+- A function's **docstring** becomes the endpoint's description, and may use Markdown formatting.
+- **`tags`** group endpoints under headings in the page.
+- **`responses`** documents additional status codes, and can attach a model for the error body.
+- **`examples`** on fields, or `Body(openapi_examples=...)`, provide sample request bodies in Swagger UI.
+- **`deprecated=True`** greys an endpoint out, which is useful while moving clients to a new version.
+- **`include_in_schema=False`** hides an endpoint, for example an internal health check, from the
+  document while leaving it working.
+- **`operation_id`** gives the endpoint a stable machine name, which matters for generated code (below).
 
 ### Controlling or disabling the docs
 
@@ -174,25 +255,33 @@ app = FastAPI(docs_url="/api/docs", redoc_url=None, openapi_url="/api/openapi.js
 app = FastAPI(openapi_url=None)       # disables /openapi.json, /docs and /redoc
 ```
 
-Disabling docs in production is a judgement call — it hides your surface from casual browsing but is *not*
-security (the endpoints still exist). Many internal APIs keep docs on behind authentication.
+The first line moves the pages to different addresses and switches ReDoc off. The second form switches
+off the description itself, and with it both pages, since they have nothing left to display.
+
+Turning the docs off in production is a judgement call. It hides the list of endpoints from casual
+visitors, but it is *not* a security measure: the endpoints still exist and still answer. Many
+internal APIs keep the docs available behind a login.
 
 ### Why the schema matters beyond pretty pages
 
-- **Client generation**: tools like `openapi-generator` or `openapi-typescript` produce typed clients in
-  TypeScript, Kotlin, Go... from `/openapi.json`. Set `operation_id`s (or a `generate_unique_id_function`)
-  to get readable method names.
-- **Contract testing**: tools such as Schemathesis fuzz your API using the schema, finding inputs that
-  crash it.
-- **Gateways**: API gateways (Kong, AWS API Gateway) can import OpenAPI for routing and validation.
-- **LLM tool use**: an OpenAPI description is a ready-made tool specification for an AI agent.
+- **Client generation.** Tools such as `openapi-generator` or `openapi-typescript` read
+  `/openapi.json` and write a ready-to-use client library (often called an **SDK**, software
+  development kit) in TypeScript, Kotlin, Go and other languages. Set `operation_id` values (or a
+  `generate_unique_id_function`) so the generated functions get readable names.
+- **Contract testing.** Tools such as Schemathesis read the schema and send your API thousands of
+  generated inputs, hunting for ones that make it crash. Throwing semi-random input at a program in
+  this way is known as *fuzz testing*.
+- **Gateways.** An API gateway (a managed front door such as Kong or AWS API Gateway) can import the
+  document to set up routing and input checking.
+- **AI tool use.** An OpenAPI description is a ready-made list of tools for an AI agent.
 
 > [!INTERVIEW]
-> "What is OpenAPI and how does FastAPI produce it?" — OpenAPI is a standard machine-readable description
-> of an HTTP API. FastAPI walks every registered route at startup (lazily, on first request to
-> `/openapi.json`), converts parameters and Pydantic models to JSON Schema, adds metadata from decorators and
-> docstrings, and caches the result. Swagger UI and ReDoc are static pages that render that JSON.
-> Benefits: always-in-sync docs, client generation, contract testing.
+> "What is OpenAPI and how does FastAPI produce it?" — OpenAPI is a standard machine-readable
+> description of an HTTP API. FastAPI walks every registered route (it does so lazily, on the first
+> request for `/openapi.json`), converts parameters and Pydantic models to JSON Schema, adds the
+> metadata from decorators and docstrings, and caches the result. Swagger UI and ReDoc are static
+> pages that display that JSON. The benefits: documentation that always matches the code, client
+> generation, and contract testing.
 
 ## A worked example: one endpoint using every input
 
@@ -208,15 +297,18 @@ def update_settings(
     ...
 ```
 
-Each source is explicit in the signature, each is validated, and each appears in the docs with its
-location (`in: path`, `in: query`, `in: header`, `in: cookie`, `requestBody`).
+One request to this endpoint is read from five places, and the signature says so line by line: an id
+from the path (at least 1), a JSON body checked against a model, an optional true/false flag from the
+query, an optional `X-Request-ID` header and an optional cookie. Each is validated, and each appears
+in the docs labelled with its location (`in: path`, `in: query`, `in: header`, `in: cookie`,
+`requestBody`).
 
 ## Anatomy of an OpenAPI document
 
-It's worth reading a real `/openapi.json` once, because every tool downstream consumes exactly this
-structure. For a single endpoint the document has four parts: metadata (`info`), the `paths` object keyed
-by URL template and method, reusable `components.schemas` (your Pydantic models as JSON Schema), and
-security schemes.
+It is worth reading a real `/openapi.json` once, because every tool mentioned above consumes exactly
+this structure. For a single endpoint the document has four parts: general information (`info`), a
+`paths` object organised by address and method, reusable model descriptions under
+`components.schemas`, and the login methods under `securitySchemes`.
 
 ```json
 {
@@ -248,6 +340,10 @@ security schemes.
 }
 ```
 
+One notation needs explaining: `"$ref": "#/components/schemas/PredictRequest"` is a *reference*. It
+means "the description is not repeated here; look it up under components, schemas, PredictRequest in
+this same document". A model used by ten endpoints is therefore described once.
+
 Where each piece came from in your code:
 
 | OpenAPI element | Source in FastAPI |
@@ -262,8 +358,8 @@ Where each piece came from in your code:
 | `security` | security dependencies such as `OAuth2PasswordBearer` or `APIKeyHeader` |
 | `components.schemas` | every Pydantic model reachable from requests and responses |
 
-The following cell builds a miniature version of this assembly: from a function signature and Pydantic
-models to an OpenAPI-like operation object.
+The following cell builds a miniature version of that assembly, going from a function signature and
+Pydantic models to an OpenAPI-like description of the operation.
 
 ```python-run
 import inspect, json
@@ -324,22 +420,44 @@ print(json.dumps(op, indent=1))
 print("components:", list(schemas), "->", json.dumps(schemas["PredictRequest"]["properties"]))
 ```
 
-Real FastAPI does the same walk over every route (including the parameters contributed by dependencies),
-then caches the result in `app.openapi_schema` — so the document is computed once, on the first request
-for it.
+How the miniature generator works:
+
+- `Header` and `Query` are tiny stand-in classes whose only content is a `where` label. They play the
+  role of FastAPI's markers.
+- `predict` is an ordinary endpoint-style function: a model parameter, a flag with a default, and an
+  annotated header.
+- `describe` starts an `op` dictionary whose summary is the function name tidied up
+  (`predict` becomes `Predict`) and whose description is the docstring.
+- It then loops over the parameters. If the hint is `Annotated[...]`, it separates the real type from
+  the markers and reads `where` from the marker. If the type is a model, the model's JSON Schema is
+  stored under `schemas` and referenced as the request body. Otherwise a parameter entry is added:
+  its name (with underscores changed to hyphens for headers), its location, whether it is required
+  (no default), and its schema.
+- The return hint becomes the `200` response, and a `422` response is added whenever there is any
+  input to validate.
+
+In the output, `dry_run` is listed as a query parameter that is not required, `x-request-id` as a
+header whose schema allows a string or null, the request body and the 200 response are references,
+and the final line shows the two properties of `PredictRequest` with their limits.
+
+Real FastAPI performs the same walk over every route (including the parameters contributed by
+dependencies, lesson 10) and then stores the result in `app.openapi_schema`, so the document is
+computed once, on the first request for it.
 
 ## Input and output schemas can differ
 
-Pydantic v2 generates JSON Schema in two modes, and FastAPI uses both: **validation** mode for what
-clients send, **serialization** mode for what they receive. A field with a default is *optional on input*
-but *always present on output*; a `@computed_field` exists only in output. For such models the docs show
-two entries, e.g. `Item-Input` and `Item-Output`. This is correct, and helps generated clients have
-accurate types; if you prefer a single schema per model, create the app with
+Pydantic generates JSON Schema in two modes, and FastAPI uses both: **validation** mode for what
+clients send and **serialization** mode for what they receive. The two can legitimately differ. A
+field with a default is *optional when sent* but *always present when returned*; a field marked
+`@computed_field` (calculated from the others, lesson 8) exists only in output. For such a model the
+docs show two entries, for example `Item-Input` and `Item-Output`. That is correct, and it gives
+generated clients accurate types. If you prefer one description per model, create the app with
 `FastAPI(separate_input_output_schemas=False)`.
 
 ## Documenting errors properly
 
-By default only `200` and `422` are documented. Clients deserve to know the rest, with a schema:
+By default only `200` and `422` are documented for an endpoint. Clients deserve to know about the
+other outcomes, each with a description of its body:
 
 ```python
 class ErrorResponse(BaseModel):
@@ -358,36 +476,65 @@ class ErrorResponse(BaseModel):
 def read_item(item_id: int): ...
 ```
 
-Declare shared ones once at the router level (`APIRouter(responses={401: ...})`) so every route inherits
-them.
+`ErrorResponse` describes the usual `{"detail": "..."}` body. The `responses` dictionary then states
+that `404` and `401` use it, and that `429` comes with a `Retry-After` header holding a number of
+seconds. Shared entries can be declared once for a whole group of routes
+(`APIRouter(responses={401: ...})`, lesson 14) so that every route in the group inherits them.
 
 ## Customising and extending the schema
 
-For changes FastAPI doesn't expose as arguments, override the generator: build the default with
-`fastapi.openapi.utils.get_openapi(...)`, modify the dict (add a logo, vendor extensions such as
-`x-internal`, servers, extra security schemes), store it in `app.openapi_schema`, and assign your function
-to `app.openapi`. Other useful switches: `servers=[{"url": "https://api.example.com"}]` so "Try it out"
-and generated clients target the right host behind a proxy; `root_path="/api/v1"` when a gateway strips a
-prefix before forwarding (otherwise `/docs` requests `/openapi.json` at the wrong location and shows
-"Failed to load API definition"); and `swagger_ui_parameters={"persistAuthorization": True}` to keep the
-login across reloads.
+For changes that FastAPI does not offer as arguments, you can replace the function that produces the
+document: build the default with `fastapi.openapi.utils.get_openapi(...)`, modify the resulting
+dictionary (add a logo, custom fields such as `x-internal`, server addresses, extra login methods),
+store it in `app.openapi_schema`, and assign your function to `app.openapi`.
+
+Three other switches are worth knowing:
+
+- `servers=[{"url": "https://api.example.com"}]` makes "Try it out" and generated clients aim at the
+  right host when your app sits behind a proxy.
+- `root_path="/api/v1"` is needed when a gateway removes a prefix from the path before forwarding the
+  request. Without it, the `/docs` page asks for `/openapi.json` at the wrong address and shows
+  "Failed to load API definition".
+- `swagger_ui_parameters={"persistAuthorization": True}` keeps you logged in when the docs page is
+  reloaded.
 
 ## Pitfalls
 
-- Expecting `X_Token` with underscores to arrive — FastAPI looks for `x-token`; proxies like nginx drop
-  underscore headers by default.
-- Reading `request.json()` manually and losing validation and docs.
-- Treating `/docs` being disabled as an auth mechanism.
-- Large `examples` in schemas bloating `/openapi.json`.
+- Expecting a header named `X_Token`, with an underscore, to arrive. FastAPI looks for `x-token`, and
+  proxies such as nginx discard underscore headers by default.
+- Reading `request.json()` by hand and so losing both validation and documentation.
+- Treating "the docs are switched off" as protection for the endpoints.
+- Very large `examples` in schemas, which bloat `/openapi.json`.
 
 ## Summary
 
 - `Header()` and `Cookie()` declare those inputs; underscores map to hyphens in header names.
-- `Request` gives raw access (body bytes, client IP) but skips validation and documentation.
-- FastAPI generates an OpenAPI document from routes, types and Pydantic models; Swagger UI (`/docs`) and
-  ReDoc (`/redoc`) render it.
-- Enrich docs with app metadata, tags, docstrings, `responses`, examples and `deprecated`.
-- The schema powers client generation, fuzz testing and gateways, not just documentation.
+- `Request` gives raw access (body bytes, client address) but skips validation and documentation.
+- FastAPI generates an OpenAPI document from routes, types and Pydantic models; Swagger UI (`/docs`)
+  and ReDoc (`/redoc`) display it.
+- Enrich the docs with app metadata, tags, docstrings, `responses`, examples and `deprecated`.
+- The schema also powers client generation, fuzz testing and gateways.
+
+## Glossary
+
+- **Header parameter** — a function parameter marked `Header()`, read from the request headers.
+- **Cookie** — a small value a browser stores for a site and sends back with each request.
+- **Session** — the server's record of one logged-in visit, usually found through a cookie.
+- **XSS (cross-site scripting)** — an attack in which hostile JavaScript runs inside your page.
+- **`Request` object** — raw access to everything in the request, without validation.
+- **Webhook** — a request another system sends to your API when an event happens.
+- **HMAC** — a keyed fingerprint proving that a message is authentic and unaltered.
+- **Schema** — a formal description of the shape of data.
+- **OpenAPI** — the standard format for describing an HTTP API; served at `/openapi.json`.
+- **JSON Schema** — the standard for describing the shape of JSON data; generated by Pydantic.
+- **YAML** — a human-friendly text notation for the same kind of data as JSON.
+- **Swagger UI / ReDoc** — the interactive page at `/docs` / the reference page at `/redoc`.
+- **Docstring** — the triple-quoted description directly under a `def` or `class` line.
+- **Tag** — a label that groups endpoints in the docs.
+- **`$ref`** — a pointer to a description stored elsewhere in the same document.
+- **SDK / generated client** — a library, produced from the schema, for calling the API.
+- **Fuzz testing** — testing by sending large numbers of generated inputs.
+- **API gateway** — a managed entry point placed in front of one or more APIs.
 
 ```quiz
 [
@@ -402,7 +549,7 @@ login across reloads.
   {"q": "Which is NOT a typical use of the OpenAPI document?", "options": ["Generating typed client SDKs", "Fuzz/contract testing", "Encrypting traffic", "Importing into an API gateway"], "answer": 2,
    "explain": "OpenAPI describes an API; TLS handles encryption."},
   {"q": "What does include_in_schema=False on a route do?", "options": ["Disables the route", "Hides it from OpenAPI and the docs while it still works", "Requires authentication", "Removes validation"], "answer": 1,
-   "explain": "The route remains callable; it is simply omitted from the generated schema."}
+   "explain": "The route remains callable; it is only left out of the generated schema."}
 ]
 ```
 

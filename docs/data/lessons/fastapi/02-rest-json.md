@@ -1,24 +1,46 @@
 # REST design and JSON
 
-HTTP gives you verbs, paths and status codes. **REST** is a set of conventions for combining them into an
-API that other developers can guess. **JSON** is the format almost every such API speaks. Together they
-are the "contract" your FastAPI service exposes — and changing a contract after clients depend on it is
-expensive, so it pays to design it deliberately.
+> **Before this lesson:** you should know what a request, a response, a method, a status code and a
+> header are. All of that is in lesson 1, [HTTP: methods, status codes and headers](#/lesson/fastapi/http-basics).
+> Basic Python dictionaries and lists are enough for the code.
+
+## In plain words
+
+Lesson 1 gave you the vocabulary of HTTP: verbs such as `GET` and `POST`, addresses, and status codes.
+Vocabulary alone does not tell you how to arrange an API. Two teams could build the same feature with
+completely different addresses and verbs, and anyone using both would have to learn each from scratch.
+
+**REST** is a set of habits for arranging an API so that other programmers can guess how it works
+before reading the manual. **JSON** is the text format in which almost every such API sends its data.
+
+An everyday picture: a library. Every book has a shelf mark, and the shelf marks follow one system.
+Once you know the system you can find any book in any library that uses it, and the things you may do
+with a book are the same few everywhere: look at it, add one, replace one, remove one. REST gives every
+"thing" in your program a shelf mark (an address) and limits you to a small fixed set of actions (the
+HTTP methods). JSON is the common language the catalogue cards are written in.
+
+Why this matters for a job: the addresses, methods, field names and error shapes of your API form a
+**contract**, a promise that other programs are written against. Phone apps and other teams' services
+depend on it, and changing it later breaks them. "Design a REST API for X" is among the most common
+interview exercises, and this lesson is the checklist for answering it.
 
 ## Where REST comes from
 
-REST (*Representational State Transfer*) was described by Roy Fielding in his 2000 dissertation as the
-architectural style of the web itself. Its formal constraints are: client–server separation,
-statelessness, cacheability, a uniform interface, a layered system, and (optionally) code on demand. In
-everyday API work, "RESTful" has come to mean something simpler, which Lubanovic summarises in his
+REST stands for *Representational State Transfer*. Roy Fielding introduced the term in his doctoral
+thesis in 2000 to describe the way the web itself is organised. The formal definition lists six
+constraints (client and server are separate programs, requests are stateless, answers can be cached,
+every resource is handled through one uniform interface, intermediaries may sit in between, and
+servers may optionally send code to the client). You rarely need to recite them. In everyday work,
+calling an API "RESTful" means it is built from four ingredients, which Lubanovic summarises in his
 chapter on the web layer:
 
-- **Resources** — the nouns your application manages (users, items, models, predictions).
-- **IDs** — unique identifiers for individual resources.
-- **URLs** — structured strings combining resource names and IDs.
-- **Verbs** — HTTP methods that say what to do with them.
+- **Resources**: the nouns your application manages (users, items, models, predictions).
+- **IDs**: an **identifier** is a value that picks out exactly one resource, such as the number `42`.
+- **URLs**: addresses built from resource names and IDs.
+- **Verbs**: the HTTP methods, which say what to do with the resource.
 
-The core pattern is two URL shapes:
+The whole pattern rests on two address shapes. `/items` is the **collection** (all items), and
+`/items/42` is one member of it.
 
 | Request | Meaning |
 |---|---|
@@ -29,50 +51,68 @@ The core pattern is two URL shapes:
 | `PATCH /items/42` | partially update item 42 |
 | `DELETE /items/42` | delete item 42 → `204 No Content` |
 
-Notice the URL names **things**, never actions. `POST /createItem` or `GET /getItem?id=42` are RPC-style
-and lose the benefits of the uniform interface (caches, tooling, predictability).
+These rows are the four basic things you can do with stored data, known by the acronym **CRUD**:
+Create (`POST`), Read (`GET`), Update (`PUT` or `PATCH`) and Delete (`DELETE`).
+
+Notice that the address names a **thing**, never an action. `POST /createItem` or `GET /getItem?id=42`
+put the verb in the address, as a function call would. That style (RPC, from lesson 1) works, but it
+throws away what the shared rules give you for free: caches know a `GET` can be stored, tools know a
+`DELETE` removes something, and a newcomer can predict your addresses.
 
 > [!NOTE]
 > Lubanovic deliberately uses *singular* resource names in his book (`/explorer`, `/creature`) because
 > English plurals are irregular (series, fish, people). The more common industry convention is plural
-> (`/explorers`). Either is fine — **consistency** is what matters. This track uses plurals.
+> (`/explorers`). Either is fine; **consistency** is what matters. This track uses plurals.
 
 ### Nested resources and relationships
 
-Sub-resources express ownership: `GET /users/7/orders` lists orders belonging to user 7. Keep nesting
-shallow (one level is usually enough); `GET /orders/99` should still work directly. Deep URLs like
-`/a/1/b/2/c/3/d/4` are hard to evolve.
+Sometimes one resource belongs to another: an order belongs to a user. A nested address expresses
+that: `GET /users/7/orders` lists the orders of user 7. Keep nesting shallow. One level is usually
+enough, and `GET /orders/99` should still work on its own. Deep addresses such as
+`/a/1/b/2/c/3/d/4` are hard to change later, because every client has the whole chain written into it.
 
 ### Actions that don't fit CRUD
 
-Some operations are not naturally create/read/update/delete: "cancel an order", "retrain a model",
-"send a password reset". Common patterns:
+Some operations are not naturally a create, read, update or delete: "cancel an order", "retrain a
+model", "send a password reset". There are three common ways to fit them in, in order of preference:
 
-1. Model the action as a **state change**: `PATCH /orders/99` with `{"status": "cancelled"}`.
-2. Model it as creating a **resource**: `POST /orders/99/cancellations`, `POST /models/3/training-jobs`
-   (which returns `202 Accepted` and a job you can poll).
-3. As a last resort, a verb sub-path: `POST /orders/99:cancel` (Google's API style guide uses this).
+1. Treat the action as a **change of state**: `PATCH /orders/99` with the body `{"status": "cancelled"}`.
+2. Treat it as **creating a new resource**: `POST /orders/99/cancellations`, or
+   `POST /models/3/training-jobs`. For slow work the server answers `202 Accepted` ("I have taken the
+   job, it is not finished") and returns a job the client can ask about later.
+3. As a last resort, a verb at the end of the path: `POST /orders/99:cancel` (Google's API style guide
+   uses this form).
 
-For ML services the second pattern is common: `POST /predictions` creates a prediction resource; long
-jobs return `202` with `GET /jobs/{id}` for status.
+For machine-learning services the second pattern is the usual one: `POST /predictions` creates a
+prediction, and long jobs return `202` plus a `GET /jobs/{id}` address for checking progress. Asking
+repeatedly "is it done yet?" in this way is called **polling**.
 
 ## Filtering, sorting and pagination
 
-Collections need query parameters:
+A collection can hold millions of resources, so clients need ways to narrow, order and slice it.
+Those controls go in the query string (the `key=value` pairs after the `?`):
 
 ```text
 GET /items?category=tools&min_price=5&sort=-price&limit=20&offset=40
 ```
 
-- **Filtering**: one parameter per field, or a small query language for complex needs.
-- **Sorting**: `sort=price` ascending, `sort=-price` descending, comma-separated for multiple keys.
-- **Pagination**: either `limit`/`offset` (simple, but slow and unstable on huge, changing tables) or a
-  **cursor** (`?after=eyJpZCI6NDJ9` — an opaque token encoding the last seen key; fast and stable).
+Reading that address piece by piece: only items in the `tools` category, costing at least 5, sorted by
+price from highest to lowest, 20 results at a time, skipping the first 40.
 
-Always **cap** the page size server-side. A client asking for `limit=1000000` should get your maximum,
-not a memory spike. The *Pagination Metadata* problem in the project-structure module builds this helper.
+- **Filtering**: one parameter per field (`category=tools`).
+- **Sorting**: `sort=price` for ascending, `sort=-price` for descending; several keys separated by commas.
+- **Pagination** means returning a long list in pages. There are two styles. `limit`/`offset` says
+  "give me 20, skipping the first 40"; it is easy to build but becomes slow and unreliable on huge
+  tables that change often. A **cursor** (`?after=eyJpZCI6NDJ9`) is a bookmark: a token that records
+  the last item the client saw. It is fast and stays correct while data changes. Both are demonstrated
+  further down.
 
-A typical paginated response envelope:
+Always **cap** the page size on the server. A client that asks for `limit=1000000` should receive your
+maximum, not a server that runs out of memory. The *Pagination Metadata* problem in the
+project-structure module builds this helper.
+
+A paginated answer normally wraps the list in an **envelope**: a JSON object that holds the list plus
+information about it.
 
 ```json
 {
@@ -84,15 +124,22 @@ A typical paginated response envelope:
 }
 ```
 
+`items` is the page itself, `total` is how many exist altogether, `limit` and `offset` echo what was
+asked, and `next` is the ready-made address of the following page so the client does not have to
+compute it.
+
 ## Errors as part of the contract
 
-Clients need errors they can parse. FastAPI's defaults are a good baseline:
+A client program has to react to errors without a person reading them, so errors need a predictable
+shape too. FastAPI's defaults are a good starting point. When your code deliberately reports a problem
+(with `HTTPException`, lesson 5) the body is:
 
 ```json
 {"detail": "Item not found"}
 ```
 
-for an `HTTPException`, and for validation failures (422):
+When the incoming data fails FastAPI's automatic checking, the status is `422` and the body lists
+every failure:
 
 ```json
 {
@@ -102,37 +149,54 @@ for an `HTTPException`, and for validation failures (422):
 }
 ```
 
-`loc` tells the client *where* (path/query/header/body plus field path), `type` is a stable
-machine-readable code, `msg` is for humans. Many teams adopt **RFC 9457 "Problem Details"**
-(`application/problem+json` with `type`, `title`, `status`, `detail`, `instance`) for a standard error shape.
-Whatever you pick, use it everywhere.
+Three keys do the work. `loc` (location) says *where* the bad value was: here in the path, in the
+part named `item_id`. `type` is a short stable code that programs can compare against. `msg` is a
+sentence for people. `input` echoes what was received.
+
+Many teams adopt a published standard for the error body. Internet standards are published as numbered
+documents called **RFCs** (Request for Comments), and **RFC 9457 "Problem Details"** defines an error
+object with the fields `type`, `title`, `status`, `detail` and `instance`, sent with the media type
+`application/problem+json`. Whichever shape you choose, use it for every error in the API.
 
 ## Versioning
 
-APIs change. Options:
+APIs change after release, and old clients keep running. **Versioning** is how you change the contract
+without breaking them. The options:
 
-- **URL versioning**: `/v1/items`, `/v2/items`. Most visible and the easiest to route (an `APIRouter`
-  per version). The most common choice.
-- **Header versioning**: `Accept: application/vnd.example.v2+json` or `API-Version: 2`. Cleaner URLs,
-  harder to test in a browser.
-- **Additive evolution**: avoid breaking changes altogether — add optional fields, never rename or remove,
-  never change types. Clients must ignore unknown fields.
+- **URL versioning**: `/v1/items`, `/v2/items`. The most visible, the easiest to direct to different
+  code (one `APIRouter` per version, lesson 14), and the most common choice.
+- **Header versioning**: `Accept: application/vnd.example.v2+json` or `API-Version: 2`. The addresses
+  stay clean, but it is harder to try out in a browser.
+- **Additive evolution**: avoid breaking changes altogether. Add optional fields; never rename or
+  remove a field; never change a field's type. This only works if clients ignore fields they do not
+  recognise.
 
-For ML APIs, versioning has two axes: the **API schema** version and the **model** version. A
-`/v1/predict` endpoint may serve model 2024-11-03 today and 2025-01-15 tomorrow; return the model
-version in the response so results are traceable (see the final module).
+For machine-learning APIs there are two version numbers to track: the version of the **API shape** and
+the version of the **model** behind it. `/v1/predict` may be answered by the model trained on
+2024-11-03 today and the one from 2025-01-15 tomorrow. Return the model version in the response so
+that any result can be traced back (see the final module).
 
 > [!INTERVIEW]
 > "How would you make a breaking change to a public API?" — Add the new behaviour under a new version
-> (`/v2`) or as an additive optional field; keep the old version running; announce a deprecation window;
-> mark the old endpoints `deprecated=True` in OpenAPI (FastAPI supports this per route) and return
-> `Deprecation`/`Sunset` headers; monitor traffic on the old version until it reaches zero; then remove.
+> (`/v2`) or as an additive optional field; keep the old version running; announce a deprecation window
+> (*deprecated* means "still works, scheduled for removal"); mark the old endpoints `deprecated=True`
+> in the generated docs (FastAPI supports this per route) and return `Deprecation`/`Sunset` headers;
+> watch traffic on the old version until it reaches zero; then remove it.
 
 ## JSON in depth
 
-JSON (RFC 8259) has exactly six value types: **object**, **array**, **string**, **number**, `true`/`false`,
-and `null`. That simplicity is why it won over XML — and it is also the source of every serialisation
-headache, because your Python objects are richer:
+JSON is defined in RFC 8259 and has exactly six kinds of value:
+
+- an **object**: `{"name": "wrench", "price": 9.5}`, which Python calls a dictionary;
+- an **array**: `[1, 2, 3]`, which Python calls a list;
+- a **string** in double quotes: `"wrench"`;
+- a **number**: `42` or `9.5`;
+- `true` or `false`;
+- `null`, meaning "no value" (Python's `None`).
+
+That small list is why JSON replaced the older, heavier XML format. It is also the cause of most
+conversion trouble, because Python has more kinds of value than JSON does. Turning a Python object
+into JSON text is called **serialisation**; the reverse is **deserialisation** or parsing.
 
 | Python | JSON | Gotcha |
 |---|---|---|
@@ -143,6 +207,8 @@ headache, because your Python objects are richer:
 | `True`/`False`/`None` | `true`/`false`/`null` | |
 | `datetime` | — | must be converted (ISO 8601 string) |
 | `Decimal`, `UUID`, `set`, `bytes` | — | must be converted |
+
+Run the conversions and watch where they succeed and where they fail:
 
 ```python-run
 import json, datetime, uuid, decimal
@@ -175,39 +241,63 @@ print("NaN is emitted by Python but is NOT valid JSON:", json.dumps(float("nan")
 print("big int precision in JS ends at", 2**53)
 ```
 
-FastAPI handles most of this for you: when you return a Pydantic model or a dict containing datetimes,
-UUIDs or Decimals, it serialises them through Pydantic (or `jsonable_encoder`). But you should know
-*that* a conversion happens, so you are not surprised that a `datetime` arrives at the client as
-`"2025-01-15T09:30:00"` and a `Decimal` might become a string or float depending on settings.
+Walking through it:
+
+- `json.dumps(data)` ("dump to string") serialises a dictionary. In the printed text the tuple
+  `("a", "b")` has become `["a", "b"]`, `True` has become `true` and `None` has become `null`.
+- `json.loads(s)` ("load from string") parses the text back. The tags are now a *list*: JSON has no
+  tuple, so the difference is lost on the round trip.
+- The `try` block attempts to serialise a `datetime`. JSON has no date type, so Python raises
+  `TypeError: Object of type datetime is not JSON serializable`, and the `except` branch prints it.
+- `default` is a function that `json.dumps` calls for any value it does not know how to write. This one
+  turns dates into ISO text (ISO 8601 is the international standard layout `2025-01-15T09:30:00`),
+  turns a **UUID** (a 128-bit random-looking identifier) and a `Decimal` (an exact decimal number, used
+  for money) into strings, and turns a set into a sorted list.
+- The last two lines show traps. Python will happily write `NaN` ("not a number"), which is not legal
+  JSON, and `2**53` (9007199254740992) is the largest range in which JavaScript can count whole numbers
+  exactly.
+
+FastAPI handles most of this for you: when your function returns data containing datetimes, UUIDs or
+Decimals, FastAPI converts them (through Pydantic, the library covered in lesson 7, or its helper
+`jsonable_encoder`). You should still know *that* a conversion happens, so that it is no surprise when
+a `datetime` reaches the client as the string `"2025-01-15T09:30:00"`, or a `Decimal` arrives as a
+string or a float depending on settings.
 
 > [!WARNING]
-> IDs larger than 2^53 (e.g. Twitter/X snowflake IDs, some database bigints) silently lose precision in
-> JavaScript clients. Serialise such IDs as **strings**.
+> IDs larger than 2^53 (for example the "snowflake" IDs used by some social networks, or large database
+> integers) silently lose precision in JavaScript clients. Send such IDs as **strings**.
 
 ### Naming and shape conventions
 
-- Pick one casing for field names. Python code uses `snake_case`; many JavaScript clients prefer
-  `camelCase`. Pydantic **aliases** (`alias_generator=to_camel`) let you keep snake_case in Python and
-  emit camelCase on the wire.
-- Return objects at the top level, not bare arrays, so you can add metadata later without a breaking change.
-- Use ISO 8601 with time zone for timestamps (`2025-01-15T09:30:00Z`).
-- Use `null` deliberately: "absent" and "explicitly null" can mean different things for `PATCH`.
+- Pick one letter-case style for field names. Python code uses `snake_case`; many JavaScript clients
+  prefer `camelCase`. Pydantic **aliases** (an alias is a second, external name for a field) let you
+  keep snake_case in Python and send camelCase to clients.
+- Return an object at the top level, not a bare array, so that you can add fields later without
+  breaking anyone.
+- Write timestamps in ISO 8601 with a time zone (`2025-01-15T09:30:00Z`; the `Z` means UTC).
+- Use `null` deliberately: "field absent" and "field present and null" can mean different things in a
+  `PATCH`.
 
 ## Alternatives you should be able to name
 
-Lubanovic's first chapter surveys other API styles; know when they beat REST+JSON:
+Lubanovic's first chapter surveys other API styles. An interviewer may ask when each beats REST with
+JSON:
 
-- **JSON:API** — a specification standardising REST response envelopes, relationships and pagination.
-- **GraphQL** — the client sends a query describing exactly which fields (and nested relations) it wants;
-  one endpoint, no over-fetching. Great for complex UIs; harder to cache and to protect from expensive
-  queries.
-- **gRPC** — binary Protocol Buffers over HTTP/2 with generated clients; fast and strongly typed; common
-  between internal microservices and for high-throughput model serving.
-- **WebSockets / Server-Sent Events** — long-lived connections for push and streaming (covered later).
+- **JSON:API**: a specification that standardises envelopes, relationships and pagination for REST
+  APIs, so that teams do not each invent their own.
+- **GraphQL**: the client sends a query listing exactly the fields (and related objects) it wants,
+  to a single endpoint. This avoids fetching unneeded data and suits complicated screens; it is harder
+  to cache and to protect against expensive queries.
+- **gRPC**: a compact binary format (Protocol Buffers) over HTTP/2, with client code generated
+  automatically. It is fast and strictly typed, and is common between a company's internal services
+  and for high-volume model serving.
+- **WebSockets / Server-Sent Events**: connections that stay open so the server can push data
+  (lesson 24).
 
 ## A worked design: a model-registry API
 
-Suppose you must design an API for managing ML models and getting predictions:
+Suppose you are asked to design an API for storing machine-learning models and getting predictions
+from them. Applying the rules above gives:
 
 ```text
 GET    /v1/models                       list models (?task=classification&limit=20)
@@ -221,13 +311,14 @@ POST   /v1/batch-jobs                   start batch scoring        -> 202 + job 
 GET    /v1/batch-jobs/{job_id}          poll job status
 ```
 
-Every URL is a noun; the verbs come from HTTP; long-running work is a resource you can poll; versions are
-in the path.
+Every address is a noun; the verbs come from HTTP; slow work (`batch-jobs`) is a resource the client
+can poll; the version is in the path. The curly braces, as in `{model_id}`, mark a path parameter: a
+slot that is filled with a real ID in an actual request.
 
 ## Worked trace: one resource through its whole life
 
-Following a single item from creation to deletion shows how the conventions fit together. Each step lists
-the request, the response and the rule it demonstrates.
+Following a single item from creation to deletion shows how the conventions fit together. Each step
+lists the request, the response and the rule it demonstrates.
 
 ```text
 1. POST /v1/items                      {"name": "wrench", "price": 9.5}
@@ -248,16 +339,24 @@ the request, the response and the rule it demonstrates.
    -> 404 Not Found (state is unchanged: DELETE is still idempotent)
 ```
 
-Steps 4 and 5 are **optimistic concurrency control**: the client proves it has seen the latest version by
-sending the ETag back in `If-Match`. Two users editing the same record can no longer silently overwrite
-each other (the "lost update" problem); the loser receives `412` and must re-read. It costs nothing but a
-header comparison, and it's the answer interviewers want when they ask how to handle concurrent edits
-without locks.
+Steps 1 to 3 are lesson 1 in action: `201` with a `Location` header, then a cached read confirmed with
+the ETag fingerprint. Steps 4 and 5 add something new, **optimistic concurrency control**. The header
+`If-Match: "a1"` means "apply this change only if the item still has fingerprint a1". In step 4 it
+does, so the change is applied and the fingerprint becomes `b7`. In step 5 a client that still holds
+the old fingerprint tries to write; the server sees the mismatch and answers
+`412 Precondition Failed`. Without this check, two people editing the same record would silently
+overwrite each other (the **lost update** problem). With it, the slower one is told to re-read first.
+The method is called "optimistic" because it does not lock the record in advance; it assumes clashes
+are rare and detects them when they happen. It costs one header comparison, and it is the answer
+interviewers hope for when they ask how to handle simultaneous edits without locks.
+
+Steps 6 to 8 show that a second `DELETE` gets `404`, yet the stored data is the same as after the
+first: that is idempotency.
 
 ## Offset versus cursor pagination, concretely
 
-The weakness of offset pagination is easiest to see by running it against data that changes between page
-requests:
+The weakness of offset pagination is easiest to see by running it against data that changes between
+two page requests:
 
 ```python-run
 import base64, json
@@ -286,12 +385,27 @@ print("cursor pages:", [r["id"] for r in c1], [r["id"] for r in c2], "<- nothing
 print("opaque cursor the client sees:", cur)
 ```
 
-With offsets, deleting one earlier row shifts everything up, so the client never sees item 4 (an insert
-would cause a duplicate instead). The cursor version asks "what comes after the last thing I saw?", which
-stays correct however the table changes — and the database answers it with an index seek instead of
-scanning and discarding `offset` rows. The cursor is opaque (base64) so clients can't depend on its
-contents, leaving you free to change the sort key later. The trade-off: cursors can't jump to "page 17",
-and they need a stable, unique sort key (add `id` as a tie-breaker when sorting by a non-unique column).
+How to read the demo:
+
+- `rows` is ten small dictionaries with ids 1 to 10, standing in for a database table.
+- `page_offset` slices the list: skip `offset` rows, take `limit` rows.
+- `page_cursor` first decodes the cursor to learn the last id the client saw (0 when there is no
+  cursor), keeps only rows with a larger id, and takes `limit` of them. It then builds the next
+  cursor by writing `{"id": <last id>}` as JSON and encoding it in **base64**, a way of writing bytes
+  using only letters, digits and a few symbols.
+- In both scenarios the client reads page 1, somebody deletes row 2, and the client reads page 2.
+
+The output is `offset pages: [1, 2, 3] [5, 6, 7]` and `cursor pages: [1, 2, 3] [4, 5, 6]`. With
+offsets, deleting an earlier row shifts every later row up by one, so "skip 3" now skips item 4 and
+the client never sees it (an insert would cause a duplicate instead). The cursor version asks "what
+comes after the last thing I saw?", which stays correct however the table changes. A database can also
+answer that question quickly, by jumping to the right place with an **index** (a lookup structure,
+lesson 16) instead of reading and discarding `offset` rows.
+
+The cursor is deliberately unreadable so that clients cannot depend on what is inside it, which leaves
+you free to change the sort order later. The trade-offs: a cursor cannot jump straight to "page 17",
+and it needs a sort key that is stable and unique (add `id` as a tie-breaker when sorting by a column
+with repeated values).
 
 ## Design mistakes and how they show up
 
@@ -321,6 +435,30 @@ and they need a stable, unique sort key (add `id` as a tie-breaker when sorting 
 - Filtering, sorting and pagination go in the query string; cap page sizes.
 - Errors are part of the contract: consistent shape, precise status codes.
 - JSON has six types; datetimes, decimals, UUIDs and huge integers need deliberate conversion.
+
+## Glossary
+
+- **REST** — a style of API design: resources at URLs, acted on with HTTP methods, statelessly.
+- **Contract** — the addresses, methods, fields and errors that clients rely on.
+- **Resource / collection** — one thing the API exposes / the full set of things of one kind.
+- **Identifier (ID)** — a value that picks out exactly one resource.
+- **CRUD** — Create, Read, Update, Delete: the four basic operations on stored data.
+- **Polling** — asking repeatedly whether a slow job has finished.
+- **Pagination** — returning a long list one page at a time.
+- **Offset / cursor** — "skip N rows" paging / a bookmark token that marks the last row seen.
+- **Envelope** — a JSON object that wraps a list together with information about it.
+- **RFC** — a numbered document that defines an internet standard.
+- **Versioning / deprecated** — changing an API without breaking old clients / still working but
+  scheduled for removal.
+- **JSON object, array, null** — JSON's names for a dictionary, a list and "no value".
+- **Serialisation** — converting an in-memory object to text or bytes (here, JSON).
+- **ISO 8601** — the standard text layout for dates and times.
+- **UUID** — a 128-bit identifier designed to be unique without central coordination.
+- **Alias** — an alternative external name for a field.
+- **Optimistic concurrency control** — detecting clashing edits with a version check (`If-Match`)
+  instead of locking.
+- **Lost update** — one writer silently overwriting another's change.
+- **Base64** — a way to write arbitrary bytes using plain text characters.
 
 ```quiz
 [

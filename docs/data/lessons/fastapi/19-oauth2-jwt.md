@@ -1,18 +1,43 @@
 # OAuth2 password flow, hashing and JWT
 
-Security is where a tutorial app becomes a liability if you improvise. Lubanovic's authentication chapter
-opens by asking whether you need authentication at all, then climbs from a shared secret to per-user
-OAuth2 with JWTs. This lesson follows that climb, updated to the libraries the official FastAPI docs use
-today (PyJWT and pwdlib/Argon2 — the book's `python-jose` and `passlib` are now poorly maintained).
+> **Before this lesson:** you should know the `Authorization` header and the difference between 401
+> and 403 ([lesson 1](#/lesson/fastapi/http-basics)), dependencies and sub-dependencies
+> ([lesson 10](#/lesson/fastapi/depends-basics)), and settings with `SecretStr`
+> ([lesson 9](#/lesson/fastapi/pydantic-settings)). No knowledge of cryptography is assumed; hashing,
+> signatures and tokens are explained from the beginning.
 
-Two words first:
+## In plain words
 
-- **Authentication (authn)** — *who are you?* Verifying identity.
-- **Authorization (authz)** — *what may you do?* Checking permissions. (Next lesson.)
+Most APIs must know who is calling. A bank's API should show your balance to you and to nobody
+else. Two separate questions are involved, and they have similar-sounding names:
+
+- **Authentication** (often shortened to *authn*) asks *who are you?* It is the checking of
+  identity.
+- **Authorization** (*authz*) asks *what are you allowed to do?* It is the checking of permission.
+  That is the next lesson.
+
+An everyday picture: a hotel. At the front desk you show your passport once. The desk checks it and
+hands you a key card. For the rest of your stay you show the card, not the passport, and the card
+stops working at check-out time. Lose the card, and whoever finds it can open your door until it
+expires.
+
+A modern login works the same way. You send your password **once**; the server checks it and hands
+back a **token** (the key card); every later request carries the token; and the token expires. This
+lesson builds each piece: how the server stores passwords so that a stolen database does not reveal
+them, what a token is made of, and how FastAPI ties these together.
+
+Why this matters for a job: improvised security turns a tutorial project into a liability.
+Interviewers reliably ask "how should passwords be stored?" and "walk me through JWT
+authentication and its weaknesses", and both answers are below.
+
+Lubanovic's authentication chapter begins by asking whether you need authentication at all, and then
+climbs from one shared secret to per-user logins with tokens. This lesson follows the same climb,
+using the libraries that the official FastAPI documentation uses today (PyJWT, and pwdlib with
+Argon2; the book's `python-jose` and `passlib` are now poorly maintained).
 
 ## Step 0: the simplest schemes
 
-**A shared secret / API key.** One key in a header; anyone with it has full access:
+**A shared secret, or API key.** One secret value sent in a header. Whoever has it has full access:
 
 ```python
 from fastapi.security import APIKeyHeader
@@ -24,21 +49,30 @@ def require_api_key(key: Annotated[str, Depends(api_key_scheme)], settings: Sett
         raise HTTPException(status_code=401, detail="Invalid API key")
 ```
 
-Fine for service-to-service calls and internal tools. Use `secrets.compare_digest` — a constant-time
-comparison — because `==` returns faster the earlier the strings differ, leaking information.
+- `APIKeyHeader(name="X-API-Key")` is a ready-made dependency that reads that header, and makes the
+  requirement appear in the docs.
+- `require_api_key` receives the key and the settings and compares the key with the configured one.
+  On a mismatch it raises 401.
 
-**HTTP Basic.** Username and password, base64-encoded (not encrypted!) in every request. The book shows
-`HTTPBasic` as the "simple individual authentication" step. Acceptable only over HTTPS and for simple
-cases; the password travels with every call.
+This is acceptable for calls between your own services and for internal tools. Note the comparison
+function. `secrets.compare_digest` always takes the same time whether the strings differ at the
+first character or the last (a **constant-time** comparison). The ordinary `==` stops at the first
+difference, so its duration reveals how much of a guess was right. An attack that measures such
+durations is a *timing attack*.
 
-Both lack what real user-facing APIs need: per-user identity without resending the password, expiry,
-and scoped permissions. That's where tokens come in.
+**HTTP Basic.** The username and password are sent with every request, encoded in base64 (a
+reversible encoding, not encryption). The book shows FastAPI's `HTTPBasic` as its "simple individual
+authentication" step. It is acceptable only over HTTPS and for simple cases, since the password
+travels with every call.
+
+Neither scheme provides what an API with real users needs: an identity per user without re-sending
+the password, expiry, and limited permissions. Tokens provide all three.
 
 ## The OAuth2 password flow
 
-OAuth2 is a framework with several "flows". The **password flow** is the simplest: the user gives their
-username and password directly to *your* app, which returns a **bearer token**; the client then sends the
-token on each request.
+**OAuth2** is a standard framework for login and permission, with several variants called *flows*.
+The **password flow** is the most direct. The user gives a username and password directly to *your*
+application, which returns a **bearer token**. The client then sends that token with every request.
 
 ```mermaid
 sequenceDiagram
@@ -52,10 +86,16 @@ sequenceDiagram
     A-->>C: 200 {"username": "ann"}
 ```
 
-"Bearer" means *whoever bears this token is treated as the user* — so tokens must travel only over HTTPS
-and expire quickly. (For third-party logins — "Sign in with Google" — you'd use the authorization-code
-flow with PKCE and OpenID Connect via a provider or library; the book lists options. The password flow is
-for first-party clients.)
+Read the diagram as two phases. First, the login: the client posts the username and password to
+`/token`; the server looks the user up, checks the password, and returns a token. Second, every
+later request: the client sends `Authorization: Bearer <token>`; the server checks the token and
+finds the user.
+
+"Bearer" means *whoever bears (carries) this token is treated as the user*. Tokens must therefore
+travel only over HTTPS and should expire quickly. (For logins through another company, such as
+"Sign in with Google", a different flow is used, the authorization-code flow with OpenID Connect,
+usually through a provider or a library; the book lists options. The password flow is for clients
+that you yourself wrote.)
 
 FastAPI's building blocks:
 
@@ -65,23 +105,30 @@ from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 ```
 
-`OAuth2PasswordBearer` is a dependency that extracts the token from `Authorization: Bearer ...` (raising
-401 if missing) **and** registers the security scheme in OpenAPI — which is why `/docs` grows an
-"Authorize" button that performs the login for you. `OAuth2PasswordRequestForm` parses the spec-mandated
-**form** fields `username`, `password` (and optional `scope`) — form-encoded, not JSON.
+`OAuth2PasswordBearer` is a dependency that does two things. It takes the token out of the
+`Authorization: Bearer ...` header, raising 401 if the header is missing. **And** it registers the
+login scheme in the OpenAPI document, which is why `/docs` gains an "Authorize" button that performs
+the login for you. `OAuth2PasswordRequestForm` reads the fields the standard requires: `username`,
+`password` and an optional `scope`. They arrive as **form data** (the encoding HTML forms use), not
+as JSON.
 
 ## Hashing passwords
 
-Never store passwords, not even encrypted. Store a **hash** from a function designed for passwords:
+Never store passwords, not even encrypted ones. Anything encrypted can be decrypted by whoever
+steals the key. Store a **hash** instead. A hash function turns any input into a fixed-length
+scramble that cannot be reversed. To check a login, hash what the user typed and compare the result
+with the stored hash.
+
+Not every hash function is suitable. One designed for passwords has three properties:
 
 | Property | Why |
 |---|---|
-| One-way | a DB leak doesn't reveal passwords |
-| **Salted** (random per-password salt) | identical passwords get different hashes; defeats rainbow tables |
-| **Slow / memory-hard** (tunable work factor) | makes brute force expensive; fast hashes like SHA-256 allow billions of guesses/second |
+| One-way | a leaked database does not reveal the passwords |
+| **Salted** (a random value, the *salt*, mixed into each password) | two users with the same password get different hashes; tables of precomputed hashes ("rainbow tables") become useless |
+| **Slow, or memory-hungry**, by an adjustable amount | trying every possible password (a *brute-force* attack) becomes expensive; a fast hash such as SHA-256 allows billions of guesses per second |
 
-Good algorithms: **Argon2id** (current recommendation), bcrypt, scrypt, PBKDF2. The FastAPI docs now use
-`pwdlib`:
+Good algorithms: **Argon2id** (the current recommendation), bcrypt, scrypt and PBKDF2. The FastAPI
+documentation now uses `pwdlib`:
 
 ```python
 from pwdlib import PasswordHash
@@ -96,8 +143,11 @@ def verify_password(plain: str, hashed: str) -> bool:
     return password_hash.verify(plain, hashed)
 ```
 
-The standard library's PBKDF2 shows the mechanics (and is what the problem *Verify a PBKDF2 Password
-Hash* uses):
+`PasswordHash.recommended()` selects Argon2id. `hash` produces the string to store, and `verify`
+checks a typed password against it. `DUMMY_HASH` is used further down, to hide which usernames exist.
+
+The standard library's PBKDF2 function shows the mechanics (and is what the problem *Verify a PBKDF2
+Password Hash* uses):
 
 ```python-run
 import hashlib, hmac, os
@@ -118,26 +168,48 @@ print("same password, different hashes:", h1 != h2)
 print(verify_password("hunter2", h1), verify_password("hunter3", h1))
 ```
 
-Storing the algorithm and parameters inside the hash string lets you raise the work factor later and
-re-hash users transparently at their next login.
+Reading `hash_password`:
+
+- `os.urandom(16)` produces 16 random bytes: the salt, new for every password.
+- `hashlib.pbkdf2_hmac(...)` mixes the password and the salt 100,000 times. The repetition is what
+  makes it slow.
+- The return value joins four parts with `$`: the algorithm name, the iteration count, the salt and
+  the result. The string describes itself; everything needed to check a password later is in it,
+  except the password.
+
+`verify_password` splits the stored string, repeats the calculation with the same salt and count,
+and compares in constant time.
+
+The output shows a stored hash; then `same password, different hashes: True`, because each call
+drew a new salt; then `True False`: the right password verifies and a wrong one does not.
+
+Keeping the algorithm and its settings inside the string lets you raise the cost later and re-hash
+each user quietly at their next login.
 
 ## JSON Web Tokens
 
-A **JWT** is a compact, signed container for claims. As the book stresses, it's an *encoding scheme*, not
-an authentication method. Three base64url segments joined by dots:
+What should the token itself be? One popular answer is the **JWT** (JSON Web Token, pronounced
+"jot"): a compact, signed container for a few facts about the user. As the book stresses, it is an
+*encoding scheme* and not, in itself, a login method. It consists of three parts separated by dots:
 
 ```text
 eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9 . eyJzdWIiOiJhbm4iLCJleHAiOjE3MzY5MzcwMDB9 . 3Jx...sig
         header (alg, typ)                    payload (claims)                       signature
 ```
 
-- **Header**: algorithm (`HS256` = HMAC-SHA256 with a shared secret; `RS256`/`ES256` = asymmetric keys).
-- **Payload**: claims. Registered ones: `sub` (subject — user id), `exp` (expiry), `iat` (issued at),
-  `nbf`, `iss` (issuer), `aud` (audience), `jti` (token id). Plus your own (`scopes`, `role`).
-- **Signature**: over `header.payload`. Proves integrity and origin.
+- The **header** names the signing algorithm. `HS256` means HMAC with SHA-256, using one secret that
+  the server keeps. `RS256` and `ES256` use a pair of keys, one private and one public.
+- The **payload** holds the **claims**: statements about the token and its owner. Standard ones are
+  `sub` (subject: the user's id), `exp` (expiry time), `iat` (issued at), `nbf` (not valid before),
+  `iss` (issuer), `aud` (intended audience) and `jti` (the token's own id). You may add your own,
+  such as `scopes` or `role`.
+- The **signature** is a keyed fingerprint (an HMAC, lesson 6) of the first two parts. Only someone
+  holding the secret can produce it, so it proves that the server issued the token and that nobody
+  has altered it.
 
-**Signed, not encrypted** — anyone can decode the payload. Never put secrets or sensitive personal data
-in a JWT. Build one by hand to remove the mystery:
+Each part is written in base64url, a text encoding that is safe inside URLs. **A JWT is signed, not
+encrypted.** Anyone can decode and read the payload. Never put secrets or sensitive personal data in
+one. Building a JWT by hand removes the mystery:
 
 ```python-run
 import base64, hashlib, hmac, json, time
@@ -182,11 +254,27 @@ except ValueError as e:
     print("forged token rejected:", e)
 ```
 
-The trade-off the book highlights: a JWT lets the server authenticate **without a database lookup**
-(stateless — any replica can verify it), but for the same reason you **can't revoke** one before it
-expires without extra machinery. Hence: short-lived access tokens (5–30 minutes) plus a **refresh token**
-(long-lived, stored server-side or rotated, revocable) to obtain new ones, or a deny-list of `jti`s in
-Redis.
+Reading the code:
+
+- `b64url` and `b64url_decode` convert between bytes and URL-safe text.
+- `encode` writes the header and the payload as compact JSON, encodes each, computes the HMAC of
+  `header.body` with the secret, and joins the three parts with dots.
+- `decode` splits the token and then makes three checks: the header must name the algorithm we
+  expect; the signature, recomputed from the first two parts, must equal the one supplied; and the
+  expiry time must lie in the future. Only then is the payload trusted.
+
+The output shows the token; then the payload read *without* the secret (anyone can do this); then
+the payload as verified by `decode`. Finally the demo forges a token: it keeps the header and the
+signature and replaces the payload with one claiming the `admin` scope. `decode` prints
+`forged token rejected: invalid signature`. The old signature does not fit the new payload, and
+without the secret the forger cannot compute one that does.
+
+The book highlights the central trade-off. A JWT lets the server authenticate a request **without a
+database lookup**: any replica holding the key can check it. This is called being *stateless*. For
+the same reason, a JWT **cannot be cancelled** before it expires unless you add machinery. Hence the
+usual design: access tokens that live 5 to 30 minutes, plus either a long-lived **refresh token**
+that can be cancelled and is used to obtain new access tokens, or a list of cancelled `jti` values
+kept in Redis.
 
 ## Putting it together in FastAPI
 
@@ -261,42 +349,67 @@ async def read_users_me(current_user: CurrentUser):
     return current_user
 ```
 
+It is long, but it is the lesson so far, assembled:
+
+- **Settings.** The secret key comes from settings (lesson 9), the algorithm is fixed, and access
+  tokens live for 30 minutes.
+- **`create_access_token`** copies the claims, adds `exp` and signs them with `jwt.encode`.
+- **`authenticate_user`** looks the user up and verifies the password. If the user does not exist,
+  it still verifies against `DUMMY_HASH` and then returns `None`; the reason is given below.
+- **`login`** is the `/token` endpoint. It reads the form, authenticates, and returns a `Token`
+  model, or raises 401 with a `WWW-Authenticate` header.
+- **`get_current_user`** is the dependency that protects everything else. It receives the token from
+  `oauth2_scheme`, decodes and verifies it, reads `sub`, and loads the user. Any failure raises the
+  same 401.
+- **`get_current_active_user`** adds one more check on top (the account must not be disabled), and
+  `CurrentUser` is the alias endpoints use.
+- **`read_users_me`** shows the result: an endpoint is protected by declaring one parameter.
+
 Details that matter:
 
-- The login error is deliberately vague ("Incorrect username or password") and timing is equalised with a
-  dummy hash, so attackers can't enumerate valid usernames.
-- `jwt.decode(..., algorithms=[ALGORITHM])` pins acceptable algorithms. Trusting the token's own `alg`
-  header enables the classic `alg: none` and key-confusion attacks.
-- PyJWT validates `exp` automatically and raises `ExpiredSignatureError` (a subclass of
-  `InvalidTokenError`).
-- Protecting an endpoint is just declaring `CurrentUser` — the dependency chain does the rest, and the
-  docs show a padlock on it.
+- The login error is vague on purpose ("Incorrect username or password"), and the dummy hash makes a
+  request for an unknown user take as long as one for a real user. Otherwise attackers could find
+  out which usernames exist (this is called *enumeration*), either from the message or from the
+  response time.
+- `jwt.decode(..., algorithms=[ALGORITHM])` fixes which algorithms are acceptable. Trusting the
+  algorithm named in the token's own header enables classic attacks, including a token that claims
+  `alg: none` and carries no signature at all.
+- PyJWT checks `exp` automatically and raises `ExpiredSignatureError`, a subclass of
+  `InvalidTokenError`.
+- Declaring `CurrentUser` is all an endpoint needs. The chain of dependencies does the rest, and the
+  docs page shows a padlock beside the endpoint.
 
-The book's version of this flow lives across its layers: `web/user.py` holds the token endpoint and
-`oauth2_dep`, `service/user.py` holds hashing/JWT helpers and `auth_user`, and `data/user.py` stores users.
+In the book this flow is spread over its layers (lesson 15): `web/user.py` holds the token endpoint
+and the token dependency, `service/user.py` holds the hashing and JWT helpers and the function that
+authenticates a user, and `data/user.py` stores the users.
 
 ## Where should the client keep the token?
 
-- **Browser SPA**: an `HttpOnly; Secure; SameSite` cookie resists XSS token theft (JavaScript can't read
-  it) but requires CSRF defences; `localStorage` is simpler but any XSS steals the token.
-- **Mobile/CLI/services**: platform secure storage; send in the `Authorization` header.
+- **A web page in a browser.** A cookie marked `HttpOnly; Secure; SameSite` cannot be read by
+  JavaScript, so a cross-site scripting attack (lesson 6) cannot steal it; in exchange it needs a
+  defence against cross-site request forgery (next lesson). Browser `localStorage` is easier to use,
+  but any script running in the page can read the token.
+- **Mobile apps, command-line tools, other services.** The platform's secure storage, with the token
+  sent in the `Authorization` header.
 
 > [!INTERVIEW]
-> "Walk me through JWT authentication and its weaknesses." — Client posts credentials to `/token`; server
-> verifies the salted slow hash (Argon2/bcrypt), issues a signed JWT with `sub` and a short `exp`. Client
-> sends it as a Bearer token; each request the server verifies signature (pinned algorithm) and expiry —
-> no session store needed. Weaknesses: can't be revoked before expiry (mitigate with short TTL + refresh
-> tokens or a `jti` deny-list); payload is readable (no secrets in it); stolen tokens are fully usable
-> (HTTPS only, careful storage); secret/key management and rotation; never accept `alg: none` or the
-> token's claimed algorithm.
+> "Walk me through JWT authentication and its weaknesses." — The client posts credentials to
+> `/token`; the server verifies the salted slow hash (Argon2 or bcrypt) and issues a signed JWT with
+> `sub` and a short `exp`. The client sends it as a Bearer token; on each request the server verifies
+> the signature (with a fixed algorithm) and the expiry, needing no session store. Weaknesses: it
+> cannot be cancelled before expiry (reduce the risk with a short lifetime plus refresh tokens, or a
+> `jti` deny-list); the payload is readable (no secrets in it); a stolen token is fully usable (HTTPS
+> only, careful storage); the secret needs management and rotation; never accept `alg: none` or
+> whatever algorithm the token claims.
 
 ## Worked example: access tokens, refresh tokens and rotation
 
-Short-lived access tokens limit the damage of a leak, but nobody wants to log in every fifteen minutes.
-The standard answer is a second, long-lived **refresh token** whose only power is to obtain new access
-tokens — and which, unlike a JWT, is *stateful*: the server stores it (hashed) and can revoke it.
-**Rotation** issues a new refresh token on every use and invalidates the old one; if an old one ever
-reappears, someone has stolen it, and the whole token family is revoked.
+Short-lived access tokens limit the damage of a leak, but nobody wants to log in every fifteen
+minutes. The standard answer is a second, long-lived **refresh token** whose only power is to obtain
+new access tokens. Unlike a JWT it is *stateful*: the server stores it (as a hash) and can cancel
+it. **Rotation** means issuing a new refresh token at every use and retiring the old one. If a
+retired one is ever presented again, somebody has stolen it, and every token descended from the same
+login (the *family*) is cancelled.
 
 ```python-run
 import hashlib, secrets
@@ -348,11 +461,27 @@ server.logout(r3)
 print("after logout              ->", server.refresh_tokens(r3, now=2100))
 ```
 
-Design points: refresh tokens are random opaque strings stored only as hashes (a database leak doesn't
-yield usable tokens); the `/token/refresh` endpoint is the single place a database lookup happens, so
-ordinary requests stay stateless; logout and "sign out everywhere" become possible; and reuse detection
-turns a silent theft into a visible event. The access token's remaining lifetime (up to fifteen minutes
-here) is the window you accept — shorten it, or add a `jti` deny-list in Redis, when that is too long.
+`AuthServer` keeps a dictionary of refresh tokens, stored under their SHA-256 hashes, and a set of
+cancelled families.
+
+- `login` issues an access token and a random refresh token belonging to a new family.
+- `refresh_tokens` looks the token up. An unknown, expired or cancelled token is refused. A token
+  that has already been used once sets off the alarm: its whole family is cancelled. Otherwise the
+  token is marked as used and a new pair is issued.
+- `logout` cancels the family.
+
+The run, line by line: login gives an access token expiring at second 900. The first refresh gives
+one expiring at 1800, together with a new refresh token. An attacker then replays the stolen first
+refresh token and receives `401 token reuse detected: session family revoked`. The legitimate client
+now tries its newest token and also receives 401; it must log in again, which is a nuisance for the
+real user but shuts the attacker out. After a fresh login and a logout, the refresh token is refused.
+
+Design points. Refresh tokens are random strings with no readable content, stored only as hashes,
+so a leaked database yields no usable tokens. The refresh endpoint is the only place where a
+database lookup happens, so ordinary requests remain stateless. Logging out, and "sign out
+everywhere", become possible. And reuse detection turns a silent theft into a visible event. The
+remaining life of the access token (up to fifteen minutes here) is the exposure you accept; shorten
+it, or add a `jti` deny-list in Redis, when that is too long.
 
 ## Debugging authentication failures
 
@@ -367,25 +496,48 @@ here) is the window you accept — shorten it, or add a `jti` deny-list in Redis
 | Signature errors with tokens from another service | algorithm mismatch (HS256 vs RS256) or wrong audience/issuer |
 
 Decode the token's payload (it is only base64url) to see `sub`, `exp` and `alg` before suspecting
-anything more exotic — and never paste production tokens into third-party websites to do so.
+anything more exotic. Never paste production tokens into third-party websites to do so.
 
 ## Pitfalls
 
-- Hashing passwords with plain SHA-256/MD5, or without a salt.
-- Long-lived access tokens with no revocation story.
+- Hashing passwords with plain SHA-256 or MD5, or without a salt.
+- Long-lived access tokens with no means of cancelling them.
 - Sensitive data in JWT payloads.
-- `jwt.decode` without an explicit `algorithms` list; hard-coded secrets in source control.
-- Different error messages for "no such user" vs "wrong password".
+- `jwt.decode` without an explicit `algorithms` list; secrets written into source code.
+- Different error messages for "no such user" and "wrong password".
 - Sending tokens in query strings (they end up in logs).
 
 ## Summary
 
-- API keys and Basic auth are the simple end; OAuth2 password flow + bearer tokens suits first-party
-  user logins.
-- Store only salted, slow password hashes (Argon2id via pwdlib); verify in constant time.
-- A JWT = base64url(header).base64url(payload).signature — signed, not encrypted, stateless,
-  hard to revoke.
-- `OAuth2PasswordBearer` + a `get_current_user` dependency protects endpoints and documents the scheme.
+- API keys and Basic authentication are the simple end; the OAuth2 password flow with bearer tokens
+  suits logins for your own clients.
+- Store only salted, slow password hashes (Argon2id through pwdlib); compare in constant time.
+- A JWT is base64url(header).base64url(payload).signature: signed, not encrypted, stateless, and
+  hard to cancel.
+- `OAuth2PasswordBearer` plus a `get_current_user` dependency protects endpoints and documents the
+  scheme.
+
+## Glossary
+
+- **Authentication / authorization** — checking who the caller is / checking what the caller may do.
+- **Credentials** — what a user presents to prove identity, such as a username and password.
+- **API key** — one shared secret value that grants access.
+- **Constant-time comparison** — a comparison whose duration does not depend on where the inputs
+  differ.
+- **Hash** — a one-way, fixed-length scramble of some input.
+- **Salt** — a random value mixed into a password before hashing.
+- **Brute force** — trying every possible password.
+- **Argon2id / bcrypt / PBKDF2** — hash functions designed to be slow, for passwords.
+- **OAuth2** — the standard framework for login and permission; a *flow* is one of its variants.
+- **Bearer token** — a token that grants access to whoever presents it.
+- **JWT** — a signed token of three base64url parts: header, payload, signature.
+- **Claim** — one statement in a JWT's payload, such as `sub` or `exp`.
+- **Signature** — a keyed fingerprint proving who issued a token and that it is unaltered.
+- **Stateless** — verifiable without looking anything up on the server.
+- **Access token / refresh token** — the short-lived token sent with requests / the long-lived,
+  cancellable token used to get new access tokens.
+- **Rotation** — replacing a refresh token with a new one each time it is used.
+- **Enumeration** — discovering which usernames exist from differences in responses.
 
 ```quiz
 [

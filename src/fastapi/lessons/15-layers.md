@@ -1,11 +1,39 @@
 # Layered architecture: web, service, data
 
-Part III of Lubanovic's book ("Making a Website") is organised around one idea: split the application
-into **layers** with clear responsibilities and narrow interfaces. It's the difference between an API you
-can test, change and reason about, and a pile of endpoint functions that each talk to the database,
-enforce business rules, and format HTTP responses all at once.
+> **Before this lesson:** you should be able to split endpoints into routers
+> ([lesson 14](#/lesson/fastapi/routers)), raise `HTTPException` and use response models
+> ([lesson 5](#/lesson/fastapi/body-responses)) and declare dependencies
+> ([lesson 10](#/lesson/fastapi/depends-basics)). No database knowledge is assumed; the little SQL
+> that appears is explained in place.
+
+## In plain words
+
+Routers divide a project by *topic*: users here, items there. This lesson divides it a second way,
+by *kind of work*. Handling one request involves three quite different jobs:
+
+1. speaking HTTP (reading the request, choosing a status code);
+2. applying the rules of your application ("a customer may place at most three orders a day");
+3. storing and fetching data.
+
+When one function does all three, it cannot be tested without a running web server and a real
+database, its rules cannot be reused anywhere else, and every change risks breaking something
+unrelated. A **layered architecture** gives each job its own section of the code, called a
+**layer**, and lets the layers talk only through small, well-defined openings.
+
+An everyday picture: a restaurant again. The waiter talks to the customers and knows the menu and
+the prices. The chef knows the recipes and decides how a dish is made. The storekeeper knows where
+every ingredient is kept. The waiter never walks into the cold store, and the storekeeper never
+takes an order. Each can be replaced, trained or inspected without disturbing the other two. In this
+lesson the waiter is the **web layer**, the chef is the **service layer** and the storekeeper is the
+**data layer**.
+
+Why this matters for a job: this structure, under one name or another, is used by almost every
+backend codebase of any size, and interviewers ask "why separate web, service and data layers?" to
+find out whether you have worked on one.
 
 ## The layers
+
+Part III of Lubanovic's book ("Making a Website") is built around this one idea.
 
 ```mermaid
 graph TD
@@ -18,27 +46,35 @@ graph TD
     M -.-> D
 ```
 
+Read the diagram from the top: the client talks HTTP and JSON to the web layer; the web layer calls
+functions in the service layer; the service layer calls functions in the data layer; the data layer
+talks to the database. The dotted lines show that the model definitions are used by all three.
+
 In the book's terms:
 
-- **Web** — the input/output layer over HTTP. It gathers client requests, calls the service layer, and
-  returns responses. It knows about paths, status codes, headers, auth tokens.
-- **Service** — the business logic: what the site actually *does*. It looks like a library, and calls the
-  data layer when it needs something stored or fetched.
-- **Data** — access to data stores and other services. It knows SQL, drivers, connection details.
-- **Model** — not a layer but the data definitions (Pydantic models) shared by all three.
+- **Web** is the input/output layer for HTTP. It collects client requests, calls the service layer
+  and returns responses. It knows about paths, status codes, headers and login tokens.
+- **Service** holds the **business logic**: the rules and procedures that make the application what
+  it is, independent of how it is reached or where its data is kept. It reads like an ordinary
+  library, and it calls the data layer when something must be stored or fetched.
+- **Data** provides access to databases and other outside services. It knows the query language,
+  the connection details and the format of stored rows.
+- **Model** is not a layer. It is the set of data definitions (Pydantic models) shared by all three.
 
-And the rule, borrowed from Ghostbusters: **don't cross the streams**. Web details must not leak out of
-the web layer (no `HTTPException` in services, no `Request` objects passed down). Database details must
-not leak out of the data layer (no SQL strings, cursors or ORM sessions in routers). The web layer may
-import service modules but should not import data modules.
+The rule that holds this together is borrowed from the film *Ghostbusters*: **don't cross the
+streams**. Details of the web must not leak out of the web layer: no `HTTPException` in services, no
+`Request` objects passed downwards. Details of the database must not leak out of the data layer: no
+query text or database connection objects in routers. The web layer may import service modules and
+should not import data modules.
 
-Why bother? The book's reasons:
+Why go to the trouble? The book's reasons:
 
-- Each layer can be written and understood by specialists.
-- Each can be **tested in isolation** (with fakes for the layer below).
-- Each can be **replaced or supplemented**: add a CLI or gRPC interface beside the web layer; swap SQLite
-  for PostgreSQL in the data layer; neither change touches the business logic.
-- Once layers are mixed, separating them later is very hard.
+- Each layer can be written and understood by a specialist.
+- Each can be **tested alone**, with a fake standing in for the layer beneath it.
+- Each can be **replaced or added to**. Put a command-line tool or another kind of interface beside
+  the web layer; exchange one database for another in the data layer. Neither change touches the
+  business logic.
+- Once the layers have been mixed together, separating them later is very hard.
 
 ## The book's layout
 
@@ -54,14 +90,17 @@ src/
 └── test/              # unit/, full/
 ```
 
-The running example is a site about cryptids (**creatures**) and the people who seek them
-(**explorers**). Lubanovic builds it "middle-out": define the models first, build the web layer against
-**fake** data so the API shape can be tried immediately, then add the service layer, then the real data
-layer — testing each step.
+Each layer is a folder, and each resource has one file in each folder. The running example is a
+site about legendary **creatures** and the **explorers** who look for them. Lubanovic builds it from
+the middle outwards: define the models first; build the web layer on top of **fake** data, so that
+the shape of the API can be tried out at once; then add the service layer; then the real data layer.
+Each step is tested before the next begins.
 
 ## One feature through all layers
 
-**Model** (shared definitions):
+Follow one resource, the creature, through every layer.
+
+**Model.** The shared definition:
 
 ```python
 # model/creature.py
@@ -75,7 +114,9 @@ class Creature(BaseModel):
     aka: str
 ```
 
-**Errors** — domain exceptions that carry no HTTP knowledge:
+**Errors.** Two exception classes of the application's own. They say what went wrong in the
+application's vocabulary and carry no knowledge of HTTP. Exceptions of this kind are called **domain
+exceptions** ("domain" meaning the subject area the program deals with):
 
 ```python
 # errors.py
@@ -88,8 +129,9 @@ class Duplicate(Exception):
         self.msg = msg
 ```
 
-**Data layer** — the only place that knows SQL (the book uses the stdlib `sqlite3` DB-API directly;
-converting rows to models and back is the data layer's job):
+**Data layer.** The only place that knows **SQL** (Structured Query Language, the language used to
+talk to relational databases; lesson 16 covers it). The book uses Python's built-in `sqlite3` module
+directly. Turning database rows into models and back is the data layer's job:
 
 ```python
 # data/creature.py
@@ -120,11 +162,23 @@ def create(creature: Creature) -> Creature:
     return get_one(creature.name)
 ```
 
-Note the **named parameters** (`:name`) — values are passed separately from the SQL text, which is what
-prevents SQL injection.
+Reading it:
 
-**Service layer** — business rules. In the early chapters it mostly passes calls through (and that's
-fine: the seam exists for when rules arrive):
+- `curs` is a **cursor**, the object through which SQL statements are sent to the database. It is
+  created in `data/init.py`.
+- The `create table if not exists` statement makes sure a table with five columns exists.
+- `row_to_model` converts one row (a tuple of five values) into a `Creature` model.
+- `get_one` runs a `select` to find a creature by name. If no row comes back it raises `Missing`;
+  otherwise it returns a model.
+- `create` runs an `insert`. If the database reports that the name already exists
+  (`IntegrityError`), the function raises `Duplicate` instead.
+
+Notice the **named parameters** such as `:name`. The value is passed separately from the SQL text,
+never pasted into it. That separation is what prevents **SQL injection**, an attack in which a user
+supplies input that the database would otherwise run as part of the command.
+
+**Service layer.** The business rules. In the early chapters it mostly passes calls straight
+through, and that is acceptable: the layer is in place for the day rules arrive.
 
 ```python
 # service/creature.py
@@ -139,7 +193,7 @@ def create(creature: Creature) -> Creature:
     return data.create(creature)
 ```
 
-**Web layer** — HTTP in, HTTP out; translates domain errors to status codes:
+**Web layer.** HTTP in, HTTP out. It translates domain exceptions into status codes:
 
 ```python
 # web/creature.py
@@ -165,12 +219,17 @@ def create(creature: Creature) -> Creature:
         raise HTTPException(status_code=409, detail=exc.msg)
 ```
 
-Instead of repeating `try/except` in every endpoint, you can register **exception handlers** once
-(`@app.exception_handler(Missing)` → 404) — shown in the errors lesson.
+Each endpoint calls the service and catches the domain exception that might come back: `Missing`
+becomes a 404, and `Duplicate` becomes a 409. The web layer is the only place where those numbers
+appear.
+
+Repeating `try` / `except` in every endpoint gets tedious. You can instead register an **exception
+handler** once for the whole app (`@app.exception_handler(Missing)` returning a 404), which lesson
+21 shows.
 
 ## Run it: three layers in one cell
 
-A compressed but faithful version, with an in-memory "database" and a fake swapped in for testing:
+A compressed but faithful version, with a dictionary playing the database:
 
 ```python-run
 from pydantic import BaseModel
@@ -240,14 +299,36 @@ assert CreatureService(FakeData()).create(Creature(name=" A ", country="us")).co
 print("service unit test passed without any database")
 ```
 
-Each layer could be rewritten without the others noticing: replace `CreatureData` with PostgreSQL, or add
-a CLI that calls `CreatureService` directly.
+Reading it layer by layer:
+
+- **Data** (`CreatureData`) only stores and fetches. It raises `Missing` or `Duplicate` and knows no
+  rules.
+- **Service** (`CreatureService`) is handed a data object when it is created and applies the rules:
+  names are trimmed and lower-cased, country codes are upper-cased, and a country must be two
+  letters long. It knows nothing of HTTP and nothing of storage.
+- **Web** (`web_get`, `web_create`) turns results into (status, body) pairs and maps each kind of
+  exception to a status code.
+
+The five requests print:
+
+- `201` with the name tidied to `yeti` and the country to `CN`;
+- `409` for a second yeti (`Creature yeti already exists`);
+- `200` for `YETI`, because the service normalised the name before looking it up;
+- `404` for `bigfoot`;
+- `422` for the country `Scotland`, which breaks the two-letter rule.
+
+The final lines are the benefit in miniature. `FakeData` is a stand-in data layer that stores
+nothing. The service is created with it, and its upper-casing rule is checked with no database of
+any kind.
+
+Each layer could be rewritten without the others noticing: replace `CreatureData` with a real
+PostgreSQL database, or add a command-line tool that calls `CreatureService` directly.
 
 ## Wiring layers with dependencies
 
-The book wires layers with plain module imports (and uses an environment variable to swap in the `fake`
-modules for unit tests). In idiomatic modern FastAPI, the same structure is usually wired with
-`Depends`, which makes substitution explicit:
+The book connects its layers with ordinary module imports, and uses an environment variable to swap
+in the `fake` modules for unit tests. In current FastAPI style the same structure is usually wired
+with `Depends`, which makes the substitution explicit:
 
 ```python
 def get_creature_service(session: SessionDep) -> CreatureService:
@@ -260,9 +341,14 @@ def get_one(name: str, service: ServiceDep) -> Creature:
     return service.get_one(name)
 ```
 
-A data-layer class like `CreatureRepository` is the **Repository pattern**, which Lubanovic mentions in
-the testing chapter: an abstraction over storage that presents a collection-like interface, so tests can
-substitute an in-memory implementation.
+`get_creature_service` builds a service around a data object that uses the request's database
+session. The endpoint asks for a `ServiceDep` and never learns how the service was put together. A
+test can override `get_creature_service` (lesson 11) to supply a service built on a fake.
+
+A data-layer class such as `CreatureRepository` is an example of the **Repository pattern**, which
+Lubanovic mentions in his testing chapter: an object that hides the storage behind a
+collection-like set of methods (`get`, `add`, `list`), so that tests can substitute an
+implementation held in memory.
 
 ## Where does each concern go?
 
@@ -278,23 +364,25 @@ substitute an in-memory implementation.
 | Logging, metrics, tracing | All layers; the book places these discussions with the service layer |
 | Pagination & sorting parameters | Web parses them; data applies them (`LIMIT/OFFSET`, `ORDER BY`) |
 
-Lubanovic's "Pagination and Sorting" section recommends doing the heavy lifting at the lowest layer: let
-the database sort and slice, rather than fetching everything and trimming in Python.
+
+Lubanovic's "Pagination and Sorting" section recommends doing the heavy work at the lowest layer:
+let the database sort and slice, instead of fetching everything and trimming it in Python.
 
 > [!INTERVIEW]
 > "Why separate web, service and data layers — isn't it boilerplate for CRUD?" — For trivial CRUD the
-> service layer may be a pass-through, but the separation buys testability (unit-test rules without HTTP
-> or a DB), replaceability (swap databases, add a CLI/worker/gRPC front end that reuses the services), and
-> containment of change (schema changes stay in the data layer; API changes stay in the web layer). The
-> key discipline is direction: web → service → data, with models shared, domain exceptions instead of
-> HTTP exceptions below the web layer, and no SQL above the data layer.
+> service layer may be a pass-through, but the separation buys testability (unit-test the rules
+> without HTTP or a database), replaceability (swap databases; add a command-line tool, a queue
+> worker or a gRPC front end that reuses the services) and containment of change (changes to tables
+> stay in the data layer; changes to the API stay in the web layer). The key discipline is direction:
+> web → service → data, with models shared, domain exceptions instead of HTTP exceptions below the
+> web layer, and no SQL above the data layer.
 
 ## A rule that needs a service layer
 
-The pass-through services of early chapters make the layer look ceremonial. It earns its place the moment
-a use case spans more than one entity. Suppose "an explorer reports a sighting": the creature must exist,
-an explorer may log at most three sightings per day, the sighting is stored, and the creature's
-`last_seen` is updated — all or nothing.
+Pass-through services make the layer look like ceremony. It earns its place the moment one action
+involves more than one kind of record. Suppose "an explorer reports a sighting". The creature must
+exist. An explorer may log at most three sightings a day. The sighting is stored, and the creature's
+`last_seen` date is updated, with both changes happening or neither.
 
 ```python-run
 from datetime import date
@@ -369,15 +457,35 @@ print("last_seen NOT advanced to 03-02 (rolled back with the failed insert):",
       db.creatures["yeti"]["last_seen"], "| stored:", len(db.sightings))
 ```
 
-Read what each layer contributed. The **data layer** offered small, dumb operations. The **service**
-decided what the use case means: the order of checks, the daily limit, and — crucially — the
-**transaction boundary** around the two writes. The **web layer** mapped three kinds of failure to three
-status codes. None of that logic would be reusable from a CLI or a queue worker if it lived in the
-endpoint, and the daily-limit rule can be unit-tested with fake repositories in microseconds.
+What each part does:
 
-This also answers a question that comes up in every design review: *who owns the transaction?* Not the
-repositories (each sees only its own table) and not the router (it shouldn't know there are two writes).
-The service — or a unit-of-work object handed to it — defines the atomic unit.
+- `Db` is a toy database with two tables and a crude transaction: `begin` takes a copy of the data,
+  `rollback` restores the copy, and `commit` discards it.
+- `CreatureRepo` and `SightingRepo` are repositories, one per table, each offering a few small
+  operations. `SightingRepo` can be told to fail, to imitate a database that has gone away.
+- `report_sighting` is the service function, the **use case**. It checks that the creature exists,
+  checks the daily limit, and then performs the two writes between `begin` and `commit`. If either
+  write raises, it rolls back and re-raises.
+- `post_sighting` is the web layer. It maps `Missing` to 404, `RuleViolation` to 409 and a
+  connection failure to 503.
+
+The output: three `201` lines for Ann's first three sightings; a `409` for the fourth
+(`ann already reported 3 sightings on 2025-03-01`); a `404` for the unknown creature `bigfoot`; and
+a `503` when the insert fails for Bob. The last line is the important one. `last_seen` is still
+`2025-03-01` and three sightings are stored. Write 1 (updating `last_seen` to 2 March) had already
+been made when write 2 failed, and the rollback undid it.
+
+Now look at what each layer contributed. The **data layer** offered small operations with no
+judgement of their own. The **service** decided what the use case means: the order of the checks,
+the daily limit, and above all the **transaction boundary**, the points where the all-or-nothing
+unit begins and ends. The **web layer** mapped three kinds of failure to three status codes. If that
+logic lived in the endpoint, none of it could be reused from a command-line tool or a queue worker.
+And the daily-limit rule can be unit-tested with fake repositories in microseconds.
+
+This also answers a question raised in every design review: *who owns the transaction?* Not the
+repositories, since each sees only its own table. Not the router, which should not even know that
+there are two writes. The service, or a unit-of-work object handed to it (lesson 11), defines the
+unit that must succeed or fail as a whole.
 
 ## Tracing a request and an error through the layers
 
@@ -396,11 +504,15 @@ sequenceDiagram
     W-->>C: 404 with detail
 ```
 
-What crosses each arrow is deliberate: JSON and status codes only on the outside; **models** and **domain
-exceptions** on the inside; SQL only beyond the data layer. If you ever see a `Request`, a
-`JSONResponse`, a cursor or an ORM session being passed along an inner arrow, a stream has been crossed.
+What travels along each arrow is deliberate. On the outside, only JSON and status codes. On the
+inside, **models** and **domain exceptions**. Beyond the data layer, SQL. If you ever see a
+`Request`, a `JSONResponse`, a cursor or a database session being passed along one of the inner
+arrows, a stream has been crossed.
 
 ## Smells and their refactorings
+
+A "code smell" is a visible sign that the structure of some code is going wrong. These are the
+common ones for layering, each with its cure:
 
 | Smell | Why it hurts | Refactoring |
 |---|---|---|
@@ -413,25 +525,48 @@ exceptions** on the inside; SQL only beyond the data layer. If you ever see a `R
 | A "utils" module everything imports | becomes a second, unstructured layer | move each function to the layer whose knowledge it uses |
 | Every service is a one-line pass-through, forever | the layer adds no value here | for pure CRUD, routing straight to a repository is acceptable — add the service when rules appear |
 
-That final row matters: layering is a tool for managing complexity, and the book is explicit that these
-divisions are guidelines. A three-endpoint internal service does not need four packages. The skill is
-recognising the moment a rule appears and giving it a proper home.
+The final row matters. Layering is a tool for managing complexity, and the book says plainly that
+these divisions are guidelines. An internal service with three endpoints does not need four
+packages. The skill is noticing the moment a rule appears and giving it a proper home.
 
 ## Pitfalls
 
-- "Fat routers": SQL and business rules in endpoint functions.
-- Raising `HTTPException` from the service or data layer (couples them to HTTP; breaks reuse in workers).
-- Returning ORM rows or cursors from the data layer (leaks storage details upward) — return models.
-- Over-engineering: five abstract base classes for a three-endpoint service. Layers are, in the author's
-  words, guidelines rather than laws of physics.
+- "Fat routers": SQL and business rules inside endpoint functions.
+- Raising `HTTPException` from the service or data layer. That ties them to HTTP and prevents their
+  reuse in workers.
+- Returning raw database rows or cursors from the data layer, which leaks storage details upwards.
+  Return models.
+- Over-engineering: five abstract base classes for a service with three endpoints. Layers are, in
+  the author's words, guidelines and not laws of physics.
 - Service functions that accept a `Request` object.
 
 ## Summary
 
 - Web = HTTP; Service = business logic; Data = storage; Model = shared Pydantic definitions.
 - Dependencies point one way: web → service → data. Don't cross the streams.
-- Domain exceptions (`Missing`, `Duplicate`) cross layer boundaries; the web layer maps them to 404/409.
-- Fakes at layer boundaries make each layer testable alone; FastAPI's `Depends` formalises the wiring.
+- Domain exceptions (`Missing`, `Duplicate`) cross the layer boundaries; the web layer maps them to
+  404 and 409.
+- Fakes at the layer boundaries make each layer testable alone; FastAPI's `Depends` makes the wiring
+  explicit.
+
+## Glossary
+
+- **Layer** — a section of the code responsible for one kind of work.
+- **Layered architecture** — organising a program as layers that call each other in one direction.
+- **Web layer** — the code that speaks HTTP: routers, status codes, headers.
+- **Service layer** — the code that holds the application's rules and procedures.
+- **Data layer** — the code that stores and fetches data.
+- **Business logic** — the rules that make the application what it is.
+- **Domain exception** — an error class in the application's own vocabulary (`Missing`, `Duplicate`).
+- **SQL** — the language for querying relational databases.
+- **Cursor** — the object through which SQL statements are sent and results read.
+- **SQL injection** — an attack that smuggles commands into a query through user input.
+- **Repository pattern** — hiding storage behind an object with collection-like methods.
+- **Fake** — a simplified stand-in for a layer, used in tests.
+- **Use case** — one complete action of the application, such as "report a sighting".
+- **Transaction boundary** — where an all-or-nothing group of writes begins and ends.
+- **Pass-through** — a function that only forwards its call to the next layer.
+- **Code smell** — a visible sign of a structural problem in code.
 
 ```quiz
 [
