@@ -39,10 +39,11 @@ TRACK = dict(
         dict(
             id="effects-data",
             title="Side Effects and Data",
-            summary="useEffect and its dependency rules, custom hooks, refs, and fetching data with loading and error states.",
+            summary="useEffect and its dependency rules, custom hooks, refs, legacy class components and their lifecycle, and fetching data with loading and error states.",
             lessons=[
                 dict(id="useeffect", title="useEffect and its dependency rules", file="07-useeffect.md"),
                 dict(id="custom-hooks-refs", title="Custom hooks and useRef", file="08-custom-hooks-refs.md"),
+                dict(id="class-components", title="Class components: reading and migrating legacy React", file="08b-class-components.md"),
                 dict(id="data-fetching", title="Fetching data: loading, errors and races", file="09-data-fetching.md"),
             ],
             problems=["react-deps-changed", "react-hooks-runtime", "react-fetch-reducer"],

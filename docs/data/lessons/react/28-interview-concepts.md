@@ -367,7 +367,7 @@ Mistakes in *answering*, as opposed to mistakes in code:
 > When given code to predict, narrate the render cycle out loud: "First render: `count` is 0, the effect is scheduled. Click: the handler closes over 0…". Interviewers grade the reasoning more than the final answer, and narrating catches your own slips.
 
 > [!WARNING]
-> Many older interview guides focus on class components and lifecycle methods (`componentDidMount`, `shouldComponentUpdate`). You should recognise the names and be able to map them: mount and update work is `useEffect`, cleanup is the effect's return value, `shouldComponentUpdate` is roughly `memo`. Do not spend your preparation memorising class APIs unless the role maintains legacy code.
+> Many older interview guides focus on [class components and lifecycle methods](#/lesson/react/class-components) (`componentDidMount`, `shouldComponentUpdate`). You should recognise the names and be able to map them: mount and update work is `useEffect`, cleanup is the effect's return value, `shouldComponentUpdate` is roughly `memo`. Do not spend your preparation memorising class APIs unless the role maintains legacy code.
 
 ## Cheat sheet
 
