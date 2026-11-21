@@ -430,7 +430,7 @@ Beyond the calendar, three habits keep you improving:
    "answer": 0,
    "explain": "* sets the search to the whole word, cgn changes the next match, and each dot finds and changes one more: four dots for the remaining four. With cw, dot would not move to the next match by itself."},
   {"q": "Lines look like '2026-03-09'. Which command rewrites every line as '09/03/2026'?",
-   "options": [":%s/\\v(\\d+)-(\\d+)-(\\d+)/\\3\\/\\2\\/\\1/", ":%s/\\v(\\d+)-(\\d+)-(\\d+)/\\1\\/\\2\\/\\3/", ":s/-/\\//g", ":%s/\\v\\d+-\\d+-\\d+/\\3\\/\\2\\/\\1/"],
+   "options": ["`:%s/\\v(\\d+)-(\\d+)-(\\d+)/\\3\\/\\2\\/\\1/`", "`:%s/\\v(\\d+)-(\\d+)-(\\d+)/\\1\\/\\2\\/\\3/`", "`:s/-/\\//g`", "`:%s/\\v\\d+-\\d+-\\d+/\\3\\/\\2\\/\\1/`"],
    "answer": 0,
    "explain": "Three groups capture year, month and day; the replacement writes them in reverse with escaped slashes. The second keeps the original order, the third only swaps the separators on one line, and the fourth has no groups to refer to."},
   {"q": "Buffer lines: 'a', 'b', 'c', 'd' with the cursor on 'a'. What is the buffer after :3m0 ?",

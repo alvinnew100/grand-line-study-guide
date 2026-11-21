@@ -450,7 +450,7 @@ Use `with open(..., encoding="utf-8")` and loop over the file line by line. Use 
    "explain": "JSON object keys are always strings, so the int key is converted and stays a string on the way back."},
   {"q": "Why open CSV files with newline=''?", "options": ["To strip whitespace", "The csv module handles line endings itself; otherwise you may get blank rows or broken embedded newlines", "It is faster", "To enable Unicode"], "answer": 1,
    "explain": "Python's universal-newline translation interferes with the csv module's own handling."},
-  {"q": "With pathlib, how do you build 'data/raw/x.csv' portably?", "options": ["'data' + '\\\\raw\\\\x.csv'", "Path('data') / 'raw' / 'x.csv'", "os.join('data','raw','x.csv')", "Path('data', sep='/')"], "answer": 1,
+  {"q": "With pathlib, how do you build 'data/raw/x.csv' portably?", "options": ["`'data' + '\\\\raw\\\\x.csv'`", "`Path('data') / 'raw' / 'x.csv'`", "`os.join('data','raw','x.csv')`", "`Path('data', sep='/')`"], "answer": 1,
    "explain": "The / operator joins path components using the right separator for the OS."},
   {"q": "What type are the values produced by csv.DictReader?", "options": ["Inferred ints/floats", "Always strings", "bytes", "Depends on the header"], "answer": 1,
    "explain": "The csv module performs no type conversion; convert explicitly."},

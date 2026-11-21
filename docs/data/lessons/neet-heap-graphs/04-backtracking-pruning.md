@@ -423,7 +423,7 @@ add memoisation and you have a DP.
    "explain": "Unlike flood fill, a cell used by a failed attempt can be part of a different successful path."},
   {"q": "Which pair of keys identifies the two diagonals through cell (r, c) in N-Queens?",
    "options": ["r * c and r / c", "r - c and r + c", "r and c", "r % c and c % r"], "answer": 1,
-   "explain": "Moving along a '\\' diagonal increases r and c together (r - c constant); along a '/' diagonal r increases while c decreases (r + c constant)."},
+   "explain": "Moving along a `\\` diagonal increases r and c together (r - c constant); along a `/` diagonal r increases while c decreases (r + c constant)."},
   {"q": "Candidates are sorted ascending. cand[j] > remain. Why may you `break` rather than `continue`?",
    "options": ["break is faster to type", "All later candidates are at least as large, so none can fit either", "continue would cause duplicates", "The recursion is finished"], "answer": 1,
    "explain": "Sorting turns one failed bound check into a proof about the entire rest of the loop."},

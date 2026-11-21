@@ -353,7 +353,7 @@ The first two codes are accepted; the others fail for lower-case letters, too fe
    "explain": "With the g flag, match returns every match as a plain array. \\d+ takes each run of digits as one match."},
   {"q": "Why does `/^cat|dog$/.test(\"dogma cat\")` return false while `/^cat|dog$/.test(\"catalog\")` returns true?", "options": ["The pattern means (^cat) or (dog$): the first text neither starts with cat nor ends with dog, the second starts with cat", "The | operator only works with the g flag", "test ignores anchors", "The first text contains a space"], "answer": 0,
    "explain": "Alternation has the lowest precedence, so each anchor belongs to only one alternative. Use ^(cat|dog)$ to anchor both."},
-  {"q": "Which pattern matches a literal dot followed by exactly two digits at the end of the text, as in \"9.50\"?", "options": ["/.\\d\\d$/", "/\\.\\d{2}$/", "/\\.d{2}$/", "/[.]\\d+/"], "answer": 1,
+  {"q": "Which pattern matches a literal dot followed by exactly two digits at the end of the text, as in \"9.50\"?", "options": ["`/.\\d\\d$/`", "`/\\.\\d{2}$/`", "`/\\.d{2}$/`", "`/[.]\\d+/`"], "answer": 1,
    "explain": "The dot must be escaped to be literal, \\d{2} means exactly two digits, and $ anchors the end. The first option would accept any character before the digits."},
   {"q": "What is the difference between `(abc)` and `(?:abc)`?", "options": ["None", "The second is optional", "Both group, but only the first stores the matched text as a capture", "The second matches case-insensitively"], "answer": 2,
    "explain": "A non-capturing group provides grouping for quantifiers and alternation without adding an entry to the match result."},

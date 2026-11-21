@@ -374,7 +374,7 @@ The general shape of this function (split into lines, skip the irrelevant ones, 
    "explain": "Because the space is optional, a run of word characters can be divided between repetitions of the group in a huge number of ways, and a failing match explores them all."},
   {"q": "What does `\"5 apples and 3 pears\".match(/\\d+(?= pears)/)[0]` return?", "options": ["5", "3", "3 pears", "null"], "answer": 1,
    "explain": "The look-ahead requires \" pears\" to follow the digits but does not include it in the match, so only 3 is returned."},
-  {"q": "Which expression correctly builds a pattern that finds the user-supplied text `term` as a whole word?", "options": ["new RegExp(\"\\b\" + term + \"\\b\")", "new RegExp(\"\\\\b\" + escapeRegExp(term) + \"\\\\b\")", "/\\bterm\\b/", "RegExp(term, \"b\")"], "answer": 1,
+  {"q": "Which expression correctly builds a pattern that finds the user-supplied text `term` as a whole word?", "options": ["`new RegExp(\"\\b\" + term + \"\\b\")`", "`new RegExp(\"\\\\b\" + escapeRegExp(term) + \"\\\\b\")`", "`/\\bterm\\b/`", "`RegExp(term, \"b\")`"], "answer": 1,
    "explain": "Inside a string literal the backslash must be doubled to reach the pattern, and the user's text must be escaped so that its special characters are taken literally."}
 ]
 ```
