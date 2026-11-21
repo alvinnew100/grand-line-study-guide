@@ -405,7 +405,7 @@ def main():
     if idx.exists():
         ver = time.strftime("%Y%m%d%H%M%S")
         html = idx.read_text(encoding="utf-8")
-        html = re.sub(r"(assets/(?:app|widgets)\.js|assets/style\.css)(\?v=\w+)?", rf"\g<1>?v={ver}", html)
+        html = re.sub(r"(assets/(?:app|widgets|web)\.js|assets/style\.css)(\?v=\w+)?", rf"\g<1>?v={ver}", html)
         idx.write_text(html, encoding="utf-8")
     if errors:
         print(f"\n{len(errors)} error(s).")

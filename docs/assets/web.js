@@ -92,12 +92,25 @@ window.WebKit = (() => {
       document.body.appendChild(f);
     });
   }
+  // A srcdoc page inherits this site's URL as its base, so following an in-page link such as
+  // href="#setup" would load the whole site inside the preview and leave it blank. Pointing the
+  // base at about:srcdoc keeps fragment links in place. Inserted after <head> (or <html>, or the
+  // doctype) because anything before the doctype would switch the page into quirks mode.
+  function withSrcdocBase(code) {
+    if (/<base[\s>]/i.test(code)) return code;
+    const tag = '<base href="about:srcdoc">';
+    for (const re of [/<head(\s[^>]*)?>/i, /<html(\s[^>]*)?>/i, /<!doctype[^>]*>/i]) {
+      const m = code.match(re);
+      if (m) return code.slice(0, m.index + m[0].length) + tag + code.slice(m.index + m[0].length);
+    }
+    return tag + code;
+  }
   function preview(host, code) {
     host.innerHTML = "";
     const f = document.createElement("iframe");
     f.setAttribute("sandbox", "allow-scripts allow-forms allow-modals");
     f.className = "web-preview";
-    f.srcdoc = code;
+    f.srcdoc = withSrcdocBase(code);
     host.appendChild(f);
     return f;
   }
@@ -131,5 +144,5 @@ window.WebKit = (() => {
     el.querySelector(".run").onclick = go;
     go();
   }
-  return { runJs, runWeb, eq, preview, mountJs, mountHtml };
+  return { runJs, runWeb, eq, preview, withSrcdocBase, mountJs, mountHtml };
 })();
