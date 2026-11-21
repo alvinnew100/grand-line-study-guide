@@ -168,7 +168,128 @@ Two related warnings:
 
 Caching is also a reason for honesty about design: a cache can hide a slow origin for years, until the day the cache is empty and the origin receives the full load at once.
 
-## 6. Autoscaling
+## 6. CQRS and event sourcing inside a service
+
+Everything so far has been about copies of data kept for speed. This section is about a bigger design choice: giving one service two different shapes of data, one for changing things and one for looking at them. It is also where Newman is at his most cautious, and the caution is worth hearing.
+
+### Two models of the same data
+
+Think of a restaurant. Waiters write orders on a ticket and hand it to the kitchen: that record is shaped for *doing the work*. The manager, at the end of the night, wants a sheet of "dishes sold, by hour": a record shaped for *answering questions*. Nobody would try to make one piece of paper serve both purposes.
+
+Most services use a single model for both jobs: one set of tables, one set of classes. **CQRS**, short for **Command Query Responsibility Segregation**, splits them. A **command** is a request to change something ("book slot 10:00 for Miso"). A **query** is a request to read something ("show me this week's bookings for Dr Lim"). Under CQRS:
+
+- The **write model** receives commands, checks the business rules and records the change. It is shaped for correctness.
+- The **read model** answers queries. It is shaped for the screens and reports that need it, often already joined and sorted, so a query is a cheap lookup.
+- Something has to carry changes from the write side to the read side. Usually that is a stream of events.
+
+```mermaid
+flowchart LR
+  C[Command: book slot] --> W[Write model<br/>checks the rules]
+  W -->|appends| ES[(Event store<br/>SlotBooked)]
+  ES -->|events flow| P[Projection]
+  P -->|updates| RM[(Read model<br/>week view for each vet)]
+  Q[Query: this week for Dr Lim] --> RM
+```
+
+The word **projection** needs defining. A projection is a program that reads events and keeps a read model up to date, like the manager's night-time tally that turns a pile of order tickets into "dishes sold, by hour". One service may keep several projections: a week view for vets, a search index, a monthly report.
+
+### Event sourcing: the history is the truth
+
+CQRS says nothing about *how* the write side stores its data. It can use an ordinary table. **Event sourcing** is a different idea that often goes with it. Instead of storing the current state ("slot 10:00 is booked by Miso"), the service stores every event that happened (SlotOpened, SlotBooked, BookingMoved, BookingCancelled) in an append-only **event store**, and works out the current state by reading them in order. A bank statement is the standard comparison: the list of deposits and withdrawals is the record, and the balance is something you calculate.
+
+The databases track explains this idea from the storage side, including the log, snapshots and replay. Read [Databases and streams: CDC and event sourcing](#/lesson/databases/cdc-event-sourcing) for how an event store is kept and queried. Here we care about what it means for service design.
+
+What event sourcing gives a service:
+
+- **A complete audit trail**, for free. Who moved this booking, and when, is simply in the history.
+- **Rebuilding state.** A bug in a projection is repaired by fixing the code and replaying the events from the start into a fresh read model. The truth was never damaged.
+- **New questions about the past.** A new report ("how often are bookings moved?") can be built later by replaying history that was always kept.
+- **Temporal queries.** "What did the diary look like last Tuesday?" is answered by replaying up to that moment.
+
+### A runnable miniature
+
+```python-run
+event_store = []                     # append-only: the single source of truth
+
+def handle_book(slot, pet):          # the write model: a command handler
+    booked = {e["slot"] for e in event_store if e["type"] == "SlotBooked"}
+    cancelled = {e["slot"] for e in event_store if e["type"] == "SlotCancelled"}
+    if slot in booked - cancelled:
+        return f"rejected: {slot} is taken"          # the business rule lives here
+    event_store.append({"type": "SlotBooked", "slot": slot, "pet": pet})
+    return f"accepted: {pet} at {slot}"
+
+def handle_cancel(slot):
+    event_store.append({"type": "SlotCancelled", "slot": slot})
+
+def apply(view, e):                  # how ONE event changes a read model
+    if e["type"] == "SlotBooked":
+        view[e["slot"]] = e["pet"]
+    elif e["type"] == "SlotCancelled":
+        view.pop(e["slot"], None)
+
+def project(events):                 # a projection from scratch: events in, view out
+    view = {}
+    for e in events:
+        apply(view, e)
+    return view
+
+read_model = {}
+applied = 0                          # how many events the projection has seen
+
+def catch_up():                      # the projection running incrementally
+    global applied
+    for e in event_store[applied:]:
+        apply(read_model, e)
+    applied = len(event_store)
+
+print(handle_book("Tue 10:00", "Miso"))
+print(handle_book("Tue 10:00", "Pip"))
+print("query before the projection runs:", read_model)     # stale for a moment
+catch_up()
+print("query after catching up:        ", read_model)
+
+handle_cancel("Tue 10:00")
+print(handle_book("Tue 10:00", "Pip"))
+catch_up()
+print("current read model:             ", read_model)
+
+# Rebuild from scratch: throw the read model away and replay all events.
+print("rebuilt from history:           ", project(event_store))
+print("events kept forever:", len(event_store))
+```
+
+`event_store` is a plain list we only ever append to. `handle_book` is the write side: it looks at the history to see whether the slot is free, and either rejects the command or appends a `SlotBooked` event. `apply` says how one event changes a read model. `project` runs `apply` over a whole history, and `catch_up` runs it only over events not yet seen, remembering in `applied` how far it has read. Notice the first query: right after the command was accepted, the read model is still empty, because the projection had not run yet. That small gap is **eventual consistency** in miniature. The last lines show the rebuild: ignore the read model, replay everything, and the same answer returns.
+
+### Eventual consistency changes the user experience
+
+In a real system the projection runs in another process, and the gap can be milliseconds or minutes. Users notice: they book a slot, the page reloads, and the booking is not on the list. Common remedies, none of them free:
+
+- Return the new state in the response to the command, and let the screen show that instead of re-querying.
+- Remember the position of the last event the user caused, and have queries wait until the read model has reached it.
+- Design the screen to say "your booking is being confirmed".
+
+One subtle point: the write model must check rules against *its own* reliable data, as `handle_book` does, not against a possibly stale read model. Otherwise two people could book the same slot in the same millisecond.
+
+### When it is worth it, and when it is not
+
+Newman's view, in short: CQRS and event sourcing are among the harder techniques in the book. Capable teams have struggled with them, and both demand a different way of thinking from developers used to "one table, update the row". Before choosing them for scaling, try the cheaper tools. If the pain is read load, a database read replica or a cache is far less risky.
+
+| Reach for CQRS or event sourcing when | Do not, when |
+|---|---|
+| Reads and writes have very different shapes or loads, and no single model suits both | A normal CRUD service (create, read, update, delete) with an index would do |
+| An audit trail or "what did it look like then" is a real business need | You want it because it sounds modern |
+| You must serve several different read views from the same facts | The team has never operated it and the deadline is near |
+| Replaying history to fix or add views is valuable | Users cannot tolerate even a short delay on reads after writes, and you cannot design around it |
+
+Further costs: events become a permanent contract, since old events must stay readable for ever (the databases track covers schema evolution). Replaying a long history takes time unless you keep snapshots. And debugging a flow means following events rather than reading a table.
+
+One more point from Newman matters for microservices specifically. Using CQRS or event sourcing is an **internal implementation detail** of a service. Consumers should see an ordinary interface. If commands go to one process and queries to another, the service itself routes them. Keeping this hidden means you can adopt it, or abandon it, without a coordinated change across other teams. Do not confuse the events *inside* a service's event store with the events *published* to other services in [lesson 10](#/lesson/microservices/request-response-events). The first are private records; the second are a deliberate public contract.
+
+> [!INTERVIEW]
+> For "what is CQRS and when would you use it?": *it separates the model that handles commands from the model that answers queries, so each can be shaped and scaled for its own job, usually joined by events and projections. Event sourcing stores the history of events as the source of truth and derives state from it. Both bring eventual consistency, versioned events and operational complexity, so I would first try read replicas or caching, and use them only for a clear need such as audit, very different read and write shapes, or several views. And I would keep it internal to the service.*
+
+## 7. Autoscaling
 
 **Autoscaling** is changing the number of running instances automatically. It needs the things earlier lessons put in place: automated deployment, stateless instances, and a platform that can add and remove them.
 
@@ -238,7 +359,7 @@ print(f"same, but instances take 3 periods to start: overloaded in {slow_over} p
 
 Compared with a fixed fleet of eight, the autoscaled fleet uses roughly half the instance time. The price shows in the overloaded count: during the steep morning rise, load outruns the fleet for a period or two, because new instances take one period to start. The last line repeats the run with a slower start-up of three periods, and the overloaded count rises. This is the central trade of reactive scaling: it saves money on the quiet hours and is always slightly behind on a steep rise. Faster start-up, more headroom or a scheduled scale-up at 7:00 would each close the gap.
 
-## 7. Starting again
+## 8. Starting again
 
 An architecture that serves a thousand users well may be the wrong one for a million, and designing for the million on day one would have been wasteful and probably mistaken. A widely repeated rule of thumb from large-scale engineering is to design for about ten times your current load and to expect to redesign before you reach a hundred times.
 
@@ -247,7 +368,7 @@ Needing to redesign as you grow is a sign of success. The skill lies in noticing
 > [!INTERVIEW]
 > For "where would you cache and how do you keep it correct?": *I first name the goal: speed, origin load or robustness. I prefer a single cache, close to the provider if I want simple invalidation, or on the consumer side if I need to avoid the network call or survive the provider being down. For invalidation I use a TTL sized to how stale the business can tolerate, and change events when it must be fresher, with a backstop TTL in case events stop. I avoid stacking caches, because staleness adds up. For autoscaling I combine a schedule for known peaks with reactive rules, scale up fast and down slowly, keep a minimum across zones, cap the maximum and load test it.*
 
-## 8. Pitfalls
+## 9. Pitfalls
 
 - **Caching without a stated reason.** You gain staleness and complexity for no measured benefit.
 - **Caches at every layer.** Staleness accumulates and nobody can say how old the data may be.
@@ -259,6 +380,8 @@ Needing to redesign as you grow is a sign of success. The skill lies in noticing
 - **Autoscaling that has never been load tested.** It may react too slowly or not at all.
 - **No maximum.** A traffic flood becomes a cost flood.
 - **Scaling down eagerly.** The fleet flaps and users meet cold instances.
+- **CQRS or event sourcing for a plain CRUD service.** Large cost, no matching need; try a read replica or a cache first.
+- **Checking rules against a stale read model.** Command handlers must validate against the write side's own data.
 
 ## Summary
 
@@ -269,6 +392,7 @@ Needing to redesign as you grow is a sign of success. The skill lies in noticing
 - Staleness adds up across nested caches, so cache in as few places as possible, and treat freshness as a business decision.
 - Autoscaling adds and removes instances by schedule or by measurement; scale up fast, down slowly, with a minimum, a maximum and a load test.
 - Expect to redesign as load grows by orders of magnitude.
+- CQRS separates a write model from read models joined by projections; event sourcing stores the event history as the truth. Both bring eventual consistency and complexity, so try replicas and caches first, and keep them internal to the service.
 
 ## Glossary
 
@@ -290,9 +414,25 @@ Needing to redesign as you grow is a sign of success. The skill lies in noticing
 | Autoscaling | Automatically changing the number of running instances |
 | Predictive / reactive scaling | Scaling by schedule / scaling in response to measurements |
 | Cooldown | A waiting period before scaling down, to avoid flapping |
+| CQRS | Command Query Responsibility Segregation: separate models for changing and for reading data |
+| Command / query | A request to change something / a request to read something |
+| Projection | A program that turns events into a read model |
+| Event sourcing | Storing the history of events as the source of truth and deriving state from it |
+| Event store | The append-only record of events |
+| Eventual consistency | The read side catches up with the write side after a delay |
 
 ```quiz
 [
+  {"q": "In CQRS, what does the read model do?", "options": ["Validates business rules for commands", "Answers queries from a structure shaped for reading, kept up to date by projections", "Stores passwords", "Replaces the event store"], "answer": 1,
+   "explain": "The write model protects the rules; the read model exists to make queries cheap and convenient."},
+  {"q": "A projection has a bug that produced wrong weekly totals. With event sourcing, how is it fixed?", "options": ["Edit the stored events by hand", "Fix the code and replay the events into a fresh read model", "Delete the event store", "Nothing can be done"], "answer": 1,
+   "explain": "The events are the truth and are never altered, so any view derived from them can be rebuilt."},
+  {"q": "A user books a slot and the list page does not show it for a second. What explains this?", "options": ["The booking failed", "Eventual consistency: the projection had not yet applied the event", "A TLS error", "A cache poisoning attack"], "answer": 1,
+   "explain": "The read side trails the write side. Return the new state in the response, or wait for the projection, to hide the gap."},
+  {"q": "Your service is slow only because reads are heavy. According to Newman, what should you usually try before CQRS?", "options": ["Event sourcing as well", "A read replica or a cache", "A rewrite in another language", "More microservices"], "answer": 1,
+   "explain": "CQRS is one of the harder scaling techniques; cheaper options carry less risk."},
+  {"q": "Should consumers of the Appointments service know it uses CQRS internally?", "options": ["Yes, they must call two endpoints in a fixed order", "No: it is an internal implementation detail the service should hide", "Yes, because events are public", "Only the gateway"], "answer": 1,
+   "explain": "Hiding it lets the team adopt or drop the pattern without coordinating with consumers."},
   {"q": "What are the three main reasons to add a cache?", "options": ["Security, logging and tracing", "Performance, scale and robustness", "Cost, compliance and fashion", "Consistency, isolation and durability"], "answer": 1,
    "explain": "A cache can make responses faster, reduce load on the origin, and keep answering when the origin is down."},
   {"q": "Which statement about client-side caching is correct?", "options": ["It cannot avoid network calls", "It avoids the call entirely on a hit and can serve when the provider is down, and invalidation is harder", "The provider always controls it", "It benefits all consumers automatically"], "answer": 1,
