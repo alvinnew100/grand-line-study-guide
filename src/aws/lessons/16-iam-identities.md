@@ -292,6 +292,101 @@ aws iam simulate-principal-policy \
 
 The **policy simulator** evaluates policies without making real calls. `implicitDeny` means "nothing allowed it" — as opposed to `explicitDeny`, which means a Deny statement matched.
 
+## Directories: AWS Directory Service and Active Directory
+
+Everything so far has been about identities that live **inside AWS**. Most companies, though, already have a list of their people long before they arrive in the cloud, and that list lives in a **directory**. This section explains what a directory is, the three directory products AWS offers, and how each connects to the identity tools above.
+
+### What a directory is
+
+A **directory** is a database built for one job: *looking up who and what exists in an organisation, and proving who someone is*. It stores **objects**: users, groups of users, and computers, each with attributes such as a name, a password check and the groups it belongs to. Think of the company phone book plus the security desk's badge register, in one system that every office, printer and application consults.
+
+The most common directory in business is **Microsoft Active Directory (AD)**. Three ideas are worth knowing:
+
+- A **domain** is one administrative area of the directory, with a name such as `corp.example.com`. Every user and computer in it is "in the domain".
+- A **domain controller** is a server that holds a copy of the directory and answers sign-in questions. A domain normally has at least two, so that one can fail.
+- **Group Policy** pushes settings (password rules, screen-lock timeouts, installed software) to every computer in the domain at once.
+
+When a Windows laptop is **joined to the domain**, the employee signs in once with an AD user name and password and then reaches file shares, intranet sites and printers without being asked again. That is **single sign-on (SSO)**. Behind it are two standard protocols you will see named: **Kerberos** (proves identity using short-lived tickets rather than sending the password around) and **LDAP**, the Lightweight Directory Access Protocol (a standard way to read and search a directory, used by Linux and many applications too).
+
+> [!NOTE]
+> IAM users, groups and roles are **not** the same thing as AD users and groups. IAM decides what an identity may do to AWS resources. A directory decides who a person is inside the company's own systems. The skill is knowing how to join them.
+
+### Why AWS offers directories
+
+Some AWS services are built for Windows-style environments and expect a directory: **FSx for Windows File Server** (SMB shares with AD permissions), **Amazon WorkSpaces** (virtual desktops that employees sign in to with company credentials), **RDS for SQL Server** with Windows authentication, and **EC2 Windows instances** that must be domain-joined. A company could run its own domain controllers on EC2, but then it patches, backs up and replicates them itself. **AWS Directory Service** provides directory options in which AWS runs that part. The service is Regional, and a directory sits in a VPC across two Availability Zones.
+
+### The three options
+
+| | AWS Managed Microsoft AD | AD Connector | Simple AD |
+|---|---|---|---|
+| What it is | A real Microsoft Windows Server Active Directory, run by AWS | A **proxy** that forwards sign-in requests to your existing on-premises AD | A small, AD-compatible directory built on Samba 4 (an open-source implementation, not Microsoft's) |
+| Stores users in AWS? | Yes (and can also trust another AD) | **No.** Nothing is stored in AWS | Yes |
+| Trust with on-premises AD | **Yes** | Not needed: it talks to the real one | **No** |
+| Multi-factor authentication | Yes (through a RADIUS server) | Yes (through your RADIUS server) | No |
+| Size | Standard Edition: up to roughly 30,000 objects (suits about 5,000 employees); Enterprise: up to roughly 500,000 objects | Small or large (a size you choose) | Small or Large; for modest numbers of users |
+| Choose it when | You need genuine AD features in the cloud, or SQL Server on RDS with Windows authentication, or a trust with the corporate AD | You want AWS services to use the on-premises directory and want nothing to synchronise or store in AWS | You need basic, low-cost directory features, often for Linux LDAP, and nothing more |
+
+How to remember it: **Managed Microsoft AD is the real thing in AWS; AD Connector is a doorbell that rings the real thing in your own building; Simple AD is a cheap stand-in.** The exam question is nearly always "which one when": more than a few thousand users or a need for trusts and Microsoft features means Managed Microsoft AD; "no data in AWS, just use our existing AD" means AD Connector; "small, cheap, basic" means Simple AD.
+
+> [!WARNING]
+> Check availability before designing around Simple AD. It supports only a subset of AD (no trusts, no multi-factor authentication, no schema extensions, no LDAPS, and it does not work with RDS for SQL Server), and AWS directs customers who need real AD features to Managed Microsoft AD. The documentation also lists which directory types each Region offers. AWS has since added a **Hybrid Edition** of the Managed Microsoft AD family for extending an existing self-managed AD into AWS; read the current Directory Service guide for what it covers before relying on it.
+
+Two further facts about **AWS Managed Microsoft AD** are examined often. AWS runs two domain controllers in different Availability Zones, monitors them, and takes daily snapshots. You do not get remote access to the controllers themselves; you administer users and Group Policy with the usual AD tools from a Windows instance joined to the domain. You can add **more domain controllers** to share the load or add Regions, and you can **enable LDAPS** (LDAP over TLS) and **MFA**.
+
+### Trusts with on-premises Active Directory
+
+A **trust relationship** is an agreement between two directories in which one accepts the sign-ins vouched for by the other. With a trust, a user whose account lives in the corporate AD can reach a resource, such as an FSx file share, that is governed by the AWS-hosted directory, without a second account or a second password.
+
+- A **one-way trust** goes in one direction: the *trusting* domain lets users of the *trusted* domain in. For "AWS resources, corporate users" the AWS directory trusts the corporate one.
+- A **two-way trust** works in both directions.
+- Trusts need **network connectivity** between the two: a Site-to-Site VPN or Direct Connect ([Connecting networks](#/lesson/aws/vpc-connectivity)), with the right ports open in security groups and on-premises firewalls (DNS, Kerberos and LDAP among them).
+- Only **AWS Managed Microsoft AD** supports trusts. This is why it is the answer whenever a question mentions "trust".
+
+The alternative to a trust is **AD Connector**. A trust keeps a *separate* directory in AWS that believes the corporate one. AD Connector keeps *no* directory in AWS at all. If the VPN link to the office fails, AD Connector cannot authenticate anyone, which is a reason to prefer a managed directory when AWS workloads must keep running through a link outage.
+
+```mermaid
+flowchart LR
+  subgraph OnPrem["On-premises"]
+    ADC[Corporate Active Directory]
+  end
+  subgraph AWSCloud["AWS VPC"]
+    MAD[AWS Managed Microsoft AD]
+    CON[AD Connector]
+    FSX[FSx for Windows]
+    WS[WorkSpaces]
+  end
+  ADC <-->|Trust over VPN or Direct Connect| MAD
+  CON -->|Proxies sign-in requests| ADC
+  MAD --> FSX
+  MAD --> WS
+```
+
+### Connecting a directory to IAM Identity Center
+
+[IAM Identity Center](#/lesson/aws/iam-evaluation) is the workforce sign-in service for AWS accounts and applications. It needs somewhere to find the people. Its **identity source** can be:
+
+1. **Identity Center's own directory**: you create the users in the service. Fine for a small team.
+2. **An external identity provider** (Okta, Microsoft Entra ID and others) over SAML 2.0, usually with automatic provisioning of users through the SCIM standard.
+3. **Active Directory** through Directory Service: either **AWS Managed Microsoft AD** or an **AD Connector** that points at the on-premises AD. Employees keep signing in with their company password; Identity Center maps their AD groups to **permission sets** in each AWS account.
+
+So the full chain for a company that already lives in Active Directory is: *employee signs in with the AD name and password, Identity Center checks it against the directory, and issues temporary credentials for a role in the account.* No IAM users are created, nothing long-lived exists, and when the employee leaves AD, access disappears everywhere.
+
+> [!INTERVIEW]
+> **"Our staff already sign in to Windows with Active Directory. How do they get to AWS?"** Connect the directory to IAM Identity Center, using AD Connector (or a Managed Microsoft AD with a trust) as the identity source, and assign AD groups to permission sets. People use their existing credentials and receive temporary role credentials; no IAM users are created.
+>
+> **"What is the difference between Managed Microsoft AD and AD Connector?"** One is a real directory hosted in AWS that can trust the corporate one; the other stores nothing and only relays requests to the on-premises directory.
+
+### Where Cognito fits
+
+Directory Service is for a **workforce**. Customers of your public app belong in **Amazon Cognito**, which can hold millions of sign-ups and accept social logins. Choosing between them is the same workforce-or-customer decision made in the IAM lessons.
+
+### Pitfalls
+
+- **Picking AD Connector and then expecting resilience.** It depends on the connection to the on-premises controllers.
+- **Using Simple AD for something that needs a trust, MFA or SQL Server on RDS.** It supports none of them.
+- **Forgetting DNS.** Domain joins and trusts depend on the VPC resolving the directory's names. Use the directory's DNS addresses in a DHCP option set, or Route 53 Resolver rules ([Route 53](#/lesson/aws/route53)).
+- **Mixing up identity worlds.** An AD user is not an IAM user. Giving someone an AD account does nothing in AWS until Identity Center or a federation role maps it.
+
 ## IAM hygiene
 
 - **Password policy**: minimum length, complexity, no reuse — for any IAM users that remain.
@@ -363,6 +458,16 @@ The **policy simulator** evaluates policies without making real calls. `implicit
 - **Role**: an identity with permissions and no long-term credentials.
 - **Temporary security credentials**: short-lived keys plus a session token.
 - **Trust policy**: the resource-based policy on a role stating who may assume it.
+- **Active Directory (AD)**: Microsoft's directory service for users, groups and computers in an organisation.
+- **AD Connector**: a Directory Service proxy that relays sign-ins to an existing on-premises AD and stores nothing in AWS.
+- **AWS Managed Microsoft AD**: a real Windows Server Active Directory run by AWS; supports trusts.
+- **Directory**: a database of users, groups and computers used for lookup and sign-in.
+- **Domain controller**: a server holding a copy of an AD domain that answers sign-in requests.
+- **Group Policy**: AD's way of pushing settings to every computer in a domain.
+- **Kerberos / LDAP**: a ticket-based authentication protocol / a standard protocol to read and search a directory.
+- **Simple AD**: a small, low-cost, Samba 4-based directory with only basic AD features.
+- **Single sign-on (SSO)**: signing in once to reach many systems.
+- **Trust relationship**: an agreement under which one directory accepts sign-ins vouched for by another.
 
 ```quiz
 [
@@ -397,7 +502,10 @@ The **policy simulator** evaluates policies without making real calls. `implicit
   {"q": "A developer can launch EC2 instances and has an unrestricted iam:PassRole permission. Why is this dangerous?",
    "options": ["PassRole deletes roles", "They can launch an instance with a more powerful role than their own and use its credentials", "PassRole exposes passwords", "It is not dangerous; PassRole is read-only"],
    "answer": 1,
-   "explain": "iam:PassRole lets a principal hand any permitted role to a service. Unrestricted, it is a privilege-escalation path; scope it to specific roles."}
+   "explain": "iam:PassRole lets a principal hand any permitted role to a service. Unrestricted, it is a privilege-escalation path; scope it to specific roles."},
+  {"q": "A company wants AWS services to authenticate users against its existing on-premises Active Directory, and wants no directory data stored in AWS. Which option fits?", "options": ["AWS Managed Microsoft AD", "AD Connector", "Simple AD", "Amazon Cognito user pool"], "answer": 1, "explain": "AD Connector is a proxy: it forwards sign-in requests to the on-premises directory and stores nothing in AWS. The others hold users in AWS."},
+  {"q": "A design needs a trust relationship between a directory in AWS and the corporate Active Directory, plus an RDS for SQL Server database using Windows authentication. Which directory type is required?", "options": ["Simple AD", "AD Connector", "AWS Managed Microsoft AD", "IAM Identity Center's built-in directory"], "answer": 2, "explain": "Only AWS Managed Microsoft AD supports trusts and works with RDS for SQL Server. Simple AD supports neither; AD Connector holds no directory."},
+  {"q": "Employees sign in to Windows with Active Directory. How should they reach several AWS accounts with no IAM users and no long-lived keys?", "options": ["Create IAM users and email the access keys", "Use an AD Connector or Managed Microsoft AD as the identity source of IAM Identity Center and assign AD groups to permission sets", "Share one IAM role password", "Copy the AD database into S3"], "answer": 1, "explain": "Identity Center checks the AD credentials and issues temporary role credentials, so access follows the employee's directory account."}
 ]
 ```
 

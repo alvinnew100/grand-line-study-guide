@@ -325,6 +325,44 @@ Clickstream to dashboard, for Tidewater Books:
 7. **Lake Formation** hides the `email` column from everyone except the support team.
 8. Lifecycle rules move raw files to Glacier Instant Retrieval after 90 days and delete them after three years.
 
+## Also worth knowing: the book's remaining application and end-user services
+
+The source book's chapter on application services lists a handful of products beyond queues, topics and workflows. Several have since been retired, renamed or closed to new customers, and cloud services change names often, so this table gives the job each one did and what to use now. Dates and statuses were checked against AWS documentation and announcements in late 2026; confirm in the current console before building on any row.
+
+| Service | What it does, in plain words | Status and what to use |
+|---|---|---|
+| **Amazon SES** (Simple Email Service) | Sends (and can receive) email at scale: receipts, password resets, newsletters. It handles the technical reputation work that gets mail into inboxes. | **Current.** You verify a domain or address, then send through an API or SMTP. New accounts start in a **sandbox** (limited volume, verified recipients only) until you request production access. SES can publish delivery, bounce and complaint events to **SNS**. It is also the recommended email service now that Pinpoint has ended. |
+| **Amazon Elastic Transcoder** | Converted video and audio files from one format to others (for example one master video into versions for phones, tablets and televisions). | **Discontinued on 13 November 2025.** Replaced by **AWS Elemental MediaConvert**, a file-based video transcoding service that charges for the minutes of video processed. Recreate presets and jobs there. |
+| **Amazon WorkSpaces** | A **virtual desktop**: a Windows or Linux desktop running in AWS that an employee reaches from any device. Think of it as renting a laptop that lives in a data centre. | **Current.** It signs users in through a directory ([Directory Service](#/lesson/aws/iam-identities), above), runs in your VPC, and bills monthly or hourly. |
+| **Amazon AppStream 2.0** | Streams a single application (for example one expensive design tool) to a browser, with nothing installed on the user's computer. | **Renamed** Amazon WorkSpaces Applications; the same idea of streaming an application rather than a whole desktop. Older documents still say AppStream. |
+| **Amazon CloudSearch** | A managed search engine for a website's own content (search box, filters, suggestions). | **Closed to new customers since 25 July 2024**; existing customers keep using it. For new work use **Amazon OpenSearch Service** (or OpenSearch Serverless), which also appears in the log-analysis material of [CloudWatch](#/lesson/aws/cloudwatch) and [Streams and workflows](#/lesson/aws/streams-workflows). |
+| **Amazon WorkDocs** | A shared document store and review tool, comparable to a company file-sharing site. | **Support ended 25 April 2025.** Use S3 with a sharing tool, or a third-party suite. |
+| **Amazon WorkMail** | A managed business email and calendar service. | **Winding down:** closed to new customers on 30 April 2026, with support ending on 31 March 2027. Plan a migration to another provider. |
+| **Amazon Mobile Analytics / Amazon Pinpoint** | Tracked how people use mobile apps and sent campaign messages. | Mobile Analytics was retired years ago. **Pinpoint's support ended on 30 October 2026**; its SMS, voice and push channels continue as **AWS End User Messaging**, and email moves to **SES**. |
+| **AWS Device Farm** | Runs your mobile or web app's tests on real phones and browsers in the cloud, so you do not own a drawer of handsets. | **Current.** |
+| **Amazon SWF** | Coordinates multi-step background jobs with durable state. | **Still available, but Step Functions is the choice for new work** ([Streams and workflows](#/lesson/aws/streams-workflows)). |
+
+How to use the table in an exam or interview. Old study material names these products as if all were current, and a question that still does so is asking the *concept*: "send transactional email" means SES, "convert a video to many formats" means a transcoding service (today MediaConvert), "virtual desktops for staff" means WorkSpaces, "search engine for my site" means OpenSearch Service. Give the current answer and mention the old name; that shows you know both the vocabulary and the present state of the platform.
+
+> [!TIP]
+> A quick way to catch a retirement: AWS announces end-of-support dates on each service's own documentation page, usually under a heading such as "end of support" or "availability change". Look there before building on any service you have not used in the last year.
+
+### SES in one worked example
+
+When Tidewater Books completes an order, a Lambda function sends the confirmation email. The caller needs an IAM role with permission to send, and the sending identity must be verified.
+
+```bash
+aws sesv2 create-email-identity --email-identity example.com
+aws sesv2 send-email \
+  --from-email-address orders@example.com \
+  --destination ToAddresses=customer@example.org \
+  --content 'Simple={Subject={Data=Your order},Body={Text={Data=Thank you for your order.}}}'
+```
+
+- `create-email-identity` registers the domain; SES then returns DNS records to publish (**DKIM**, a digital signature on each message, plus optional SPF and DMARC records) that prove you own it and help receivers trust your mail.
+- `send-email` sends one message. In the sandbox the recipient must also be a verified identity, which is why a first test succeeds only with your own addresses.
+- Bounces (the address does not exist) and complaints (a recipient marked it as spam) must be watched. Too many harms your sending reputation, and SES can suspend an account. Route these events to SNS or a queue and stop sending to those addresses.
+
 ## Cost notes and free-tier warnings
 
 - **S3** storage and requests: the lake's base cost. Small files inflate request charges.
@@ -396,6 +434,11 @@ Clickstream to dashboard, for Tidewater Books:
 - **Predicate pushdown**: skipping file blocks using stored statistics.
 - **Transient cluster**: a cluster created for one job and then terminated.
 - **Zone**: a stage of refinement in the lake (raw, clean, analytics).
+- **AWS Elemental MediaConvert**: the file-based video transcoding service that replaced Elastic Transcoder.
+- **DKIM**: a digital signature added to email so that receivers can verify the sender's domain.
+- **SES sandbox**: the limited starting mode of an SES account (restricted volume and recipients).
+- **Transcoding**: converting audio or video files from one format to others.
+- **WorkSpaces**: managed virtual desktops in AWS.
 
 ```quiz
 [
@@ -430,7 +473,10 @@ Clickstream to dashboard, for Tidewater Books:
   {"q": "Website click events must land in S3 as Parquet within a few minutes, with no servers or consumer code. Which service?",
    "options": ["AWS DataSync", "Amazon Data Firehose with format conversion", "AWS Snowball", "Amazon EMR"],
    "answer": 1,
-   "explain": "Firehose buffers streaming records and delivers them to S3, converting JSON to Parquet using a Glue table schema."}
+   "explain": "Firehose buffers streaming records and delivers them to S3, converting JSON to Parquet using a Glue table schema."},
+  {"q": "A reader finds an old study guide that says to use Amazon Elastic Transcoder to convert uploaded videos. What is the current answer?", "options": ["Elastic Transcoder is still the recommended service", "AWS Elemental MediaConvert, because Elastic Transcoder was discontinued", "Amazon SES", "Amazon CloudSearch"], "answer": 1, "explain": "Elastic Transcoder reached end of support on 13 November 2025; MediaConvert is its replacement."},
+  {"q": "A new project needs a search box over its own product catalogue. Which service should be chosen, and why not Amazon CloudSearch?", "options": ["CloudSearch, it is the managed search service", "OpenSearch Service, because CloudSearch is closed to new customers", "WorkDocs", "Elastic Transcoder"], "answer": 1, "explain": "CloudSearch has been closed to new customers since July 2024; OpenSearch Service is the recommended search engine."},
+  {"q": "A new SES account can send only to a few verified addresses at low volume. What is the cause and the fix?", "options": ["The account is in the SES sandbox; request production access", "SES does not support external recipients", "A security group blocks port 25", "The account needs Shield Advanced"], "answer": 0, "explain": "SES accounts begin in a sandbox that limits volume and recipients. You request production access, and then manage bounces and complaints to protect your sending reputation."}
 ]
 ```
 

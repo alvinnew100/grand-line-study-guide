@@ -138,6 +138,74 @@ Governance at scale uses the multi-account tools from [the Organizations lesson]
 
 The book's chapter on risk and compliance makes one further point worth keeping: a customer's own risk management does not go away in the cloud. You still identify what you are protecting, assess the threats, choose controls and verify them; the cloud changes *which* controls you operate yourself and gives you far better tools for verifying them.
 
+## AWS's side of security, and testing your own defences
+
+The shared responsibility model ([Shared responsibility](#/lesson/aws/responsibility-and-tools)) splits security into "of the cloud" (AWS) and "in the cloud" (you). Two practical questions follow. What exactly does AWS do on its side, so that you know what you can rely on and cite in an audit? And may you attack your own systems to check your side? The second has an official policy, and getting it wrong can get an account suspended.
+
+### What AWS secures: buildings, hosts and the hypervisor
+
+You cannot visit an AWS data centre, so you rely on the controls AWS describes and on audit reports obtained through **AWS Artifact** (above). The main layers are:
+
+- **Physical access.** Facilities are unmarked buildings with controlled perimeters, guards, video surveillance and intrusion detection. Staff need a business reason for access, pass multi-factor checks to reach the data floors, and lose access the moment the reason ends. Visitors are identified, signed in and escorted, and every entry is logged and audited.
+- **Environmental protection.** Fire detection and suppression, redundant power with battery and generator backup, climate control, and sites chosen with flood and earthquake risk in mind. Availability Zones are far enough apart to avoid sharing most of these risks, but close enough for fast links.
+- **Hardware lifecycle.** Storage media that reaches the end of its life is destroyed or wiped to industry standards before leaving the building, so one customer's data cannot reappear on another's disk.
+- **The network.** AWS runs the physical network and its protections, such as spoofed-address blocking, so that one instance cannot pretend to be another or listen to traffic meant for someone else.
+- **The hypervisor.** Each EC2 instance is a **virtual machine**, a software-simulated computer, and the **hypervisor** is the layer that creates them and keeps neighbours apart on the same physical server. It is how many customers share hardware without seeing each other's memory or disks. Current-generation instances use the **AWS Nitro System**, which moves much of this work into dedicated hardware and a minimal hypervisor; AWS states that it has no operator access path to the memory of Nitro-based instances. You neither patch nor configure this layer; the shared responsibility table puts it firmly on AWS's side.
+
+What stays with you does not change: the guest operating system and anything you install on it, security groups and network design, identity and access management, encryption choices, and your data. With **managed services** such as RDS or Lambda, AWS also takes the operating system and platform, which is why the line moves up with the abstraction level, but your data and your access rules never move.
+
+> [!NOTE]
+> "Isolation by the hypervisor" is not the same as "no shared hardware". By default your instance shares a physical server with other customers' instances. If a regulation demands a server nobody else touches, use **Dedicated Hosts or Dedicated Instances** ([EC2 purchasing](#/lesson/aws/ec2-purchasing)).
+
+### May you test your own AWS resources? The penetration testing policy
+
+A **penetration test** is an authorised, controlled attempt to break into a system in order to find weaknesses before real attackers do. Think of hiring a locksmith to try your doors, with a signed letter saying so. Without such a letter, the same activity looks identical to an attack, which is why AWS publishes a policy.
+
+AWS's current policy, in summary:
+
+- **Many services need no prior approval.** You may run security assessments against your own resources on a list of services that includes **EC2 instances (with their load balancers, NAT gateways and AWS WAF), RDS and Aurora, CloudFront, API Gateway, Lambda and Lambda@Edge, Lightsail, Elastic Beanstalk, ECS and Fargate, and OpenSearch Service**, among others. The list has grown over time, so read the current page rather than relying on memory.
+- **Only your own accounts and resources.** You may test what you own. Testing someone else's account, or the underlying AWS infrastructure and shared services, is outside the policy.
+- **Other testing needs approval.** For anything not on the permitted list, and for activities such as red-team exercises, command-and-control hosting, simulated phishing and malware testing, you submit a request through AWS Support (the "simulated events" form), giving dates, the account and assets involved, and contact details, well ahead of the start date.
+- **Denial of service is prohibited.** You may not run denial of service (DoS) or distributed denial of service (DDoS) attacks against AWS resources, simulated or not. A **DoS attack** tries to make a service unavailable by overwhelming it; a **DDoS attack** does it from many sources at once.
+- **Other forbidden activities** include port flooding, protocol flooding, request flooding (for example a flood of login or API calls), DNS zone walking against Route 53 hosted zones, and S3 bucket or subdomain takeover.
+- **Your tools must be able to be stopped from flooding.** If a scanner has a denial-of-service feature, it must be switchable off; otherwise do not use it. This is your responsibility even when a contractor runs the test.
+- **Load testing is a different thing.** Checking that your own application survives expected traffic is stress testing. It follows its own AWS stress testing policy and is not a security test; never aim it at resources you do not own.
+
+### The DDoS simulation policy
+
+Because the right way to test resilience against DDoS is itself valuable, AWS publishes a **separate** policy. In outline:
+
+- Tests must be run by an **approved AWS DDoS Test Partner**, not by you with a home-made tool. The partner list is on the AWS policy page.
+- Targets must be your own resources that are **registered as protected resources with AWS Shield Advanced**, or an API Gateway edge-optimised endpoint, in an account you own.
+- Traffic must stay under published ceilings (for example 20 gigabits per second and 50,000 requests per second; lower packet-rate limits apply to some resource types), and must **not originate from an AWS resource** or simulate an amplification attack.
+- Larger or differently shaped tests need an exception requested in advance, and a vendor that is not approved must also request one.
+- Your system should already be built to current DDoS-resilience guidance (CloudFront, Shield, WAF, Auto Scaling) before you test it.
+
+The practical lesson for an architect is that **defences against DDoS are bought and designed, not proven by attacking**. Use CloudFront, Shield (Standard is automatic; Advanced adds response support and cost protection), AWS WAF rate-based rules and spare capacity, and rely on the partner route when a test is genuinely required.
+
+```mermaid
+flowchart TD
+  A[Want to test security] --> B{Own the account and resource?}
+  B -->|No| X[Not allowed]
+  B -->|Yes| C{Service on the permitted list and activity is not DoS or flooding?}
+  C -->|Yes| D[Go ahead: no approval needed. Keep records]
+  C -->|No| E{Is it a DDoS simulation?}
+  E -->|Yes| F[Approved DDoS test partner and Shield Advanced targets]
+  E -->|No| G[Submit simulated events request via AWS Support first]
+```
+
+> [!INTERVIEW]
+> **"Can we run a penetration test against our production API on AWS?"** Yes for our own account and for services AWS lists as permitted, without asking first, as long as we do not do denial of service or flooding and our tools cannot flood. Anything outside the list needs advance approval through AWS Support. DDoS simulation is separate: an approved partner, Shield Advanced protected resources, and published traffic limits.
+>
+> **"Whose job is the hypervisor?"** AWS's. The customer secures the guest operating system, network rules, access and data.
+
+### Pitfalls
+
+- **Running a scanner with its default "stress" modules on.** The tool, not your intent, decides what is sent. Switch off DoS and brute-force-flooding modules.
+- **Treating "no approval needed" as "no records needed".** Log who ran what, when, from where, so your security team can tell the test from an attack, and warn your own on-call staff so a GuardDuty finding is not mistaken for a breach.
+- **Testing a managed service AWS runs for you at a depth beyond your side.** You may test your configuration and application; attacking the AWS-operated layers is outside the policy.
+- **Believing the permitted list is fixed.** It changes; read it each time.
+
 ## The operational excellence pillar
 
 ### Design principles
@@ -319,6 +387,11 @@ They pull against each other at times — encryption and redundancy cost money, 
 - **Preventive / detective / responsive control**: stops / notices / automatically remediates a problem.
 - **SLO**: service level objective, a measurable reliability target.
 - **Well-Architected Tool**: the console service for reviewing workloads against the pillars.
+- **DDoS / DoS**: an attack that overwhelms a service to make it unavailable, from many sources / from one.
+- **Hypervisor**: the software layer that runs virtual machines and keeps them isolated on shared hardware.
+- **Nitro System**: AWS's hardware-and-minimal-hypervisor platform for current EC2 instances.
+- **Penetration test**: an authorised attempt to break into a system to find weaknesses.
+- **Simulated events request**: the AWS Support form for testing that needs prior approval.
 
 ```quiz
 [
@@ -353,7 +426,10 @@ They pull against each other at times — encryption and redundancy cost money, 
   {"q": "After an outage caused by a manual configuration error, which outcome of the review is most valuable?",
    "options": ["Naming the engineer responsible", "An action to automate the change through reviewed code with validation, so the error cannot recur", "A reminder email to be more careful", "No written record"],
    "answer": 1,
-   "explain": "Blameless reviews look for why the system allowed the mistake and convert the lesson into automated prevention."}
+   "explain": "Blameless reviews look for why the system allowed the mistake and convert the lesson into automated prevention."},
+  {"q": "A security team wants to run a vulnerability scan and exploit test against its own EC2 instances behind an Application Load Balancer. Does it need to ask AWS first?", "options": ["Yes, always, two weeks ahead", "No, EC2 and load balancers are on the permitted list, provided the test is in the team's own account and does not include DoS or flooding", "No, and flooding tests are also fine", "Yes, and the test must come from an AWS resource"], "answer": 1, "explain": "Permitted services in your own account need no prior approval, but denial of service, port or request flooding stay prohibited."},
+  {"q": "A company wants to prove its public site survives a large DDoS attack. What does AWS policy allow?", "options": ["Running its own flood tool from EC2 instances", "A test by an approved AWS DDoS test partner against Shield Advanced protected resources within the published limits", "Any test, if it is done at night", "Nothing; DDoS testing is never possible"], "answer": 1, "explain": "DDoS simulation is governed by a separate policy: approved partners, Shield Advanced targets, traffic ceilings and no traffic originating from AWS resources."},
+  {"q": "Who patches and secures the hypervisor that isolates EC2 instances from each other?", "options": ["The customer", "AWS", "The Marketplace vendor", "The AMI publisher"], "answer": 1, "explain": "The hypervisor, host hardware and facilities are part of security of the cloud. The customer secures the guest operating system, network rules, access and data."}
 ]
 ```
 
