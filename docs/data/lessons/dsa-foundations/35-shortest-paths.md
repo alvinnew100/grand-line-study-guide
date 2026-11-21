@@ -1,20 +1,43 @@
 # Weighted graphs and Dijkstra's algorithm
 
-BFS finds paths with the fewest edges. But edges are rarely equal: roads have lengths, flights have
-prices, network links have latencies. In a **weighted graph** each edge carries a number, and the
-natural question becomes: what is the **cheapest** path? This lesson covers the single-source
-shortest path problem and its classic greedy solution, **Dijkstra's algorithm**.
+> **Before this lesson:** You should know graph vocabulary and adjacency lists
+> ([Graphs and their representations](#/lesson/dsa-foundations/graph-representations)),
+> breadth-first search ([DFS, BFS, transitive closure and DAGs](#/lesson/dsa-foundations/graph-traversals)),
+> priority queues, `heapq` and lazy deletion
+> ([Priority queues and binary heaps](#/lesson/dsa-foundations/heaps),
+> [PQ sorting, heap-sort and adaptable priority queues](#/lesson/dsa-foundations/heap-sort-adaptable)),
+> and the greedy method ([Greedy compression and tries](#/lesson/dsa-foundations/huffman-tries)).
+
+## In plain words
+
+Breadth-first search finds the route with the fewest steps. That is the best route only if
+every step costs the same. On a real map it does not: one road is 2 kilometres, another 80. A
+route with five short roads can beat a route with one long road. This lesson is about finding
+the **cheapest** route when every connection has its own cost.
+
+The method is **Dijkstra's algorithm** (pronounced "DYKE-stra", after the Dutch computer
+scientist Edsger Dijkstra). Picture water flooding outwards from your starting town along all
+the roads at once, at a steady speed. The water reaches the nearest town first, then the next
+nearest, and so on. The moment it arrives at a town, the time elapsed *is* the shortest
+distance to that town, because water coming by any other route is still on its way. Dijkstra's
+algorithm simulates that flood: it settles towns one at a time, always the nearest unsettled
+one next.
+
+Why it matters for a job: this is the algorithm behind route planners and behind the routing
+of data across the internet. It is also the most frequently asked graph algorithm in
+interviews after BFS and DFS, usually in its short `heapq` form, which section 4 teaches.
 
 ## 1. Weighted graphs and shortest paths
 
-A **weighted graph** has a numeric label $w(e)$, the **weight**, on each edge $e$. The **length**
-(or weight) of a path $P = (e_0, e_1, \ldots, e_{k-1})$ is
+A **weighted graph** is a graph in which every edge $e$ carries a number $w(e)$, its
+**weight**: a length, a price, a travel time. The **length** of a path is the sum of the
+weights of its edges. For a path $P$ made of edges $e_0, e_1, \ldots, e_{k-1}$:
 
 $$w(P) = \sum_{i=0}^{k-1} w(e_i).$$
 
-The **distance** $d(u, v)$ from $u$ to $v$ is the length of a minimum-length path (a **shortest
-path**) from $u$ to $v$, if one exists; by convention $d(u, v) = \infty$ if there is no path, and
-$d(u, u) = 0$.
+The **distance** from $u$ to $v$, written $d(u, v)$, is the length of a path of smallest
+length from $u$ to $v$; such a path is a **shortest path**. If there is no path at all, the
+distance is taken to be infinite, $d(u, v) = \infty$; and $d(u, u) = 0$.
 
 ```mermaid
 graph LR
@@ -29,30 +52,39 @@ graph LR
   E -- 1 --- F
 ```
 
-Fewest edges ≠ cheapest: from A to B the direct edge costs 8, while A → C → D → B costs
-$2 + 1 + 2 = 5$.
+In the picture, the fewest edges and the lowest cost disagree. From A to B the direct edge
+costs 8, while the three-edge route A, C, D, B costs $2 + 1 + 2 = 5$. BFS would report the
+direct edge; we want the route of length 5.
 
-**Negative weights.** If some cycle has negative total weight, distances are not well defined —
-going around the cycle again always makes the path cheaper. Dijkstra's algorithm requires **all edge
-weights to be non-negative**.
+**Negative weights.** A weight may in principle be negative (a road that pays you to drive
+it). If some cycle has a negative total, "shortest" stops making sense, because going round
+the cycle once more always makes the path cheaper. Dijkstra's algorithm requires that **every
+edge weight is non-negative**, zero or more, and section 2.2 shows exactly where that is
+needed.
 
-**Single-source shortest paths (SSSP):** given a source vertex $s$, find $d(s, v)$ for every vertex
-$v$.
+**The problem.** Given a starting vertex $s$, the **source**, find the distance $d(s, v)$ to
+every vertex $v$. This is called the *single-source shortest-paths* problem.
 
 ## 2. Dijkstra's algorithm
 
-The idea is a "weighted BFS": grow a **cloud** $C$ of vertices around $s$, adding vertices in order
-of their distance from $s$. It is an application of the **greedy method**: at each step, add the
-vertex outside the cloud that is closest to $s$.
+The idea is a weighted version of BFS. Grow a set of settled vertices around $s$, traditionally
+called the **cloud**, adding vertices in order of their distance from $s$. It is an
+application of the greedy method: at each step, add the vertex outside the cloud that is
+closest to $s$.
 
-Maintain for each vertex $v$ a label $D[v]$: the length of the best path from $s$ to $v$ **found so
-far** (an upper bound on $d(s, v)$). Initially $D[s] = 0$ and $D[v] = \infty$ otherwise.
+For each vertex $v$ keep a label $D[v]$: the length of the best path from $s$ to $v$ **found
+so far**. It is a tentative distance, never smaller than the true one, and it can only go
+down. At the start $D[s] = 0$ and every other label is $\infty$, meaning "no path found yet".
 
-Repeat: pull into the cloud the vertex $u \notin C$ with the smallest $D[u]$; then, for each edge
-$(u, v)$ with $v \notin C$, check whether going through $u$ gives a better path to $v$ — this is
-**edge relaxation**:
+Then repeat. Take the vertex $u$ outside the cloud with the smallest label and move it into
+the cloud. For each edge from $u$ to a vertex $v$ still outside the cloud, ask whether
+reaching $v$ by way of $u$ beats the best route to $v$ known so far, and if so, lower $v$'s
+label. This test-and-update step is called **relaxing** the edge:
 
 $$\text{if } D[u] + w(u, v) < D[v]: \quad D[v] \leftarrow D[u] + w(u, v).$$
+
+(The arrow means "is replaced by".) The vertex with the smallest label is found with a
+priority queue keyed by the labels:
 
 ```
 ShortestPath(G, s):
@@ -81,28 +113,39 @@ On the graph above with source A:
 | 5 | E (6) | 0 | 5 | 2 | 3 | 6 | **7** |
 | 6 | F (7) | 0 | 5 | 2 | 3 | 6 | 7 |
 
-Each label is finalised at the moment its vertex is pulled into the cloud.
+Read the table row by row. In step 1, A enters the cloud and its three edges are relaxed,
+giving tentative labels 8, 2 and 4. In step 2 the smallest label outside the cloud is C's, 2;
+C enters, and its edge to D improves D's label from 4 to 3 (the route A, C, D beats the direct
+edge), while E gets its first label, $2 + 7 = 9$. In step 3, D enters with label 3 and
+improves B to 5 and E to 6. Bold figures mark improvements. A label becomes final at the moment
+its vertex enters the cloud.
 
 ### 2.2 Why it works
 
-> **Proposition.** At the moment Dijkstra's algorithm moves a vertex $v$ into the cloud, its label
-> is already exact: $D[v] = d(s, v)$.
+> **Claim.** At the moment Dijkstra's algorithm moves a vertex $v$ into the cloud, its label is
+> exact: $D[v] = d(s, v)$.
 
-*Why (by contradiction).* Suppose $z$ is the **first** vertex pulled into the cloud with
-$D[z] > d(s, z)$. Consider a true shortest path $P$ from $s$ to $z$. Let $y$ be the first vertex on
-$P$ that is *not* in the cloud at that moment (possibly $y = z$), and $x$ its predecessor on $P$
-(in the cloud; possibly $x = s$). Since $x$ was pulled in correctly, $D[x] = d(s, x)$, and when $x$
-entered the cloud we relaxed edge $(x, y)$, so
+The flood picture makes this plausible; here is the proof, by contradiction. Suppose the claim
+fails, and let $z$ be the **first** vertex to enter the cloud with a label that is too large,
+$D[z] > d(s, z)$. Take a true shortest path $P$ from $s$ to $z$. It starts inside the cloud (at
+$s$) and ends at $z$, which is about to enter; so somewhere it leaves the cloud. Let $y$ be
+the first vertex on $P$ that is *not* in the cloud at this moment (it may be $z$ itself), and
+let $x$ be the vertex before it on $P$, which is in the cloud. Since $z$ is the first mistake,
+$x$'s label was exact when it entered, and at that time the edge from $x$ to $y$ was relaxed,
+so
 
-$$D[y] \le D[x] + w(x, y) = d(s, x) + w(x, y) = d(s, y),$$
+$$D[y] \le D[x] + w(x, y) = d(s, x) + w(x, y) = d(s, y).$$
 
-the last step because a prefix of a shortest path is a shortest path. But the algorithm chose $z$,
-not $y$, so $D[z] \le D[y]$. And since $y$ lies on the shortest path to $z$ and **weights are
-non-negative**, $d(s, y) \le d(s, z)$. Chaining:
-$D[z] \le D[y] \le d(s, y) \le d(s, z)$ — contradicting $D[z] > d(s, z)$. ∎
+(The last equality holds because the first part of a shortest path is itself a shortest
+path.) Now, the algorithm chose $z$ and not $y$, so $z$ had the smaller label:
+$D[z] \le D[y]$. And $y$ comes before $z$ on the path $P$; since **no weight is negative**, the
+rest of the path from $y$ to $z$ adds zero or more, so $d(s, y) \le d(s, z)$. Putting the three
+together: $D[z] \le D[y] \le d(s, y) \le d(s, z)$. That contradicts $D[z] > d(s, z)$. ∎
 
-The non-negativity is used exactly once, in $d(s, y) \le d(s, z)$: with negative edges, a path that
-leaves the cloud could come back cheaper, and the greedy choice fails.
+Non-negativity was used in exactly one place, the step $d(s, y) \le d(s, z)$. With a negative
+edge, a path could leave the cloud, wander off, and come back cheaper than anything known when
+a vertex was settled, and the greedy choice would be wrong. The demo shows this happening on a
+three-vertex graph.
 
 ```python-run
 import heapq
@@ -127,20 +170,31 @@ Let $n$ and $m$ be the numbers of vertices and edges. The algorithm does $n$ ins
 `remove_min` calls and at most $m$ key updates (one per relaxation that succeeds), plus
 $O(n + m)$ for scanning adjacency lists.
 
-- **Adaptable heap PQ** (locators let us find and update a vertex's entry): every operation is
-  $O(\log n)$, so the total is **$O((n + m)\log n)$**.
-- **Unsorted sequence PQ**: `remove_min` costs $O(n)$, updates cost $O(1)$: total **$O(n^2)$**.
+The total depends on how the priority queue is built:
 
-Which is better depends on density: the heap wins when $m < n^2/\log n$ (sparse graphs — almost
-all practical cases); the unsorted list wins for dense graphs where $m \approx n^2$. (With a
-Fibonacci heap the bound improves to $O(m + n\log n)$, mostly of theoretical interest.)
+- **A heap with locators** (the adaptable priority queue of the heaps module, which can find
+  and update a vertex's entry): every operation is $O(\log n)$, so the total is
+  **$O((n + m)\log n)$**.
+- **An unsorted list**: finding the minimum costs $O(n)$ and an update costs $O(1)$, for a
+  total of **$O(n^2)$**.
+
+Which is better depends on how dense the graph is. The heap wins when $m$ is well below
+$n^2/\log n$, which covers sparse graphs and so almost every practical case. The unsorted
+list wins for dense graphs with $m$ close to $n^2$. (A more elaborate structure called a
+Fibonacci heap improves the bound to $O(m + n\log n)$; it is mainly of theoretical interest.)
 
 ## 4. Python implementation
 
-The book's implementation uses its `AdaptableHeapPriorityQueue`, updating a vertex's key through its
-locator. Python's `heapq` has no decrease-key, so the idiomatic version uses **lazy deletion**: push
-a new `(distance, vertex)` entry whenever a label improves, and ignore stale entries when popped.
-The heap may hold up to $m$ entries, so the bound is $O((n + m)\log m) = O((n+m)\log n)$.
+Python's `heapq` cannot change the key of an entry already in the heap. The standard
+workaround is the **lazy deletion** from the heaps module: whenever a label improves, push a
+*new* `(distance, vertex)` entry, leave the old one where it is, and when an entry is popped
+for a vertex that is already in the cloud, discard it as stale. The heap may then hold up to
+$m$ entries, so the bound is $O((n + m)\log m)$, which is the same as $O((n+m)\log n)$ because
+$\log m \le 2 \log n$.
+
+In the code, a graph maps each vertex to a list of `(neighbour, weight)` pairs. The function
+returns two dictionaries: `d`, the distances, and `parent`, which records for each vertex the
+vertex before it on its shortest path, so that paths can be rebuilt by walking backwards.
 
 ```python-run
 import heapq
@@ -182,15 +236,22 @@ print("A -> F:", path_to(parent, "F"), "length", d["F"])
 print("G reachable?", "G" in d)
 ```
 
+The output gives the distances `{'A': 0, 'B': 5, 'C': 2, 'D': 3, 'E': 6, 'F': 7}`, the same as
+the last row of the dry-run table; the shortest path from A to F is A, C, D, E, F with length
+7; and the isolated vertex G never receives a distance, which is how "unreachable" shows up.
+
 ### 4.1 Reconstructing the shortest-path tree
 
-The union of shortest paths from $s$ forms a tree rooted at $s$, the **shortest-path tree**. Above we
-recorded `parent[v]` during relaxation. Alternatively (as the book does) it can be recovered
-afterwards from the distances alone: for each vertex $v \ne s$, find an incoming edge $(u, v)$ with
-$d[u] + w(u, v) = d[v]$ — that edge is the last edge of a shortest path to $v$. This takes
-$O(n + m)$.
+Put together, the shortest paths from $s$ to all the other vertices form a tree rooted at $s$,
+the **shortest-path tree**. The code above recorded it in `parent` while relaxing. It can also
+be recovered afterwards from the distances alone: for each vertex $v$ other than $s$, look for
+an incoming edge from some $u$ with $d[u] + w(u, v) = d[v]$; that edge is the last edge of a
+shortest path to $v$. This takes $O(n + m)$.
 
 ## 5. Variations and relatives
+
+Dijkstra's algorithm is one of a family. The table says which member fits which situation;
+the names are worth recognising even where this track does not cover the algorithm.
 
 | Situation | Algorithm | Time |
 |---|---|---|
@@ -202,15 +263,16 @@ $O(n + m)$.
 | all pairs | Floyd-Warshall, or Dijkstra from every vertex | $O(n^3)$ / $O(n(n+m)\log n)$ |
 | single target with a good heuristic | A* | depends on the heuristic |
 
-**Stopping early.** If only $d(s, t)$ is needed, stop when $t$ is pulled into the cloud — its label
-is final at that moment.
+**Stopping early.** If only the distance to one target $t$ is wanted, stop as soon as $t$
+enters the cloud; its label is final at that moment.
 
 > [!INTERVIEW]
-> Know the template by heart: `heap = [(0, src)]`, pop the minimum, skip it if already finalised (or
-> if `dist > best[u]`), relax neighbours, push improvements. State the complexity
-> $O((V + E)\log V)$, the **non-negative weights** precondition, and what you would use otherwise
-> (Bellman-Ford). A classic follow-up: "what if there are at most $k$ stops?" — the state becomes
-> (vertex, stops used).
+> Know the template by heart: start with `heap = [(0, src)]`; pop the smallest entry; skip it
+> if its vertex is already settled; relax the edges to its neighbours and push every
+> improvement. State the running time, $O((V + E)\log V)$; the requirement that weights are
+> **non-negative**; and what you would use if they were not (the Bellman-Ford algorithm). A
+> classic follow-up is "what if the route may have at most $k$ stops?": then the thing being
+> settled is no longer a vertex but a pair (vertex, stops used so far).
 
 ## 6. Dry run with the heap: watching lazy deletion
 
@@ -303,23 +365,47 @@ unsorted-array priority queue is competitive only when $m$ approaches $n^2$.
 
 ## 7. Pitfalls
 
-- Using Dijkstra with negative edge weights.
-- Marking a vertex as final when it is *pushed* rather than when it is *popped* — a later, cheaper
-  path would be ignored.
-- Not skipping stale heap entries: still correct with a `dist > d[u]` check, but without any check
-  the work can blow up.
-- Pushing `(dist, vertex_object)` where vertices are not comparable: on equal distances Python
-  compares the second field and raises `TypeError` — add a tie-breaking counter.
-- Forgetting both directions for undirected graphs.
+- **Using Dijkstra with negative edge weights.** It can settle a vertex too early and return
+  wrong distances.
+- **Settling a vertex when it is pushed** instead of when it is popped. A cheaper path found
+  later would then be ignored.
+- **Not skipping stale heap entries.** The answer stays correct only if stale entries are
+  recognised (by the cloud test, or by checking `dist > d[u]`); without any check the same
+  vertex is processed again and again and the work can blow up.
+- **Pushing `(dist, vertex)` when vertices cannot be compared.** If two distances are equal,
+  Python compares the second field, and for objects with no ordering it raises `TypeError`.
+  Add a tie-breaking counter as the middle field.
+- **Forgetting the second direction** of each edge in an undirected graph.
+- **Using BFS on a weighted graph.** BFS minimises the number of edges, not the total weight.
 
 ## 8. Summary
 
-- Dijkstra grows a cloud from the source, always adding the closest outside vertex and relaxing its
-  edges; correctness needs non-negative weights.
-- $O((n + m)\log n)$ with a heap; $O(n^2)$ with an unsorted list (better for dense graphs).
-- Record parents (or re-derive them) to obtain the shortest-path tree.
+- In a weighted graph, the length of a path is the sum of its edge weights, and the distance
+  between two vertices is the length of a shortest path.
+- Dijkstra's algorithm grows a cloud from the source, always adding the closest outside vertex
+  and relaxing its edges. It is a greedy algorithm, and its correctness needs non-negative
+  weights.
+- It runs in $O((n + m)\log n)$ with a heap, or $O(n^2)$ with an unsorted list, which is the
+  better choice for dense graphs.
+- Recording each vertex's parent during relaxation gives the shortest-path tree.
 
 > **Source:** Goodrich, Tamassia & Goldwasser, *Data Structures and Algorithms in Python*, ch. 14.6.
+
+## Glossary
+
+- **Weighted graph**: a graph whose edges carry numbers (weights).
+- **Path length**: the sum of the weights along a path.
+- **Distance $d(u, v)$**: the length of a shortest path from $u$ to $v$.
+- **Source**: the starting vertex of a shortest-path computation.
+- **Single-source shortest paths**: finding the distance from one source to every vertex.
+- **Dijkstra's algorithm**: the greedy algorithm that settles vertices in order of distance.
+- **Cloud**: the set of vertices whose distances are final.
+- **Label $D[v]$**: the best distance to $v$ found so far.
+- **Relaxation**: lowering a vertex's label when a path through a newly settled neighbour is
+  shorter.
+- **Stale entry**: a heap entry that has been superseded by a better one.
+- **Shortest-path tree**: the tree formed by the shortest paths from the source.
+- **Bellman-Ford algorithm**: a slower shortest-path algorithm that allows negative weights.
 
 ## Check yourself
 

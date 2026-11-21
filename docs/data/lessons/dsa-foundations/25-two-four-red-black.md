@@ -1,34 +1,64 @@
 # (2,4) trees and red-black trees
 
-This lesson presents the two remaining balanced trees of the chapter. The **(2,4) tree** leaves the
-binary world: nodes may hold several keys, and the tree stays *perfectly* height-balanced by
-splitting and merging nodes. The **red-black tree** is a binary search tree that encodes a (2,4)
-tree using one colour bit per node; it is the balanced tree found in most standard libraries.
-Understanding the first makes the second far less mysterious.
+> **Before this lesson:** You should know binary search trees
+> ([Binary search trees](#/lesson/dsa-foundations/bst)) and rotations, trinode restructuring and
+> AVL trees ([Rotations and AVL trees](#/lesson/dsa-foundations/avl)). Splay trees are mentioned
+> only in the final comparison.
+
+## In plain words
+
+This lesson presents two more ways to keep a search tree balanced, and the surprise is that
+they are the same idea in two outfits.
+
+The first, the **(2,4) tree**, gives up the rule that a node holds one key. Its nodes are like
+small drawers that can hold one, two or three keys in order. When a drawer gets a fourth key
+it is too full, so it splits into two drawers and passes its middle key up to the drawer
+above. Because the tree only ever grows by splitting at the top, every path from the top to the
+bottom has exactly the same length: the tree is perfectly level at all times.
+
+The second, the **red-black tree**, is an ordinary binary search tree with every node painted
+red or black. The colours are a code. A black node together with its red children stands for
+one drawer of a (2,4) tree. A few rules about colours are then enough to keep the binary tree
+from becoming lopsided.
+
+Why it matters for a job: the red-black tree is the balanced tree inside most standard
+libraries (Java's `TreeMap`, C++'s `std::map`) and inside the Linux kernel. You will rarely be
+asked to write one, but stating its rules and explaining why they keep the height logarithmic
+is a classic interview question. The (2,4) tree also leads directly to the B-tree, the
+structure behind database indexes, covered in the final lesson of this track.
 
 ## 1. Multiway search trees
 
-Let $w$ be a node of an ordered tree. $w$ is a **$d$-node** if it has $d$ children. A **multiway
-search tree** is an ordered tree $T$ in which:
+A binary search tree node holds one key and has up to two children. A **multiway search tree**
+generalises this: a node may hold several keys and have several children. A node with $d$
+children is called a **$d$-node**. The rules are:
 
-- each internal node has at least two children (is a $d$-node with $d \ge 2$);
-- each $d$-node $w$ with children $c_1, \ldots, c_d$ stores an ordered set of $d - 1$ items with
-  keys $k_1 \le \cdots \le k_{d-1}$;
-- with $k_0 = -\infty$ and $k_d = +\infty$, every key $k$ stored in the subtree rooted at $c_i$
-  satisfies $k_{i-1} \le k \le k_i$.
+- every internal node has at least two children;
+- a $d$-node with children $c_1, \ldots, c_d$ stores $d - 1$ items, with keys in order
+  $k_1 \le \cdots \le k_{d-1}$;
+- the keys act as dividers: everything in the subtree of the first child is at most $k_1$,
+  everything in the subtree of child $c_i$ lies between $k_{i-1}$ and $k_i$, and everything in
+  the subtree of the last child is at least $k_{d-1}$.
 
-So the keys in a node act as **separators** for its children's subtrees. (For uniformity the book
-treats the leaves as empty placeholders; an $n$-item multiway tree then has $n + 1$ external nodes.)
+Think of the tabbed dividers in a filing drawer: a node's keys are the **separators**, and
+between each pair of neighbouring separators hangs the subtree of keys that fall in that gap.
+A binary search tree is the special case in which every node is a 2-node. (For neat
+bookkeeping, the bottom of the tree is imagined to end in empty placeholder leaves, the
+*external nodes*; a tree holding $n$ items has $n + 1$ of them, one for each gap between
+consecutive keys.)
 
-**Searching** generalises the BST search: at a $d$-node, compare $k$ with $k_1, \ldots, k_{d-1}$; if
-it matches some $k_i$, done; otherwise continue in the child $c_i$ with $k_{i-1} < k < k_i$.
+**Searching** extends the BST search: at a $d$-node, compare the target $k$ with the node's
+keys; if it equals one of them, the search is done; otherwise continue into the child whose gap
+contains $k$.
 
 ## 2. (2,4) trees
 
-A **(2,4) tree** (also *2-4 tree* or *2-3-4 tree*) is a multiway search tree with:
+A **(2,4) tree** (also called a *2-4 tree* or *2-3-4 tree*) is a multiway search tree with two
+extra rules:
 
-- **Size property:** no internal node has more than **four children** (so 1, 2 or 3 keys);
-- **Depth property:** all external nodes have the **same depth**.
+- **Size property:** no node has more than **four children**, so a node holds 1, 2 or 3 keys;
+- **Depth property:** all external nodes are at the **same depth**. The tree is perfectly
+  level.
 
 ```mermaid
 graph TD
@@ -41,31 +71,42 @@ graph TD
   B --> B2["17"]
 ```
 
-Nodes are called 2-nodes, 3-nodes or 4-nodes by their number of children.
+In the picture, the root `12` is a 2-node (one key, two children), `5 10` is a 3-node and
+`6 7 8` holds three keys, the maximum. Every bottom node is at depth 2. To search for 7: at the
+root, 7 is less than 12, go to the first child; at `5 10`, 7 lies between 5 and 10, go to the
+middle child; there it is.
 
-> **Proposition.** A (2,4) tree with $n$ items has logarithmic height; more precisely
+> **Claim.** A (2,4) tree with $n$ items has height $h$ with
 > $\tfrac12 \log(n+1) \le h \le \log(n+1)$.
 
-*Justification.* By the size property there are at most $4^h$ external nodes, and by the depth and
-size properties (every internal node has at least 2 children) at least $2^h$. Since the number of
-external nodes is $n + 1$: $2^h \le n + 1 \le 4^h$. ∎
+*Why.* Count the external nodes. Every internal node has at most 4 children, so after $h$
+levels there are at most $4^h$ of them. Every internal node has at least 2 children and all
+external nodes are at depth $h$, so there are at least $2^h$. And we know there are exactly
+$n + 1$. So $2^h \le n + 1 \le 4^h$, which rearranges to the claim. ∎
 
-Since each node holds at most 3 keys, the work per node is $O(1)$ and a search takes $O(\log n)$.
+Each node holds at most 3 keys, so the work at one node is $O(1)$, and a search, which visits
+one node per level, takes $O(\log n)$.
 
 ### 2.1 Insertion: overflow and split
 
-Search for $k$; the search ends unsuccessfully at an external node $z$ with parent $w$. Add the new
-item to **$w$** (the lowest internal node) — this keeps the depth property. But $w$ may now have
-five children (4 keys): an **overflow**. Fix it with a **split**:
+To insert a key $k$, search for it. The search fails at the bottom of the tree; let $w$ be the
+lowest real node on the search path. Add the new key **into $w$**, in its sorted place. Adding
+to an existing bottom node, instead of hanging a new node below it, is what preserves the depth
+property. But $w$ may now hold 4 keys, one too many. This is an **overflow**, and it is
+repaired by a **split**:
 
-1. Let $w$ have children $c_1..c_5$ and keys $k_1..k_4$.
-2. Replace $w$ by two nodes: $w'$ (a 3-node with keys $k_1, k_2$, children $c_1, c_2, c_3$) and $w''$
-   (a 2-node with key $k_4$, children $c_4, c_5$).
-3. Move the middle key $k_3$ **up** into the parent $u$ of $w$ (if $w$ was the root, create a new
-   root holding $k_3$ — this is the only way the tree grows taller, and it grows **at the root**, so
-   all leaves stay at the same depth).
+1. Say $w$ now holds keys $k_1, k_2, k_3, k_4$ (and, if it is not at the bottom, five children).
+2. Replace $w$ by two nodes: one with keys $k_1, k_2$ (and the first three children) and one
+   with the single key $k_4$ (and the last two children).
+3. Move the middle key $k_3$ **up** into the parent of $w$, where it becomes the separator
+   between the two new nodes. If $w$ was the root, create a new root holding only $k_3$.
 
-The parent may overflow in turn; splits can cascade up to the root: $O(\log n)$ splits, each $O(1)$.
+Creating a new root is the only way the tree ever gets taller, and it gets taller **at the
+top**, which lowers every leaf by one level at the same instant. That is why all leaves always
+stay at the same depth.
+
+Receiving a key may make the parent overflow in turn, so splits can ripple upwards as far as
+the root: at most $O(\log n)$ splits, each $O(1)$.
 
 **Example.** Insert 4, 6, 12, 15, 3, 5, 10, 8 into an empty tree:
 
@@ -127,22 +168,32 @@ for k in range(20, 60): T.insert(k)
 print("search 37:", T.search(37), " search 99:", T.search(99))
 ```
 
+**Reading the code.** A node is a two-item list `[keys, children]`, and a bottom node has an
+empty list of children. `_insert` goes down recursively to the right bottom node and adds the
+key there. If a node ends up with more than 3 keys, the function splits it and *returns* the
+middle key together with the new right-hand node, so that the caller (the parent) can absorb
+them; `None` means "no split happened". `insert` handles the special case of the root
+splitting. The printed tree matches the last row of the table: `[5, 12]` on top with `[3, 4]`,
+`[6, 8, 10]` and `[15]` indented beneath it.
+
 ### 2.2 Deletion: underflow, transfer and fusion
 
-As in a BST, reduce to deleting from a node at the bottom: if the key $k_i$ to delete is in a
-higher node, swap it with its inorder predecessor (the rightmost key in the subtree of $c_i$),
-which lives in a bottom node. Removing a key from a bottom node $w$ may leave it with **no keys**
-(one child): an **underflow**. Two remedies:
+As in a BST, deletion is first reduced to removing a key from a bottom node: if the key to
+delete is higher up, replace it by its inorder predecessor (the largest key in the subtree to
+its left, which is always in a bottom node) and delete that one instead. Removing a key from a
+bottom node $w$ may leave $w$ with **no keys at all**. This is an **underflow**, and there are
+two remedies, depending on $w$'s neighbours.
 
-- **Transfer:** if an immediate sibling $s$ of $w$ is a 3-node or 4-node, shift one of $s$'s children over to
-  $w$, send a key of $s$ up to the parent $u$, and a key of $u$ down to $w$ (a rotation through the
-  parent). Done.
-- **Fusion:** if the immediate siblings are 2-nodes, **merge** $w$ with a sibling into a new node and
-  pull a key of the parent $u$ down into it. Now $u$ has one fewer key — it may underflow in turn,
-  and the process repeats upward. If the root becomes empty, delete it: the tree shrinks **from the
-  top**.
+- **Transfer.** If a sibling next to $w$ has a key to spare (it holds 2 or 3 keys), borrow
+  through the parent: one key of the sibling moves up into the parent, and the parent's
+  separator key moves down into $w$. Everything is legal again, and the repair is finished.
+- **Fusion.** If the neighbouring siblings hold only one key each, nobody can lend. Then
+  **merge** $w$ with a sibling into one node, and pull the separator key down from the parent
+  into it. The parent now has one key fewer, so it may underflow in turn, and the process
+  repeats one level up. If the root is left with no keys, delete it: the tree gets shorter
+  **from the top**, again keeping all leaves level.
 
-At most $O(\log n)$ fusions followed by at most one transfer.
+A deletion needs at most $O(\log n)$ fusions, followed by at most one transfer.
 
 | Operation | (2,4) tree |
 |---|---|
@@ -151,22 +202,26 @@ At most $O(\log n)$ fusions followed by at most one transfer.
 
 ## 3. Red-black trees
 
-AVL trees may need $O(\log n)$ restructurings per deletion; (2,4) trees may need $O(\log n)$ splits
-or fusions. Red-black trees need only **$O(1)$ structural changes** per update, with $O(\log n)$
-recolourings.
+A (2,4) tree is pleasant on paper but awkward to program, because its nodes come in three
+sizes. The red-black tree stores the same structure using ordinary binary nodes. It also has a
+practical edge over the other balanced trees: an AVL tree may need $O(\log n)$ restructurings
+for one deletion, whereas a red-black tree needs only **$O(1)$ rotations** per update, plus up
+to $O(\log n)$ changes of colour, which are much cheaper.
 
-A **red-black tree** is a binary search tree whose nodes are coloured **red** or **black** such that:
+A **red-black tree** is a binary search tree in which every node carries a colour, **red** or
+**black** (one bit of information), subject to three rules:
 
 1. **Root property:** the root is black.
-2. **Red property:** a red node never has a red child — no two reds in a row.
-3. **Depth property:** every node that lacks at least one child has the same **black depth** — the
-   number of black ancestors (counting the node itself if black). Equivalently: every path from the
-   root down to a missing child passes through the same number of black nodes.
+2. **Red property:** a red node never has a red child. There are never two reds in a row.
+3. **Depth property:** every path from the root down to a missing child passes through the
+   same number of black nodes. That number is the tree's **black depth** (also called its black
+   height).
 
 ### 3.1 The correspondence with (2,4) trees
 
-Merge every red node into its black parent. Each black node together with its red children forms a
-(2,4)-tree node:
+The rules look arbitrary until you see what the colours encode. Imagine sliding every red node
+up into its black parent, so that they become one fat node. Each black node, together with its
+red children, forms exactly one node of a (2,4) tree:
 
 - a black node with no red children ↔ a **2-node**;
 - a black node with one red child ↔ a **3-node** (two possible orientations);
@@ -183,35 +238,47 @@ graph TD
   end
 ```
 
-The depth property of the red-black tree is exactly the "all leaves at the same depth" property of
-the (2,4) tree. Red-black trees are (2,4) trees wearing a binary costume.
+Now the rules make sense. The red property says a red node always belongs to the black node
+directly above it, so the fat nodes never have more than three keys. The depth property, read
+through the code, says that every path crosses the same number of fat nodes: it is the (2,4)
+tree's "all leaves at the same depth". A red-black tree is a (2,4) tree in binary dress.
 
-> **Proposition.** A red-black tree with $n$ entries has height $O(\log n)$; precisely
+> **Claim.** A red-black tree with $n$ entries has height $O(\log n)$; more precisely
 > $\log(n+1) - 1 \le h \le 2\log(n+1) - 2$.
 
-*Justification.* Let $d$ be the common black depth. The corresponding (2,4) tree has height $d$, so
-$d \le \log(n+1)$... and by the red property at most every other node on a path is red, so the
-height is at most about $2d$. ∎
+*Why.* Let $d$ be the black depth. The matching (2,4) tree has height $d$, and section 2 showed
+that such a tree has height at most $\log(n+1)$. On any path in the red-black tree, reds can
+never be adjacent, so at most every other node is red, and a path is at most about twice as
+long as its count of black nodes. Hence the height is at most about $2\log(n+1)$. ∎
 
 ### 3.2 Insertion
 
-Insert as in a BST and colour the new node $x$ **red** (black if it is the root). Red preserves the
-depth property; the only possible violation is a **double red**: $x$'s parent $y$ is also red. (Then
-$y$ is not the root, so the grandparent $z$ exists and is black.) Let $s$ be the sibling of $y$ —
-$x$'s "uncle".
+Insert as in a plain BST, and colour the new node $x$ **red** (or black if it is the root). Why
+red? A red node adds no black node to any path, so the depth property cannot be broken. The
+only rule that can fail is the red property, when the parent $y$ of $x$ is red as well: a
+**double red**. (In that case $y$ is not the root, so the grandparent $z$ exists, and $z$ must
+be black.) Let $s$ be the sibling of $y$, the "uncle" of $x$. What to do depends on the uncle's
+colour.
 
-**Case 1 — the uncle $s$ is black (or absent).** In (2,4) terms, we created a malformed 4-node.
-Perform a **trinode restructuring** of $x, y, z$ (single or double rotation as in AVL), then colour
-the new subtree root $b$ **black** and its children $a$ and $c$ **red**. The double red is gone, and
-black depths are unchanged. **Done** — one restructuring.
+**Case 1: the uncle is black (or missing).** In (2,4) terms, the fat node around $z$ has room
+for the new key, but its three keys are arranged in a line or bend instead of a triangle.
+Perform a **trinode restructuring** of $x$, $y$, $z$ (a single or double rotation, exactly as
+for AVL trees), then colour the node that ends up on top **black** and its two children
+**red**. The double red is gone and no path has gained or lost a black node. **Finished**,
+after one restructuring.
 
-**Case 2 — the uncle $s$ is red.** In (2,4) terms, an **overflow** (5-node). Perform the equivalent
-of a split by **recolouring**: colour $y$ and $s$ black and $z$ red (unless $z$ is the root, which
-stays black). Black depths are preserved, but $z$ is now red and may form a double red with *its*
-parent — repeat the analysis at $z$. Recolouring can propagate up $O(\log n)$ levels, but it involves
-no rotations.
+**Case 2: the uncle is red.** In (2,4) terms, the fat node already held three keys ($y$, $z$,
+$s$), and $x$ is a fourth: an **overflow**. The (2,4) tree would split and send the middle key
+up. The red-black version of a split involves no rotation at all, only **recolouring**: colour
+$y$ and $s$ black and $z$ red (unless $z$ is the root, which stays black). Black depths are
+unchanged. But $z$ is now red, and its own parent may be red too, so the same analysis is
+repeated at $z$, two levels higher. This can continue up $O(\log n)$ levels, each step being a
+constant-time change of three colours.
 
-So an insertion costs $O(\log n)$ recolourings and **at most one** restructuring.
+An insertion therefore costs $O(\log n)$ recolourings and **at most one** restructuring.
+
+The implementation below follows the two cases in `_resolve_red`. Its `check` method verifies
+all three red-black rules, as well as the BST ordering, and returns the black height.
 
 ```python-run
 RED, BLACK = True, False
@@ -292,8 +359,13 @@ print("n=2000 sorted inserts: height", T.height(), " black height", T.check(),
       " rotations", T.rotations, " recolour steps", T.recolorings)
 ```
 
+The demo inserts 2,000 keys in sorted order, the worst input for a plain BST. The resulting
+height is 19, comfortably inside the bound $2\log_2(2001) - 2 \approx 19.9$ and a long way from
+the 1,999 a plain BST would reach, and `check` confirms that every rule holds.
+
 ### 3.3 Deletion (overview)
 
+Deletion has more cases than insertion and is seldom asked for in full, so here is the outline.
 Delete as in a BST; the node physically removed has at most one child.
 
 - If the removed node was **red**, nothing is violated.
@@ -340,21 +412,51 @@ A deletion uses $O(\log n)$ recolourings and at most **two** restructurings.
 
 ## 5. Pitfalls
 
-- Inserting a new node as black (breaks the depth property immediately).
-- Forgetting to keep the root black after recolouring propagates to it.
-- In Case 1, recolouring before identifying $a$, $b$, $c$ (colour by position after restructuring).
-- For (2,4) trees: adding the new key at an external position (creating a deeper leaf) rather than
-  into the lowest internal node.
+- **Inserting a new node as black.** That adds a black node to some paths and not others, which
+  breaks the depth property at once. New nodes are red.
+- **Letting the root turn red** when recolouring reaches it. Colour it black again; that adds
+  one black node to *every* path, which is harmless.
+- **Colouring before restructuring in Case 1.** Colours are assigned by position *after* the
+  rotation: the top node black, its two children red.
+- **Hanging a new node below the bottom of a (2,4) tree.** The new key goes *into* the lowest
+  existing node; a new, deeper node would break the depth property.
+- **Confusing the two bounds.** AVL height is at most about $1.44 \log n$; red-black height is
+  at most about $2 \log n$.
 
 ## 6. Summary
 
-- (2,4) trees keep all leaves at one depth; insert → split on overflow (grow at the root),
-  delete → transfer or fusion on underflow (shrink at the root).
-- A red-black tree is a binary encoding of a (2,4) tree: black node + red children = one multi-key
-  node.
-- Red-black updates: $O(\log n)$ time, $O(1)$ rotations.
+- A (2,4) tree keeps all leaves at one depth. Insertion splits an overflowing node and sends a
+  key up, growing the tree at the root; deletion repairs an underflow by transfer or fusion,
+  shrinking the tree at the root.
+- A red-black tree is a binary encoding of a (2,4) tree: a black node plus its red children is
+  one multi-key node.
+- A red-black insertion colours the new node red; a red uncle means recolour and move up, a
+  black uncle means restructure once and stop.
+- Red-black updates take $O(\log n)$ time with only $O(1)$ rotations, and the height is at most
+  about $2\log(n+1)$.
 
 > **Source:** Goodrich, Tamassia & Goldwasser, *Data Structures and Algorithms in Python*, ch. 11.5–11.6.
+
+## Glossary
+
+- **Multiway search tree**: a search tree whose nodes may hold several keys and have several
+  children.
+- **$d$-node**: a node with $d$ children and $d - 1$ keys.
+- **External node**: an empty placeholder below the bottom of the tree.
+- **(2,4) tree**: a multiway search tree with at most four children per node and all leaves at
+  the same depth.
+- **Overflow / split**: a node with too many keys / dividing it in two and moving its middle
+  key up.
+- **Underflow**: a node left with no keys after a deletion.
+- **Transfer / fusion**: repairing an underflow by borrowing a key through the parent / by
+  merging with a sibling.
+- **Red-black tree**: a BST with red and black nodes obeying the root, red and depth
+  properties.
+- **Black depth (black height)**: the number of black nodes on any path from the root to a
+  missing child.
+- **Double red**: a red node with a red parent; the violation fixed after insertion.
+- **Uncle**: the sibling of a node's parent.
+- **Recolouring**: changing node colours without changing the tree's shape.
 
 ## Check yourself
 

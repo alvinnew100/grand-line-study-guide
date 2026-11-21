@@ -1,29 +1,55 @@
 # Divide and conquer: merge-sort
 
-Sorting is the most studied problem in computer science, and for good reason: sorted data enables
-binary search, duplicate detection, grouping, range queries and countless greedy algorithms. So far
-we have insertion-sort and selection-sort ($O(n^2)$) and heap-sort ($O(n \log n)$). This lesson
-introduces the **divide-and-conquer** design pattern through **merge-sort**, a clean, stable,
-guaranteed $O(n\log n)$ algorithm.
+> **Before this lesson:** You should be comfortable with recursion and recursion trees
+> ([Thinking recursively](#/lesson/dsa-foundations/recursion-examples),
+> [Analysing recursive algorithms](#/lesson/dsa-foundations/recursion-analysis)), know
+> insertion sort and the words "stable" and "in place"
+> ([Using arrays](#/lesson/dsa-foundations/using-arrays)), and know what a linked list is
+> ([Singly and circularly linked lists](#/lesson/dsa-foundations/singly-circular)).
+
+## In plain words
+
+**Merge-sort** sorts a list by cutting it in half, sorting each half separately, and then
+combining the two sorted halves into one. Each half is sorted the same way, by cutting it in
+half again, until the pieces are single items, which need no sorting at all.
+
+Imagine two teachers who must put a big pile of exam papers into alphabetical order. They split
+the pile, each sorts their own half, and then they combine: both lay their sorted piles face
+up, and they repeatedly take whichever of the two top papers comes first in the alphabet.
+Combining two sorted piles this way is quick, because only the two top papers ever need
+comparing. That combining step is called a **merge**, and it is the heart of the algorithm.
+
+The general strategy (split a problem into parts, solve the parts, combine the answers) is
+called **divide and conquer**, and it reappears throughout computer science.
+
+Why it matters for a job: sorting is the most common preprocessing step there is, because
+sorted data makes searching, removing duplicates and grouping easy. Merge-sort is the standard
+example of an $O(n \log n)$ sort with a guarantee; Python's own built-in sort is a refined
+merge-sort; and "merge two sorted lists" and "sort a linked list" are routine interview tasks
+that are solved with exactly the code in this lesson.
 
 ## 1. Divide-and-conquer
 
-The pattern has three steps:
+So far this track has seen insertion-sort and selection-sort, both $O(n^2)$, and heap-sort,
+$O(n \log n)$. Merge-sort reaches $O(n \log n)$ by a different route, the divide-and-conquer
+pattern, which has three steps:
 
-1. **Divide.** If the input is smaller than a threshold (one or two elements), solve it directly.
-   Otherwise split it into two or more disjoint subproblems.
-2. **Conquer.** Recursively solve the subproblems.
-3. **Combine.** Merge the subproblem solutions into a solution for the original problem.
+1. **Divide.** If the input is tiny (one or two items), solve it directly. Otherwise split it
+   into two or more separate smaller problems.
+2. **Conquer.** Solve the smaller problems recursively.
+3. **Combine.** Put their solutions together into a solution of the original problem.
 
-For merge-sort on a sequence $S$ of $n$ elements:
+For merge-sort on a sequence $S$ of $n$ items:
 
-1. **Divide:** if $S$ has zero or one element, return (it is sorted). Otherwise put the first
-   $\lfloor n/2 \rfloor$ elements in $S_1$ and the remaining $\lceil n/2 \rceil$ in $S_2$.
-2. **Conquer:** recursively sort $S_1$ and $S_2$.
+1. **Divide:** if $S$ has zero or one item, it is already sorted; return. Otherwise put the
+   first $\lfloor n/2 \rfloor$ items into $S_1$ and the remaining $\lceil n/2 \rceil$ into
+   $S_2$.
+2. **Conquer:** sort $S_1$ and $S_2$ recursively.
 3. **Combine:** **merge** the sorted $S_1$ and $S_2$ back into $S$.
 
-The execution is visualised by the **merge-sort tree**: each node is a recursive call; the root is
-the whole sequence; leaves are single elements.
+A run of the algorithm can be drawn as a **merge-sort tree**. Each node is one recursive call,
+labelled with the sequence it was given; the root is the whole input and the leaves are single
+items. Reading the picture downwards shows the dividing.
 
 ```mermaid
 graph TD
@@ -47,14 +73,18 @@ On the way back up, each node merges its children's sorted results:
 `[24 85]`, `[45 63]` → `[24 45 63 85]`; `[17 31]`, `[50 96]` → `[17 31 50 96]`; finally
 `[17 24 31 45 50 63 85 96]`.
 
-> **Proposition.** The merge-sort tree for a sequence of size $n$ has height $\lceil \log n \rceil$.
+> **Claim.** The merge-sort tree for a sequence of size $n$ has height $\lceil \log n \rceil$.
 
-Each level halves the sequence size, so there are about $\log n$ levels.
+Each level halves the size of the sequences, and halving $n$ repeatedly reaches 1 after about
+$\log n$ steps. For the eight items above there are three levels of splitting.
 
 ## 2. Merging two sorted sequences
 
-Keep an index into each input. Repeatedly copy the smaller of the two front elements to the output
-and advance that index. When one input is exhausted, copy the rest of the other.
+All the real work happens in the merge. Keep one index into each sorted input, both starting at
+the front. Repeatedly compare the two items the indices point at, copy the smaller one to the
+output, and advance that index. When one input runs out, copy whatever remains of the other.
+This works because each input is sorted: the smallest item not yet output must be at the front
+of one of the two.
 
 ```python
 def merge(S1, S2, S):
@@ -69,7 +99,12 @@ def merge(S1, S2, S):
             j += 1
 ```
 
-The index into the output is simply $i + j$. Each iteration copies one element, so merging takes
+**Reading this code.** `i` counts how many items have been taken from `S1` and `j` how many from
+`S2`, so the next free cell of the output `S` is at index `i + j`. The condition decides
+whether to take from `S1`: either `S2` is used up (`j == len(S2)`), or `S1` still has items and
+its front item is the smaller. Python evaluates `or` and `and` from left to right and stops as
+soon as the answer is known, which is why `S2[j]` is never read once `S2` is exhausted. Each
+pass of the loop copies one item, so merging lists of lengths $n_1$ and $n_2$ takes
 $O(n_1 + n_2)$ time.
 
 ### Dry run of merge
@@ -86,12 +121,17 @@ $O(n_1 + n_2)$ time.
 | 3 | 2 | 11 vs 10 | 2 3 5 8 9 10 |
 | 3 | 3 | S2 exhausted | 2 3 5 8 9 10 11 |
 
-**Stability.** A sort is *stable* if elements with equal keys keep their original relative order.
-The book's merge takes from `S2` on ties (`S1[i] < S2[j]` is strict), which is not stable as
-written; taking from the **left** run on ties (`S1[i] <= S2[j]`) makes merge-sort stable. Stability
-matters when sorting records by one field after another (sort by name, then stably by department).
+**Stability.** Recall that a sort is *stable* if items with equal keys keep their original
+relative order. The merge above uses a strict comparison (`S1[i] < S2[j]`), so when the two
+front items are equal it takes the one from `S2`, letting a later item overtake an earlier one:
+not stable. Changing the test to `S1[i] <= S2[j]`, so that ties are taken from the **left**
+input, makes merge-sort stable. Stability matters when records are sorted by one field after
+another (by name first, then stably by department, leaves each department in name order).
 
 ## 3. Array-based merge-sort
+
+The full algorithm for a Python list follows. It uses the stable merge, and prints each merge,
+indented by the depth of the recursion, so that the output traces the tree from the bottom up.
 
 ```python-run
 def merge(S1, S2, S):
@@ -122,26 +162,40 @@ data = [85, 24, 63, 45, 17, 31, 96, 50]
 merge_sort(data)
 ```
 
+**Reading this code.** `S[0:mid]` and `S[mid:n]` are slices, so `S1` and `S2` are *copies* of
+the two halves. The two recursive calls sort those copies. Then `merge(S1, S2, S)` writes the
+merged result back over the original list `S`, which is why the function needs no `return`
+value. The first lines of output are the deepest merges, `[85] + [24] -> [24, 85]` and
+`[63] + [45] -> [45, 63]`, and the last line is the final merge of the two sorted halves into
+`[17, 24, 31, 45, 50, 63, 85, 96]`.
+
 ## 4. Running time
 
-**Counting per level.** Consider the merge-sort tree. A node handling a subsequence of size $m$
-spends $O(m)$ time on slicing and merging (excluding its recursive calls). At depth $i$ there are
-$2^i$ nodes, each of size $n/2^i$, so **every level costs $O(n)$** in total. With
-$\lceil \log n \rceil + 1$ levels:
+**Counting level by level.** Look at the merge-sort tree. A call on a sequence of $m$ items
+spends $O(m)$ time on its own work, slicing and merging, not counting its recursive calls. At
+depth $i$ of the tree there are $2^i$ calls, each on $n/2^i$ items, so the calls at one depth
+handle $n$ items between them: **every level costs $O(n)$ in total**. There are
+$\lceil \log n \rceil + 1$ levels. Multiplying:
 
-> **Proposition.** Merge-sort sorts a sequence of size $n$ in $O(n \log n)$ time.
+> **Claim.** Merge-sort sorts a sequence of size $n$ in $O(n \log n)$ time.
 
-**Recurrence.** Let $t(n)$ be the worst-case time. Then
+**By recurrence.** Let $t(n)$ be the worst-case time for $n$ items. A tiny input costs a
+constant $b$; otherwise the cost is two half-sized sorts plus linear work $cn$:
 
 $$t(n) = \begin{cases} b & n \le 1 \\ 2\,t(n/2) + cn & \text{otherwise.} \end{cases}$$
 
-Unrolling (assume $n$ is a power of 2):
-$t(n) = 2(2t(n/4) + c\,n/2) + cn = 4t(n/4) + 2cn = \cdots = 2^i t(n/2^i) + i\,cn$. Setting
-$i = \log n$: $t(n) = n\,b + cn\log n$, which is $O(n \log n)$.
+Unrolling, as in the recursion-analysis lesson, and assuming $n$ is a power of 2:
+$t(n) = 2(2t(n/4) + c\,n/2) + cn = 4t(n/4) + 2cn = \cdots = 2^i t(n/2^i) + i\,cn$. When
+$i = \log n$ the subproblems have size 1, giving $t(n) = n\,b + cn\log n$, which is
+$O(n \log n)$.
 
-The bound holds for **every** input — best, average and worst case are all $\Theta(n \log n)$ for the
-basic algorithm. The cost is **space**: the temporary halves use $O(n)$ extra memory (merge-sort is
-*not in place*).
+The bound holds for **every** input. This basic merge-sort does the same splitting and merging
+whatever the data looks like, so its best, average and worst cases are all $\Theta(n \log n)$.
+The price is **space**: the temporary halves need $O(n)$ extra memory, so merge-sort is *not*
+in place.
+
+The demo times merge-sort against insertion-sort on random data. Doubling $n$ roughly doubles
+the first and quadruples the second.
 
 ```python-run
 import random, time
@@ -172,17 +226,22 @@ for n in [1000, 2000, 4000]:
 
 ### 5.1 Sorting linked lists
 
-Merge-sort never needs random access — only sequential scans — so it works beautifully on linked
-lists and queues: split by dequeuing the first half into one queue and the rest into another;
-merge by repeatedly dequeuing the smaller front element. The book gives this version with
-`LinkedQueue`. Each `first`, `dequeue`, `enqueue` is $O(1)$, so the bound stays $O(n\log n)$, and
-merging linked nodes needs no extra arrays. This is why merge-sort is *the* sort for linked lists
-(and for data on tape or disk — see external sorting in the last module).
+Merge-sort never jumps to an arbitrary position (it never needs *random access*); it only reads
+its inputs from front to back. So it suits linked lists and queues, where reading from the
+front is all you can do cheaply. With a queue: split by dequeuing the first half of the items
+into one queue and the rest into another; merge by repeatedly dequeuing the smaller of the two
+front items. Each `first`, `dequeue` and `enqueue` is $O(1)$, so the bound is still
+$O(n\log n)$. This is why merge-sort is the method of choice for linked lists, and for data too
+large for memory that must be read from disk in order (external sorting, in the last module).
+Section 6 gives a linked-list version.
 
 ### 5.2 Bottom-up (non-recursive) merge-sort
 
-Instead of recursing, merge runs of length 1 into runs of length 2, then 2 into 4, and so on,
-alternating between two arrays to avoid repeated allocation:
+The recursion can be avoided by working upwards from the leaves of the merge-sort tree. A
+sorted stretch of consecutive items is called a **run**. Treat every single item as a run of
+length 1; merge neighbouring runs in pairs to get runs of length 2; merge those to get runs of
+length 4; and so on until one run covers everything. Two arrays are used alternately as source
+and destination, so that no new lists are created along the way:
 
 ```python-run
 import math
@@ -218,23 +277,29 @@ data = [85, 24, 63, 45, 17, 31, 96, 50, 7]
 merge_sort_bottom_up(data); print(data)
 ```
 
-It runs in $O(n\log n)$ like the recursive version but is a bit faster in practice (no recursive
-calls, one temporary array).
+The printed lines show the runs doubling: after the first pass the list consists of sorted
+pairs, then sorted fours, then eights, and with nine items a fourth pass finishes the job. This
+version runs in $O(n\log n)$ like the recursive one and is somewhat faster in practice, since
+it makes no recursive calls and uses a single temporary array.
 
 ### 5.3 Natural merge-sort and Timsort
 
-Real data often contains already-sorted stretches (**runs**). A *natural* merge-sort detects
-existing runs and merges those rather than starting from runs of length 1 — taking only $O(n)$ on
-sorted input. Python's built-in sort, **Timsort**, is an engineered natural merge-sort: it finds runs
-(reversing descending ones), extends short runs with insertion sort, and merges with careful
-balancing ("galloping"). It is stable, $O(n \log n)$ worst case and $O(n)$ on already-sorted data.
+Real data often arrives with stretches that are already in order. A *natural* merge-sort looks
+for those existing runs and merges them, instead of starting from runs of length 1. On input
+that is already sorted it finds one run and finishes in $O(n)$. Python's built-in sort,
+**Timsort** (named after its author, Tim Peters), is a carefully engineered natural merge-sort.
+It finds runs, reversing any that are in descending order; lengthens short runs with insertion
+sort; and merges with several refinements. It is stable, $O(n \log n)$ in the worst case, and
+$O(n)$ on data that is already sorted.
 
 > [!INTERVIEW]
-> Merge-sort facts to have ready: $\Theta(n\log n)$ in all cases; stable; $O(n)$ extra space for
-> arrays ($O(\log n)$ stack + pointer rewiring for linked lists); the merge step alone solves "merge
-> two sorted arrays/lists"; and the merge can **count inversions** — when an element is taken from
-> the right run, it is smaller than all remaining elements of the left run, so add
-> `len(left) - i` to the count.
+> Merge-sort facts to have ready: $\Theta(n\log n)$ in every case; stable; $O(n)$ extra space
+> for arrays (for linked lists, only the $O(\log n)$ recursion stack); the merge step by itself
+> solves "merge two sorted arrays" and "merge two sorted lists". The merge can also **count
+> inversions**, the out-of-order pairs from the insertion-sort lesson. Whenever an item is taken
+> from the right half, it is smaller than every item still waiting in the left half, and each of
+> those is one inversion, so add `len(left) - i` to the count. The demo below does this;
+> `[5, 2, 4, 6, 1, 3]` has 9 inversions.
 
 ```python-run
 def sort_count(A):
@@ -283,9 +348,13 @@ input order preserved within each grade. With the strict comparison, ties are re
 the **right** run, so later records overtake earlier ones. Stability is what makes multi-key sorting
 by successive passes work: sort by the secondary key, then stably by the primary key.
 
-**Merge-sort on a linked list.** No random access is needed, so linked lists can be sorted without
-any auxiliary array: split by walking with slow and fast pointers, sort both halves, and merge by
-**relinking the existing nodes**.
+**Merge-sort on a linked list.** Since no random access is needed, a linked list can be sorted
+with no extra array at all. To split it, walk two references along the list, a slow one moving
+one node at a time and a fast one moving two; when the fast one reaches the end, the slow one
+is at the middle, and cutting the link there gives two halves. Sort both halves recursively,
+then merge by **re-linking the existing nodes** in order. The `merge` function starts from a
+dummy node, as in the linked-lists module, so that attaching the first node needs no special
+case.
 
 ```python-run
 class Node:
@@ -333,26 +402,52 @@ print(to_list(merge_sort_list(from_list([85, 24, 63, 45, 17, 31, 96, 50, 7]))))
 
 **Cost.** Finding the middle and merging are both linear in the length of the list, so the
 recurrence is still $T(n) = 2T(n/2) + cn$: $O(n \log n)$ time. But the merge allocates **no new
-nodes** — it only rewrites `next` references — so the extra space is just the $O(\log n)$ recursion
-stack, compared with $O(n)$ for arrays. The final splice `tail.next = a or b` also shows a small
+nodes** (it only rewrites `next` references), so the extra space is only the $O(\log n)$
+recursion stack, compared with $O(n)$ for arrays. The final splice `tail.next = a or b` also shows a small
 advantage over the array version: the leftover run is attached in $O(1)$ instead of being copied
 element by element.
 
 ## 7. Pitfalls
 
-- Using `<` instead of `<=` for the left run breaks stability.
-- Forgetting to copy the leftover tail of the non-exhausted run.
-- Recursing on `n < 1` only: a one-element list would recurse forever (`mid = 0`).
-- Allocating new lists at every level in a hot loop — prefer one auxiliary buffer.
+- **Breaking stability.** Using `<` instead of `<=` when comparing the left item with the right
+  one takes ties from the right and loses stability.
+- **Dropping the leftovers.** When one input runs out, the rest of the other still has to be
+  copied to the output.
+- **A base case that is too small.** Stopping only when `n < 1` lets a one-item list recurse
+  for ever, because `mid` is 0 and the "second half" is the same one-item list again. Stop when
+  `n < 2`.
+- **Creating new lists at every level** in code where speed matters. Prefer one extra buffer,
+  as in the bottom-up version.
+- **Calling merge-sort "in place".** On arrays it needs $O(n)$ extra memory.
 
 ## 8. Summary
 
-- Divide-and-conquer: divide, conquer recursively, combine.
-- Merge-sort: split in half, sort halves, merge in linear time — $O(n \log n)$ always, stable,
-  $O(n)$ extra space, ideal for linked lists and external data.
-- Recurrence $t(n) = 2t(n/2) + cn$ solves to $O(n\log n)$.
+- Divide and conquer: divide the problem, solve the parts recursively, combine the results.
+- Merge-sort splits the list in half, sorts each half, and merges them in linear time. It takes
+  $O(n \log n)$ on every input, is stable, uses $O(n)$ extra space on arrays, and is ideal for
+  linked lists and for data read sequentially from disk.
+- The recurrence $t(n) = 2t(n/2) + cn$ solves to $O(n\log n)$: $\log n$ levels, each costing
+  $O(n)$.
+- Python's built-in sort, Timsort, is a merge-sort that exploits runs already present in the
+  data.
 
 > **Source:** Goodrich, Tamassia & Goldwasser, *Data Structures and Algorithms in Python*, ch. 12.1–12.2.
+
+## Glossary
+
+- **Divide and conquer**: solving a problem by splitting it, solving the parts recursively and
+  combining the answers.
+- **Merge**: combining two sorted sequences into one sorted sequence in linear time.
+- **Merge-sort**: sorting by recursively sorting two halves and merging them.
+- **Merge-sort tree**: the tree of recursive calls made by merge-sort.
+- **Stable sort**: a sort that keeps items with equal keys in their original order.
+- **In place**: using only a constant amount of extra memory; array merge-sort is not.
+- **Random access**: reaching any position directly, as in an array.
+- **Run**: a stretch of consecutive items that is already sorted.
+- **Bottom-up merge-sort**: a non-recursive merge-sort that merges runs of doubling length.
+- **Natural merge-sort**: a merge-sort that starts from the runs already in the data.
+- **Timsort**: Python's built-in sorting algorithm, a refined natural merge-sort.
+- **Inversion**: a pair of items that are out of order relative to each other.
 
 ## Check yourself
 

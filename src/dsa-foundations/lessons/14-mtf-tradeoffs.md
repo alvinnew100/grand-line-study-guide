@@ -1,31 +1,53 @@
 # Access frequencies, move-to-front and link vs array
 
-This lesson finishes the linked-list module with the book's case study — maintaining a list of
-elements ordered by how often they are accessed — which introduces the elegant **move-to-front
-heuristic** and its analysis. We close by systematically comparing link-based and array-based
-sequences.
+> **Before this lesson:** You should know singly and doubly linked lists, positions, and the LRU
+> cache from [Doubly linked lists and positional lists](#/lesson/dsa-foundations/doubly-positional),
+> and the costs of list operations from
+> [Low-level arrays](#/lesson/dsa-foundations/low-level-arrays). Amortised cost comes from
+> [Dynamic arrays](#/lesson/dsa-foundations/dynamic-arrays).
+
+## In plain words
+
+This lesson asks a practical question: if you keep a list of things and look them up by walking
+along the list, in what order should you keep them so that lookups are quick? It then steps back
+and compares the two ways of storing a sequence that you now know, arrays and linked lists.
+
+Think of the spices on a kitchen shelf. If you put each jar back at the *front* of the shelf
+after using it, the jars you cook with most drift to the front on their own, and the saffron you
+use once a year ends up at the back. You never planned an order; the habit produced one. That
+habit is the **move-to-front heuristic**. (A **heuristic** is a rule of thumb that usually works
+well but carries no guarantee of being best.)
+
+Why it matters for a job: "should this be an array or a linked list?" is a question you will
+answer in interviews and in code review, and a good answer talks about which operations are
+frequent, not about which structure is "better". Move-to-front is also the idea underneath LRU
+caches and part of the bzip2 compression program.
 
 ## 1. The favourites problem
 
-Many applications keep track of the most popular items: a browser's most-visited pages, a music
-player's most-played songs, a phone's frequently called contacts. We want a **favourites list**
-supporting:
+Many applications track the most popular items: the pages you visit most in a browser, the
+songs you play most, the contacts you call most. We want a **favourites list** with three
+operations:
 
-- `access(e)`: record an access of `e` (adding it if new);
-- `remove(e)`: remove `e`;
-- `top(k)`: report the $k$ most-accessed elements.
+- `access(e)`: record one more use of item `e`, adding it to the list if it is new;
+- `remove(e)`: take `e` off the list;
+- `top(k)`: report the $k$ most-used items.
 
 ## 2. Approach 1: keep the list sorted by count
 
-Store `(element, count)` items in a positional list kept in nondecreasing order... of *decreasing*
-count. On `access(e)`:
+Store each item together with a count of how many times it has been accessed, and keep the list
+ordered from the highest count to the lowest. On `access(e)`:
 
-1. find `e`'s position by walking the list — $O(n)$;
-2. increment its count;
-3. while the item before it has a smaller count, move it forward (like one pass of insertion sort).
+1. find `e` by walking along the list from the front, which is $O(n)$ in the worst case;
+2. add one to its count;
+3. while the item in front of it has a smaller count, move it one place forward (the same
+   sliding step as insertion sort).
 
-`top(k)` is then just the first $k$ items: $O(k)$. The weak point is `access`, $O(n)$ for the search
-in the worst case.
+With the list in that order, `top(k)` is the first $k$ items, which costs $O(k)$. The weak
+point is `access`: the search can take $O(n)$.
+
+The first demo uses a plain Python list of `[element, count]` pairs so that the logic is easy to
+follow; section 5 rebuilds it on a linked list.
 
 ```python-run
 class FavoritesList:
@@ -55,32 +77,46 @@ for site in "a b c a b a d a c c c c".split():
 print(fav.top(3), fav._data)
 ```
 
+**Reading this code.** `_find` walks the list and returns the index of `e`, or `None`.
+`enumerate` supplies each item together with its index. `access` appends a new `[e, 0]` pair if
+the item was not found, adds one to the count, and then swaps the pair forward while the pair in
+front of it has a smaller count. The twelve accesses are a ×4, b ×2, c ×5, d ×1, so the output
+is `['c', 'a', 'b'] [['c', 5], ['a', 4], ['b', 2], ['d', 1]]`.
+
 ## 3. Approach 2: the move-to-front heuristic
 
-Access patterns often have **locality of reference**: an element that was just accessed is likely
-to be accessed again soon. The **move-to-front (MTF)** heuristic exploits this: whenever an element
-is accessed, move it to the *front* of the list. Recently used elements cluster near the front, so
-their searches are fast.
+Real access patterns often show **locality of reference**: an item that was used a moment ago is
+likely to be used again soon. (You open the same few files all morning, then a different few all
+afternoon.) The **move-to-front (MTF)** heuristic exploits this. Whenever an item is accessed,
+move it to the *front* of the list. Recently used items gather near the front, so finding them
+again is quick.
 
-- `access(e)`: find `e` ($O(\text{position})$), move it to the front ($O(1)$ with a positional list).
-- `top(k)`: the list is no longer sorted by count, so we must compute it. The book's approach:
-  copy the items to a temporary list and repeatedly extract the maximum count $k$ times — $O(kn)$.
-  (With sorting it is $O(n \log n)$; with a heap, $O(n + k\log n)$.)
+- `access(e)`: find `e`, at a cost proportional to its position, then move it to the front,
+  which is $O(1)$ in a doubly linked list.
+- `top(k)`: the list is no longer in order of count, so the answer has to be computed. One
+  direct way is to copy the items to a temporary list and pick out the largest count $k$ times,
+  for $O(kn)$ in total. (Sorting the copy costs $O(n \log n)$; the heap of a later module does
+  it in $O(n + k\log n)$.)
 
-So MTF trades a slower `top(k)` for potentially much faster accesses.
+So MTF accepts a slower `top(k)` in exchange for accesses that may be much faster.
 
-### 3.1 When does MTF win — and lose?
+### 3.1 When does MTF win, and when does it lose?
 
-**Favourable example.** Suppose there are $n$ elements and the access sequence is: access element 1
-$n$ times, then element 2 $n$ times, … (blocks of repeated accesses). With MTF, the first access in
-each block searches the list ($O(n)$) and the remaining $n - 1$ accesses find the element at the front
-($O(1)$). Total $O(n^2)$ over $n^2$ accesses — $O(1)$ amortised each. The sorted-by-count list must
-walk further and further as counts accumulate.
+**A favourable case.** Suppose there are $n$ items and the accesses come in blocks: item 1 is
+accessed $n$ times, then item 2 is accessed $n$ times, and so on. With MTF, the first access of
+each block has to search the list, costing up to $n$ steps, and the other $n - 1$ accesses find
+the item at the very front, costing 1 step each. That is about $2n$ steps per block and $2n^2$
+steps for all $n^2$ accesses: $O(1)$ amortised per access. The count-sorted list fares worse,
+because the item now in demand has to climb past all the earlier favourites.
 
-**Unfavourable example.** Access the $n$ elements in a repeating cycle $1, 2, \ldots, n, 1, 2,
-\ldots$. MTF always moves the just-accessed element to the front, so the next element needed is
-always at the **back**: every access costs $\Theta(n)$. A count-sorted list would do equally badly
-here, but a static order would be no worse. MTF is a heuristic, not a guarantee.
+**An unfavourable case.** Access the $n$ items in an endless cycle $1, 2, \ldots, n, 1, 2,
+\ldots$. MTF moves each item to the front as it is used, which pushes every other item one place
+back, so the item needed next is always at the **back** of the list: every access costs
+$\Theta(n)$. A list that never reordered itself would do no worse here. MTF is a heuristic, not
+a guarantee.
+
+The demo measures both cases. `mtf_cost` counts how many positions are scanned when the list
+reorders itself by move-to-front; `static_cost` counts the same for a list that never changes.
 
 ```python-run
 def mtf_cost(order, accesses):
@@ -104,41 +140,54 @@ print("blocks: MTF", mtf_cost(items[::-1], blocks), " static", static_cost(items
 print("cycle:  MTF", mtf_cost(items, cycle), " static", static_cost(items, cycle))
 ```
 
+With 50 items and 2,500 accesses, the block pattern costs MTF 4,950 positions (each block is one
+scan of 50 followed by 49 hits at position 1) against 63,750 for a list that never reorders,
+while the cycle pattern costs MTF 123,775 against 63,750 for the fixed list. One pattern rewards the heuristic and the other punishes it.
+
 > [!NOTE]
-> A celebrated result (Sleator and Tarjan, 1985) shows MTF is **2-competitive**: on any access
-> sequence its total cost is at most about twice that of the best possible list-reordering strategy
-> that knows the future. The same authors invented splay trees, which apply a "move-to-root" idea
-> to binary search trees (search-trees module).
+> A celebrated result of Sleator and Tarjan (1985) shows that MTF is **2-competitive**: on *any*
+> sequence of accesses, its total cost is at most about twice the cost of the best possible
+> reordering strategy, even one that knows the whole future sequence in advance. So MTF can
+> lose, but never by much. The same two researchers invented splay trees, which apply a
+> "move to the top" idea to search trees (search-trees module).
 
 ### 3.2 Where MTF is used
 
-- **Self-organising lists** in symbol tables and caches.
-- **Move-to-front transform** in compression: in bzip2, after the Burrows–Wheeler transform, MTF
-  converts runs of repeated symbols into runs of small integers, which compress well.
-- **LRU caching** is MTF with a capacity: on each access move to front; when full, evict the back.
+- **Self-organising lists** inside compilers and caches, where a short list is searched often.
+- **Compression.** The bzip2 program includes a move-to-front step that turns runs of repeated
+  symbols into runs of small numbers, which then compress well.
+- **LRU caching** is MTF with a size limit: on each access move the item to the front, and when
+  the cache is full, evict the item at the back.
 
 ## 4. Link-based versus array-based sequences
 
-Neither representation dominates. Choosing well is about matching the operations you need.
+Neither representation is better in general. Choosing well means matching the structure to the
+operations you will perform most.
 
 ### 4.1 Advantages of arrays
 
-1. **$O(1)$ access by index.** `A[k]` is a single address computation; a linked list needs $k$ hops.
-2. **Lower constant factors.** Operations with equal big-O typically run faster on arrays — e.g.
-   appending to a list vs creating a node object, setting two or four references, and updating size.
-3. **Less memory** — typically. An array of $n$ references uses at most about $2n$ cells even right
-   after a doubling resize (and exactly $n$ for a tuple). A singly linked list uses $2n$ references
-   (element + next) *plus* per-node object overhead; doubly linked uses $3n$ plus overhead.
-4. **Cache locality**: contiguous memory is prefetched efficiently by hardware.
+1. **$O(1)$ access by index.** `A[k]` is one address calculation; a linked list needs $k$ hops.
+2. **Smaller constant factors.** When both structures have the same big-O for an operation, the
+   array version is usually quicker in practice. Appending to a list writes one cell; adding a
+   node means creating an object, setting two or four references and updating a count.
+3. **Less memory, usually.** An array of $n$ references has at most about $2n$ cells even
+   immediately after doubling (and exactly $n$ for a tuple). A singly linked list needs $2n$
+   references (element and next) *plus* the bookkeeping of $n$ separate node objects; a doubly
+   linked list needs $3n$ plus that bookkeeping.
+4. **Cache locality.** Processors keep recently used memory, and the memory next to it, in a
+   small fast store called the **cache**. An array's cells are neighbours, so scanning it stays
+   inside the cache; a list's nodes are scattered, so each hop may be a slow trip to main
+   memory.
 
 ### 4.2 Advantages of linked lists
 
-1. **Worst-case $O(1)$ bounds** for operations, not amortised. In real-time systems (an aircraft
-   controller, an audio callback), an occasional $O(n)$ resize pause is unacceptable.
-2. **$O(1)$ insertion and deletion at arbitrary positions** given a reference (position) to the
-   location. Arrays must shift: inserting at index $k$ costs $O(n - k + 1)$.
-3. **No over-allocation**: memory is proportional to the number of elements at all times.
-4. **Stable references**: positions remain valid as other elements change; array indices shift.
+1. **Worst-case $O(1)$ bounds**, not amortised ones. In software that must respond within a
+   fixed time (flight control, live audio), an occasional $O(n)$ pause for a resize is not
+   acceptable.
+2. **$O(1)$ insertion and deletion anywhere**, given a reference (a position) to the spot. An
+   array must shift: inserting at index $k$ costs $O(n - k + 1)$.
+3. **No spare capacity.** Memory use is proportional to the number of items at every moment.
+4. **Stable handles.** A position stays valid while other items change; array indices shift.
 
 ### 4.3 Summary table
 
@@ -152,19 +201,26 @@ Neither representation dominates. Choosing well is about matching the operations
 | search for value | $O(n)$ | $O(n)$ | $O(n)$ |
 | memory | ~$n$ to $2n$ refs | $2n$ refs + node overhead | $3n$ refs + node overhead |
 
+In the table, "after / at" in the singly linked column means: $O(1)$ to insert or delete
+*after* a node you hold, but $O(n)$ to delete that node itself, since its predecessor must be
+found. In the doubly linked column, access to the $k$-th item can start from whichever end is
+nearer.
+
 > [!INTERVIEW]
-> "Array or linked list?" Interviewers want to hear about access patterns, not dogma: arrays for
-> indexing, iteration and cache efficiency (the default in Python); linked structures when you hold
-> references into the middle and splice frequently, or need worst-case $O(1)$. Note that in Python,
-> `collections.deque` already gives $O(1)$ at both ends.
+> "Array or linked list?" Interviewers want reasoning about access patterns, not a slogan. Use
+> an array for indexing, scanning and cache efficiency; it is the default in Python. Use a
+> linked structure when you hold references into the middle and insert or remove there often, or
+> when you need worst-case $O(1)$. Mention that Python's `collections.deque` already gives
+> $O(1)$ at both ends.
 
 ## 5. Building both favourites lists on a linked structure
 
-The demo in section 2 used a Python list for clarity, which hides the point of the case study: with
-a **positional (doubly linked) list**, relocating an item costs $O(1)$ once it has been found — no
-shifting. The book's `FavoritesList` wraps a `PositionalList` (the *composition* pattern) and
-`FavoritesListMTF` inherits from it, overriding just two methods: `_move_up` and `top`. The cell
-below is a compact, self-contained version of both.
+The demo in section 2 used a Python list for clarity, which hides the point of the case study.
+On a **doubly linked list**, moving an item to a new place costs $O(1)$ once the item has been
+found; nothing is shifted. The cell below builds both strategies on such a list. The second
+class, `FavoritesListMTF`, inherits from the first and **overrides** (replaces) two of its
+methods, `_move_up` and `top`; everything else is shared. Each list also counts in `steps` how
+many nodes its searches examine, which is the cost we compare.
 
 ```python-run
 class _Node:
@@ -251,10 +307,16 @@ print("top 3 agree:", sorted(a.top(3)) == sorted(b.top(3)))
 
 ### 5.1 Reading the experiment
 
-Two workloads, two different winners — which is exactly the lesson of the case study.
+The experiment feeds both lists two streams of page visits. In the first, `random.choices` picks
+pages with unequal probabilities given by `weights`: page $i$ is chosen in proportion to
+$1/(i+1)$, so a few pages are very popular and most are rare. This shape is known as a *Zipf*
+distribution and is typical of web traffic and word frequencies. In the second stream each
+randomly chosen page is visited 50 times in a row.
 
-- **Zipf-like, stationary popularity.** A handful of pages receive most of the hits and stay popular
-  forever. Keeping the list sorted by count places exactly those pages at the front and *keeps* them
+There are two workloads and two different winners, which is the lesson of the case study.
+
+- **Zipf-like popularity that does not change over time.** A handful of pages receive most of
+  the hits and stay popular forever. Keeping the list sorted by count places exactly those pages at the front and *keeps* them
   there, so its scans are short. Move-to-front does almost as well, but every access to a rare page
   drags that page to the very front, pushing the popular pages back by one position; MTF therefore
   scans somewhat more.
@@ -284,20 +346,44 @@ $O(1)$, and the list is used purely for ordering — the design of every LRU cac
 
 ## 6. Pitfalls
 
-- Assuming linked lists make "insert in the middle" cheap when you must first *search* for the
-  spot ($O(n)$).
-- Implementing MTF on a Python list with `insert(0, ...)`: that is $O(n)$ per move, defeating the
-  purpose (fine for demos; use a linked/positional list or `OrderedDict.move_to_end` for real).
-- Forgetting that `top(k)` with MTF requires a selection step.
+- **Assuming a linked list makes "insert in the middle" cheap.** The insertion itself is
+  $O(1)$, but if you must first *search* for the spot, that search is $O(n)$.
+- **Implementing MTF on a Python list with `insert(0, ...)`.** Each move then shifts the whole
+  list, $O(n)$, which defeats the purpose. That is fine for a demo; for real use, take a linked
+  list or `OrderedDict.move_to_end`.
+- **Forgetting that `top(k)` under MTF needs a selection step.** The list order reflects
+  recency, not popularity.
+- **Reading "2-competitive" as "always within a factor of two of a fixed list".** The comparison
+  is with the best strategy that is allowed to reorder; on the cycle pattern, MTF and that best
+  strategy both do poorly.
+- **Choosing a structure by reputation.** Measure or reason about the operations you perform.
 
 ## 7. Summary
 
-- Sorted-by-count favourites: `access` $O(n)$, `top(k)` $O(k)$.
-- Move-to-front: `access` cost depends on recency (fast with locality), `top(k)` $O(kn)$; 2-competitive.
-- Arrays win on indexing, constants and memory; linked lists win on worst-case bounds, splicing at
-  known positions, and stable references.
+- A favourites list sorted by count has `access` in $O(n)$ and `top(k)` in $O(k)$.
+- Under move-to-front, the cost of `access` depends on how recently the item was used (fast when
+  accesses have locality), `top(k)` costs $O(kn)$, and the total is never much worse than the
+  best reordering strategy.
+- Arrays win on access by index, constant factors, memory and cache behaviour. Linked lists win
+  on worst-case bounds, insertion and removal at known positions, and handles that stay valid.
 
 > **Source:** Goodrich, Tamassia & Goldwasser, *Data Structures and Algorithms in Python*, ch. 7.6–7.7.
+
+## Glossary
+
+- **Heuristic**: a rule of thumb that usually works well but has no guarantee of being best.
+- **Favourites list**: a list that records how often each item is accessed and reports the top
+  few.
+- **Locality of reference**: the tendency for recently used items to be used again soon.
+- **Move-to-front (MTF)**: moving each accessed item to the front of the list.
+- **Self-organising list**: a list that reorders itself in response to accesses.
+- **Competitive (2-competitive)**: never more than a fixed factor (here about 2) worse than the
+  best strategy that knows the future.
+- **Transpose heuristic**: swapping an accessed item with the one in front of it.
+- **Zipf distribution**: a popularity pattern in which a few items account for most accesses.
+- **Cache (processor)**: a small, fast memory holding recently used data and its neighbours.
+- **Override**: to replace an inherited method with a new version in a subclass.
+- **Splice**: to insert or remove a node by redirecting a few references.
 
 ## Check yourself
 
@@ -308,13 +394,13 @@ $O(1)$, and the list is used purely for ordering — the design of every LRU cac
    "explain": "Recently accessed items cluster at the front, exploiting locality of reference."},
   {"q": "On the cyclic access sequence 1, 2, ..., n, 1, 2, ..., n, ..., each MTF access costs...",
    "options": ["O(1)", "Theta(n)", "O(log n)", "O(k)"], "answer": 1,
-   "explain": "The element needed next is always at the back, because everything after it was just moved forward."},
+   "explain": "The element needed next is always at the back, because every other element has been moved in front of it since it was last used."},
   {"q": "In the book's MTF favourites list, top(k) costs...",
    "options": ["O(k)", "O(kn)", "O(1)", "O(n^2)"], "answer": 1,
    "explain": "The list is not sorted by count, so k rounds of finding the max over n items are needed."},
   {"q": "Which is an advantage of linked lists over arrays?",
    "options": ["O(1) access by index", "Better cache locality", "Worst-case O(1) insertion at a known position", "Less memory per element"], "answer": 2,
-   "explain": "Arrays must shift elements; linked lists just update references."},
+   "explain": "Arrays must shift elements; linked lists only update a few references."},
   {"q": "Which is an advantage of arrays over linked lists?",
    "options": ["Worst-case O(1) appends", "O(1) access to the k-th element", "O(1) deletion in the middle", "No over-allocation"], "answer": 1,
    "explain": "Address arithmetic gives direct indexing; appends are only amortised O(1)."},

@@ -1,15 +1,35 @@
 # Doubly linked lists and positional lists
 
-In a singly linked list, removing the tail — or any node other than the head — is awkward because a
-node does not know its predecessor. A **doubly linked list** stores two references in each node,
-`next` and `prev`, which makes insertion and deletion at *any known position* $O(1)$. Building on
-that, the **positional list ADT** gives users a safe way to refer to positions inside a list.
+> **Before this lesson:** You should know nodes, head and tail references, and why removing the
+> last node of a singly linked list costs $O(n)$. All of that is in
+> [Singly and circularly linked lists](#/lesson/dsa-foundations/singly-circular). The deque ADT
+> comes from [Queues, circular arrays and deques](#/lesson/dsa-foundations/queues-deques).
+
+## In plain words
+
+A **doubly linked list** is a linked list in which every node knows both of its neighbours: the
+one after it (`next`) and the one before it (`prev`). With both links in hand, any node can be
+removed, or a new node inserted beside it, in a constant number of steps.
+
+Picture a line of people holding hands. Each person holds the hand of the person on either
+side. If someone in the middle wants to leave, they join their two neighbours' hands together
+and step out; nobody else in the line is disturbed. In a singly linked list each person could
+see only the person in front, so the one behind a leaver would not know whose hand to take.
+
+The second idea in this lesson is a **position**: a safe handle on a place in the list, like a
+bookmark, that stays correct while other items come and go around it.
+
+Why it matters for a job: the doubly linked list combined with a dictionary gives the LRU
+cache, among the most frequently asked design questions in interviews and a structure used in
+real systems wherever memory is limited (web caches, database buffers). Section 6 builds one.
 
 ## 1. Header and trailer sentinels
 
-To avoid special cases at the ends, the book's doubly linked lists add two **sentinel** (dummy)
-nodes: a **header** before the first real node and a **trailer** after the last. Sentinels store no
-element. An empty list is just `header <-> trailer`.
+In the previous lesson, code for the ends of a list was full of special cases ("if the list is
+empty, also set the tail..."). Doubly linked lists usually avoid these with two **sentinel**
+nodes, dummy nodes that hold no element: a **header** in front of the first real node and a
+**trailer** after the last. An empty list is the two sentinels linked to each other,
+`header <-> trailer`.
 
 ```mermaid
 graph LR
@@ -19,9 +39,9 @@ graph LR
   C <--> T["trailer sentinel"]
 ```
 
-Why sentinels? Every real node now always has a real predecessor *and* successor node (possibly a
-sentinel), so insertion and deletion code never has to check for `None` or update `head`/`tail`
-references. All insertions look like "insert between two existing nodes", and all deletions look
+Why bother with two nodes that store nothing? Because every real node now always has a node on
+each side of it (possibly a sentinel), so the insertion and deletion code never has to check
+for `None` or update separate `head` and `tail` references. All insertions look like "insert between two existing nodes", and all deletions look
 like "unlink a node that has neighbours on both sides".
 
 ## 2. Inserting and deleting
@@ -37,7 +57,13 @@ like "unlink a node that has neighbours on both sides".
 2. Link `p.next = s` and `s.prev = p`.
 3. Optionally clear `node`'s fields (helps garbage collection and marks it as deprecated).
 
-Both are $O(1)$.
+Both are $O(1)$: a fixed number of reference updates, whatever the length of the list.
+
+The code below has two classes. `_DoublyLinkedBase` holds the sentinels and the two operations
+described above. `LinkedDeque(_DoublyLinkedBase)` **inherits** from it: writing a class name in
+parentheses means "start with everything that class has, and add to it". The deque's six methods
+are then one line each, because "first item" is `header._next` and "last item" is
+`trailer._prev`.
 
 ```python-run
 class _DoublyLinkedBase:
@@ -100,22 +126,30 @@ print(D.first(), D.last(), len(D))
 print(D.delete_last(), D.delete_first(), D.delete_first(), D.delete_first(), D.is_empty())
 ```
 
-All deque operations are $O(1)$ **worst case** — better than the circular array's amortised bound,
-at the cost of two extra references per element.
+The test builds the deque 7, 3, 5, 9 (two insertions at each end), so the first line prints
+`7 9 4`. The second line removes 9 from the back and then 7, 3, 5 from the front, and prints
+`9 7 3 5 True`.
+
+Every deque operation is $O(1)$ in the **worst case**, which is better than the circular
+array's amortised bound. The cost is memory: two extra references per item.
 
 ## 3. The positional list ADT
 
-Stacks, queues and deques only allow access at the ends. Many applications need to work *inside* a
-sequence: a text editor's cursor, a waiting list where someone in the middle leaves, a playlist where
-a song is inserted after the current one. Integer indices are a poor way to describe such places:
+Stacks, queues and deques allow access only at the ends. Many applications need to work
+*inside* a sequence: the cursor in a text editor, a waiting list that someone in the middle
+leaves, a playlist where a song is inserted after the one now playing. Whole-number indices are
+a poor way to describe such places:
 
-- an index changes when elements are inserted or deleted before it;
-- finding position $k$ in a linked list costs $O(k)$.
+- an index changes whenever an item is inserted or deleted before it, so a remembered index
+  goes stale;
+- reaching index $k$ in a linked list costs $O(k)$ hops.
 
-We want something like a *reference to a node* — stable, $O(1)$ to use — without exposing the nodes
-themselves (which users could corrupt). The book's answer is the **position** abstraction: an
-object that marks a place in the list. A position's place remains valid while other elements are
-inserted or removed around it; it becomes invalid only if its own element is deleted.
+What we want is something like a *reference to a node*: it stays correct as the list changes
+and can be used in $O(1)$. But handing users the nodes themselves would let them tamper with
+the links and wreck the list. The answer is an abstraction called a **position**: a small
+object that marks a place in the list and lets you read the element there, nothing more. A
+position stays valid while other items are inserted or removed around it. It becomes invalid
+only when its own item is deleted.
 
 ### 3.1 Operations
 
@@ -138,9 +172,19 @@ All of these run in $O(1)$ worst-case time with a doubly linked implementation.
 
 ### 3.2 Implementation
 
-The `Position` class wraps a node and remembers which list it belongs to. The list's `_validate`
-method rejects positions that belong to another list or whose node has been deleted (a deleted node
-has `_next is None`).
+The `Position` class wraps a node and remembers which list it belongs to. A few details of the
+code are worth knowing before you read it:
+
+- `_validate(p)` is the gatekeeper. It rejects anything that is not a `Position`, a position
+  from a different list, and a position whose node has been deleted (recognisable because
+  `_delete_node` set its `_next` to `None`). If all is well it returns the underlying node.
+- `_make_position(node)` goes the other way, wrapping a node in a `Position`, and returns `None`
+  for a sentinel so that users can never get hold of the header or trailer.
+- `__eq__` defines what `==` means for positions: two `Position` objects are equal when they
+  wrap the very same node (`is` tests whether two names refer to one object).
+- `super()._insert_between(...)` calls the version of the method defined in the parent class.
+
+The cell also contains the sorting function discussed in section 4.
 
 ```python-run
 class _DoublyLinkedBase:                       # (same base class as above, repeated so this cell runs alone)
@@ -252,13 +296,21 @@ insertion_sort_positional(L2)
 print(list(L2))
 ```
 
+**Reading the output.** The comments beside the first four operations show the list growing to
+`9 8 3 5`; `before(q)` is the position holding 3. After replacing 8 by 7 and deleting 3, the
+list is `[9, 7, 5]`. The position `r` now refers to a deleted node, so `L.after(r)` is refused
+with `p is no longer valid`. The last line is the sorted list
+`[11, 15, 22, 23, 25, 29, 36, 42, 53]`.
+
 ## 4. Sorting a positional list
 
-Insertion sort adapts naturally: maintain a `marker` position (the last element of the sorted
-prefix). Take `pivot = after(marker)`. If `pivot`'s value is not smaller than `marker`'s, just advance
-the marker. Otherwise, walk left from the marker to find where it belongs, `delete(pivot)` and
-`add_before(walk, value)`. No shifting — but finding the spot is still a walk, so the worst case is
-$O(n^2)$, like the array version.
+Insertion sort, from the arrays module, adapts naturally. Keep a position called `marker` on the
+last item of the sorted stretch at the front. Let `pivot` be the position after it, the next
+item to place. If the pivot's value is larger than the marker's, it is already in the right
+place, and the marker moves forward onto it. Otherwise, walk left from the marker to find where
+the value belongs, delete the pivot, and add its value back before that spot. Nothing is
+shifted: an insertion is four reference updates. But finding the spot is still a walk, so the
+worst case remains $O(n^2)$, the same as the array version.
 
 ```python
 def insertion_sort_positional(L):
@@ -280,9 +332,10 @@ def insertion_sort_positional(L):
 The runnable cell in section 3.2 above includes this function too; scroll up and run it with your own data.
 
 > [!INTERVIEW]
-> A doubly linked list plus a hash map from keys to nodes is the textbook **LRU cache**: the map
-> finds a node in $O(1)$, the list moves it to the front or evicts the back in $O(1)$. Python's
-> `collections.OrderedDict` is implemented exactly this way (`move_to_end`, `popitem(last=False)`).
+> A doubly linked list plus a dictionary from keys to nodes is the textbook **LRU cache** ("least
+> recently used"). The dictionary finds a node in $O(1)$; the list moves it to the front, or
+> drops the node at the back, in $O(1)$. Python's `collections.OrderedDict` is built this way
+> (see its `move_to_end` and `popitem(last=False)` methods). Section 6 builds one from scratch.
 
 ## 5. Dry run: the four reference updates
 
@@ -308,18 +361,22 @@ needed a special case for the empty list.
 
 ## 6. Worked application: an LRU cache from a positional list and a dictionary
 
-A **least-recently-used cache** holds at most `capacity` items; when a new item arrives and the
-cache is full, the item that has gone unused for the longest time is evicted. Both operations must
+A **cache** is a small, fast store of recently used results, kept so that they need not be
+fetched or computed again. Since it is small, something must be thrown out when it fills up;
+throwing an item out is called **eviction**. A **least-recently-used (LRU) cache** holds at most
+`capacity` items, each a value filed under a **key** (the name used to look it up), and when it
+is full it evicts the item that has gone unused for the longest time. Two operations must both
 be $O(1)$:
 
-- `get(key)` — return the value and mark the item as most recently used;
-- `put(key, value)` — insert or update, mark as most recently used, evict if over capacity.
+- `get(key)`: return the value and mark the item as the most recently used;
+- `put(key, value)`: insert or update, mark as most recently used, and evict if over capacity.
 
-No single structure does this. A dictionary finds a key in $O(1)$ but has no notion of recency; a
-list ordered by recency supports $O(1)$ eviction from the back but takes $O(n)$ to *find* a key.
-Combine them: the dictionary maps each key to its **node** (its position) in a doubly linked list
-ordered from most to least recently used. The dictionary provides the lookup; the position provides
-$O(1)$ unlink-and-move-to-front — the operation that only a doubly linked list can do.
+No single structure does this. A dictionary finds a key in $O(1)$ but knows nothing about how
+recently each item was used. A list kept in order of recency can drop its last item in $O(1)$
+but needs $O(n)$ to *find* a key. So combine them. The dictionary maps each key to its **node**
+(its position) in a doubly linked list ordered from most to least recently used. The dictionary
+supplies the lookup. The node supplies the $O(1)$ "unlink and move to the front", the one
+operation that only a doubly linked list can do.
 
 ```python-run
 class LRUCache:
@@ -398,11 +455,15 @@ next lesson can find their items in $O(1)$.
 
 ## 7. Pitfalls
 
-- Forgetting one of the four link updates in insert (two on the new node, two on neighbours).
-- Allowing a deleted position to be reused: always validate.
-- Comparing positions with `is` instead of `==`: two distinct `Position` wrappers can refer to the
-  same node, hence the custom `__eq__`.
-- Using an index-based mental model; positions do not shift when elements are inserted elsewhere.
+- **Forgetting one of the four link updates** when inserting: two inside the new node, two on
+  its neighbours. A list that is only half linked passes forward-only tests and fails later.
+- **Reusing a deleted position.** Always validate before use.
+- **Comparing positions with `is` instead of `==`.** Two different `Position` wrappers can refer
+  to the same node, which is why the class defines its own `__eq__`.
+- **Thinking in indices.** A position does not shift when items are inserted elsewhere; an index
+  does.
+- **Forgetting to store the key in an LRU node.** Eviction starts from the list, and without the
+  key it cannot remove the matching dictionary entry.
 
 ## 8. Summary
 
@@ -414,6 +475,24 @@ next lesson can find their items in $O(1)$.
 | access by index $k$ | $O(k)$ |
 
 > **Source:** Goodrich, Tamassia & Goldwasser, *Data Structures and Algorithms in Python*, ch. 7.3–7.5.
+
+## Glossary
+
+- **Doubly linked list**: a linked list whose nodes refer to both the next and the previous
+  node.
+- **Sentinel**: a dummy node that holds no element and removes special cases at the ends.
+- **Header / trailer**: the sentinels before the first and after the last real node.
+- **Inheritance**: defining a class that starts with all the features of another class.
+- **Positional list**: a list ADT whose operations are stated in terms of positions, not
+  indices.
+- **Position**: an object marking a place in a list; it stays valid while other items change.
+- **Validate**: check that a position belongs to this list and has not been deleted.
+- **Cache**: a small, fast store of results kept to avoid repeating work.
+- **Key**: the name under which a value is stored and looked up.
+- **Eviction**: removing an item from a full cache to make room.
+- **LRU (least recently used)**: the eviction rule that removes the item unused for longest.
+- **`OrderedDict`**: Python's dictionary that also remembers an order, built from a hash table
+  plus a doubly linked list.
 
 ## Check yourself
 

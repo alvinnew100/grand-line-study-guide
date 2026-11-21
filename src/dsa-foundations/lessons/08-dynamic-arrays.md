@@ -1,14 +1,35 @@
 # Dynamic arrays and amortised analysis
 
-A low-level array has a **fixed capacity** chosen when it is created: the memory after it might
-belong to something else, so it cannot simply grow. Yet a Python `list` grows forever with
-`append`. How? The answer — the **dynamic array** — is one of the most important tricks in data
-structures, and its analysis introduces **amortisation**.
+> **Before this lesson:** You should know that an array is a row of equal-sized cells next to
+> each other in memory, and that a Python list stores references in such a row. Both come from
+> [Low-level arrays and Python's sequence types](#/lesson/dsa-foundations/low-level-arrays). The
+> doubling sum $1 + 2 + 4 + \cdots + 2^m = 2^{m+1} - 1$ comes from
+> [Measuring algorithms and the seven functions](#/lesson/dsa-foundations/seven-functions).
+
+## In plain words
+
+An array cannot grow: the memory right after it may already be in use by something else. Yet a
+Python list accepts `append` after `append` without complaint. The trick behind it is the
+**dynamic array**: keep the items in an array that is somewhat bigger than needed, and when it
+fills up, get a much bigger array and move everything across.
+
+Think of a growing family renting a flat. Moving house is expensive, so they do not move every
+time a child is born. They rent a flat with spare rooms, and when it is finally full they move
+to one twice the size. Moves are painful but rare, and each one buys a long quiet stretch. Averaged
+over the years, the cost of moving per new family member is small and steady. That averaging
+has a name, **amortisation**, and this lesson shows how to do it rigorously.
+
+Why it matters for a job: "what is the time complexity of `list.append`?" is a standard
+interview question, and the full answer ("constant on average, linear once in a while, because
+of doubling") is this lesson. The same idea powers Java's `ArrayList`, C++'s `vector`, Go's
+slices and the hash tables later in this track.
 
 ## 1. Watching a list grow
 
-`sys.getsizeof` reports the bytes a list object occupies (its header plus its array of references,
-*not* the elements). Append items one at a time and watch:
+A low-level array has a **fixed capacity**, the number of cells it was created with. To see how
+a list copes, we can measure it. `sys.getsizeof` reports the number of bytes a list object
+occupies: a fixed header plus its row of references, *not* counting the items themselves. The
+demo appends one item at a time and prints a line only when the size changes.
 
 ```python-run
 import sys, struct
@@ -24,19 +45,26 @@ for k in range(1, 70):
         last = size
 ```
 
-The size does not change on every append. It jumps occasionally, then stays flat while the spare
-room fills up. The list reserves **more capacity than it currently needs**, and when that runs out
-it allocates a bigger array.
+**Reading this code.** `struct.calcsize('P')` gives the size in bytes of one reference on the
+machine running the code. `data.append(None)` adds one more item (the value does not matter;
+`None` is Python's "nothing" value). Each time `sys.getsizeof(data)` differs from the previous
+reading, the loop prints the new size and how many references now fit.
+
+The size does not change on every append. It jumps now and then, and stays flat in between while
+the spare room fills up. The list reserves **more capacity than it currently needs**, and when
+that runs out it obtains a bigger array.
 
 ## 2. The dynamic array algorithm
 
-Maintain an underlying array `A` of capacity `c` and a count `n` of elements actually stored. To
-append when `n < c`, write into `A[n]`. When the array is full (`n == c`):
+Keep an underlying array `A` with capacity `c`, and a separate count `n` of how many cells are
+really in use. To append when `n < c`, write the new item into `A[n]` and add one to `n`. When
+the array is full (`n == c`):
 
-1. Allocate a new array `B` with larger capacity.
-2. Copy `B[i] = A[i]` for $i = 0, \ldots, n-1$.
-3. Let `A = B` (the old array is reclaimed by the garbage collector).
-4. Store the new element in the new array.
+1. Ask for a new, larger array `B`. (Requesting memory is called **allocating** it.)
+2. Copy every item across: `B[i] = A[i]` for $i = 0, \ldots, n-1$.
+3. From now on use `B` as `A`. Nothing refers to the old array any more, so Python's *garbage
+   collector*, the part of the system that recycles unused memory, reclaims it.
+4. Store the new item in the new array.
 
 ```mermaid
 graph LR
@@ -50,8 +78,16 @@ choice is the key to efficiency.
 
 ## 3. Implementation
 
-The book's `DynamicArray` uses `ctypes` to obtain a raw array. Here we simulate a fixed-capacity
-raw array with a Python list we never resize, which keeps the logic identical:
+The class below is a simplified Python list built from scratch. A real implementation would get
+a raw fixed-size array from the operating system (in Python, through the `ctypes` module). To
+keep the demo runnable anywhere, `_make_array` returns an ordinary list of `None` values that we
+promise never to grow, which behaves the same for our purposes.
+
+A few Python conventions used here and throughout the track: a **class** is a template for
+objects that bundles data with the functions (**methods**) that work on it; `self` is the object
+a method is working on; names starting with one underscore (`_n`, `_A`) are internal details;
+and methods with double underscores are hooks that Python calls for built-in syntax, so
+`__len__` runs when you write `len(d)` and `__getitem__` runs when you write `d[k]`.
 
 ```python-run
 class DynamicArray:
@@ -112,39 +148,65 @@ d.insert(0, 'front'); d.remove(5)
 print([d[i] for i in range(len(d))])
 ```
 
+**Reading the class.**
+
+- `__init__` runs when a `DynamicArray()` is created: no items yet, capacity 1.
+- `__getitem__` first checks that `k` is a position in use, and raises `IndexError` otherwise.
+  The chained comparison `0 <= k < self._n` means "`k` is at least 0 and less than `_n`".
+- `append` doubles the capacity if the array is full, then writes into the first free cell.
+- `_resize` is the "move house" step: make array `B`, copy every item, switch over.
+- `insert` shifts items one cell right, starting from the last, to open a gap at `k`.
+  `range(self._n, k, -1)` counts downwards.
+- `remove` finds the first matching value, shifts everything after it one cell left, and clears
+  the now-unused last cell.
+
+The output shows the capacity going 1, 2, 4, 4, 8, 8, 8, 8, 16, 16 while the length goes from 1
+to 10. Capacity doubles exactly when an append finds the array full. The last line is
+`['front', 0, 1, 2, 3, 4, 6, 7, 8, 9]`.
+
 ## 4. Amortised analysis
 
-A single append that triggers a resize from capacity $k$ costs $\Theta(k)$ — linear! So a
-worst-case-per-operation analysis would call `append` an $O(n)$ operation, suggesting $n$ appends
-cost $O(n^2)$. That is far too pessimistic: expensive appends are rare. **Amortised analysis**
-bounds the *total* cost of a sequence of operations.
+An append that triggers a resize from capacity $k$ must copy $k$ items, so it costs
+$\Theta(k)$: linear. If we judged `append` by its worst single call, we would label it $O(n)$
+and conclude that $n$ appends could cost $O(n^2)$. That is far too gloomy, because expensive
+appends are rare and get rarer. **Amortised analysis** bounds the *total* cost of a whole
+sequence of operations, and reports the average per operation.
 
 ### 4.1 The cyber-dollar (accounting) argument
 
-Imagine the computer is a coin-operated appliance: each primitive operation costs one
-**cyber-dollar**. Appending without resizing costs 1 dollar; growing from size $k$ to $2k$ costs $k$
-dollars for the copy.
+Pretend the computer is coin-operated: each primitive operation costs one coin, which we call a
+**cyber-dollar**. Appending without a resize costs 1 dollar. Growing from capacity $k$ to $2k$
+costs $k$ dollars for the copying.
 
-> **Proposition.** Starting from an empty dynamic array of capacity 1 that doubles when full, a
+> **Claim.** Starting from an empty dynamic array of capacity 1 that doubles when full, a
 > sequence of $n$ appends takes $O(n)$ time.
 
-*Justification.* Charge each append **3** cyber-dollars. One pays for writing the element; the other
-two are saved in a bank. When the array has capacity $2^i$ and becomes full, the $2^{i-1}$ elements
-added since the last resize have each deposited 2 dollars — $2^i$ dollars in total — which is exactly
-enough to pay for copying all $2^i$ elements into the new array. So the bank never goes negative,
-and $n$ appends cost at most $3n$ dollars. ∎
+*Why.* Charge every append a flat fee of **3** cyber-dollars, more than a plain append needs.
+One dollar pays for writing the item. The other two go into a savings account. Now look at the
+moment an array of capacity $2^i$ fills up. The last resize happened at capacity $2^{i-1}$, so
+since then $2^{i-1}$ items have been appended, each saving 2 dollars: $2^i$ dollars in the
+account. Copying the $2^i$ items into the new array costs exactly $2^i$ dollars. The savings
+cover it. So the account never goes below zero, and $n$ appends cost at most $3n$ dollars in
+total. ∎
 
-Each append is therefore **$O(1)$ amortised**.
+Each append is therefore **$O(1)$ amortised**: constant when averaged over the sequence. Note
+what this does *not* say. It is not about probability or luck; it is a guarantee about the total,
+true for every sequence of appends.
 
 ### 4.2 The direct summation argument
 
-With doubling, resizes happen when the size reaches $1, 2, 4, \ldots, 2^m$ where $2^m < n$. The total
-copying cost is
+The same result by plain addition. With doubling, a resize happens when the size reaches
+$1, 2, 4, \ldots, 2^m$, where $2^m$ is the last power of two below $n$. The total number of
+items copied is
 
 $$1 + 2 + 4 + \cdots + 2^m = 2^{m+1} - 1 < 2n.$$
 
-Plus $n$ for the writes themselves: under $3n$ total. The geometric series from the first lesson is
-doing all the work.
+Add $n$ for the writes themselves and the total is under $3n$. The doubling sum from the first
+lesson does all the work: every resize costs as much as all earlier resizes put together, so the
+last one dominates and it is at most $n$.
+
+The demo counts copies and writes for three growth rules: doubling, growing by a quarter, and
+adding a fixed 100 cells.
 
 ```python-run
 def total_cost(n, grow):
@@ -163,38 +225,48 @@ for n in [1000, 10000, 100000]:
           f"+100: {total_cost(n, lambda c: c+100)/n:7.2f} per op")
 ```
 
+In the output, the first two columns stay flat as `n` grows (between 2 and 3 steps per append
+for doubling, between 5 and 6 for the 1.25 rule), while the `+100` column keeps climbing:
+roughly 6, 51 and 501 steps per append.
+
 ### 4.3 Geometric versus arithmetic growth
 
-Any **geometric** growth factor works: grow by a factor $1 + r$ for any constant $r > 0$ and the
-copies form a geometric series bounded by a constant times $n$ — still $O(1)$ amortised (the
-constant gets worse as $r$ shrinks). CPython itself grows lists by roughly 1/8 plus a small constant,
-trading a slightly higher amortised constant for less wasted space.
+**Geometric** growth means multiplying the capacity by a fixed factor each time. Any factor
+above 1 works: grow by $1 + r$ for any fixed $r > 0$ and the copy costs form a geometric sum
+bounded by a constant times $n$, so append is still $O(1)$ amortised. The smaller $r$ is, the
+larger that constant but the less memory is wasted. CPython itself grows lists by roughly one
+eighth plus a small extra, choosing less waste at the price of more frequent copying.
 
-**Arithmetic** growth — adding a fixed $c$ cells each time — is a disaster:
+**Arithmetic** growth means adding a fixed number $c$ of cells each time, and it is a disaster:
 
-> **Proposition.** With a fixed increment $c$, $n$ appends take $\Omega(n^2)$ time.
+> **Claim.** With a fixed increment $c$, $n$ appends take $\Omega(n^2)$ time.
 
-There are $m = \lceil n/c \rceil$ resizes, copying $c, 2c, 3c, \ldots, (m-1)c$ elements:
-$c \sum_{i=1}^{m-1} i = c \cdot \frac{m(m-1)}{2} = \Omega(n^2/c)$. A larger $c$ only delays the
-inevitable. Run the cell above: the `+100` column keeps growing with $n$.
+There are $m = \lceil n/c \rceil$ resizes, and they copy $c$, then $2c$, then $3c$ items, up to
+$(m-1)c$. That is an arithmetic sum:
+$c \sum_{i=1}^{m-1} i = c \cdot \frac{m(m-1)}{2} = \Omega(n^2/c)$. A larger $c$ only postpones
+the trouble. The intuition: with a fixed increment, the "quiet stretch" bought by each move
+stays the same length while the moves keep getting more expensive.
 
 ### 4.4 Shrinking
 
-If many elements are removed, the array may waste memory. A safe policy: when the number of
-elements drops **below one quarter** of the capacity, halve the capacity. (Halving at one half is
-dangerous: alternating append/pop at the boundary would trigger a resize every operation —
-"thrashing".) With the quarter rule, any sequence of appends and pops still runs in $O(1)$ amortised
-time per operation, and the capacity is always $O(n)$.
+If many items are removed, the array may be mostly empty and waste memory. A safe rule: when the
+number of items drops **below one quarter** of the capacity, halve the capacity. Halving as soon
+as the array is half empty is dangerous, because a program that alternates append and pop right
+at the boundary would trigger a resize on every operation, a behaviour called **thrashing**.
+With the quarter rule, any mixture of appends and pops still costs $O(1)$ amortised per
+operation, and the capacity stays within a constant factor of $n$. Section 8 proves it.
 
 ## 5. Python's list in practice
 
-The book measures the average cost of `append` for growing $n$ and finds it roughly constant
-(tens of nanoseconds), confirming the amortised bound. Two related costs:
+Timing `append` on a real Python list for larger and larger $n$ gives a roughly constant average
+of a few tens of nanoseconds (billionths of a second), which matches the amortised bound. Some
+related facts:
 
-- `extend` is preferred over repeated `append`s: it knows the final size in advance and resizes
-  once, and its loop runs in C.
-- **List comprehensions** are faster than appending in a Python loop for the same reason.
-- Preallocating with `[None] * n` is a single allocation.
+- `extend` beats repeated `append`: it knows the final size in advance, resizes at most once,
+  and its loop runs inside the interpreter's compiled C code.
+- A **list comprehension** such as `[i * i for i in range(n)]` is faster than appending in a
+  Python loop, for the same reasons.
+- Creating a list at full size with `[None] * n` is a single allocation.
 
 ```python-run
 import time
@@ -218,14 +290,16 @@ for f in (by_append, by_comprehension):
 
 ## 6. Amortisation beyond arrays
 
-Amortised analysis applies wherever an occasional expensive step is "paid for" by many cheap ones:
-hash-table rehashing (maps module), splay trees, union-find with path compression, and the
-"clear and rebuild" queue tricks of the next module. The three standard techniques are:
+Amortised analysis applies wherever an occasional expensive step is paid for by many cheap ones.
+Later in this track it explains hash tables that rebuild themselves when they get crowded, the
+self-adjusting splay tree, and the union-find structure. There are three standard ways to carry
+it out:
 
-1. **Aggregate**: bound the total of $n$ operations and divide (the summation above).
-2. **Accounting**: overcharge cheap operations and bank credit (the cyber-dollars).
-3. **Potential**: define a potential function of the data structure state whose increase pays for
-   future work (used in the splay-tree analysis).
+1. **Aggregate**: bound the total cost of $n$ operations and divide by $n$ (section 4.2).
+2. **Accounting**: overcharge the cheap operations and save the surplus for the expensive ones
+   (the cyber-dollars of section 4.1).
+3. **Potential**: describe the savings as a formula in the current state of the data structure
+   (section 8, and later the splay-tree analysis).
 
 ## 7. Worked trace: the bank account during nine appends
 
@@ -276,16 +350,24 @@ cost of an append under doubling is at most 3 primitive operations.
 
 ## 8. The potential method, and why the shrinking rule works
 
-The third standard technique expresses the "bank balance" as a function of the data structure's
-current state. Define the **potential**
+The third technique replaces the savings account by a formula. Instead of tracking deposits and
+withdrawals, we define a number that can be read off the data structure at any moment and plays
+the role of the balance. It is called the **potential** and written with the Greek letter phi,
+$\Phi$. For the dynamic array, take
 
 $$\Phi = 2n - c,$$
 
-where $n$ is the number of elements and $c$ the capacity. (With doubling the array is always at
-least half full once it holds an element, so $\Phi \ge 0$.) The **amortised cost** of an operation is
-its actual cost plus the change in potential, $\hat{c} = c_{\text{actual}} + \Delta\Phi$. Summed over
-a sequence, the $\Delta\Phi$ terms telescope, so total actual cost $\le$ total amortised cost
-whenever $\Phi$ ends no lower than it started.
+where $n$ is the number of items and $c$ the capacity. (With doubling, an array holding at least
+one item is always at least half full, so $\Phi \ge 0$.) Right after a resize the array is half
+full and $\Phi$ is near 0: no savings. As items are appended, $\Phi$ rises by 2 each time. When
+the array is full, $\Phi = n$: enough to pay for copying $n$ items.
+
+The **amortised cost** of an operation is defined as its actual cost plus the change in
+potential it causes, $\hat{c} = c_{\text{actual}} + \Delta\Phi$, where $\Delta\Phi$ (read "delta
+phi") means "the new $\Phi$ minus the old $\Phi$". Add this up over a sequence of operations and
+the changes in potential cancel in pairs, leaving only the final $\Phi$ minus the initial one.
+So as long as $\Phi$ ends no lower than it began, the total actual cost is at most the total
+amortised cost.
 
 - **Append without resize:** actual cost 1; $n$ grows by one so $\Delta\Phi = +2$. Amortised cost
   $1 + 2 = 3$.
@@ -334,12 +416,15 @@ it is less than half full; every operation then has amortised cost at most 3.
 
 ## 9. Pitfalls
 
-- Saying "append is O(1)" without "amortised" — in real-time systems, the occasional $O(n)$ stall
-  matters.
-- Shrinking at half-full: causes thrashing.
-- Growing by a constant increment: quadratic.
-- Holding a reference to an element index across resizes is fine in Python, but in C/C++ a resize
-  invalidates pointers into the old array.
+- **Saying "append is $O(1)$" and leaving out "amortised".** In systems that must respond within
+  a fixed time (audio, games, control software), the occasional $O(n)$ pause matters.
+- **Confusing amortised with average-case.** Average-case depends on how likely inputs are;
+  amortised is a guarantee on the total for any sequence.
+- **Shrinking at half full.** It causes thrashing; use one quarter.
+- **Growing by a fixed increment.** The total becomes quadratic.
+- **Keeping a memory address into the array across a resize.** Python hides addresses, so this
+  cannot go wrong there, but in C or C++ a resize moves the data and any saved address into the
+  old array becomes invalid.
 
 ## 10. Summary
 
@@ -349,6 +434,23 @@ it is less than half full; every operation then has amortised cost at most 3.
 | add a constant $c$ | $\Theta(n^2)$ | $\Theta(n)$ |
 
 > **Source:** Goodrich, Tamassia & Goldwasser, *Data Structures and Algorithms in Python*, ch. 5.3.
+
+## Glossary
+
+- **Capacity**: the number of cells an array has, used or not.
+- **Dynamic array**: an array-based list that replaces its array with a larger one when full.
+- **Allocate**: to request a block of memory.
+- **Resize**: to allocate a new array and copy the items into it.
+- **Amortised cost**: the cost per operation averaged over any sequence of operations.
+- **Cyber-dollar**: an imaginary coin that pays for one primitive operation in an accounting
+  argument.
+- **Geometric growth**: multiplying the capacity by a fixed factor at each resize.
+- **Arithmetic growth**: adding a fixed number of cells at each resize.
+- **Thrashing**: resizing again and again because grow and shrink thresholds are too close.
+- **Aggregate / accounting / potential method**: the three standard ways to do an amortised
+  analysis.
+- **Potential ($\Phi$)**: a formula in the structure's state that stands for saved-up work.
+- **Class / method**: a template for objects / a function that belongs to a class.
 
 ## Check yourself
 

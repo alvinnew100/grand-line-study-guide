@@ -1,14 +1,36 @@
 # Comparing sorts and selection
 
-We now have seven sorting algorithms. This lesson compares them, looks at how Python's built-in sort
-is used in practice (key functions, stability), and then tackles a closely related problem that does
-*not* require sorting: **selection** — finding the $k$-th smallest element — in expected linear
-time with **randomised quick-select**.
+> **Before this lesson:** You should know the sorting algorithms of this track: insertion-sort
+> ([Using arrays](#/lesson/dsa-foundations/using-arrays)), heap-sort
+> ([PQ sorting, heap-sort and adaptable priority queues](#/lesson/dsa-foundations/heap-sort-adaptable)),
+> [merge-sort](#/lesson/dsa-foundations/merge-sort),
+> [quick-sort](#/lesson/dsa-foundations/quick-sort) with its partition step, and
+> [bucket-sort and radix-sort](#/lesson/dsa-foundations/lower-bound-linear).
+
+## In plain words
+
+This lesson has two halves. The first is a buyer's guide: with seven sorting algorithms on the
+shelf, which do you pick for which job, and how do you use the one built into Python?
+
+The second half is about a different question that people often answer by sorting when they do
+not need to. Suppose you want the median house price in a city, the value with half the prices
+below it and half above. You could sort all the prices and take the middle one. But that
+arranges *everything* in order when you wanted a single value. Finding the item that would be
+in position $k$ if the list were sorted, without sorting it, is called **selection**, and it
+can be done faster than sorting. The trick is quick-sort's partition step, followed by throwing
+away the side that cannot contain the answer.
+
+Why it matters for a job: "which sort would you use here, and why?" tests judgement, and the
+table in section 1 is the answer key. "Find the $k$-th largest element" is among the most
+frequently asked interview questions; this lesson gives its three standard solutions and when
+each is the right one.
 
 ## 1. Comparing sorting algorithms
 
-What matters when choosing a sort: running time (worst/average/best), **space**, **stability**,
-whether the data fits in memory, and how the input tends to look.
+What matters when choosing a sort: its running time (in the best, average and worst cases), its
+**extra space**, whether it is **stable**, whether the data fits in memory, and what the input
+tends to look like. In the table, $N$ is the size of the key range for bucket-sort and $d$ the
+number of digits for radix-sort.
 
 | Algorithm | Best | Average | Worst | Extra space | Stable | Notes |
 |---|---|---|---|---|---|---|
@@ -20,34 +42,40 @@ whether the data fits in memory, and how the input tends to look.
 | Bucket-sort | $O(n+N)$ | $O(n+N)$ | $O(n+N)$ | $O(n+N)$ | yes | integer keys in $[0, N-1]$ |
 | Radix-sort | $O(d(n+N))$ | same | same | $O(n+N)$ | yes | $d$-digit keys |
 
-The book's guidance, in brief:
+How to choose, in brief:
 
-- **Insertion-sort** — excellent for small sequences (say, fewer than 50 elements) and for "almost
-  sorted" sequences; used as the base case of faster sorts.
-- **Heap-sort** — the natural choice when the input fits in memory and a guaranteed
-  $O(n \log n)$ in-place sort is required (real-time constraints); slower than quick-sort and
-  merge-sort on large inputs in practice.
-- **Quick-sort** — historically the default general-purpose in-memory sort (C's `qsort`, Java's
-  sort for primitives), because of its speed; not stable, and $O(n^2)$ worst case makes it risky
-  where guarantees matter.
-- **Merge-sort** — the choice when stability is required, or when data does not fit in main memory
-  (it accesses data sequentially). Its hybrid descendant **Timsort** is the standard sort in Python
-  and for objects in Java.
-- **Bucket-/radix-sort** — when keys are small integers, character strings or $d$-tuples of small
-  integers, these can beat everything else.
+- **Insertion-sort** is excellent for short lists (up to a few dozen items) and for lists that
+  are already almost in order. Faster sorts use it to finish off their small pieces.
+- **Heap-sort** is the natural choice when the data fits in memory and you need a guaranteed
+  $O(n \log n)$ sort that uses no extra space, for example in software with strict timing
+  requirements. On large inputs it is slower in practice than quick-sort and merge-sort.
+- **Quick-sort** has long been the default general-purpose sort for data in memory (C's `qsort`
+  is named after it, and Java uses a variant for its basic numeric types), because it is so
+  fast. It is not stable, and its $O(n^2)$ worst case makes it risky where a guarantee matters.
+- **Merge-sort** is the choice when stability is required, or when the data is too large for
+  memory, since it reads its input in order. Its refined descendant **Timsort** is the standard
+  sort in Python, and in Java for lists of objects.
+- **Bucket-sort and radix-sort** apply when keys are small whole numbers, strings, or tuples of
+  small numbers, and in those cases they can beat everything else.
 
 ## 2. Python's built-in sorting
 
-Python offers `list.sort()` (in place, returns `None`) and `sorted(iterable)` (returns a new list).
-Both use Timsort: **stable**, $O(n \log n)$ worst case, $O(n)$ on already sorted or reverse-sorted
-data.
+Python offers two ways to sort: `my_list.sort()` rearranges the list in place and returns
+`None`, and `sorted(anything_iterable)` leaves its argument alone and returns a new sorted
+list. Both use Timsort, so both are **stable**, take $O(n \log n)$ in the worst case, and take
+only $O(n)$ on data that is already sorted or sorted in reverse.
 
 ### 2.1 Sorting according to a key function
 
-By default elements are compared with `<`. Often we want a different order — strings by length,
-records by a field. Rather than a comparison function, Python takes a one-parameter **key function**:
-`key(e)` is computed **once per element**, and elements are ordered by their keys. This is the
-**decorate–sort–undecorate** pattern done internally.
+By default items are compared with `<`. Often a different order is wanted: strings by length,
+records by one of their fields. Python handles this with a **key function**, a function of one
+argument passed as `key=`. Python calls it **once per item**, and then orders the items by the
+values it returned. (Internally each item is paired with its key, the pairs are sorted, and the
+keys are discarded; this is known as *decorate, sort, undecorate*.)
+
+In the demo, `key=len` sorts strings by length; `reverse=True` reverses the order;
+`itemgetter(1, 2)` builds a key function that returns fields 1 and 2 of a record as a tuple, so
+that records are ordered by department and then by salary.
 
 ```python-run
 colors = ['red', 'green', 'blue', 'cyan', 'magenta', 'yellow']
@@ -62,33 +90,45 @@ by_salary = sorted(staff, key=itemgetter(2), reverse=True)
 print(sorted(by_salary, key=itemgetter(1)))             # stable: dept, salary descending within dept
 ```
 
-The last two lines show the classic **multi-pass stable sort**: sort by the secondary criterion
-first, then stably by the primary one — the same idea as LSD radix-sort.
+The last two lines show a classic technique, the **multi-pass stable sort**. To order by
+department, and by salary from highest to lowest within each department, sort by the *less*
+important criterion first (salary, descending) and then sort stably by the more important one
+(department). Stability keeps the salary order inside each department. It is the idea of LSD
+radix-sort applied to records.
 
 ## 3. Selection
 
-The **selection problem**: given an unsorted collection of $n$ comparable elements, find the
-$k$-th smallest (an **order statistic**). Minimum ($k = 1$) and maximum ($k = n$) are easy in
-$O(n)$. The **median** ($k = \lceil n/2 \rceil$) is the interesting case.
+The **selection problem**: given an unsorted collection of $n$ items that can be compared,
+find the $k$-th smallest, that is, the item that would be at position $k$ if the collection
+were sorted. Such an item is called an **order statistic**. The smallest ($k = 1$) and the
+largest ($k = n$) are easy to find in $O(n)$ with one scan. The interesting case is the
+**median**, the middle one, $k = \lceil n/2 \rceil$.
 
-The obvious approach — sort, then index — costs $O(n\log n)$. That is overkill: we want one element,
-not a total order. Can we do it in $O(n)$?
+The obvious approach is to sort and then read off position $k$, which costs $O(n\log n)$. That
+does far more than was asked: it puts every item in order when we wanted one item. Can
+selection be done in $O(n)$?
 
 ### 3.1 Prune-and-search
 
-**Prune-and-search** (or *decrease-and-conquer*): solve a problem on $n$ elements by **pruning away
-a fraction** of them and recursively solving the smaller problem; when the problem is of constant
-size, use brute force. Binary search is the simplest example (prune half each time). Unlike
-divide-and-conquer, only **one** subproblem is solved.
+The design pattern that achieves it is **prune-and-search** (also called *decrease and
+conquer*): throw away a sizeable fraction of the items, known not to contain the answer, and
+solve the same problem on what is left; when only a handful of items remain, solve it
+directly. Binary search is the simplest example, discarding half the items at each step. The
+difference from divide and conquer is that only **one** smaller problem is solved, not two.
 
 ### 3.2 Randomised quick-select
 
-Pick a pivot at random and partition, exactly as in quick-sort, into $L$ (less), $E$ (equal), $G$
-(greater). Then the $k$-th smallest lies in exactly one of them:
+Choose a pivot at random and partition, exactly as in quick-sort, into $L$ (items less than
+the pivot), $E$ (items equal to it) and $G$ (items greater). In sorted order, all of $L$ comes
+first, then all of $E$, then all of $G$. So the sizes of the three groups tell us which group
+holds the $k$-th smallest item. Writing $|L|$ for the number of items in $L$:
 
-- if $k \le |L|$: it is the $k$-th smallest of $L$ — recurse on $L$;
-- else if $k \le |L| + |E|$: it **is the pivot** — done;
-- else: it is the $(k - |L| - |E|)$-th smallest of $G$ — recurse on $G$.
+- if $k \le |L|$, it is among the first $|L|$ items: it is the $k$-th smallest of $L$, so
+  recurse on $L$;
+- otherwise, if $k \le |L| + |E|$, it falls in the block of items equal to the pivot: the
+  answer **is the pivot**, and we are done;
+- otherwise it is in $G$. The $|L| + |E|$ smaller items are skipped, so it is the
+  $(k - |L| - |E|)$-th smallest of $G$; recurse on $G$.
 
 ```python-run
 import random
@@ -122,33 +162,41 @@ $L = [3]$, $E = [4]$ → $k = 2 \le 1 + 1$ → answer **4**.
 
 ### 3.3 Analysis
 
-**Worst case:** unlucky pivots prune only one element at a time: $O(n^2)$.
+**Worst case.** If every pivot is an extreme value, each step discards only one item, and the
+cost is $n + (n-1) + \cdots = O(n^2)$.
 
-**Expected case:** let $t(n)$ be the running time. Call a recursive call **good** if it leaves at
-most $3n/4$ elements (the pivot is in the middle half — probability at least $1/2$). Let $g(n)$ be
-the number of consecutive calls made, including the present one, before we get a good one. Then
+**Expected case.** Let $t(n)$ be the running time on $n$ items. As in the quick-sort analysis,
+call a step **good** if it leaves at most $3n/4$ items; that happens whenever the pivot comes
+from the middle half of the sorted order, so with probability at least $1/2$. Let $g(n)$ be the
+number of steps taken until a good one occurs. Each step costs at most $bn$ for some constant
+$b$, so
 
-$$t(n) \le b\,n \cdot g(n) + t(3n/4),$$
+$$t(n) \le b\,n \cdot g(n) + t(3n/4).$$
 
-and since $E[g(n)] \le 2$ (coin flips until heads),
+Waiting for a good step is like tossing a coin until it shows heads, which takes 2 tosses on
+average. So $E[g(n)] \le 2$, and taking expected values,
 
 $$E[t(n)] \le 2bn + E[t(3n/4)].$$
 
-Unrolling gives a **geometric series**:
+Unrolling this gives a **geometric sum** in which each term is three quarters of the one
+before:
 
 $$E[t(n)] \le 2bn\left(1 + \tfrac34 + \left(\tfrac34\right)^2 + \cdots\right) = 8bn.$$
 
-> **Proposition.** The expected running time of randomised quick-select on a sequence of size $n$ is
-> $O(n)$.
+(The bracket adds up to $1/(1 - \tfrac34) = 4$.)
 
-The contrast with quick-sort is instructive: quick-sort recurses on *both* parts, giving $n$ work
-per level for $\log n$ levels; quick-select recurses on *one* part, so the work shrinks
-geometrically: $n + \tfrac34 n + \cdots = O(n)$.
+> **Claim.** The expected running time of randomised quick-select on $n$ items is $O(n)$.
+
+The contrast with quick-sort is worth stating. Quick-sort recurses on *both* parts, so every
+level of its recursion handles all $n$ items, for $\log n$ levels. Quick-select recurses on
+*one* part, so the work shrinks from level to level: $n + \tfrac34 n + \cdots = O(n)$. The
+first level dominates.
 
 ### 3.4 In-place quick-select and deterministic selection
 
-Using the in-place partition from quick-sort, selection needs $O(1)$ extra space with a loop (the
-recursion is a tail call):
+With quick-sort's in-place partition, selection needs only $O(1)$ extra space. And since the
+recursive call is the last thing the function does (a tail call), it can be written as a loop
+that narrows the range `lo..hi`:
 
 ```python-run
 import random
@@ -169,12 +217,14 @@ def kth_smallest_inplace(A, k):
 print(kth_smallest_inplace([7, 4, 9, 3, 2, 6, 5, 1, 8], 4))
 ```
 
-There is also a **deterministic** $O(n)$ worst-case algorithm, *median of medians* (Blum, Floyd,
-Pratt, Rivest, Tarjan): split into groups of 5, take each group's median, recursively select the
-median of those medians and use it as the pivot — guaranteeing a 30/70 split at worst. It is
-elegant but has large constants; in practice randomised quick-select (or *introselect*, which falls
-back to median-of-medians) is used. NumPy's `np.partition` and C++'s `std::nth_element` are
-implementations.
+There is also a **deterministic** algorithm, one that uses no random choices, with $O(n)$
+running time in the worst case. It is called *median of medians* and is due to Blum, Floyd,
+Pratt, Rivest and Tarjan. Split the items into groups of 5, take the median of each group, and
+recursively select the median of those medians to use as the pivot; this guarantees a split no
+worse than about 30% to 70%. It is elegant but has large constant factors, so in practice
+people use randomised quick-select, or *introselect*, which starts as quick-select and falls
+back to median of medians if it is going badly. NumPy's `np.partition` and C++'s
+`std::nth_element` are implementations. Section 4 goes through the algorithm in full.
 
 > [!INTERVIEW]
 > "Find the $k$-th largest element": three standard answers. (1) Sort: $O(n \log n)$. (2) Min-heap of
@@ -287,22 +337,46 @@ choice entirely.
 
 ## 5. Pitfalls
 
-- Mixing 0-based and 1-based $k$.
-- Forgetting the $E$ group: with many duplicates, a two-way partition can fail to make progress.
-- Using `list.sort()` and expecting a return value (it returns `None`).
-- Passing an expensive `key` function is fine (called once per element); passing a `cmp`-style
-  function is not supported directly — use `functools.cmp_to_key`.
-- Assuming quick-select leaves the array sorted — it only places the $k$-th element (and partitions
-  around it).
+- **Mixing up counting from 0 and from 1.** "The $k$-th smallest" usually counts from 1, while
+  list positions count from 0. Decide which you mean and convert in one place.
+- **Forgetting the group of equal items.** With many duplicates, a partition into only "less"
+  and "not less" can fail to shrink the problem, and the selection never ends.
+- **Expecting `list.sort()` to return the list.** It returns `None`; use `sorted(...)` when you
+  want a value back.
+- **Passing a two-argument comparison function as `key`.** A `key` function takes one item. An
+  expensive key is fine, since it is called once per item. If you only have an old-style
+  comparison function, wrap it with `functools.cmp_to_key`.
+- **Assuming quick-select leaves the array sorted.** It puts the $k$-th item in place, with
+  smaller items before it and larger ones after, and nothing more.
 
 ## 6. Summary
 
-- Choose a sort by size, memory, stability and input structure; Python's Timsort is stable and
-  adaptive, customised via `key=`.
-- Selection is easier than sorting: randomised quick-select is expected $O(n)$ by a geometric-series
-  argument; prune-and-search solves one subproblem instead of two.
+- Choose a sort by input size, available memory, the need for stability and the structure of
+  the keys. Python's built-in Timsort is stable and adaptive, and is customised with `key=`.
+- Selection, finding the $k$-th smallest item, is easier than sorting. Randomised quick-select
+  takes expected $O(n)$ time, by a geometric-sum argument.
+- Prune-and-search solves one smaller problem where divide and conquer solves two.
+- Median of medians achieves $O(n)$ in the worst case by computing a pivot that is guaranteed
+  to be reasonably central.
 
 > **Source:** Goodrich, Tamassia & Goldwasser, *Data Structures and Algorithms in Python*, ch. 12.5–12.7.
+
+## Glossary
+
+- **Key function**: a one-argument function whose result is used to order the items.
+- **Decorate, sort, undecorate**: pairing each item with its key, sorting the pairs, then
+  dropping the keys.
+- **Multi-pass stable sort**: sorting by the least important criterion first and finishing,
+  stably, with the most important.
+- **Selection problem**: finding the $k$-th smallest item of an unsorted collection.
+- **Order statistic**: the item at a given position in sorted order.
+- **Median**: the middle order statistic.
+- **Prune-and-search (decrease and conquer)**: discarding part of the input and recursing on
+  the rest.
+- **Quick-select**: selection by partitioning around a pivot and continuing into one side.
+- **Deterministic algorithm**: an algorithm that makes no random choices.
+- **Median of medians**: a pivot rule that guarantees worst-case linear-time selection.
+- **Introselect**: quick-select with a fall-back to median of medians.
 
 ## Check yourself
 

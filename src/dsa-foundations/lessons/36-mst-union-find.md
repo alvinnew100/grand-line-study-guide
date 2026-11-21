@@ -1,21 +1,46 @@
 # Minimum spanning trees and union-find
 
-Suppose we must connect all the computers in a building with the least amount of cable, or link a
-set of cities with the cheapest possible road, pipeline or fibre network. We do not need shortest
-paths between particular pairs — we need a cheapest set of edges that keeps **everything
-connected**. That is the **minimum spanning tree (MST)** problem. This lesson covers its key
-structural fact (the cut property), two greedy algorithms — **Prim-Jarník** and **Kruskal** — and
-the **union-find** data structure that makes Kruskal fast.
+> **Before this lesson:** You should know weighted graphs, Dijkstra's algorithm and its "cloud"
+> ([Weighted graphs and Dijkstra's algorithm](#/lesson/dsa-foundations/shortest-paths)),
+> spanning trees and connected components
+> ([Graphs and their representations](#/lesson/dsa-foundations/graph-representations)), the
+> greedy method and exchange arguments
+> ([Greedy compression and tries](#/lesson/dsa-foundations/huffman-tries)), and `heapq`
+> ([Priority queues and binary heaps](#/lesson/dsa-foundations/heaps)).
+
+## In plain words
+
+Suppose a company must lay cable so that every office in a building is connected to the
+network, and each possible cable run between two offices has a known cost. The goal is not the
+shortest route between any particular pair of offices. It is the cheapest set of cable runs
+that leaves **every office connected to every other**, directly or through other offices.
+
+The answer never contains a loop: if three offices were wired in a triangle, one side of the
+triangle could be removed and everything would still be connected, for less money. A
+connected network with no loops is a tree, and since it reaches (spans) every office it is
+called a spanning tree. The cheapest one is the **minimum spanning tree**, or **MST**.
+
+The lesson gives two greedy ways to find it. One grows a single network outwards from a
+starting office, always adding the cheapest cable that reaches a new office. The other
+considers all cables from cheapest to dearest and takes each one unless it would close a loop.
+The second needs a quick way to answer "are these two offices already connected?", and that
+is a small, clever data structure called **union-find**.
+
+Why it matters for a job: MSTs are used to design networks of every kind and to group similar
+data in machine learning. Union-find is short to write and remarkably fast, and it solves a
+whole family of interview problems about "which things are connected to which".
 
 ## 1. The problem
 
-Given an undirected, connected, weighted graph $G$, find a **spanning tree** $T$ — a tree containing
-every vertex of $G$ — that minimises the total weight
+Given an undirected, connected, weighted graph $G$, find a **spanning tree** $T$, a set of
+edges that forms a tree and includes every vertex of $G$, whose total weight is as small as
+possible:
 
 $$w(T) = \sum_{(u,v) \in T} w(u, v).$$
 
-A spanning tree of an $n$-vertex graph has exactly $n - 1$ edges. The MST need not be unique (ties in
-weights), but its total weight is.
+A spanning tree of a graph with $n$ vertices always has exactly $n - 1$ edges. When several
+edges have equal weights there may be more than one minimum spanning tree, but they all have
+the same total weight.
 
 ```mermaid
 graph LR
@@ -39,28 +64,40 @@ graph LR
 
 ## 2. The crucial fact: the cut property
 
-> **Proposition.** Let $G$ be a weighted connected graph, and let $V_1$ and $V_2$ be a partition of
-> its vertices into two disjoint non-empty sets. Let $e$ be an edge of **minimum weight** among those
-> with one endpoint in $V_1$ and the other in $V_2$. Then there is a minimum spanning tree that has
-> $e$ as one of its edges.
+Both algorithms rest on one fact. Divide the vertices into two non-empty groups in any way you
+like; such a division is called a **cut**. Some edges have one endpoint in each group; they
+are said to *cross* the cut.
 
-*Justification (exchange argument).* Let $T$ be an MST. If $T$ contains $e$ we are done. Otherwise,
-adding $e$ to $T$ creates a cycle. That cycle crosses between $V_1$ and $V_2$ via $e$, so it must
-cross back via some other edge $f$ with one endpoint on each side. By the choice of $e$,
-$w(e) \le w(f)$. Remove $f$: the result is again a spanning tree, of weight no greater than $T$'s —
-so it is also an MST, and it contains $e$. ∎
+> **Cut property.** Let $G$ be a connected weighted graph, and split its vertices into two
+> non-empty groups $V_1$ and $V_2$. Let $e$ be an edge of **smallest weight** among the edges
+> that cross from $V_1$ to $V_2$. Then some minimum spanning tree contains $e$.
 
-If all weights are distinct, the MST is unique and *must* contain $e$. Both algorithms below are
-just different strategies for choosing the cut.
+In cable terms: if the offices are on two floors, the cheapest cable run between the floors
+can safely be part of the final network.
+
+*Why (an exchange argument).* Take any minimum spanning tree $T$. If it contains $e$, there is
+nothing to prove. Otherwise, add $e$ to $T$. A tree plus one extra edge contains exactly one
+cycle, and $e$ is on it. The cycle crosses from $V_1$ to $V_2$ along $e$, so to get back it
+must cross the cut again along some other edge $f$. Because $e$ is a cheapest crossing edge,
+$w(e) \le w(f)$. Now remove $f$. The cycle is broken, everything is still connected, so we
+have a spanning tree again, and its weight is no more than that of $T$. So it too is a minimum
+spanning tree, and it contains $e$. ∎
+
+If all the weights are different, the minimum spanning tree is unique and *must* contain $e$.
+The two algorithms below differ only in which cut they apply the property to at each step.
 
 ## 3. The Prim-Jarník algorithm
 
-Grow a single tree from an arbitrary root $s$, like Dijkstra's cloud. At each step, the cut is
-(cloud, rest): add the **minimum-weight edge connecting a cloud vertex to an outside vertex**.
+Grow a single tree from an arbitrary starting vertex $s$, in the manner of Dijkstra's cloud.
+At each step the cut is "the cloud" against "everything else", and the cut property says it is
+safe to add the **cheapest edge that joins a cloud vertex to a vertex outside**. (The
+algorithm is named after Robert Prim and Vojtěch Jarník, who found it independently; it is
+often called Prim's algorithm.)
 
-Keep for each outside vertex $v$ a label $D[v]$ = the weight of the cheapest edge joining $v$ to the
-cloud (not a path length — that is the *only* difference from Dijkstra's update rule), and the edge
-that achieves it.
+For each vertex $v$ outside the cloud keep a label $D[v]$: the weight of the cheapest single
+edge joining $v$ to the cloud, together with a note of which edge that is. This is the *only*
+difference from Dijkstra's algorithm, and it is easy to get wrong: Dijkstra's label is the
+length of a whole path from the source, while this label is the weight of one edge.
 
 ```
 PrimJarnik(G):
@@ -75,8 +112,14 @@ PrimJarnik(G):
     return T
 ```
 
-**Running time:** identical bookkeeping to Dijkstra — $O((n + m)\log n)$ with a heap-based adaptable
-priority queue, i.e. **$O(m \log n)$** for a connected graph; $O(n^2)$ with an unsorted list.
+**Running time.** The bookkeeping is the same as Dijkstra's: $O((n + m)\log n)$ with a heap,
+which is **$O(m \log n)$** for a connected graph (where $m \ge n - 1$), or $O(n^2)$ with an
+unsorted list.
+
+The Python version below uses `heapq` with lazy deletion, as the Dijkstra code did. Heap
+entries are `(edge weight, vertex, parent)`; an entry popped for a vertex already in the tree
+is stale and is skipped. Started from A on the graph above, it prints the total weight 37 and
+the eight tree edges in the order they were added.
 
 ```python-run
 import heapq
@@ -108,10 +151,12 @@ print(total, [(names[u], names[v], w) for u, v, w in tree])
 
 ## 4. Kruskal's algorithm
 
-Kruskal's algorithm grows a **forest**. Initially each vertex is its own cluster. Consider the edges
-in **nondecreasing order of weight**; if an edge connects two **different clusters**, add it to the
-tree and merge the clusters; if both endpoints are already in the same cluster, discard it (it would
-create a cycle).
+Kruskal's algorithm grows many small trees at once, a **forest**, and joins them up. At the
+start every vertex is a tree on its own; call each such group of connected vertices a
+**cluster**. Go through the edges **from the lightest to the heaviest**. If an edge joins two
+**different clusters**, add it to the result and merge the two clusters into one. If both its
+endpoints are already in the same cluster, discard it, because those two vertices are already
+connected and the edge would close a cycle.
 
 ```
 Kruskal(G):
@@ -126,9 +171,12 @@ Kruskal(G):
     return T
 ```
 
-**Correctness** follows from the cut property: when edge $(u, v)$ is accepted, take $V_1 = C(u)$ and
-$V_2$ = everything else. Every lighter edge crossing that cut would have been examined earlier and
-accepted (it joins different clusters), so $(u, v)$ is a minimum-weight crossing edge.
+**Why it is correct.** Apply the cut property at the moment an edge from $u$ to $v$ is
+accepted. Let $V_1$ be the cluster of $u$ and $V_2$ everything else. Could a lighter edge
+cross this cut? If one did, it would have been examined earlier (edges are taken in order of
+weight), and since it joins two different clusters it would have been accepted, merging $u$'s
+cluster with another, so it would no longer cross. Hence the accepted edge is a cheapest edge
+across the cut, and belongs to a minimum spanning tree.
 
 ### Dry run on the example
 
@@ -150,46 +198,57 @@ Sorted edges: G–H 1, C–I 2, F–G 2, A–B 4, C–F 4, G–I 6, C–D 7, H�
 
 Total $1 + 2 + 2 + 4 + 4 + 7 + 8 + 9 = 37$.
 
-**Running time.** Sorting the edges: $O(m\log m) = O(m \log n)$ (since $m \le n^2$). Then at most
-$m$ iterations each doing two *find* operations and at most one *union*. With the union-find
-structure below, all of those together cost $O(m\,\alpha(n))$ or $O(m \log^* n)$ — negligible next to
-the sort. Total **$O(m\log n)$**.
+**Running time.** Sorting the edges takes $O(m\log m)$, which equals $O(m \log n)$ because
+$m \le n^2$ and so $\log m \le 2\log n$. Then there are at most $m$ rounds, each asking "which
+cluster is this vertex in?" twice and merging at most once. With the union-find structure
+described next, all of those questions and merges together cost very nearly $O(m)$, which is
+negligible beside the sort. The total is **$O(m\log n)$**.
 
 ## 5. Disjoint partitions and union-find
 
-Kruskal needs a data structure for a **partition** of the vertices into disjoint groups:
+Kruskal's algorithm needs to keep track of a **partition**: a division of a set of elements
+into groups such that every element is in exactly one group (the groups are *disjoint*, having
+nothing in common). Three operations are required:
 
 | Operation | Meaning |
 |---|---|
-| `make_group(x)` | create a singleton group containing new element `x` |
-| `find(p)` | return the **leader** (representative) of the group containing `p` |
-| `union(p, q)` | merge the groups containing `p` and `q` |
+| `make_group(x)` | create a new group containing only the new element `x` |
+| `find(p)` | return the **leader** of the group containing `p`: one member chosen to stand for the whole group |
+| `union(p, q)` | merge the group containing `p` with the group containing `q` |
 
-Two elements are in the same group iff they have the same leader.
+Two elements are in the same group exactly when `find` gives the same leader for both. The
+structure is named **union-find** after its two main operations.
 
 ### 5.1 Sequence-based implementation
 
-Each group is a list; each element stores a reference to its group. `find` is $O(1)$. `union` moves
-every element of the **smaller** group into the larger and updates their references. A single union
-can cost $O(n)$, but each time an element is moved, its group at least **doubles** in size, so an
-element is moved at most $\log n$ times. Hence $k$ operations starting from $n$ singletons take
-$O(k + n\log n)$ — an amortised $O(\log n)$ per union.
+A first design: keep each group as a list, and let every element hold a reference to its
+group. Then `find` is $O(1)$. `union` moves every element of the **smaller** group into the
+larger one and updates their references. A single union can cost $O(n)$. But consider one
+element: each time it is moved, it ends up in a group at least **twice** as large as the one it
+left, and a group cannot double more than $\log n$ times. So each element is moved at most
+$\log n$ times in total, and $k$ operations starting from $n$ single-element groups take
+$O(k + n\log n)$, an amortised $O(\log n)$ per union.
 
 ### 5.2 Tree-based implementation
 
-Represent each group as a **tree** in which every element points to its **parent**; the root is the
-leader (and points to itself).
+A better design represents each group as a **tree** in which every element stores a reference
+to its **parent**. The root of the tree is the group's leader, and is its own parent. These
+are not search trees; the only thing that matters about their shape is how far each element is
+from the root.
 
-- `find(p)`: follow parent pointers up to the root.
-- `union(p, q)`: find both roots; make one root the child of the other.
+- `find(p)`: follow parent references upwards until the root is reached.
+- `union(p, q)`: find the two roots, and make one root a child of the other.
 
-Naively this can build tall, list-like trees with $O(n)$ finds. Two heuristics fix it:
+Done carelessly, this can build tall, chain-like trees in which a `find` takes $O(n)$. Two
+simple rules prevent that:
 
-- **Union-by-size** (or by rank): make the root of the **smaller** tree a child of the root of the
-  larger. A node's depth increases only when its tree is merged into a tree at least as big, which
-  at least doubles the size — so heights are $O(\log n)$.
-- **Path compression:** during `find(p)`, after locating the root, **re-point every node on the
-  path directly to the root**. Later finds on those nodes are $O(1)$.
+- **Union by size** (a variant is called union by rank): always make the root of the
+  **smaller** tree a child of the root of the larger. An element gets one step further from
+  its root only when its tree is absorbed into a tree at least as large, which at least
+  doubles the size of its tree; so no element is ever more than $\log n$ steps from its root.
+- **Path compression:** during `find(p)`, once the root has been found, go back and **make
+  every element on the path point directly at the root**. The next `find` on any of them takes
+  one step.
 
 ```mermaid
 graph TD
@@ -207,13 +266,26 @@ graph TD
 
 (Arrows drawn from parent to child; the stored pointers go the other way.)
 
-> **Proposition.** With union-by-size and path compression, a series of $k$ `make_group`, `union`
-> and `find` operations on an initially empty partition takes **$O(k \log^* n)$** time.
+> **Theorem.** With union by size and path compression, a sequence of $k$ `make_group`, `union`
+> and `find` operations starting from an empty partition takes **$O(k \log^* n)$** time.
 
-$\log^* n$ — the *iterated logarithm* — is the number of times you must apply $\log_2$ to get down
-to 1 or below; it is at most 5 for any $n$ up to $2^{65536}$. (The tight bound is $O(k\,\alpha(n))$
-with the even slower-growing inverse Ackermann function.) For all practical purposes, each operation
-is **constant time**.
+The function $\log^* n$, read "log star", is the *iterated logarithm*: the number of times
+$\log_2$ must be applied to $n$ to bring it down to 1 or less. It grows unimaginably slowly.
+$\log^* 16 = 3$ (16, 4, 2, 1), $\log^* 65536 = 4$, and it is at most 5 for every $n$ up to
+$2^{65536}$, a number with nearly twenty thousand digits. (The exact bound involves an even
+slower-growing function, the inverse Ackermann function, written $\alpha(n)$.) For every
+practical purpose, each union-find operation takes **constant time**.
+
+A small trace. Start with five elements, each its own group: parents `[0, 1, 2, 3, 4]`.
+`union(0, 1)` makes 1 a child of 0. `union(2, 3)` makes 3 a child of 2. `union(1, 3)` finds the
+roots 0 and 2, which have equal size, and makes 2 a child of 0: parents `[0, 0, 0, 2, 4]`.
+Element 3 is now two steps from its root. `find(3)` walks 3, 2, 0, returns 0, and on the way
+re-points 3 directly at 0: parents `[0, 0, 0, 0, 4]`. There are two groups left, with leaders
+0 and 4.
+
+The class below stores the parents in a list, as in that trace, and uses it to implement
+Kruskal's algorithm. `union` returns `True` if it merged two groups and `False` if the two
+elements were already together, which is exactly the accept-or-reject decision Kruskal needs.
 
 ```python-run
 class Partition:
@@ -268,42 +340,70 @@ print(total, [(names[u], names[v], w) for u, v, w in tree])
 | Best for | dense graphs (array version), adjacency structure at hand | sparse graphs, edge lists, pre-sorted edges |
 | Disconnected input | spans only the root's component | naturally yields a minimum spanning **forest** |
 
-A third classic, **Borůvka's algorithm**, lets every cluster pick its cheapest outgoing edge
-simultaneously — attractive for parallel computation.
+A third classic method, **Borůvka's algorithm**, lets every cluster choose its cheapest
+outgoing edge at the same time, which suits computation on many processors at once.
 
 ### Union-find beyond MSTs
 
-Dynamic connectivity ("are $u$ and $v$ connected yet?" as edges arrive), cycle detection in
-undirected graphs (an edge whose endpoints already share a leader closes a cycle), counting
-connected components, image segmentation, percolation, equivalence classes (unifying types or
-accounts), and offline lowest-common-ancestor queries.
+Union-find is useful wherever groups only ever merge. It answers "are $u$ and $v$ connected
+yet?" as edges arrive one at a time. It detects a cycle in an undirected graph: an edge whose
+two endpoints already have the same leader closes a cycle. It counts connected components
+(the number of groups left). And it merges records known to refer to the same thing, such as
+user accounts that share an email address.
 
 > [!INTERVIEW]
-> Union-find template: `parent = list(range(n))`; `find` with path compression; `union` by size or
-> rank returning whether a merge happened. Typical uses: number of connected components, redundant
-> connection (first edge that closes a cycle), accounts merge, Kruskal. Quote near-constant amortised
-> time ($\alpha(n)$). And know the difference from Dijkstra's update: Prim compares the **edge
-> weight** $w(u,v)$, Dijkstra compares the **path length** $D[u] + w(u, v)$.
+> The union-find template is worth memorising: `parent = list(range(n))`; a `find` with path
+> compression; a `union` by size that returns whether a merge took place. Typical uses: the
+> number of connected components, finding the first edge that closes a cycle, merging
+> accounts, and Kruskal's algorithm. Describe its cost as "amortised near-constant time". And
+> be ready to state the difference between the two cloud-growing algorithms: Prim compares the
+> weight of one **edge**, $w(u,v)$; Dijkstra compares the length of a whole **path**,
+> $D[u] + w(u, v)$.
 
 ## 7. Pitfalls
 
-- Prim with Dijkstra's relaxation (`D[u] + w`) — produces a shortest-path tree, not an MST.
-- Kruskal without union-find, checking connectivity by DFS for every edge: $O(nm)$.
-- Union that links *elements* rather than *roots* (`parent[p] = q`) — corrupts the trees.
-- Forgetting to check that $n - 1$ edges were accepted: otherwise the graph is disconnected and no
-  spanning tree exists.
-- Recursive `find` on long chains before compression — recursion depth; the iterative two-pass
-  version is safer in Python.
+- **Running Prim with Dijkstra's update rule** (`D[u] + w`). The result is a shortest-path
+  tree, which is generally not a minimum spanning tree.
+- **Kruskal without union-find.** Checking with a fresh DFS whether each edge's endpoints are
+  already connected costs $O(nm)$ overall.
+- **Linking elements instead of roots** in `union` (`parent[p] = q`). The roots must be found
+  first and one root attached to the other, or the trees are corrupted.
+- **Not checking that $n - 1$ edges were accepted.** If fewer were, the graph is not
+  connected and has no spanning tree.
+- **A recursive `find` on a long chain.** It can exceed Python's recursion limit; the
+  two-pass loop above is safer.
 
 ## 8. Summary
 
-- Cut property: the lightest edge across any cut belongs to some MST — the basis of all MST
-  algorithms.
-- Prim-Jarník: grow one tree with a priority queue. Kruskal: scan edges by weight, joining clusters.
-  Both $O(m\log n)$.
-- Union-find with union-by-size and path compression: $O(\log^* n)$ amortised per operation.
+- A minimum spanning tree connects all the vertices of a weighted graph with the smallest
+  possible total edge weight.
+- The cut property (the lightest edge across any cut belongs to some minimum spanning tree)
+  is the basis of every MST algorithm.
+- Prim-Jarník grows one tree using a priority queue; Kruskal goes through the edges in order
+  of weight and joins clusters. Both take $O(m\log n)$.
+- Union-find with union by size and path compression costs $O(\log^* n)$ amortised per
+  operation, effectively constant.
 
 > **Source:** Goodrich, Tamassia & Goldwasser, *Data Structures and Algorithms in Python*, ch. 14.7.
+
+## Glossary
+
+- **Spanning tree**: a tree made of a graph's edges that includes every vertex.
+- **Minimum spanning tree (MST)**: a spanning tree of the smallest total weight.
+- **Cut**: a division of the vertices into two non-empty groups.
+- **Crossing edge**: an edge with one endpoint on each side of a cut.
+- **Cut property**: a lightest edge crossing any cut belongs to some minimum spanning tree.
+- **Prim-Jarník algorithm**: growing one tree by repeatedly adding the cheapest edge that
+  leaves it.
+- **Kruskal's algorithm**: taking edges in order of weight, skipping those that would close a
+  cycle.
+- **Cluster**: a group of vertices already connected by accepted edges.
+- **Partition**: a division of a set into disjoint groups.
+- **Union-find**: a data structure for a partition, supporting `find` and `union`.
+- **Leader (representative)**: the element that identifies a group; the root of its tree.
+- **Union by size**: attaching the smaller tree beneath the root of the larger.
+- **Path compression**: re-pointing every element met during a `find` directly at the root.
+- **Iterated logarithm ($\log^* n$)**: how many times $\log_2$ must be applied to reach 1.
 
 ## Check yourself
 

@@ -1,22 +1,42 @@
 # Designing recursion and eliminating it
 
-The previous lessons showed what recursion looks like and how to analyse it. This lesson is about
-*writing* recursive algorithms deliberately — the design recipe, the trick of parameterising a
-recursion — and then about removing recursion when it costs too much: eliminating tail recursion
-and simulating the call stack by hand.
+> **Before this lesson:** You should be able to read a recursive function and say what its base
+> case is ([Thinking recursively](#/lesson/dsa-foundations/recursion-examples)), and know what a
+> recurrence, the call stack and overlapping subproblems are
+> ([Analysing recursive algorithms](#/lesson/dsa-foundations/recursion-analysis)).
+
+## In plain words
+
+The last two lessons read other people's recursive functions. This one is about writing your
+own, and about knowing when to take the recursion back out.
+
+Writing a recursion is like delegating. A good manager facing a big job asks one question: "if a
+reliable assistant did everything except one small piece, what would be left for me to do?" You
+do not need to know *how* the assistant does their part; you only need to hand over a smaller
+job and finish off the result. The recipe in section 1 is that question, made precise.
+
+Taking a recursion out is the reverse skill. Every recursive call leaves a sticky note on a pile
+("when this comes back, multiply by 4"). Python's pile has a height limit. When the pile would
+grow too tall, you can keep the notes yourself in an ordinary list, or notice that some
+recursions never need notes at all and are loops in disguise.
+
+Why it matters for a job: "now do it without recursion" is among the most common interview
+follow-ups, and in production Python a recursion a few thousand levels deep crashes. Knowing the
+three standard conversions (loop, explicit stack, table) covers almost every case.
 
 ## 1. A design recipe
 
-Goodrich et al. summarise recursive design as two activities:
+Designing a recursion comes down to two activities:
 
-1. **Test for base cases.** Begin by testing for a set of base cases (there should be at least
-   one). Every possible chain of recursive calls must eventually reach a base case, and each base
-   case must be handled without recursion.
-2. **Recur.** If not a base case, perform one or more recursive calls. Each call should make
-   progress towards a base case.
+1. **Test for base cases first.** There must be at least one input that is answered directly,
+   with no recursive call. Every possible chain of calls has to end at one of them.
+2. **Recur.** Otherwise, make one or more recursive calls, each on an input that is closer to a
+   base case than the current one.
 
-A practical way to find the recursion: ask *"if someone handed me the answer for a smaller version
-of this problem, how would I finish the job?"*
+A practical way to find the recursion is the delegating question: *"if someone handed me the
+answer for a smaller version of this problem, how would I finish the job?"* The table applies it
+to five problems. (A **palindrome** is a word that reads the same backwards, such as "level"; the
+last two rows preview later modules.)
 
 | Problem | Smaller version | Finishing step |
 |---|---|---|
@@ -28,9 +48,14 @@ of this problem, how would I finish the job?"*
 
 ### 1.1 Parameterising a recursion
 
-Often the natural signature is not recursive-friendly. `binary_search(data, target)` is the public
-interface users want, but each recursive call needs to know the *current range*. The solution is to
-add parameters — `low` and `high` — and provide a clean public wrapper:
+A function's **signature** is its name together with the list of parameters it accepts. Often
+the signature a user wants is not the one the recursion needs. Callers want to write
+`binary_search(data, target)`, but each recursive call has to know *which part of the list* it
+is responsible for. The solution is to give the recursive function extra parameters, here `low`
+and `high`, and to put a small function in front of it that supplies their starting values. That
+front function is called a **wrapper**. (The leading underscore in `_bsearch` is a Python
+convention meaning "internal helper, not for outside use", and `...` stands for the body shown
+in the earlier lesson.)
 
 ```python
 def binary_search(data, target):
@@ -40,9 +65,14 @@ def _bsearch(data, target, low, high):
     ...
 ```
 
-Passing indices rather than slices is not only cleaner — slicing costs $O(n)$ per call, which would
-make binary search linear and `linear_sum` quadratic. The same trick returns *extra information*
-(as in `good_fibonacci`, which returns two values instead of one).
+Passing positions instead of slices is not only tidier. A slice copies its items, costing $O(n)$
+per call, which would make binary search linear and `linear_sum` quadratic. The mirror-image
+trick is to *return* extra information, as `good_fibonacci` did by returning two values instead
+of one.
+
+The palindrome checker below uses default values in place of a separate wrapper. A caller writes
+`is_palindrome("racecar")`; the hidden parameters `lo` and `hi` mark the first and last
+characters still to be compared and move inwards with each call.
 
 ```python-run
 def is_palindrome(s, lo=0, hi=None):
@@ -58,23 +88,35 @@ for w in ["racecar", "gohangasalamiimalasagnahog", "python", "", "a"]:
     print(repr(w), is_palindrome(w))
 ```
 
+**Reading this code.** If `hi` was not supplied, this is the caller's first call, so `hi` is set
+to the last position. `lo >= hi` means zero or one character remains: a palindrome by definition,
+the base case. If the two end characters differ, the answer is `False` at once. Otherwise the
+answer is whatever the inner stretch gives. `repr(w)` prints a string with its quotes, so the
+empty string is visible. The output is `True`, `True`, `False`, `True`, `True`.
+
 ## 2. Recursion versus iteration
 
-Recursion's cost is the call stack: each pending activation stores its state. For a linear recursion
-of depth $n$, that is $O(n)$ memory and a risk of `RecursionError`. Any recursive algorithm *can* be
-made non-recursive by maintaining your own stack of pending subproblems; for some recursions it is
-even simpler.
+**Iteration** means repeating with a loop. The cost of recursion, compared with a loop, is the
+call stack: every call that has started and not finished keeps a frame. For a recursion that
+goes $n$ levels deep in one chain, that is $O(n)$ memory and, in Python, the risk of a
+`RecursionError`. Any recursive algorithm *can* be rewritten without recursion by keeping your
+own pile of unfinished subproblems; for some recursions it is easier still.
 
 ### 2.1 Tail recursion
 
-A recursion is a **tail recursion** if every recursive call is the *very last* thing the function
-does, and its return value (if any) is immediately returned. Then nothing remains to be done in the
-caller after the call — so there is no need to keep the caller's frame. Such a recursion can be
-turned into a loop that **reassigns the parameters** and jumps back to the top.
+A recursion is a **tail recursion** if every recursive call is the *very last* thing the
+function does, and the value that comes back (if any) is returned unchanged. In that situation
+the caller has nothing left to do when the call returns, so its frame holds no useful
+information. Such a recursion can be turned into a loop that **assigns new values to the
+parameters** and goes back to the top.
 
-`binary_search` and `reverse` are tail-recursive. `factorial` is **not**: after
-`factorial(n - 1)` returns, the caller still multiplies by `n`. Similarly `linear_sum` adds after
-the call returns.
+`binary_search` and `reverse` are tail-recursive: look for `return binary_search(...)` with
+nothing wrapped around it. `factorial` is **not**: in `return n * factorial(n - 1)` the caller
+still has a multiplication to do after the call comes back. Likewise `linear_sum` still has an
+addition to do.
+
+Compare the loop versions below with the recursive ones from the earlier lessons. The comments
+mark where each recursive call turned into an assignment.
 
 ```python-run
 def binary_search_iterative(data, target):
@@ -99,15 +141,21 @@ def reverse_iterative(S):
 print(binary_search_iterative(list(range(0, 100, 3)), 42), reverse_iterative([1, 2, 3, 4, 5]))
 ```
 
+The base-case test `low > high` became the loop condition `low <= high` (its opposite: keep going
+while the range is not empty). The demo searches the multiples of 3 below 100 for 42 and reverses
+a five-item list; it prints `True [5, 4, 3, 2, 1]`.
+
 > [!NOTE]
-> Some languages (Scheme, and optionally C compilers) perform tail-call optimisation automatically.
-> CPython deliberately does not — Guido van Rossum preferred complete tracebacks — so in Python you
-> must eliminate tail recursion yourself when depth matters.
+> Some languages (Scheme always, C compilers optionally) reuse the frame for a tail call
+> automatically, a feature called *tail-call optimisation*. CPython, the standard Python
+> interpreter, deliberately does not, because its designer preferred error reports that show
+> every call. So in Python you must remove tail recursion yourself when depth matters.
 
 ### 2.2 Accumulators: making a recursion tail-recursive
 
-A non-tail recursion can often be converted by passing the pending work along as an extra
-**accumulator** parameter:
+A recursion that still has work to do after the call can often be converted by carrying that
+unfinished work *forward* in an extra parameter, called an **accumulator**, instead of leaving it
+behind on the stack. For factorial, the accumulator holds the product so far:
 
 ```python
 def factorial_acc(n, acc=1):
@@ -116,7 +164,10 @@ def factorial_acc(n, acc=1):
     return factorial_acc(n - 1, acc * n)   # tail call: nothing left to do afterwards
 ```
 
-and then eliminated:
+Trace `factorial_acc(3)`: it calls `factorial_acc(2, 3)`, which calls `factorial_acc(1, 6)`,
+which calls `factorial_acc(0, 6)`, which returns 6. The multiplications happen on the way *down*,
+and the answer is ready when the base case is reached. Now the call is a tail call, and the
+recursion can be replaced by a loop:
 
 ```python
 def factorial_iter(n):
@@ -126,11 +177,16 @@ def factorial_iter(n):
     return acc
 ```
 
+The line `n, acc = n - 1, acc * n` computes both right-hand values first and then assigns them
+together, so `acc * n` uses the old `n`.
+
 ### 2.3 Simulating the stack explicitly
 
-When there are several recursive calls (binary or multiple recursion), simple parameter
-reassignment is not enough. Keep an explicit stack of pending work instead. Here is the
-disk-usage-style traversal without recursion:
+When a function makes several recursive calls (binary or multiple recursion), reassigning
+parameters is not enough, because after the first call returns there is still a second one to
+make. The general method is to keep your own **stack** of work still to be done: a list where
+you add to the end (`append`) and take from the end (`pop`). Here is the disk-usage computation
+without recursion:
 
 ```python-run
 fs = {"a": {"b": {"c.txt": 5, "d.txt": 7}, "e.txt": 11}, "f": {"g.txt": 2}, "h.txt": 1}
@@ -154,14 +210,23 @@ def total_size_recursive(node):
 print(total_size_iterative(fs), total_size_recursive(fs))
 ```
 
-When the work after the recursive calls matters (postorder, e.g. printing a directory's total only
-after its children are done), push a marker such as `(node, "after")` so the "return" step is
-simulated too.
+**Reading this code.** `stack` starts with one entry, the whole file system. `while stack:` keeps
+going as long as the list is not empty. Each round takes one entry off the end. If it is a
+directory (a `dict`), all of its contents are added to the stack with `extend`, and 1 is added
+for the directory itself; if it is a file, its size is added. Where the recursive version would
+have made a call, this version makes a note to come back later. Both functions print 30.
+
+When something must happen *after* a directory's contents are finished (printing its total, for
+example), push a marker such as `(node, "after")` underneath the children, so that the "return"
+step is simulated too. Section 6 does exactly that.
 
 ## 3. Memoisation: keeping recursion, losing the waste
 
-If the problem with a recursion is *repeated subproblems* rather than depth, cache results. Python
-makes it a one-liner:
+If the trouble with a recursion is *repeated subproblems* and not depth, store each result the
+first time it is computed and look it up afterwards. Such a store is a **cache**, and the
+technique is **memoisation**. Python provides it ready-made. The line `@lru_cache(maxsize=None)`
+written above a function is a **decorator**: it wraps the function so that every call first
+checks whether the same arguments have been seen before.
 
 ```python-run
 from functools import lru_cache
@@ -179,22 +244,29 @@ def fib_bottom_up(n):            # the same idea, no recursion at all
 print(fib(90), fib_bottom_up(90))
 ```
 
-Memoising turns $\Theta(\phi^n)$ into $O(n)$; the bottom-up version uses $O(1)$ space. This is the
-pattern that the dynamic-programming lesson in the text-processing module builds on.
+Both print `2880067194370816120`, the 90th Fibonacci number, instantly. Without the cache the
+recursive version would need more than a million million million calls. Memoising turns
+$\Theta(\phi^n)$ into $O(n)$, because each value from `fib(0)` to `fib(n)` is computed once. The
+second function, `fib_bottom_up`, starts from the smallest cases and works upwards in a loop,
+keeping only the last two values, so it uses $O(1)$ extra memory. The dynamic-programming lesson
+in the text-processing module builds on this pattern.
 
 ## 4. When should you use recursion?
 
 **Prefer recursion when:**
 
-- the data is recursive (trees, nested lists, file systems, expression grammars);
-- the algorithm is divide-and-conquer (merge-sort, quick-sort, binary search);
-- you are exploring a search space (backtracking).
+- the data is itself nested (trees, lists inside lists, file systems, arithmetic expressions
+  with brackets);
+- the algorithm splits the problem into parts and solves each part the same way, a strategy
+  called *divide and conquer* (binary search, and the merge-sort and quick-sort of later
+  lessons);
+- you are exploring combinations of choices (backtracking).
 
 **Prefer iteration when:**
 
-- the recursion is linear with large depth (Python's limit, memory);
-- the recursion is tail-recursive (the loop is just as clear);
-- the recursion has overlapping subproblems and a bottom-up table is natural.
+- the recursion is a single deep chain (Python's depth limit, memory);
+- the recursion is tail-recursive (the loop is equally clear);
+- subproblems overlap and filling a table from the bottom up is natural.
 
 > [!INTERVIEW]
 > "Can you do this without recursion?" Answer in three steps: (1) is it tail-recursive? then reassign
@@ -313,27 +385,53 @@ print(hanoi_iterative(4) == hanoi_recursive(4), len(hanoi_iterative(12)))
 Two things to notice. First, the pending steps are pushed in **reverse** order, because a stack
 returns them last-in, first-out — the commonest bug when hand-converting a recursion. Second, the
 iterative version is neither shorter nor clearer than the recursive one, and it uses the same
-$O(n)$ auxiliary space: the explicit stack simply *is* the call stack, written out. That is the
-general truth about recursion elimination — it buys freedom from Python's recursion limit and from
-call overhead, not asymptotic savings. Here, with depth only $n$ for a $2^n$-step computation, the
-recursive version is the right engineering choice.
+$O(n)$ extra memory: the explicit stack *is* the call stack, written out by hand. That is the
+general truth about removing recursion. It buys freedom from Python's depth limit and from the
+small cost of each function call; it does not change the growth rate. Here, with depth only $n$
+for a computation of $2^n$ steps, the recursive version is the right engineering choice.
 
 ## 7. Pitfalls
 
-- Believing Python will optimise tail calls. It will not.
-- Converting a non-tail recursion by "just using a loop" and losing the post-call work.
-- Using a mutable default argument as an accumulator (`def f(x, acc=[])`) — it is shared across
-  calls. Use `None` and initialise inside.
-- Memoising a function whose arguments are unhashable (lists) — convert to tuples first.
+- **Believing Python will optimise tail calls.** It will not; a deep tail recursion still fails.
+- **Replacing a non-tail recursion by a loop and losing the work that came after the call.** If
+  the function did something after its recursive call returned, the loop version needs an
+  accumulator or an explicit stack to do it.
+- **Using a list as a default argument for an accumulator** (`def f(x, acc=[])`). Python creates
+  that list once, when the function is defined, and every call shares it, so results from one
+  call leak into the next. Write `acc=None` and create the list inside the function.
+- **Memoising a function whose arguments are lists.** The cache looks arguments up in a
+  dictionary, which only accepts values that cannot change (such values are called *hashable*).
+  Convert lists to tuples first.
+- **Pushing pending steps in the order you want them done.** A stack hands them back in reverse.
 
 ## 8. Summary
 
-- Design: base cases first, then recursive calls that make progress; parameterise with indices and
-  wrap in a clean public function.
-- Tail recursions become loops by reassigning parameters; others need an explicit stack.
-- Overlapping subproblems → memoise or go bottom-up.
+- Design: handle base cases first, then make recursive calls that move towards a base case.
+  Give the recursive function the parameters it needs (positions, accumulators) and hide them
+  behind a clean wrapper.
+- A tail recursion becomes a loop by reassigning its parameters; other recursions need an
+  explicit stack of pending work.
+- When subproblems overlap, memoise or fill a table bottom-up.
+- Removing recursion saves stack depth, not asymptotic time or space.
 
 > **Source:** Goodrich, Tamassia & Goldwasser, *Data Structures and Algorithms in Python*, ch. 4.5–4.6.
+
+## Glossary
+
+- **Signature**: a function's name and the parameters it accepts.
+- **Wrapper**: a small function that supplies starting values and calls the real worker.
+- **Palindrome**: a sequence that reads the same forwards and backwards.
+- **Iteration**: repetition using a loop.
+- **Tail recursion**: recursion in which the recursive call is the last action of the function.
+- **Tail-call optimisation**: a language feature that reuses the frame for a tail call; Python
+  lacks it.
+- **Accumulator**: an extra parameter that carries the result so far into the next call.
+- **Explicit stack**: a list used last-in, first-out to hold work still to be done.
+- **Cache**: a store of results already computed.
+- **Memoisation**: caching a function's results by its arguments.
+- **Decorator**: a line starting with `@` that wraps a function to change its behaviour.
+- **Bottom-up**: solving the smallest subproblems first and building towards the answer.
+- **Towers of Hanoi**: the three-peg disc puzzle; moving $n$ discs takes $2^n - 1$ moves.
 
 ## Check yourself
 

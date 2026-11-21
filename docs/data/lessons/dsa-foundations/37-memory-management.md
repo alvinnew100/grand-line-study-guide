@@ -1,39 +1,64 @@
 # Memory allocation, garbage collection and caching
 
-Every analysis so far assumed that memory is a uniform array of cells, each reachable in $O(1)$
-time, and that objects simply "exist" when we create them. Real computers are messier: memory must
-be **allocated** and **reclaimed**, and it is organised as a **hierarchy** of levels whose speeds
-differ by factors of a million. This lesson looks under the hood — the memory heap, garbage
-collection, the call stack, memory hierarchies and caching policies — and explains why these
-details change which data structures are best. The next lesson uses them to motivate B-trees.
+> **Before this lesson:** You should know memory addresses, arrays and references
+> ([Low-level arrays](#/lesson/dsa-foundations/low-level-arrays)), linked lists
+> ([Singly and circularly linked lists](#/lesson/dsa-foundations/singly-circular)), the call
+> stack ([Thinking recursively](#/lesson/dsa-foundations/recursion-examples)), depth-first
+> search ([DFS, BFS, transitive closure and DAGs](#/lesson/dsa-foundations/graph-traversals)),
+> and the LRU cache ([Doubly linked lists and positional lists](#/lesson/dsa-foundations/doubly-positional)).
+
+## In plain words
+
+Every lesson so far has treated the computer's memory as a perfect, endless whiteboard: any
+spot can be read or written instantly, and new objects appear whenever we ask. Real memory is
+neither endless nor uniform. This lesson looks at three things that happen behind the scenes.
+
+First, **finding room**. When a program creates an object, something has to find free space
+for it, like a car park attendant finding a gap big enough for each arriving vehicle. Second,
+**cleaning up**. Space used by objects that the program can no longer reach has to be
+recovered, or memory would run out; Python does this automatically, and how it does so
+explains some otherwise puzzling behaviour. Third, **speed is not uniform**. A computer has
+several kinds of storage, from tiny and extremely fast to huge and slow, and a program's
+real-world speed depends heavily on how often it must go to the slow kinds. Think of the
+papers on your desk, the filing cabinet across the room, and the archive in another building.
+
+Why it matters for a job: this is where "memory leak", "garbage collection pause" and "cache
+miss" come from, terms you will meet as soon as a program has to run fast or for a long time.
+It also explains why two programs with the same big-O can differ tenfold in speed, and it
+prepares the ground for the next lesson on how databases organise data on disk.
 
 ## 1. Memory allocation
 
-When a Python program executes `w = Widget()`, the interpreter must find space for the new object.
-Objects are stored in a pool of memory known as the **memory heap** (also *Python heap*, *free
-store*) — not to be confused with the heap data structure of the priority-queue module.
+When a Python program runs `w = Widget()`, the interpreter must find space for the new object.
+Reserving space is called **allocation**, and giving it back is **deallocation**. Objects are
+kept in a large pool of memory called the **memory heap**. (This has nothing to do with the
+heap data structure of the priority-queue module; the same word is used for two unrelated
+things.)
 
-The storage in the memory heap is divided into contiguous **blocks**, which may be of variable or
-standard sizes. The system must quickly find a free block for each new object and keep track of the
-"holes" of unused memory. A common method is to keep the free blocks in a linked list, the **free
-list**.
+The memory heap is divided into **blocks**, stretches of consecutive bytes, some in use and
+some free. The system has to find a free block quickly for each new object, and keep track of
+the "holes" of unused memory. A common way is to link all the free blocks together in a linked
+list called the **free list**.
 
 ### 1.1 Fragmentation
 
-As blocks are allocated and deallocated, the free list changes and unused memory gets separated into
-disjoint holes between allocated blocks. This is **fragmentation**. Two kinds:
+As blocks are allocated and freed in no particular order, the free memory gets chopped into
+separate holes scattered among the blocks in use. This is **fragmentation**, and there are two
+kinds:
 
 - **Internal fragmentation:** part of an *allocated* block is unused. A dynamic array with capacity
   for 16 references that currently holds 9 elements has 7 cells of internal fragmentation.
 - **External fragmentation:** unused memory lies *between* allocated blocks, in pieces that may be
   individually too small to satisfy a request even though their total is large enough.
 
-A good allocation policy keeps external fragmentation low so that large requests can still be
-served.
+A car park shows the second kind well: there may be ten free metres of kerb in total, but if
+they are five gaps of two metres each, no car can park. A good allocation policy keeps
+external fragmentation low so that large requests can still be met.
 
 ### 1.2 Allocation heuristics
 
-Given a request for $b$ bytes, which hole should we use?
+Given a request for $b$ bytes and several holes that are large enough, which hole should be
+used? Four standard policies:
 
 | Policy | Rule | Behaviour |
 |---|---|---|
@@ -42,9 +67,13 @@ Given a request for $b$ bytes, which hole should we use?
 | **Next-fit** | like first-fit, but start where the previous search stopped, wrapping around (a circular list) | spreads fragmentation evenly; search times stay low; large blocks become hard to find |
 | **Worst-fit** | take the **largest** hole | keeps contiguous leftover space large; costly unless the free list is a priority queue |
 
-In every policy, the chosen hole is split: the requested amount is used and the remainder is returned
-to the free list as a smaller hole. When a block is freed, adjacent free blocks should be
-**coalesced** into one.
+Under every policy the chosen hole is split: the requested amount is used and whatever is left
+over goes back on the free list as a smaller hole. And when a block is freed, any free blocks
+next to it should be merged with it into one larger block, which is called **coalescing**.
+
+The simulation below starts with five holes of sizes 100, 500, 200, 300 and 600 and serves
+four requests under each policy. For example, with first-fit the request for 212 takes the
+first hole that is big enough, the 500, leaving a hole of 288.
 
 ```python-run
 def simulate(policy, holes, requests):
@@ -71,40 +100,48 @@ for policy in ["first", "next", "best", "worst"]:
     print(f"{policy:5s}-fit: holes left {left}  could not allocate {failed}")
 ```
 
-Run it: on this classic workload, first-fit, next-fit and worst-fit all fail to place the last
-request (426) although enough total memory is free — external fragmentation in action — while
-best-fit succeeds.
-On other workloads the ranking changes; there is no universally best policy.
+On this workload, first-fit, next-fit and worst-fit all fail to place the last request (426),
+although far more than 426 bytes are free in total: external fragmentation in action. Best-fit
+succeeds. On other workloads the ranking is different; no policy is best everywhere.
 
-Real allocators are more elaborate: CPython's `pymalloc` serves small objects (up to 512 bytes) from
-pools of **fixed-size** blocks grouped by size class, which makes allocation $O(1)$ and eliminates
-external fragmentation within a pool at the cost of some internal fragmentation.
+Real allocators are more elaborate. CPython's own allocator serves small objects (up to 512
+bytes) from pools of **equal-sized** blocks, one pool for each size class. That makes
+allocation $O(1)$ and avoids external fragmentation inside a pool, at the price of a little
+internal fragmentation when an object does not fill its block.
 
 ## 2. Garbage collection
 
-In C you must free memory explicitly; forget and you **leak**, free twice and you corrupt the heap.
-Python, like Java, automates reclamation: **garbage collection** is the process of detecting
-objects that can no longer be used by the program and reclaiming their space.
+In a language such as C, the programmer must give memory back explicitly. Forget to, and the
+program **leaks** memory, using more and more until it fails; give the same block back twice,
+and the heap is corrupted. Python, like Java, does the job automatically. **Garbage
+collection** is the process of detecting objects that the program can no longer use and
+reclaiming their space.
 
-Which objects are still needed? Define:
+How can the system tell which objects are still needed? Two definitions:
 
-- **Root objects:** objects directly referenced by an identifier in an active namespace — global
-  variables, and the locals of every function call currently on the stack.
-- **Live objects:** root objects, and any object **reachable** from a root by following references
-  (elements of a live list, attributes of a live instance, …).
+- **Root objects** are the objects that a variable currently in scope refers to directly:
+  global variables, and the local variables of every function call now on the call stack.
+- **Live objects** are the root objects, plus every object **reachable** from a root by
+  following references (the items of a live list, the fields of a live object, and so on).
 
-Everything else is **garbage**. Note that this is a *graph reachability* question: objects are
-vertices, references are directed edges.
+Everything else is **garbage**: no chain of references leads to it, so the program could never
+touch it again. This is the reachability question of the graphs module, with objects as the
+vertices and references as the directed edges.
 
 ### 2.1 Reference counting
 
-Each object carries a **reference count**: the number of references to it. Assigning a reference
-increments it; removing or reassigning one decrements it. When the count reaches **zero**, the object
-is unreachable and is reclaimed immediately (which may in turn decrement the counts of objects it
-referenced — a cascade).
+The first technique gives every object a **reference count**: the number of references that
+currently point to it. Creating a new reference to the object adds one; removing a reference
+or pointing it elsewhere subtracts one. When the count reaches **zero**, nothing refers to the
+object, so it is reclaimed at once. (Reclaiming it removes the references *it* held, which may
+bring other counts to zero in a chain reaction.)
 
-CPython uses reference counting as its primary mechanism. It is simple and prompt: memory is
-released the moment the last reference disappears.
+CPython uses reference counting as its main mechanism. It is uncomplicated and prompt: memory
+is released the instant the last reference goes away.
+
+In the demo, `sys.getrefcount` reports an object's count (the code subtracts the one extra
+reference that the call itself holds), and a `weakref` is a special reference that does not
+count, used here to check whether an object still exists without keeping it alive.
 
 ```python-run
 import sys, gc, weakref
@@ -128,30 +165,42 @@ print("objects found unreachable by the cycle collector:", gc.collect())
 print("cycle still in memory after gc.collect()?", probe() is not None)
 ```
 
-**The weakness: cycles.** If two objects reference each other (or a longer cycle exists), their
-counts never drop to zero even when the whole group is unreachable from any root. Pure reference
-counting leaks cyclic garbage. (Self-referential structures are common: doubly linked lists, trees
-with parent pointers, graphs.)
+The first three lines show the count going 1, 2, 1 as a second name `b` is attached to the
+object and then removed. The second half builds two objects that refer to each other and then
+deletes both names.
+
+**The weakness: cycles.** If two objects refer to each other (or a longer loop of references
+exists), each keeps the other's count above zero for ever, even when no root can reach either
+of them. Reference counting by itself never reclaims such garbage. And structures that refer
+back to themselves are common: doubly linked lists, trees whose nodes store their parent,
+graphs. The demo shows the pair surviving `del x, y`, and being reclaimed only when
+`gc.collect()` runs the mechanism described next.
 
 ### 2.2 Cycle detection and mark-sweep
 
-To reclaim cycles, CPython periodically runs a **cycle detector** over container objects, organised
-into three **generations**: new objects start in generation 0 and are promoted when they survive a
-collection. Young generations are scanned often and old ones rarely, on the empirical "generational
-hypothesis" that most objects die young.
+To reclaim cycles, CPython runs a second mechanism from time to time, a **cycle detector**. It
+sorts objects into three **generations** by age: new objects start in the youngest generation
+and are promoted each time they survive a collection. Young generations are examined often and
+old ones rarely, on the observation that most objects have short lives.
 
-The classic general algorithm for garbage collection is **mark-sweep**:
+The classic general-purpose garbage collection algorithm is **mark-sweep**, which works in two
+phases:
 
-1. **Mark phase.** Associate a "mark" bit with each object. Suspend the program, clear all marks,
-   then mark every root object as live, and perform a **depth-first search** on the directed graph
-   of references starting from the roots, marking every object reached.
-2. **Sweep phase.** Scan through the entire memory heap; reclaim the space of every object that is
-   **not** marked. Optionally **coalesce**/compact the surviving objects to eliminate external
-   fragmentation.
+1. **Mark.** Give every object a one-bit "mark". Pause the program and clear all the marks.
+   Mark every root object, then run a **depth-first search** over the graph of references
+   starting from the roots, marking every object reached.
+2. **Sweep.** Walk through the whole memory heap and reclaim every object that is **not**
+   marked. Optionally slide the surviving objects together to remove the gaps between them.
 
-Mark-sweep correctly reclaims cyclic garbage — an unreachable cycle is simply never marked. Its mark
-phase takes time proportional to the number of live objects and their references; the sweep phase
-is proportional to the heap size.
+Mark-sweep handles cycles correctly: an unreachable cycle is never marked, so it is swept. The
+mark phase takes time proportional to the number of live objects and references; the sweep
+phase takes time proportional to the size of the heap.
+
+The demo runs mark-sweep on a toy heap of seven objects, given as a dictionary from each
+object's name to the names it refers to. With A as the only root, the live objects come out as
+A, B, C and D, and the garbage as E, F and G. Note two things: B and D form a cycle but are
+live, because A reaches them; and G refers *to* A but is garbage, because nothing refers to G.
+What matters is whether an object can be reached, not what it points at.
 
 ```python-run
 def mark_sweep(heap, roots):
@@ -173,38 +222,49 @@ print(mark_sweep(heap, roots=["A"]))
 
 ### 2.3 Performing DFS in place
 
-There is a subtle problem: garbage collection typically runs **because memory is scarce**, yet the
-DFS of the mark phase needs a stack — recursion or an explicit one — whose size can be proportional
-to the number of live objects. The elegant solution (Deutsch–Schorr–Waite) performs the DFS **in
-place**: as the traversal moves from object $v$ to object $w$, it temporarily **reverses the
-reference** it just followed so that it points back to $v$. The path from the current object back to
-the root is thus stored in the objects themselves. When the traversal backtracks, each reference is
-restored to its original value. Only a constant amount of extra memory is needed.
+There is an awkward catch. Garbage collection usually runs **because memory is short**, yet
+the depth-first search of the mark phase needs a stack, whether through recursion or an
+explicit one, and that stack can grow as large as the number of live objects. A neat solution
+(known as the Deutsch-Schorr-Waite algorithm) performs the search **in place**, using no
+stack at all. As the search steps from object $v$ to object $w$, it temporarily **turns round
+the reference it followed**, so that it points back to $v$. The trail from the current object
+back to the root is then stored inside the objects themselves. When the search backs up, it
+restores each reference to its original value. Only a constant amount of extra memory is
+needed.
 
 ### 2.4 Other collectors (context)
 
-- **Copying collectors** divide the heap into two semi-spaces and copy live objects from one to the
-  other, compacting as they go; cost is proportional to live data only.
-- **Generational collectors** (JVM, .NET, CPython's cycle detector) collect young objects more
-  frequently.
-- **Concurrent/incremental collectors** bound pause times by interleaving with the program.
+Other designs are worth recognising by name:
+
+- A **copying collector** divides the heap into two halves and copies the live objects from
+  one half to the other, packing them together as it goes; its cost depends only on the amount
+  of live data.
+- A **generational collector** (used by Java, .NET and CPython's cycle detector) collects
+  young objects more often than old ones.
+- A **concurrent** or **incremental collector** does its work in small steps interleaved with
+  the program, to keep each pause short.
 
 ## 3. Additional memory used by the Python interpreter
 
-Besides the memory heap, a running program uses the **call stack** (also *Python interpreter
-stack*). Each function call pushes an **activation record** (frame) holding the call's namespace —
-parameters and local variables (references to heap objects) — and the point in the caller to return
-to. Returning pops the frame.
+Besides the memory heap, a running program uses the **call stack** met in the recursion
+module. Each function call pushes a frame (an activation record) holding that call's
+parameters and local variables, which are references to objects in the heap, together with a
+note of where in the caller to resume. Returning pops the frame.
 
-- This is exactly the stack ADT: the running call is on top; suspended callers lie below.
-- It is what makes **recursion** work: each recursive call has its own frame, so its own copies of
-  parameters and locals.
-- It is why deep recursion costs memory — $O(\text{depth})$ frames — and why Python caps the depth
-  (`sys.getrecursionlimit()`, typically 1000).
+- This is the stack ADT at work: the call that is running is on top, and the callers waiting
+  for it lie underneath.
+- It is what makes **recursion** work: each recursive call has its own frame, and so its own
+  copies of the parameters and local variables.
+- It is why deep recursion costs memory, one frame per level, and why Python caps the depth
+  (`sys.getrecursionlimit()`, usually 1000).
 
-The **operand stack** is a related idea: the interpreter evaluates an expression such as
-`((a + b) * (c + d)) / e` by pushing operands and applying operators to the top entries — the
-postfix evaluation of the stacks lesson, performed on bytecode.
+A related structure is the **operand stack**. Python does not run your source text directly;
+it first translates it into simple instructions called **bytecode**. To evaluate an
+expression such as `((a + b) * (c + d)) / e`, the bytecode pushes operands on a stack and
+applies each operator to the top two entries. This is the postfix evaluation of the stacks
+lesson. The `dis` module prints the bytecode of a function, so you can see it: instructions
+whose names begin with `LOAD` push a value, and those beginning with `BINARY` pop two values
+and push the result.
 
 ```python-run
 import dis
@@ -215,7 +275,10 @@ dis.dis(f)        # LOAD pushes operands; BINARY_* pops two and pushes the resul
 
 ## 4. Memory hierarchies
 
-Computers have several kinds of memory, trading **speed** against **capacity and cost**:
+Computers have several kinds of memory, which trade **speed** against **capacity and cost**:
+the faster a kind of memory is, the more it costs per byte, so there is less of it. In the
+table, a nanosecond (ns) is a billionth of a second and a millisecond (ms) a thousandth; KB,
+MB, GB and TB are roughly a thousand, a million, a billion and a trillion bytes.
 
 | Level | Typical size | Typical access time |
 |---|---|---|
@@ -225,8 +288,9 @@ Computers have several kinds of memory, trading **speed** against **capacity and
 | External memory: SSD / disk | hundreds of GB to TB | 0.1 ms (SSD) – 10 ms (disk seek) |
 | Network / archival storage | effectively unbounded | ms to seconds |
 
-The gaps are enormous. If a RAM access took one second, a disk seek would take about a day. So an
-algorithm that looks fine in the uniform-cost model can be disastrous when its data lives on a
+The gaps are enormous. Scale everything up so that one access to main memory takes a second:
+then fetching something from a spinning disk takes about a day. So an algorithm that looks
+fine when every access is assumed to cost the same can be disastrous when its data lives on a
 slower level.
 
 ```mermaid
@@ -239,20 +303,28 @@ graph TD
 
 ### 4.1 Caching and blocking
 
-Two mechanisms make the hierarchy work, both justified by **locality of reference**:
+Two mechanisms make the hierarchy usable, and both rely on **locality of reference**, the
+tendency of programs to keep working with the same data and with neighbouring data.
 
-- **Temporal locality:** if a program accesses a location, it is likely to access it again soon.
-  → **Caching**: keep recently used data in the faster level, hoping it will be needed again. In
-  the processor this is the *cache*; between RAM and disk it is **virtual memory**.
-- **Spatial locality:** if a program accesses a location, it is likely to access nearby locations
-  soon. → **Blocking**: when one location is needed from the slower level, bring over a whole
-  contiguous **block** around it. Blocks between cache and RAM are called **cache lines**; between
-  RAM and disk, **pages**.
+- **Temporal locality** (locality in time): a location that has been accessed is likely to be
+  accessed again soon. The response is **caching**: keep recently used data in the faster
+  level, expecting it to be wanted again. Inside the processor the fast level is called the
+  *cache*; between main memory and disk the same idea is called **virtual memory**.
+- **Spatial locality** (locality in space): when a location is accessed, nearby locations are
+  likely to be accessed soon. The response is **blocking**: when one location has to be
+  fetched from the slower level, fetch a whole **block** of neighbouring data along with it. A
+  block moved between cache and main memory is a **cache line**; a block moved between main
+  memory and disk is a **page**.
 
-Consequences for data structures: **arrays** (contiguous) enjoy spatial locality — a sequential scan
-touches each cache line once; **linked structures** scatter nodes across memory and may incur a
-cache miss per node. This is why, in practice, arrays beat linked lists and sorted arrays beat
-binary search trees for read-mostly workloads, despite equal big-O.
+This has consequences for data structures. An **array** is stored in consecutive memory, so
+scanning it benefits fully from blocking: each cache line is fetched once and then used many
+times. The nodes of a **linked structure** are scattered across memory, and following each
+link may require a fresh fetch from the slower level. This is why, in practice, arrays beat
+linked lists and sorted arrays beat binary search trees for data that is mostly read, even
+where the big-O bounds are the same.
+
+The demo adds up the same 300,000 numbers twice, once visiting them in order and once in a
+shuffled order.
 
 ```python-run
 import time, random
@@ -273,10 +345,11 @@ several times slower. In the browser the difference may be small — the princip
 
 ## 5. Caching strategies
 
-When a block is requested and the fast level is full, some block must be **evicted** to make room.
-A fetch from the slower level is a **cache miss** (for virtual memory, a **page fault**); the
-question is which page to throw out. The book's setting: a cache of $m$ pages, a sequence of $n$
-page requests.
+When a block is needed and the fast level is already full, some block must be thrown out, or
+**evicted**, to make room. Having to fetch from the slower level is a **cache miss** (for
+virtual memory it is called a **page fault**), and it is expensive, so the question is which
+page to evict so as to cause as few future misses as possible. The setting for the analysis:
+a cache with room for $m$ pages, and a sequence of $n$ requests for pages.
 
 | Policy | Evicts | Implementation | Notes |
 |---|---|---|---|
@@ -333,13 +406,16 @@ print("adversarial cycle of 17 pages, capacity 16 -> LRU misses:", simulate("LRU
 
 ### 5.1 How good can a policy be?
 
-All three policies have bad worst cases. Cycle repeatedly through $m + 1$ pages: LRU and FIFO evict
-exactly the page that is needed next and miss on **every** request. Competitive analysis shows FIFO
-and LRU are **$m$-competitive** (at most $m$ times as many misses as the optimal offline policy that
-knows the future — Belady's "evict the page needed farthest in the future"), and no deterministic
-online policy can do better. Randomised policies can achieve $O(\log m)$-competitiveness in
-expectation. In practice, on real workloads with locality, LRU (or cheap approximations such as
-CLOCK) is the method of choice.
+All three policies have bad worst cases. Request $m + 1$ different pages over and over in a
+cycle: LRU and FIFO each evict exactly the page that will be asked for next, and miss on
+**every** request. How bad is that compared with the best that could be done? The best
+conceivable policy would know the future and evict the page whose next use is farthest away.
+The theory of competitive analysis (met with move-to-front lists) shows that FIFO and LRU are
+**$m$-competitive**: they never incur more than $m$ times as many misses as that
+all-knowing policy, and no policy that lacks knowledge of the future and makes no random
+choices can guarantee better. Policies that use randomness can do better on average. In
+practice, on real workloads with locality, LRU, or a cheap approximation of it, is the method
+of choice, as the first part of the demo shows.
 
 > [!INTERVIEW]
 > "Design an LRU cache with $O(1)$ `get` and `put`" is among the most common design questions:
@@ -350,26 +426,59 @@ CLOCK) is the method of choice.
 
 ## 6. Pitfalls
 
-- Confusing the *memory heap* with the *heap data structure*, or the *call stack* with a stack you
-  create.
-- Assuming reference counting reclaims everything: cycles need the cycle collector
-  (`gc.collect()`), and objects kept alive by a forgotten global list or cache are a "leak" even in
-  a garbage-collected language.
-- Assuming `del x` frees an object: it removes one reference.
-- Ignoring locality: two $O(n)$ loops can differ several-fold in speed depending on memory layout.
-- Believing LRU is optimal: it is a heuristic with an adversarial worst case.
+- **Mixing up names.** The *memory heap* is not the *heap data structure*, and the *call
+  stack* is not a stack object that you create.
+- **Assuming reference counting reclaims everything.** Cycles need the cycle collector. And
+  objects kept reachable by a forgotten global list or an ever-growing cache are a "leak" even
+  in a garbage-collected language: the collector cannot free what the program can still reach.
+- **Assuming `del x` frees an object.** It removes one reference. The object is freed only if
+  that was the last one.
+- **Ignoring locality.** Two $O(n)$ loops can differ several-fold in speed depending on how
+  their data is laid out in memory.
+- **Believing LRU is optimal.** It is a heuristic that suits typical workloads, and it has a
+  worst case.
 
 ## 7. Summary
 
-- Objects live in the memory heap, managed with a free list; allocation policies (best, first, next,
-  worst fit) trade speed against fragmentation.
-- Garbage = objects unreachable from the roots. Reference counting is prompt but misses cycles;
-  mark-sweep does a DFS from the roots and reclaims everything unmarked.
-- Function calls use frames on the interpreter stack.
-- Memory is a hierarchy; caching (temporal locality) and blocking (spatial locality) hide its slow
-  levels; eviction policies — Random, FIFO, LRU — decide what to drop.
+- Objects live in the memory heap, whose free blocks are tracked in a free list. Allocation
+  policies (first-fit, next-fit, best-fit, worst-fit) trade speed against fragmentation.
+- Garbage is whatever cannot be reached from the roots. Reference counting reclaims promptly
+  but misses cycles; mark-sweep runs a depth-first search from the roots and reclaims
+  everything left unmarked.
+- Each function call uses a frame on the call stack.
+- Memory is a hierarchy of levels. Caching (which exploits temporal locality) and blocking
+  (which exploits spatial locality) hide the slow levels, and eviction policies (random,
+  FIFO, LRU) decide what to drop when the fast level is full.
 
 > **Source:** Goodrich, Tamassia & Goldwasser, *Data Structures and Algorithms in Python*, ch. 15.1–15.2.
+
+## Glossary
+
+- **Allocation / deallocation**: reserving memory for an object / giving it back.
+- **Memory heap**: the pool of memory from which objects are allocated.
+- **Free list**: a linked list of the free blocks of memory.
+- **Internal / external fragmentation**: wasted space inside an allocated block / free space
+  split into holes too small to use.
+- **First-fit, next-fit, best-fit, worst-fit**: policies for choosing which hole to allocate
+  from.
+- **Coalescing**: merging neighbouring free blocks into one.
+- **Garbage collection**: automatically reclaiming objects the program can no longer reach.
+- **Root object / live object**: an object referred to directly by a variable in scope / an
+  object reachable from a root.
+- **Reference count**: the number of references pointing to an object.
+- **Reference cycle**: objects that refer to one another in a loop.
+- **Mark-sweep**: marking everything reachable from the roots, then reclaiming the rest.
+- **Memory leak**: memory that is never given back although it is no longer needed.
+- **Bytecode**: the simple instructions into which Python translates a program before running
+  it.
+- **Memory hierarchy**: the levels of storage, from small and fast to large and slow.
+- **Temporal / spatial locality**: the tendency to reuse the same data soon / to use
+  neighbouring data soon.
+- **Cache line / page**: the block moved between cache and main memory / between main memory
+  and disk.
+- **Cache miss / page fault**: a request for data that is not in the fast level.
+- **Eviction policy**: the rule choosing what to remove from a full cache (random, FIFO,
+  LRU).
 
 ## Check yourself
 
@@ -395,6 +504,6 @@ CLOCK) is the method of choice.
    "explain": "By temporal locality, the page unused for the longest time is least likely to be needed soon."},
   {"q": "A request sequence cycling through m + 1 distinct pages with a cache of m pages makes LRU...",
    "options": ["never miss", "miss on every request", "miss half the time", "equal to the optimal policy"], "answer": 1,
-   "explain": "The page just evicted is always the next one requested: the adversarial worst case."}
+   "explain": "The page evicted most recently is always the next one requested: the adversarial worst case."}
 ]
 ```

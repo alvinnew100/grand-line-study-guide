@@ -1,20 +1,42 @@
 # Quick-sort and randomisation
 
-Like merge-sort, **quick-sort** is divide-and-conquer — but it puts the hard work **before** the
-recursive calls rather than after. Merge-sort divides trivially and combines carefully; quick-sort
-divides carefully (partitioning around a pivot) and combines trivially. The result is an algorithm
-that sorts **in place**, runs very fast in practice, and — with a dash of randomness — takes
-$O(n \log n)$ expected time on every input.
+> **Before this lesson:** You should know divide and conquer, merge-sort and its recurrence
+> ([Divide and conquer: merge-sort](#/lesson/dsa-foundations/merge-sort)), recursion trees
+> ([Analysing recursive algorithms](#/lesson/dsa-foundations/recursion-analysis)), and the
+> meaning of "in place" and "stable" ([Using arrays](#/lesson/dsa-foundations/using-arrays)).
+
+## In plain words
+
+**Quick-sort** sorts a list by picking one item, called the **pivot**, and dividing the others
+into two groups: those smaller than the pivot and those larger. The pivot now stands exactly
+where it belongs in the final order, with the smaller items somewhere to its left and the
+larger ones somewhere to its right. Each group is then sorted the same way.
+
+Picture a teacher lining up a class by height. She picks one child and says: "everyone shorter
+than Sam, stand on his left; everyone taller, on his right." Sam is now in his final place. She
+then does the same within the left group and within the right group, and continues until every
+group is a single child.
+
+Compare this with merge-sort. Merge-sort splits without thinking (down the middle) and does
+its real work when combining. Quick-sort does its real work when splitting, and combining
+costs nothing: once both groups are sorted, the whole list is.
+
+Why it matters for a job: quick-sort is the sorting algorithm behind many standard libraries,
+because it rearranges the data inside the original array and is very fast on real hardware.
+Interviewers like it for three reasons: the dividing step is a small, self-contained coding
+exercise; its worst case is a classic trap; and the cure, choosing the pivot at random, is the
+best-known example of randomness making an algorithm reliable.
 
 ## 1. The algorithm
 
 For a sequence $S$:
 
-1. **Divide.** If $S$ has at least two elements, select an element $x$ called the **pivot**
-   (classically, the *last* element). Remove all elements from $S$ and put them into three
-   sequences: $L$ (elements less than $x$), $E$ (equal to $x$), $G$ (greater than $x$).
-2. **Conquer.** Recursively sort $L$ and $G$.
-3. **Combine.** Put the elements back into $S$ in order: $L$, then $E$, then $G$.
+1. **Divide.** If $S$ has at least two items, choose one of them, $x$, as the **pivot**
+   (traditionally the *last* item). Distribute all the items into three sequences: $L$, the
+   items less than $x$; $E$, the items equal to $x$; and $G$, the items greater than $x$. This
+   three-way split is called **partitioning**.
+2. **Conquer.** Sort $L$ and $G$ recursively. ($E$ needs no sorting; its items are all equal.)
+3. **Combine.** Write the items back in the order $L$, then $E$, then $G$.
 
 ```mermaid
 graph TD
@@ -27,9 +49,13 @@ graph TD
   F --> F2["85"]
 ```
 
-The execution is drawn as a **quick-sort tree**. Unlike the merge-sort tree, its shape depends on the
-pivots: a pivot near the median gives two children of about half size; an extreme pivot gives one
-child nearly as large as the parent.
+A run can be drawn as a **quick-sort tree**, one node per recursive call. Unlike the merge-sort
+tree, its shape is not fixed in advance; it depends on the pivots. A pivot near the **median**
+(the middle value of the sorted order) gives two children of about half the size. A pivot near
+either extreme gives one child almost as large as its parent and one that is nearly empty.
+
+The first implementation follows the description literally, building new lists with list
+comprehensions. It is clear but uses extra memory; section 4 gives the in-place version.
 
 ```python-run
 def quick_sort_simple(S, depth=0):
@@ -46,44 +72,58 @@ def quick_sort_simple(S, depth=0):
 print(quick_sort_simple([85, 24, 63, 45, 17, 31, 96, 50]))
 ```
 
+The first line of output is `pivot 50: L=[24, 45, 17, 31] E=[50] G=[85, 63, 96]`. The deeper
+lines show `L` and `G` being split in turn, and the last line is the sorted list.
+
 ## 2. Running time
 
-At each node of the quick-sort tree, the divide step takes time proportional to the size of the
-node's input. Let $s_i$ be the total size of all inputs at depth $i$: $s_0 = n$, $s_1 \le n - 1$
-(the pivot is excluded), and in general $s_i \le n - i$. The running time is
-$O\!\left(\sum_{i=0}^{h} s_i\right) \le O(n \cdot h)$ where $h$ is the height of the tree.
+At each node of the quick-sort tree, partitioning takes time proportional to the number of
+items the node was given. Add this up one level at a time. Let $s_i$ be the total number of
+items in all the nodes at depth $i$. At the top, $s_0 = n$. At depth 1 the pivot has been set
+aside, so $s_1 \le n - 1$, and in general $s_i \le n - i$: each level handles at most $n$ items.
+The total running time is therefore $O\!\left(\sum_{i=0}^{h} s_i\right)$, which is at most
+$O(n \cdot h)$, where $h$ is the height of the tree. Everything depends on $h$.
 
-- **Best case.** Pivots split evenly: $h = O(\log n)$, time $O(n \log n)$.
-- **Worst case.** Every pivot is the minimum or maximum of its subsequence: one of $L$, $G$ is empty
-  and the other has size $n - 1$. Then $h = n - 1$ and the time is
-  $n + (n-1) + \cdots + 1 = \Theta(n^2)$.
+- **Best case.** Every pivot splits its items evenly, the sizes halve at each level, and
+  $h = O(\log n)$: the time is $O(n \log n)$.
+- **Worst case.** Every pivot is the smallest or largest item of its group. Then one of $L$ and
+  $G$ is empty and the other has all the remaining items, the size shrinks by only one per
+  level, $h = n - 1$, and the time is $n + (n-1) + \cdots + 1 = \Theta(n^2)$.
 
-The cruel irony: with "last element as pivot", the worst case is an **already sorted** input —
-the easiest instance of all, and one that occurs frequently in practice.
+And here is the trap. With "last item as pivot", the input that triggers the worst case is one
+that is **already sorted**: the last item is always the largest. The easiest input of all, and
+a very common one in practice, is the one this version handles worst.
 
 ## 3. Randomised quick-sort
 
-Rather than hoping the input is "random", inject randomness into the algorithm: **pick the pivot
-uniformly at random** from the subsequence. Then no particular input is bad; the bound holds in
-expectation over the algorithm's own coin flips.
+We could hope that inputs arrive in random order, but hoping is not engineering. A better idea
+is to put the randomness inside the algorithm: **choose the pivot at random**, with every item
+of the group equally likely. Now no particular input is bad. An already-sorted list is as
+harmless as any other, and the running time depends only on the algorithm's own random choices,
+which nobody can predict or arrange.
 
-> **Proposition.** The expected running time of randomised quick-sort on a sequence of size $n$ is
-> $O(n\log n)$.
+> **Claim.** The expected running time of randomised quick-sort on $n$ items is $O(n\log n)$.
 
-*Justification (the book's argument).* Call a recursive call on a sequence of size $m$ **good** if
-both $L$ and $G$ have size at most $3m/4$, and **bad** otherwise. A call is good whenever the pivot
-lands in the middle half of the sorted order — there are $m/2$ such pivots — so each call is good
-with probability $1/2$.
+*Why.* Call a recursive call on $m$ items **good** if both $L$ and $G$ end up with at most
+$3m/4$ items, and **bad** otherwise. A call is good whenever the pivot comes from the middle
+half of the sorted order (not among the smallest quarter, not among the largest quarter). Half
+of the possible pivots are in that middle half, so each call is good with probability $1/2$.
 
-- A good call shrinks the problem to at most $3/4$ of its size, so along any root-to-leaf path there
-  can be at most $\log_{4/3} n$ good calls.
-- Since each call is good with probability $1/2$, the expected number of calls on a path before
-  accumulating $\log_{4/3} n$ good ones is $2\log_{4/3} n$. So the expected height is $O(\log n)$.
-- Each level does $O(n)$ work. Total expected time $O(n\log n)$. ∎
+- A good call shrinks the problem to at most three quarters of its size. Starting from $n$, the
+  size can be multiplied by $3/4$ only $\log_{4/3} n$ times before reaching 1. So any path from
+  the root to a leaf contains at most $\log_{4/3} n$ good calls.
+- Each call is good with probability $1/2$, like tossing a coin. To collect $k$ heads you need
+  $2k$ tosses on average. So the expected length of a path is at most $2\log_{4/3} n$, which is
+  $O(\log n)$.
+- Each level of the tree does $O(n)$ work. The expected total is $O(n\log n)$. ∎
 
-A sharper analysis shows the expected number of comparisons is about $2n\ln n \approx 1.39\,n\log_2
-n$, and that the running time is $O(n\log n)$ **with high probability** — the chance of hitting
-quadratic behaviour on a large input is astronomically small.
+A sharper analysis shows that the expected number of comparisons is about
+$2n\ln n \approx 1.39\,n\log_2 n$, and that the running time is $O(n\log n)$ **with high
+probability**: on a large input, the chance of ever seeing quadratic behaviour is
+astronomically small.
+
+The demo counts comparisons on a sorted list of 900 numbers, first with the last item as pivot
+and then with a random pivot.
 
 ```python-run
 import random
@@ -98,22 +138,32 @@ print("last-element pivot on sorted input:", comparisons(sorted_input, lambda S:
 print("random pivot on sorted input:      ", comparisons(sorted_input, random.choice), "comparisons (1.39 n log2 n =", int(1.39 * n * 9.8), ")")
 ```
 
+The fixed rule makes 404,550 comparisons, which is $n(n-1)/2$: the full quadratic cost. The
+random rule makes roughly 9,000 to 11,000, varying from run to run, the same order of size as
+$1.39\,n\log_2 n \approx 12{,}000$ and about forty times fewer.
+
 ## 4. In-place quick-sort
 
-The version above uses auxiliary lists. Quick-sort's real strength is that the partition can be done
-**in place**, using only swaps within the array. A subsequence is described by two indices
-$a$ (leftmost) and $b$ (rightmost).
+The versions so far build new lists. Quick-sort's real strength is that the partitioning can be
+done **in place**, by swapping items inside the one array. A part of the array is described by
+two indices, $a$ for its leftmost cell and $b$ for its rightmost.
 
-**Partition (the book's two-pointer scheme).** Take `pivot = S[b]`. Use `left = a` and
-`right = b - 1`:
+**Partition with two scanning indices.** Take the last item as the pivot, `pivot = S[b]`, and
+start two indices at the ends of the rest: `left = a` and `right = b - 1`. The idea is to find
+a large item sitting on the left and a small item sitting on the right, and swap them.
 
-1. Advance `left` rightwards while `S[left] < pivot`.
-2. Move `right` leftwards while `pivot < S[right]`.
-3. If the scans have not strictly crossed, swap `S[left]` and `S[right]`, and shrink both.
-4. Repeat until `left > right`. Finally swap the pivot `S[b]` with `S[left]`: the pivot is now in
-   its **final sorted position**.
+1. Move `left` rightwards while `S[left] < pivot`. It stops at an item that is too large to be
+   on the left side.
+2. Move `right` leftwards while `pivot < S[right]`. It stops at an item that is too small to be
+   on the right side.
+3. If the two indices have not passed each other, swap `S[left]` and `S[right]` and move both
+   one step inwards.
+4. Repeat until `left > right`. Finally swap the pivot `S[b]` with `S[left]`. The pivot is now
+   in its **final sorted position**.
 
-Everything left of `left` is $\le$ pivot; everything right of it is $\ge$ pivot.
+Afterwards everything to the left of the pivot is $\le$ the pivot and everything to its right
+is $\ge$ the pivot, and the two sides are sorted recursively. The function prints the array
+after each partition.
 
 ```python-run
 def inplace_quick_sort(S, a, b, depth=0):
@@ -153,26 +203,42 @@ inplace_quick_sort(data, 0, len(data) - 1)
 
 ### Other partition schemes
 
-- **Lomuto**: a single left-to-right scan keeping a boundary index `i`; simple to code, but does
-  more swaps and degrades to $O(n^2)$ when all keys are equal.
-- **Hoare**: two pointers from the ends (the book's is of this family); fewer swaps.
-- **Three-way (Dutch national flag)**: partitions into `<`, `==`, `>` regions; essential when there
-  are **many duplicate keys** — otherwise an array of equal keys can trigger quadratic behaviour.
+There are several standard ways to partition, each named after its inventor or its picture.
+Section 7 compares them in detail.
+
+- **Lomuto's scheme**: one scan from left to right, keeping a boundary index `i` between the
+  small items and the rest. It is the shortest to write, but it makes more swaps and slows to
+  $O(n^2)$ when all keys are equal.
+- **Hoare's scheme**: two indices moving inwards from the ends, as above. Fewer swaps.
+- **Three-way partitioning** (also called the *Dutch national flag* method, after the flag's
+  three stripes): divides the array into "less than", "equal to" and "greater than" regions. It
+  is essential when there are **many duplicate keys**, because the whole block of items equal
+  to the pivot is finished at once.
 
 ### Space
 
-In-place quick-sort uses no auxiliary arrays, but the recursion stack has depth equal to the tree
-height: $O(\log n)$ expected, $O(n)$ worst case. A standard trick guarantees $O(\log n)$ stack:
-recurse on the **smaller** part and loop on the larger (tail-call elimination).
+In-place quick-sort uses no extra arrays, but its recursion needs stack space equal to the
+height of the quick-sort tree: $O(\log n)$ expected, $O(n)$ in the worst case. A standard trick
+guarantees $O(\log n)$: make the recursive call only on the **smaller** of the two parts, and
+handle the larger part by looping (the tail-recursion elimination of the recursion module).
+Since the smaller part has at most half the items, the recursion can nest at most $\log n$
+deep.
 
 ## 5. Additional optimisations
 
-- **Median-of-three pivot:** take the median of the first, middle and last elements. Cheap, avoids
-  the sorted-input disaster, and gives a slightly better split than a random element.
-- **Cutoff to insertion-sort:** for subarrays below about 50 elements (the book's suggestion; many
-  libraries use 10–20), insertion-sort is faster because of its low overhead.
-- **Introsort:** monitor the recursion depth and switch to heap-sort if it exceeds about
-  $2\log n$ — $O(n \log n)$ worst case guaranteed. C++ `std::sort` does this.
+- **Median-of-three pivot.** Look at the first, middle and last items and use the one whose
+  value is in the middle. It is cheap, it avoids the sorted-input disaster, and it tends to
+  split a little more evenly than a single random item.
+- **Switching to insertion-sort for small parts.** Below some small size (libraries typically
+  use 10 to 20 items, and values up to about 50 are reasonable), insertion-sort is faster
+  because it has so little overhead.
+- **Introsort.** Keep count of the recursion depth and switch to heap-sort if it goes beyond
+  about $2\log n$, which guarantees $O(n \log n)$ in the worst case. The C++ standard library's
+  `std::sort` works this way.
+
+The function below combines a random pivot, three-way partitioning, recursion on the smaller
+side only, and insertion-sort for parts shorter than 16. In the partition loop, `lt` and `gt`
+mark the edges of the "less than" and "greater than" regions and `i` scans the unknown middle.
 
 ```python-run
 import random
@@ -214,15 +280,18 @@ print(quick_sort(data[:]) == sorted(data), quick_sort(list(range(5000))) == list
 | Access pattern | in place, cache-friendly | sequential (good for lists, files) |
 
 > [!INTERVIEW]
-> Be ready to: write a partition from memory (state your invariant!); explain the worst case and how
-> random or median-of-three pivots avoid it; handle duplicates with three-way partitioning; and
-> explain why quick-sort is not stable (long-distance swaps). The partition routine is reused by
-> quick-select (finding the $k$-th smallest, last lesson of this module).
+> Be ready to: write a partition from memory, stating the invariant you are maintaining; explain
+> the worst case and how a random or median-of-three pivot avoids it; handle duplicates with
+> three-way partitioning; and explain why quick-sort is not stable (its swaps carry items long
+> distances past equal items). The partition routine is reused by quick-select, which finds the
+> $k$-th smallest item and is covered in the last lesson of this module.
 
 ## 7. Partition schemes compared: Lomuto, two-pointer and three-way
 
-The book's partition scans from both ends. The scheme most often seen in interviews is **Lomuto's**,
-which uses a single left-to-right scan and one boundary index:
+Section 4 scanned from both ends. The scheme seen most often in interviews is **Lomuto's**,
+which makes a single scan from left to right with one boundary index `i`. Everything before
+`i` is known to be smaller than the pivot; the scan index `j` looks at each item in turn, and
+whenever it finds a small one, swaps it to position `i` and moves the boundary along:
 
 ```
 lomuto_partition(S, a, b):            # pivot = S[b]
@@ -332,21 +401,45 @@ scheme.
 
 ## 8. Pitfalls
 
-- Fixed pivot (first/last) on sorted or reverse-sorted input: $\Theta(n^2)$ time **and** recursion
-  depth $n$ — a `RecursionError` in Python.
-- Off-by-one errors in the scan conditions (`left <= right` vs `<`) leading to infinite loops.
-- Recursing on ranges that include the pivot's final position — no progress.
-- Assuming stability.
+- **A fixed pivot on sorted input.** Using the first or last item as pivot on sorted or
+  reverse-sorted data costs $\Theta(n^2)$ time **and** makes the recursion $n$ levels deep,
+  which in Python ends in a `RecursionError`.
+- **Off-by-one errors in the scanning conditions.** Writing `left < right` where
+  `left <= right` is needed (or the reverse) produces wrong partitions or loops that never end.
+- **Including the pivot in a recursive call.** The pivot is already in its final place; a call
+  whose range still contains it may make no progress.
+- **Assuming stability.** Quick-sort is not stable.
+- **Forgetting duplicates.** A random pivot protects against bad orderings, not against many
+  equal keys; those need three-way partitioning.
 
 ## 9. Summary
 
-- Quick-sort: pick a pivot, partition into less/equal/greater, recurse on the outer parts.
-- $O(n^2)$ worst case, $O(n\log n)$ expected with random pivots; in place with $O(\log n)$ expected
-  stack.
-- Practical versions add median-of-three, three-way partitioning, small-array cutoffs and a
-  heap-sort fallback.
+- Quick-sort picks a pivot, partitions the items into smaller, equal and larger, and recurses
+  on the two outer groups.
+- It is $O(n^2)$ in the worst case and $O(n\log n)$ expected with random pivots, and it sorts in
+  place using $O(\log n)$ expected stack space.
+- Practical versions add median-of-three pivots, three-way partitioning, insertion-sort for
+  small parts, and a fall-back to heap-sort.
+- Compared with merge-sort it uses less memory and is usually faster, but it is not stable and
+  has no worst-case guarantee of its own.
 
 > **Source:** Goodrich, Tamassia & Goldwasser, *Data Structures and Algorithms in Python*, ch. 12.3.
+
+## Glossary
+
+- **Quick-sort**: sorting by partitioning around a pivot and recursing on the two sides.
+- **Pivot**: the item against which all the others are compared in one partitioning step.
+- **Partition**: rearranging items so that smaller ones come before the pivot and larger ones
+  after it.
+- **Quick-sort tree**: the tree of recursive calls; its height determines the running time.
+- **Median**: the middle value of a collection in sorted order.
+- **Randomised algorithm**: an algorithm that makes random choices as it runs.
+- **Expected running time**: the running time averaged over the algorithm's random choices.
+- **Lomuto / Hoare partition**: the single-scan / two-index in-place partitioning schemes.
+- **Three-way partition (Dutch national flag)**: partitioning into less than, equal to and
+  greater than the pivot.
+- **Median-of-three**: choosing as pivot the middle value of the first, middle and last items.
+- **Introsort**: quick-sort that switches to heap-sort when the recursion gets too deep.
 
 ## Check yourself
 

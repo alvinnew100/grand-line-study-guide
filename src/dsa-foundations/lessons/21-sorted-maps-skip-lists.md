@@ -1,14 +1,39 @@
 # Sorted maps, skip lists, sets and multimaps
 
-Hash tables answer **exact** queries brilliantly — "is key $k$ present?" — but they scatter keys
-deliberately, so they cannot answer "what is the nearest key to $k$?" or "list every key between
-$a$ and $b$". The **sorted map** ADT adds order-based queries. This lesson covers the sorted search
-table, the randomised **skip list**, and the related ADTs: sets, multisets and multimaps.
+> **Before this lesson:** You should know the map ADT and hash tables
+> ([Maps and hash functions](#/lesson/dsa-foundations/maps-hash-functions),
+> [Collision handling](#/lesson/dsa-foundations/collisions)), binary search and the "leftmost
+> position at or after the target" variant
+> ([Thinking recursively](#/lesson/dsa-foundations/recursion-examples)), and linked lists with
+> sentinels ([Doubly linked lists](#/lesson/dsa-foundations/doubly-positional)).
+
+## In plain words
+
+A hash table is superb at one question: "is this exact key here?" It is useless at questions
+about *nearby* keys, because its whole method is to scatter keys around. A **sorted map** keeps
+the keys in order, so it can also answer "what is the closest key below this one?" and "give me
+every key between these two".
+
+A paper train timetable is a sorted map from departure times to trains. Nobody asks it "is
+there a train at exactly 09:37?". The useful questions are "what is the next train after
+09:30?" and "which trains leave between 9 and 10?", and both are easy because the times are
+listed in order: find the place, then read along.
+
+The lesson shows two ways to build a sorted map. One is a sorted array searched by halving.
+The other, the **skip list**, is a linked list with express lanes laid over it, like a railway
+line with stopping trains, semi-fast trains and expresses.
+
+Why it matters for a job: "find the nearest", "find everything in a range" and "keep things in
+order while inserting" come up constantly (scheduling, pricing, leaderboards, time-series
+data). Knowing that a dictionary cannot do them, and what can, is a frequent interview
+discriminator. The lesson ends with three close relatives of the map: sets, multisets and
+multimaps.
 
 ## 1. The sorted map ADT
 
-Keys are assumed to come from a **total order** (any two are comparable with `<`). On top of the
-map ADT, a sorted map `M` supports:
+A sorted map needs keys that can be put in order: for any two keys, one is smaller, or they
+are equal. Such an ordering is called a **total order**; numbers and strings have one built in.
+In addition to everything an ordinary map does, a sorted map `M` supports:
 
 | Operation | Meaning |
 |---|---|
@@ -18,15 +43,26 @@ map ADT, a sorted map `M` supports:
 | `M.find_range(start, stop)` | iterate all pairs with `start <= key < stop` |
 | `iter(M)` / `reversed(M)` | keys in increasing / decreasing order |
 
-These are called **inexact** or **nearest-neighbour** searches.
+The suffixes abbreviate comparisons: `lt` is "less than", `le` "less than or equal", `gt`
+"greater than", `ge` "greater than or equal". These are called **inexact** or
+**nearest-neighbour** searches, because the key asked about need not be in the map.
 
 ## 2. Sorted search tables
 
-Store the items in an array-based sequence in **increasing key order**. Then binary search locates
-any key — or the position where it would be — in $O(\log n)$.
+The first implementation stores the items in a Python list kept in **increasing order of key**.
+Binary search then finds any key, or the position where it *would* be, in $O(\log n)$.
 
-The workhorse is `_find_index(k, low, high)`: return the index of the **leftmost item with key
-$\ge k$** (or `high + 1` if none). Every query is built on it:
+One helper does all the searching: `_find_index(k, low, high)` returns the index of the
+**leftmost item whose key is at least $k$**, or `high + 1` if every key is smaller. This is the
+"lower bound" search from the recursion module. Every operation is a small step away from it:
+
+- `M[k]`: call it `j`; the key is present exactly when `j` is in range and the key at `j`
+  equals `k`.
+- `find_ge(k)`: the item at `j`, if there is one.
+- `find_lt(k)`: the item at `j - 1`, since everything before `j` is smaller than `k`.
+- `find_gt(k)`: the item at `j`, or at `j + 1` if the key at `j` equals `k`.
+- `find_range(start, stop)`: start at the index for `start` and walk right until a key reaches
+  `stop`.
 
 ```python-run
 class SortedTableMap:
@@ -103,23 +139,36 @@ print("range [50, 85):", [k for k, _ in M.find_range(50, 85)])
 | `find_range(start, stop)` | $O(s + \log n)$ where $s$ items are reported |
 | `iter`, `reversed` | $O(n)$ |
 
-A sorted table is ideal when searches dominate and updates are rare. In Python the `bisect` module
-(`bisect_left`, `bisect_right`, `insort`) gives you the binary search primitive directly.
+The demo inserts fifteen keys in a jumbled order and prints them back sorted. Then
+`find_ge(30)` gives `(32, '32')`, `find_lt(30)` gives `(29, '29')`, `find_gt(88)` gives
+`(93, '93')`, and the range from 50 up to but not including 85 is `[54, 65, 76, 80, 82]`.
+
+The table shows the trade. Searching is fast, but inserting or deleting a key has to shift
+part of the array, $O(n)$. A sorted table is ideal when searches are frequent and updates are
+rare. In everyday Python the `bisect` module (`bisect_left`, `bisect_right`, `insort`) provides
+the binary search ready-made.
 
 ### 2.1 Two applications
 
-**Flight databases.** Key each flight by `(origin, destination, date, time)`. A traveller asks for
-flights near a requested time: `find_ge((ORD, PVD, 05May, 09:30))` returns the first flight at or
-after 09:30, and `find_range(k1, k2)` lists all flights in a window. Tuple keys compare
-lexicographically, which is exactly what is needed.
+**Flight databases.** Give each flight the key `(origin, destination, date, time)`. A traveller
+asks for flights near a requested time: `find_ge((ORD, PVD, 05May, 09:30))` returns the first
+flight on that route and day at or after 09:30, and `find_range(k1, k2)` lists every flight in
+a time window. Tuples are compared item by item from the left, like words in a dictionary,
+which is exactly the ordering needed here.
 
-**Maxima sets.** Suppose cars are (cost, performance) pairs. A car is *dominated* if another car is
-both cheaper and faster. The set of non-dominated pairs — the **maxima set** (also the *Pareto
-frontier*) — can be kept in a sorted map keyed by cost, with performance strictly increasing along
-it. `best(c)` = `find_le(c)` answers "the best car I can afford for at most $c$". To `add(c, p)`:
-if `find_le(c)` already has performance $\ge p$, the new pair is dominated — ignore it; otherwise
-insert it and remove the pairs it now dominates (walk right with `find_gt` while their
-performance $\le p$).
+**Maxima sets.** Suppose each car is described by a pair (cost, performance). One car
+*dominates* another if it is at least as cheap and at least as fast; nobody would choose the
+dominated one. The cars that no other car dominates form the **maxima set** (economists call it
+the *Pareto frontier*). Along it, paying more always buys more performance. It can be kept in
+a sorted map keyed by cost. Then `best(c)`, "the best car I can get for at most $c$", is
+`find_le(c)`. To `add(c, p)`: if `find_le(c)` already offers performance $\ge p$, the new car
+is dominated, so ignore it. Otherwise insert it, and remove every costlier car whose
+performance is $\le p$, since the newcomer now dominates those.
+
+The demo keeps two parallel sorted lists, costs and performances, and uses `bisect`. Of the six
+cars offered, (30, 100) and (15, 70) are dominated by cars already stored and are never added;
+what remains is `[(10, 80), (20, 120), (25, 150), (40, 160)]`, with performance rising as cost
+rises, and the best car for at most 35 is `(25, 150)`.
 
 ```python-run
 import bisect
@@ -145,22 +194,29 @@ print(list(zip(db._cost, db._perf)), "best under 35:", db.best(35))
 
 ## 3. Skip lists
 
-A sorted array gives $O(\log n)$ search but $O(n)$ updates; a sorted linked list gives $O(1)$
-updates at a known position but $O(n)$ search. The **skip list** gets $O(\log n)$ *expected* time for
-all of them by adding randomised "express lanes" to a linked list.
+A sorted array gives $O(\log n)$ search but $O(n)$ updates. A sorted linked list gives $O(1)$
+updates once you are at the right place, but getting there takes $O(n)$, because a linked list
+cannot be halved. The **skip list** gets $O(\log n)$ *expected* time for search and for updates
+by laying "express lanes" over a linked list, and it decides which items get express stops by
+tossing a coin.
 
 ### 3.1 Structure
 
-A skip list $S$ for a map consists of a series of lists $\{S_0, S_1, \ldots, S_h\}$:
+A skip list is a stack of sorted linked lists $S_0, S_1, \ldots, S_h$, one above another:
 
-- $S_0$ contains every item, in key order, plus sentinels $-\infty$ and $+\infty$.
-- For $i \ge 1$, $S_i$ contains a **randomly chosen subset** of $S_{i-1}$ (plus the sentinels):
-  each item of $S_{i-1}$ is also in $S_i$ with probability 1/2.
-- $S_h$ contains only the sentinels.
+- $S_0$, the bottom list, contains every item in key order, between two sentinels written
+  $-\infty$ and $+\infty$ ("minus infinity" and "plus infinity": pretend keys smaller and
+  larger than any real key).
+- Each higher list $S_i$ contains a **random selection** of the items in the list below it:
+  every item of $S_{i-1}$ is copied up into $S_i$ with probability 1/2, independently of the
+  others. The sentinels are in every list.
+- The top list $S_h$ contains only the sentinels.
 
-So $S_1$ has about $n/2$ items, $S_2$ about $n/4$, and the height $h$ is about $\log n$. Viewed
-as a grid, each item forms a **tower** across the levels it appears in; positions support
-`next(p)`, `prev(p)`, `below(p)`, `above(p)`.
+So $S_1$ holds about half the items, $S_2$ about a quarter, and so on; the number of levels $h$
+is about $\log n$. An item that appears on several levels forms a **tower**. From any position
+you can step to the next or previous item on the same level, or to the same item on the level
+below or above. The picture shows seven keys; 17 has a tower of height three, 31 and 55 of
+height two.
 
 ```mermaid
 graph LR
@@ -177,8 +233,10 @@ graph LR
 
 ### 3.2 Searching
 
-Start at the top-left sentinel. Repeat: **scan forward** while the next key is $\le k$; then **drop
-down** one level. Stop at the bottom level: the current position holds the largest key $\le k$.
+Searching works like a rail journey: ride the express as far as it helps, then change to a
+slower train. Start at the top-left sentinel. Repeat: **scan forward** along the current level
+while the next key is $\le k$; then **drop down** one level. When you can go no further on the
+bottom level, you are standing on the largest key that is $\le k$.
 
 ```
 SkipSearch(k):
@@ -195,10 +253,12 @@ is 55 > 44); drop to $S_0$, move to 44. Found in 3 forward steps rather than 5.
 
 ### 3.3 Insertion
 
-Search for $k$ to find the bottom-level position $p$ with the largest key $\le k$; insert the new
-item after $p$. Then **flip a coin**: while it comes up heads, add the item to the next level up
-(growing a new top level if needed), linking it after the last position visited on that level during
-the search.
+Search for $k$ to find the bottom-level position $p$ holding the largest key $\le k$, and
+insert the new item right after $p$. Then **toss a coin**. While it comes up heads, also add
+the item to the next level up (creating a new top level if necessary), linking it in after the
+last position the search visited on that level. Half of all items stop at the bottom level, a
+quarter reach exactly level 1, and so on, which is what keeps the levels in the right
+proportions without any rebalancing work.
 
 ### 3.4 Deletion
 
@@ -207,13 +267,18 @@ Search for $k$; if found, remove the whole tower by unlinking the position at ea
 
 ### 3.5 Analysis
 
-- **Height.** The probability that a given item reaches level $i$ is $1/2^i$, so the probability
-  level $i$ has *any* item is at most $n/2^i$. For $i = 3\log n$ this is at most $1/n^2$: the height
-  is $O(\log n)$ **with high probability**.
-- **Search time.** At each level the expected number of forward scans is at most 2: a key scanned
-  at level $i$ is one that did *not* get promoted to level $i+1$, and counting coin flips until the
-  first heads gives expectation 2. With $O(\log n)$ levels, search is expected $O(\log n)$.
-- **Space.** Expected total positions $\sum_i n/2^i < 2n$: $O(n)$.
+- **Height.** An item reaches level $i$ only if its coin came up heads $i$ times running, which
+  has probability $1/2^i$. So the chance that level $i$ contains *any* of the $n$ items is at
+  most $n/2^i$. For $i = 3\log n$ that is at most $1/n^2$, which is tiny. The height is
+  $O(\log n)$ **with high probability**, a phrase meaning that the chance of it failing shrinks
+  rapidly as $n$ grows.
+- **Search time.** On each level, the expected number of forward steps is at most 2. Here is
+  why: every key the search steps over on level $i$ is one that was *not* promoted to level
+  $i+1$ (otherwise the search would have stepped over it on the level above). So counting
+  forward steps on a level is like counting coin tosses until the first heads, and that
+  averages 2. With $O(\log n)$ levels, a search takes expected $O(\log n)$ time.
+- **Space.** The expected number of positions over all levels is
+  $n + n/2 + n/4 + \cdots < 2n$, so $O(n)$.
 
 | Operation | Skip list (expected) |
 |---|---|
@@ -223,9 +288,16 @@ Search for $k$; if found, remove the whole tower by unlinking the position at ea
 | `find_range` | $O(s + \log n)$ |
 | space | $O(n)$ |
 
-The worst case is unbounded in principle (the coin could keep coming up heads) but astronomically
-unlikely. Note the randomness is in the **algorithm's coin flips**, not in the input — no input
-distribution is "bad".
+In principle the worst case has no limit (the coin could keep coming up heads), but that is
+astronomically unlikely. Note where the randomness lives: in the **algorithm's own coin
+tosses**, not in the data. No particular input is "bad" for a skip list, and nobody can
+construct one, because they cannot predict the coin.
+
+The implementation below uses the layout found in practice: each item is one node holding a
+list `forward`, where `forward[i]` is the next node on level `i`. The length of that list is
+the height of the item's tower. The helper `_predecessors(key)` performs the search walk and
+records, for every level, the last node visited there; those are exactly the nodes whose
+links must change on an insertion or a removal.
 
 ```python-run
 import random
@@ -289,30 +361,36 @@ print("levels:", S._level, " search steps for one key:", S.get(probe)[1], " (lis
 S.remove(probe); print("after removal found:", S.get(probe)[0], " size:", S._n)
 ```
 
-(This implementation stores each tower as one node with an array of forward pointers — the usual
-practical layout — rather than a grid of separate positions.)
+With 5,000 keys the skip list has around a dozen levels, and finding the middle key takes a
+handful of forward steps (7 in this run) where a plain linked list would need about 2,500.
 
 > [!INTERVIEW]
-> Skip lists are the classic answer to "an ordered map without tree rotations". Redis sorted sets
-> and LevelDB/RocksDB memtables use them, partly because they are easy to make concurrent. Know the
-> search walk (right while possible, then down) and the coin-flip height argument.
+> Skip lists are the classic answer to "how would you build an ordered map without a balanced
+> tree?". The Redis database uses one for its sorted sets, and the storage engines LevelDB and
+> RocksDB use one for recent writes held in memory, partly because a skip list is comparatively
+> easy to share safely between threads. Be able to describe the search walk (go right while you
+> can, then down) and the coin-toss argument for the height.
 
 ## 4. Sets, multisets and multimaps
 
-- A **set** is an unordered collection of elements **without duplicates** — conceptually a map with
-  keys but no values. Core: `S.add(e)`, `S.discard(e)`, `e in S`, `len(S)`, `iter(S)`; plus
-  `remove`, `pop`, `clear`, subset tests (`<=`, `<`), union `|`, intersection `&`, difference `-`,
-  symmetric difference `^`, and in-place versions (`|=`, …). Python's `MutableSet` ABC derives all of
-  these from the five core methods — e.g. `__lt__` (proper subset) checks sizes and then membership
-  of every element; `__or__` builds a new set by adding elements of both.
-- A **multiset** (or *bag*) allows duplicates. Implement it as a map from element to its **count**.
-  Python: `collections.Counter`.
-- A **multimap** associates a key with *multiple* values (an index maps a term to all its pages).
-  Implement it as a map from key to a **container of values**. Python:
-  `collections.defaultdict(list)`.
+Three relatives of the map appear so often that they have names of their own.
 
-With hash tables underneath: `add`, `discard`, `in` are expected $O(1)$; union/intersection of sets
-of sizes $n$ and $m$ take $O(n + m)$ and $O(\min(n, m))$ expected.
+- A **set** is a collection of items with **no duplicates** and no particular order. Think of
+  it as a map that has keys but no values. Its core operations are `S.add(e)`, `S.discard(e)`,
+  `e in S`, `len(S)` and `iter(S)`. On top of those come `remove`, `pop`, `clear`, subset tests
+  (`<=`, `<`), union `|` (items in either set), intersection `&` (items in both), difference
+  `-` (items in the first but not the second), symmetric difference `^` (items in exactly
+  one), and versions that update in place (`|=` and so on). As `MutableMapping` does for maps,
+  Python's `MutableSet` base class builds all of these out of the five core methods.
+- A **multiset**, or *bag*, allows duplicates: it records how many copies of each item it
+  holds. Implement it as a map from item to **count**. In Python: `collections.Counter`.
+- A **multimap** associates one key with *several* values. The index at the back of a book maps
+  each term to all the pages where it appears. Implement it as a map from key to a **list of
+  values**. In Python: `collections.defaultdict(list)`.
+
+Built on hash tables, `add`, `discard` and `in` take expected $O(1)$ time. The union of sets of
+sizes $n$ and $m$ takes expected $O(n + m)$; the intersection takes expected $O(\min(n, m))$,
+by looking up each item of the smaller set in the larger.
 
 ```python-run
 from collections import Counter, defaultdict
@@ -348,14 +426,28 @@ print(Counter("mississippi").most_common(2), {1, 2, 3} & {2, 3, 4}, {1, 2} <= {1
 
 ## 5. Pitfalls
 
-- Using a hash map when you need ordered queries (then sorting the keys on every query).
-- `_find_index` returning "not found" instead of the insertion point — the insertion point is what
-  makes inexact searches possible.
-- Skip-list search that scans while `next.key <= k` at upper levels during *insertion* without
-  recording the predecessor at each level.
-- Forgetting to delete a multimap key when its last value is removed.
+- **Using a hash map when you need ordered queries**, and then sorting all the keys on every
+  query. Use a sorted structure.
+- **A search helper that reports only "not found".** The position where the key *would* go is
+  what makes inexact searches possible; return that.
+- **Inserting into a skip list without recording the predecessor on every level.** The new
+  tower has to be linked in on each level it reaches.
+- **Leaving an empty list behind in a multimap** when the last value for a key is removed.
+  Delete the key as well.
+- **Expecting a skip list's bounds to be guarantees.** They are expected-case bounds; for a
+  worst-case guarantee, use a balanced search tree.
 
 ## 6. Summary
+
+- A sorted map adds nearest-key and range queries to the map ADT.
+- A sorted table (sorted array plus binary search) searches in $O(\log n)$ but updates in
+  $O(n)$.
+- A skip list (a linked list with random express levels) searches and updates in expected
+  $O(\log n)$, using $O(n)$ expected space.
+- Sets, multisets and multimaps are maps in light disguise.
+
+The table compares the structures seen so far with the balanced search trees of the next
+module.
 
 | Structure | Search | Insert/delete | Ordered queries |
 |---|---|---|---|
@@ -365,6 +457,23 @@ print(Counter("mississippi").most_common(2), {1, 2, 3} & {2, 3, 4}, {1, 2} <= {1
 | balanced search tree (next module) | $O(\log n)$ worst | $O(\log n)$ worst | yes |
 
 > **Source:** Goodrich, Tamassia & Goldwasser, *Data Structures and Algorithms in Python*, ch. 10.3–10.5.
+
+## Glossary
+
+- **Total order**: an ordering in which any two keys can be compared.
+- **Sorted map**: a map that also answers questions about neighbouring keys and ranges.
+- **Inexact (nearest-neighbour) search**: finding the closest key to one that may be absent.
+- **Sorted search table**: a sorted array of items searched by binary search.
+- **`bisect`**: Python's standard module for binary search in a sorted list.
+- **Dominated pair**: a pair that another pair beats or equals on both measures.
+- **Maxima set (Pareto frontier)**: the pairs that no other pair dominates.
+- **Skip list**: a sorted linked list with randomly chosen higher "express" levels.
+- **Tower**: the copies of one item across the levels of a skip list.
+- **With high probability**: with a chance of failure that shrinks quickly as $n$ grows.
+- **Set**: a collection of distinct items.
+- **Union / intersection / difference**: items in either set / in both / in the first only.
+- **Multiset (bag)**: a collection that counts duplicates.
+- **Multimap**: a map in which one key may have several values.
 
 ## Check yourself
 

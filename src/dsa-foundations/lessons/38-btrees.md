@@ -1,21 +1,45 @@
 # External searching: (a,b) trees and B-trees
 
-A database index with a billion keys does not fit in main memory. It lives on disk (or SSD), and
-every access to a new disk block costs something like a hundred thousand times more than a memory
-access. In that world, counting comparisons is pointless — what matters is the number of **block
-transfers**. This final lesson develops the **external-memory model**, shows why balanced binary
-trees are a poor fit for it, and builds the structure that every database and file system uses
-instead: the **B-tree**. It ends with **external-memory sorting**.
+> **Before this lesson:** You should know the memory hierarchy, blocks and pages
+> ([Memory allocation, garbage collection and caching](#/lesson/dsa-foundations/memory-management)),
+> multiway search trees and (2,4) trees with their splits, transfers and fusions
+> ([(2,4) trees and red-black trees](#/lesson/dsa-foundations/two-four-red-black)), binary
+> search trees ([Binary search trees](#/lesson/dsa-foundations/bst)), merge-sort
+> ([Divide and conquer: merge-sort](#/lesson/dsa-foundations/merge-sort)) and `heapq`
+> ([Priority queues and binary heaps](#/lesson/dsa-foundations/heaps)).
+
+## In plain words
+
+When data is too big for the computer's fast working memory, it lives on disk, and fetching
+anything from disk is enormously slower than working on data already in memory. This lesson
+is about organising such data so that as few fetches as possible are needed.
+
+Picture a huge library whose books are kept in a warehouse across town. Finding a book by
+opening boxes one at a time would take for ever, because each box means a van trip. A balanced
+binary tree is not much better: it asks one question per trip ("is your key before or after
+this one?"), so a billion books would need about thirty trips. The fix is to bring back, on
+each trip, a whole index sheet listing hundreds of dividing points, so that one trip narrows
+the search hundreds of times over. Three or four trips then reach any of a billion books. That
+index-sheet tree is a **B-tree**.
+
+Why it matters for a job: every relational database you will use (PostgreSQL, MySQL, SQLite)
+and most file systems keep their indexes in B-trees. "Why do databases use B-trees?" is a
+standard interview question, and understanding the answer tells you why adding an index makes
+a slow query fast. The lesson closes with how to sort data that does not fit in memory, which
+is how databases sort large tables.
 
 ## 1. The external-memory model
 
-Assume the data set is too large for internal memory and is stored on an external device divided
-into **blocks** (pages) of size $B$ — each block holds $B$ items/references. Reading or writing one
-block is one **disk transfer** (I/O). We measure an algorithm's **I/O complexity**: the number of
-disk transfers it performs. Computation on blocks already in memory is treated as free.
+Assume the data is too large for main memory (internal memory) and is stored on an external
+device, a disk or SSD, divided into **blocks** (also called pages), each able to hold $B$
+items. Reading or writing one block is one **disk transfer**, also called an I/O (input/output)
+operation. In this setting we measure an algorithm by its **I/O complexity**, the number of
+disk transfers it performs, and treat computation on blocks already in memory as free. That is
+a simplification, but a reasonable one: a transfer can cost a hundred thousand times as much
+as a step in memory, so counting comparisons would measure the wrong thing.
 
-For a sense of scale: with a 4 KB or 16 KB page and 16-byte entries, $B$ is in the hundreds or
-thousands.
+For a sense of scale: with a page of 4 or 16 kilobytes and entries of 16 bytes each, $B$ is in
+the hundreds or thousands.
 
 ### 1.1 How do our existing structures fare?
 
@@ -31,14 +55,16 @@ Consider a map with $n$ items stored externally.
   about 30 disk transfers per search — at 5–10 ms each for a spinning disk, a quarter of a second
   per lookup.
 
-Can we do better than $\log_2 n$? Yes: make the tree **much shallower** by giving each node **many
-children**, sized so that one node fills exactly one block. Reading a node is then one transfer,
-and the search inside the node — in memory — is free in this model. A tree in which every node has
-about $B$ children has height about $\log_B n$:
+Can we do better than $\log_2 n$? Yes: make the tree **much shallower** by giving every node
+**many children**, sized so that one node fills exactly one block. Reading a node is then one
+transfer, and searching inside the node, which happens in memory, is free in this model. The
+number of children a node has is called its **fan-out**. A tree in which every node has a
+fan-out of about $B$ has height about $\log_B n$, and by the change-of-base rule
 
 $$\log_B n = \frac{\log_2 n}{\log_2 B}.$$
 
-For $n = 10^9$ and $B = 1000$ that is **3** transfers instead of 30.
+For $n = 10^9$ and $B = 1000$: $\log_2 n \approx 30$ and $\log_2 B \approx 10$, so the height
+is **3**. Three transfers instead of thirty. The demo prints the height for several fan-outs.
 
 ```python-run
 import math
@@ -50,21 +76,26 @@ for B in [2, 4, 16, 100, 256, 1000, 4096]:
 
 ## 2. (a,b) trees
 
-An **(a,b) tree** is a multiway search tree (see the (2,4)-tree lesson for the definition of
-multiway search and $d$-nodes) with integer parameters $2 \le a \le (b+1)/2$, such that:
+The (2,4) tree of the search-trees module had nodes with 2 to 4 children. An **(a,b) tree** is
+the same idea with the limits turned into parameters: every node has between $a$ and $b$
+children. Formally, it is a multiway search tree with whole-number parameters
+$2 \le a \le (b+1)/2$, such that:
 
-- **Size property:** an internal node never has more than $b$ children, and never fewer than $a$ —
-  with one exception, the root, which is allowed to drop to 2.
-- **Depth property:** every external node sits at one and the same depth.
+- **Size property:** an internal node never has more than $b$ children and never fewer than
+  $a$, with one exception: the root may have as few as 2.
+- **Depth property:** all external nodes are at the same depth.
 
-A (2,4) tree is the special case $a = 2$, $b = 4$.
+A (2,4) tree is the case $a = 2$, $b = 4$. With large $a$ and $b$, each node is a big sorted
+index sheet and the tree is very shallow.
 
-> **Proposition.** An (a,b) tree with $n$ entries has height at least proportional to
+> **Claim.** The height of an (a,b) tree with $n$ entries is at least proportional to
 > $\log n / \log b$ and at most proportional to $\log n / \log a$.
 
-*Why.* Let $h$ be the height and $n'' = n + 1$ the number of external nodes. By the size
-property, level 1 has at least 2 nodes (the root has ≥ 2 children), level 2 at least $2a$, and level
-$h$ at least $2a^{h-1}$; and at most $b^h$. So
+*Why.* Let $h$ be the height. A tree with $n$ entries has $n + 1$ external nodes. Count the
+nodes level by level. The root has at least 2 children, so level 1 has at least 2 nodes; each
+of those has at least $a$ children, so level 2 has at least $2a$; and level $h$ has at least
+$2a^{h-1}$. In the other direction, no node has more than $b$ children, so level $h$ has at
+most $b^h$ nodes. Therefore
 
 $$2a^{h-1} \le n + 1 \le b^h,$$
 
@@ -107,9 +138,11 @@ Each of these operations touches $O(1)$ nodes; an update performs them along one
 
 > A **B-tree of order $d$** is an (a,b) tree with $a = \lceil d/2 \rceil$ and $b = d$.
 
-So every internal node other than the root has between $\lceil d/2 \rceil$ and $d$ children — it is
-always **at least half full** — and all leaves are at the same depth. The (2,4) tree is the B-tree
-of order 4.
+So every internal node except the root has between $\lceil d/2 \rceil$ and $d$ children: it is
+always **at least half full**. And all leaves are at the same depth. The (2,4) tree is the
+B-tree of order 4. The limits were chosen to be as tight as the rules allow: a node may hold
+as many children as fit, and when it overflows and splits, the two halves are each (about)
+half full, which is exactly the minimum.
 
 ```mermaid
 graph TD
@@ -130,33 +163,40 @@ graph TD
 
 (A B-tree of order 6: internal nodes have 3 to 6 children — 2 to 5 keys; the root may have fewer.)
 
-**Choosing $d$.** Pick the order so that the $d$ child references and $d - 1$ keys of a node **just
-fit in one disk block**: $d$ is $\Theta(B)$. Then $a = \lceil d/2 \rceil$ and $b = d$ are both
-$\Theta(B)$, and the height is
+**Choosing $d$.** Pick the order so that one node, with its $d$ child references and $d - 1$
+keys, **exactly fills one disk block**. Then $d$ is proportional to the block size $B$, so
+both $a = \lceil d/2 \rceil$ and $b = d$ are $\Theta(B)$, and the height is
 
 $$O\!\left(\frac{\log n}{\log \lceil d/2 \rceil}\right) = O(\log_B n).$$
 
-> **Proposition.** With blocks of size $B$, a B-tree of $n$ entries occupies $O(n/B)$ blocks, and
+> **Theorem.** With blocks of size $B$, a B-tree of $n$ entries occupies $O(n/B)$ blocks, and
 > each search, insertion or deletion performs $O(\log_B n)$ block transfers.
 
-*Why updates too:* a search reads one node per level; an insertion may split one node per level, and
-a deletion may fuse one node per level — each a constant number of block reads and writes. The space
-bound follows because every node except the root is at least half full.
+*Why updates are as cheap as searches.* A search reads one node per level. An insertion may
+split one node per level on the way back up, and a deletion may fuse one node per level; each
+split or fusion reads and writes a constant number of blocks. The space bound holds because
+every node except the root is at least half full, so no more than about twice the minimum
+number of blocks is ever used.
 
 ### 3.1 Searching within a node
 
-Within a block, keys are kept sorted, so the child to follow is found by binary search — in the
-external-memory model this is free; in reality it is a few dozen nanoseconds against milliseconds for
-the transfer. The total *comparison* count is still about $\log_2 n$
-($\log_B n$ levels × $\log_2 B$ comparisons each) — a B-tree does not reduce comparisons, it
-**packs them into fewer blocks**.
+Inside a block the keys are kept in sorted order, so the child to follow is found by binary
+search. In the external-memory model this is free; in reality it takes a few dozen
+nanoseconds, against milliseconds for the transfer. A point that is often misunderstood: the
+total number of *comparisons* is still about $\log_2 n$ (there are $\log_B n$ levels, with
+about $\log_2 B$ comparisons at each). A B-tree does not reduce the number of comparisons. It
+**packs them into far fewer blocks**.
 
 ### 3.2 A working B-tree (insert and search)
 
-The implementation below follows the standard "split full children on the way down" formulation
-with **minimum degree** $t$ (each non-root node has between $t - 1$ and $2t - 1$ keys, i.e. between
-$t$ and $2t$ children — a B-tree of order $d = 2t$). It counts node visits as a stand-in for disk
-transfers.
+The implementation below uses a common variant of insertion that makes a single pass from the
+root downwards: on the way down, any full node it is about to enter is split *first*, so that
+there is always room when the bottom is reached and nothing has to be repaired on the way
+back up. It is parameterised by the **minimum degree** $t$: every node except the root has
+between $t - 1$ and $2t - 1$ keys, that is, between $t$ and $2t$ children, which makes it a
+B-tree of order $d = 2t$. Each node keeps a sorted list of keys and a list of children (empty
+for a leaf), and `bisect_left` does the binary search inside a node. The class counts node
+visits in `transfers`, as a stand-in for disk transfers.
 
 ```python-run
 import bisect, math, random
@@ -235,6 +275,12 @@ print(f"n = 200,000, order 100: height {big.height()}, avg nodes read per search
       f"{big.transfers / 1000:.2f}  (a balanced binary tree: ~{math.log2(200000):.0f})")
 ```
 
+**Reading the output.** The first part builds a small tree of order 4 from twelve keys and
+prints it with each level indented: the root's keys on the first line, its children beneath.
+The second part inserts 200,000 random keys into a tree whose nodes hold up to 99 keys. Its
+height comes out as 3 or 4 levels, and a search reads about that many nodes, where a balanced
+binary tree would visit about 18.
+
 ### 3.3 Dry run: inserting into a small B-tree
 
 Take a B-tree of order 4 (a (2,4) tree: at most 3 keys per node, split when a 4th arrives), and
@@ -252,50 +298,67 @@ grow **upward from the root**, so all leaves always remain at the same depth.
 
 ### 3.4 B+ trees and practice
 
-Production systems almost always use the **B+ tree** variant: all records (or record pointers) live
-in the **leaves**, internal nodes hold only separator keys (so their fan-out is even larger), and
-leaves are chained in a linked list — making **range scans** a walk along the leaf level. Indexes in
-PostgreSQL, MySQL/InnoDB, SQLite and Oracle, and file systems such as NTFS, HFS+, ext4 and Btrfs are
-built this way. Because nodes are at least half full (about 69% on average under random insertions),
-space overhead is modest. Write-heavy systems (LevelDB, RocksDB, Cassandra) often prefer **LSM
-trees**, which turn random writes into sequential ones via the external merge-sort idea below.
+Real systems almost always use a variant called the **B+ tree**. In a B+ tree all the records
+(or references to them) live in the **leaves**; the internal nodes hold only separator keys,
+which makes them smaller and their fan-out even larger; and the leaves are linked to one
+another in a chain. A **range query** ("all orders between 1 March and 31 March") then finds
+the first matching leaf by a normal search and walks along the chain. The indexes of
+PostgreSQL, MySQL, SQLite and Oracle are built this way, and so are file systems such as
+NTFS and ext4. Because nodes are at least half full (about 69% full on average when keys
+arrive in random order), little space is wasted. Systems that must absorb very many writes
+(such as the storage engines LevelDB and RocksDB) often prefer a different structure, the
+LSM tree, which turns scattered writes into sequential ones using the merge-sort idea of the
+next section.
 
 > [!INTERVIEW]
-> "Why do databases use B-trees instead of binary search trees or hash tables?" — (1) **fan-out**:
-> a node per disk page gives height $\log_B n$, i.e. 3–4 page reads for billions of rows, versus
-> ~30 for a binary tree; (2) **ordered**: range queries, prefix matches and ORDER BY come for free,
-> which hash indexes cannot do; (3) **guaranteed balance** with at least half-full nodes. Mention
-> B+ trees with linked leaves for range scans.
+> "Why do databases use B-trees and not binary search trees or hash tables?" Three points.
+> (1) **Fan-out**: with one node per disk page the height is $\log_B n$, which means 3 or 4
+> page reads for billions of rows, against about 30 for a binary tree. (2) **Order**: range
+> queries, prefix matches and sorted output come naturally, which a hash index cannot offer.
+> (3) **Guaranteed balance**, with nodes at least half full. Mention B+ trees with linked
+> leaves for range scans.
 
 ## 4. External-memory sorting
 
-Sorting $n$ items that do not fit in memory, with internal memory of size $M$ and block size $B$.
-Internal sorts such as quick-sort or heap-sort access memory in patterns that would cause a
-transfer for nearly every step. **Merge-sort**, which reads and writes sequentially, adapts
-perfectly.
+The second problem of this lesson is sorting $n$ items that do not fit in memory. Say main
+memory holds $M$ items and a block holds $B$. The sorting algorithms designed for memory are a
+poor fit: quick-sort and heap-sort jump around in the data, and here nearly every jump would
+be a disk transfer. **Merge-sort** adapts perfectly, because it reads its inputs and writes
+its output strictly in order, one block after another.
 
-A standard 2-way merge-sort would make $\log_2(n/M)$ passes over the data, each costing $O(n/B)$
-transfers. We can cut the number of passes by merging **many runs at once**.
+An ordinary merge-sort, merging two runs at a time, would make $\log_2(n/M)$ passes over the
+data, each pass costing $O(n/B)$ transfers. The number of passes can be cut sharply by merging
+**many runs at once**.
 
 ### 4.1 Multiway merge-sort
 
-Let $d = M/B - 1$ — the number of input blocks that fit in memory while leaving room for one output
-block.
+Let $d = M/B - 1$: the number of input blocks that fit in memory at once while leaving room
+for one block of output.
 
-1. **Run formation.** Read the input in chunks of $M$ items, sort each in memory, and write it out
-   as a sorted **run**: $n/M$ runs, $O(n/B)$ transfers.
-2. **$d$-way merging.** Repeatedly merge $d$ runs into one. Keep one block of each run in memory;
-   output the smallest remaining item (found with a small priority queue of size $d$ — the book
-   describes it as a *tournament*); when an input block is exhausted, read that run's next block;
-   when the output block is full, write it. Each merge pass costs $O(n/B)$ transfers.
+1. **Run formation.** Read the input in chunks of $M$ items, as much as memory holds. Sort
+   each chunk in memory and write it back out as a sorted **run**. This produces $n/M$ runs and
+   costs $O(n/B)$ transfers.
+2. **$d$-way merging.** Repeatedly merge $d$ runs into one longer run. Keep one block of each
+   of the $d$ runs in memory. Repeatedly output the smallest item among the fronts of those
+   blocks, found with a small priority queue of size $d$. When an input block has been used
+   up, read the next block of that run; when the output block is full, write it out. Each
+   merging pass over all the data costs $O(n/B)$ transfers.
 
-The number of merge passes is $\log_d(n/M)$, so the total I/O complexity is
+Each pass divides the number of runs by $d$, so the number of passes is $\log_d(n/M)$, and the
+total I/O complexity is
 
-$$O\!\left(\frac{n}{B}\,\log_{M/B}\frac{n}{B}\right)$$
+$$O\!\left(\frac{n}{B}\,\log_{M/B}\frac{n}{B}\right).$$
 
-— the "sorting bound" of external-memory computation, which is provably optimal.
+This is known as the sorting bound of external-memory computation, and it has been proved to
+be the best possible.
 
 ### 4.2 Multiway merging with a heap
+
+The code simulates the whole process in memory. `k_way_merge` keeps a heap with one entry per
+run, `(value, run index, position)`: the smallest value is popped and sent to the output, and
+the next value from the *same run* is pushed in its place. With $k$ runs the heap has at most
+$k$ entries, so merging $n$ items costs $O(n \log k)$. `external_sort` forms runs of `M` items
+and then merges them `d` at a time, counting the passes.
 
 ```python-run
 import heapq, random
@@ -341,31 +404,55 @@ $k$-way merge lazily, over iterators, and is what you would use to merge sorted 
 | 2-way merge-sort | $O(n\log n)$ | $O((n/B)\log_2(n/B))$ |
 | **Multiway merge-sort** | $O(n \log n)$ | $O((n/B)\log_{M/B}(n/B))$ |
 
-The lesson of the chapter generalises well beyond disks: the same reasoning applies between CPU
-cache and RAM, which is why cache-conscious in-memory structures (B-trees with node size equal to a
-few cache lines, sorted arrays, radix trees) often outperform pointer-heavy binary trees.
+The same reasoning applies well beyond disks. It holds between the processor's cache and main
+memory too, which is why in-memory structures designed with blocks in mind (B-trees whose
+nodes are a few cache lines long, sorted arrays, radix trees) often outperform binary trees
+built from scattered nodes.
 
 ## 6. Pitfalls
 
-- Analysing an external algorithm by counting comparisons instead of block transfers.
-- Believing a B-tree performs fewer comparisons than a binary tree — it performs about the same
-  number, but in far fewer blocks.
-- Forgetting the root's exemption from the minimum-children rule (the root may have as few as 2
-  children).
-- Splitting unevenly: both halves must have at least $a$ children, which is why $a \le (b+1)/2$.
-- Using 2-way merging for external sorting when memory could hold hundreds of input buffers.
+- **Counting comparisons for an external algorithm.** Count block transfers.
+- **Believing a B-tree makes fewer comparisons than a binary tree.** It makes about the same
+  number, in far fewer blocks.
+- **Forgetting the root's exemption.** The root may have as few as 2 children; every other
+  internal node needs at least $a$.
+- **Splitting unevenly.** Both halves must have at least $a$ children, which is the reason for
+  the condition $a \le (b+1)/2$.
+- **Two-way merging when memory could hold hundreds of input blocks.** Every unnecessary pass
+  reads and writes the entire data set.
+- **Reaching for a hash index when the queries are ranges.** A hash table finds exact keys
+  only.
 
 ## 7. Summary
 
-- External-memory model: cost = number of block transfers; block size $B$.
-- (a,b) trees generalise (2,4) trees; height between $\log_b n$ and $\log_a n$; overflow → split,
-  underflow → transfer or fusion.
-- B-tree of order $d$ = $(\lceil d/2\rceil, d)$ tree with one node per block: $O(\log_B n)$
-  transfers per search or update, $O(n/B)$ blocks.
-- External sorting: form memory-sized runs, then $d$-way merge with $d \approx M/B$:
-  $O((n/B)\log_{M/B}(n/B))$ transfers.
+- In the external-memory model the cost of an algorithm is the number of block transfers, with
+  $B$ items per block.
+- (a,b) trees generalise (2,4) trees: the height lies between $\log_b n$ and $\log_a n$; an
+  overflow is fixed by a split, an underflow by a transfer or a fusion.
+- A B-tree of order $d$ is a $(\lceil d/2\rceil, d)$ tree with one node per block. It uses
+  $O(n/B)$ blocks and $O(\log_B n)$ transfers per search or update.
+- External sorting forms memory-sized sorted runs and then merges about $M/B$ of them at a
+  time, for $O((n/B)\log_{M/B}(n/B))$ transfers.
 
 > **Source:** Goodrich, Tamassia & Goldwasser, *Data Structures and Algorithms in Python*, ch. 15.3–15.4.
+
+## Glossary
+
+- **External memory**: storage outside main memory, such as a disk or SSD.
+- **Block (page)**: the unit in which data is moved between disk and memory.
+- **Disk transfer (I/O)**: reading or writing one block.
+- **I/O complexity**: the number of disk transfers an algorithm performs.
+- **Fan-out**: the number of children of a node.
+- **(a,b) tree**: a multiway search tree whose nodes have between $a$ and $b$ children, with
+  all leaves at one depth.
+- **B-tree of order $d$**: an (a,b) tree with $a = \lceil d/2 \rceil$ and $b = d$.
+- **Minimum degree ($t$)**: an alternative parameter; nodes have between $t$ and $2t$ children.
+- **Overflow / underflow**: a node with too many / too few children after an update.
+- **Split / fusion / transfer**: the three repair operations.
+- **B+ tree**: a B-tree that keeps all records in linked leaves.
+- **Range query**: a request for all keys between two values.
+- **Run**: a sorted stretch of data produced during external sorting.
+- **Multiway merge**: merging many sorted runs at once, using a priority queue.
 
 ## Check yourself
 

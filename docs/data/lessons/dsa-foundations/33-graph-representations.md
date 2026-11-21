@@ -1,29 +1,57 @@
 # Graphs and their representations
 
-A **graph** models pairwise connections: a collection of things, plus the links between some of them. Road maps,
-flight networks, the web, social networks, course prerequisites, electrical circuits, dependencies
-between software packages — all are graphs. This lesson introduces the vocabulary, the basic
-counting facts, the graph ADT and the four classic data structures for storing a graph, with their
-trade-offs.
+> **Before this lesson:** You should know trees and their vocabulary
+> ([Tree terminology](#/lesson/dsa-foundations/tree-basics)), Python dictionaries and hash tables
+> ([Maps and hash functions](#/lesson/dsa-foundations/maps-hash-functions)), lists of lists
+> ([Using arrays](#/lesson/dsa-foundations/using-arrays)), and big-O notation. This is the first
+> lesson of the graphs module.
+
+## In plain words
+
+A **graph** is a collection of things together with the connections between some pairs of
+them. (This is a different meaning from "graph" as a chart with axes.) The things are called
+**vertices** and the connections **edges**.
+
+A map of an underground railway is a graph: the stations are the vertices and the stretches of
+track between neighbouring stations are the edges. So is a social network (people, and who
+knows whom), the web (pages, and links between them), and a set of courses with prerequisites
+(courses, and "must be taken before"). A tree is a special, restricted kind of graph; a
+general graph may contain loops, several separate pieces, and many routes between the same two
+places.
+
+Before any clever algorithm can run, a program has to *store* the graph. This lesson teaches
+the vocabulary and then compares four ways of storing a graph, because the choice decides how
+fast everything else will be.
+
+Why it matters for a job: an enormous range of practical problems are graph problems in
+disguise (route planning, dependency resolution in build tools, recommendation, network
+analysis). In an interview the first question is nearly always "how will you represent the
+graph?", and the right answer depends on the trade-offs in section 3.
 
 ## 1. Definitions
 
-A graph $G$ is a set $V$ of **vertices** (nodes) together with a collection $E$ of pairs of vertices
-called **edges** (arcs).
+A graph $G$ consists of a set $V$ of **vertices** (also called nodes) and a collection $E$ of
+**edges** (also called arcs), each edge joining a pair of vertices.
 
-- An edge $(u, v)$ is **directed** if the pair is ordered ($u$ precedes $v$), and **undirected**
-  otherwise. A graph whose edges are all undirected is an **undirected graph**; all directed, a
-  **directed graph** or **digraph**; otherwise a **mixed graph**.
-- An edge's two vertices are called its **endpoints** (or end vertices). For a directed edge, the
-  first is its **origin** and the second its **destination**.
-- Two vertices are **adjacent** if an edge joins them. A vertex and an edge are **incident** when the
-  edge touches that vertex.
-- The **outgoing edges** of $v$ are the directed edges whose origin is $v$; the **incoming edges**
-  have $v$ as destination. The **degree** $\deg(v)$ counts the edges touching $v$; the
-  **in-degree** and **out-degree** count incoming and outgoing edges.
-- $E$ is a *collection*, not a set: **parallel edges** (multiple edges) join the same pair of
-  vertices; a **self-loop** joins a vertex to itself. A graph with neither is **simple** — the usual
-  assumption.
+- An edge $(u, v)$ is **directed** if it has a direction, from $u$ to $v$, like a one-way
+  street; it is **undirected** if it can be used both ways. A graph in which every edge is
+  undirected is an **undirected graph**; if every edge is directed it is a **directed graph**,
+  or **digraph**; a graph with both kinds is **mixed**.
+- The two vertices an edge joins are its **endpoints**. For a directed edge, the first is its
+  **origin** and the second its **destination**.
+- Two vertices are **adjacent** (or *neighbours*) if an edge joins them. An edge is
+  **incident** to a vertex if that vertex is one of its endpoints.
+- The **outgoing edges** of a vertex $v$ are the directed edges that start at $v$; its
+  **incoming edges** are those that end at $v$. The **degree** of $v$, written $\deg(v)$, is
+  the number of edges incident to it. In a directed graph the **in-degree** and **out-degree**
+  count incoming and outgoing edges separately.
+- Edges form a *collection*, not a set, because in principle two different edges can join the
+  same pair of vertices (**parallel edges**), and an edge can join a vertex to itself (a
+  **self-loop**). A graph with neither is called **simple**, and unless stated otherwise the
+  graphs in this track are simple.
+
+The picture shows an undirected graph of seven airports. `ORD` and `JFK` are adjacent; `SFO`
+and `JFK` are not. The degree of `BOS` is 3.
 
 ```mermaid
 graph LR
@@ -42,49 +70,67 @@ graph LR
   BOS --- MIA
 ```
 
-Examples: a co-authorship graph is undirected (if A wrote with B, B wrote with A); a class
-inheritance graph or a flight network is directed; a city map with one-way and two-way streets is
-mixed.
+Whether edges are directed depends on what the graph models. "Has written a paper with" is
+mutual, so a graph of co-authors is undirected. "Links to" and "depends on" are one-way, so
+the web and a graph of software dependencies are directed. A city map with both one-way and
+two-way streets is mixed.
 
 ### 1.1 Paths, cycles, connectivity
 
-- A **path** is a walk through the graph — vertex, edge, vertex, edge, …, vertex — in which every
-  edge joins the two vertices written on either side of it. A **cycle** is a path of one or more
-  edges that returns to where it began. **Simple** paths/cycles do not repeat vertices
-  (except the endpoint of a cycle). A **directed path/cycle** respects edge directions.
-- A digraph with no directed cycle anywhere is called **acyclic** (a **DAG**).
-- $u$ **reaches** $v$ (and $v$ is **reachable** from $u$) if some (directed) path leads from $u$ to
-  $v$. Without edge directions, reachability is symmetric.
-- A graph is **connected** if there is a path between every pair of vertices. A digraph is
-  **strongly connected** if for every pair $u, v$: $u$ reaches $v$ **and** $v$ reaches $u$.
-- A **subgraph** of $G$ uses subsets of its vertices and edges; a **spanning subgraph** contains all
-  vertices. The maximal connected subgraphs are the **connected components**.
-- A cycle-free graph is a **forest**, and a forest in one connected piece is a **tree** (a *free*
-  tree: nobody is the root). A **spanning tree** is a tree that reaches every vertex of the graph.
+- A **path** is a route through the graph: a sequence of vertices in which each consecutive
+  pair is joined by an edge. A **cycle** is a path with at least one edge that ends where it
+  began. A path or cycle is **simple** if it does not visit any vertex twice (apart from a
+  cycle's return to its start). In a directed graph, a **directed path** or **directed cycle**
+  follows every edge in its proper direction.
+- A directed graph with no directed cycle is called **acyclic**, and a *directed acyclic
+  graph* is known by its initials as a **DAG**. Course prerequisites must form a DAG, or
+  nobody could ever start.
+- A vertex $u$ **reaches** $v$ (and $v$ is **reachable** from $u$) if there is a path from $u$
+  to $v$. In an undirected graph, if $u$ reaches $v$ then $v$ reaches $u$; in a directed
+  graph that need not be so.
+- An undirected graph is **connected** if every vertex reaches every other. A directed graph
+  is **strongly connected** if, for every pair $u$ and $v$, $u$ reaches $v$ **and** $v$
+  reaches $u$.
+- A **subgraph** of $G$ is a graph made from some of its vertices and some of its edges. A
+  **spanning subgraph** keeps all the vertices. A graph that is not connected falls apart into
+  **connected components**, its separate connected pieces.
+- A graph with no cycles is a **forest**, and a connected forest is a **tree**. (This is a
+  *free* tree: no vertex is singled out as the root.) A **spanning tree** of a graph is a
+  subgraph that is a tree and includes every vertex.
 
 ### 1.2 Counting facts
 
-Let $n = |V|$ and $m = |E|$.
+From here on, $n$ is the number of vertices and $m$ the number of edges. (The notation $|V|$
+means "the number of elements in $V$".) Running times of graph algorithms are stated in terms
+of both.
 
-> **Proposition 1.** In a graph with $m$ edges, $\sum_{v \in V} \deg(v) = 2m$.
+> **Fact 1.** In an undirected graph with $m$ edges, the degrees add up to twice the number of
+> edges: $\sum_{v \in V} \deg(v) = 2m$.
 
-Each edge is counted twice, once at each endpoint (the *handshake lemma*).
+Each edge has two endpoints and adds 1 to the degree of each, so it is counted twice. In the
+airport graph there are 13 edges and the degrees add up to 26.
 
-> **Proposition 2.** In a directed graph, $\sum_v \text{indeg}(v) = \sum_v \text{outdeg}(v) = m$.
+> **Fact 2.** In a directed graph, the in-degrees add up to $m$, and so do the out-degrees.
 
-> **Proposition 3.** A simple graph with $n$ vertices has $m \le n(n-1)/2$ edges if undirected and
-> $m \le n(n-1)$ if directed.
+> **Fact 3.** A simple graph with $n$ vertices has at most $n(n-1)/2$ edges if it is
+> undirected, and at most $n(n-1)$ if it is directed.
 
-So $m$ is $O(n^2)$. A graph is called **dense** if $m$ is close to $n^2$ and **sparse** if $m$ is
-closer to $n$ — most real-world graphs (roads, social networks, the web) are sparse.
+There are $n(n-1)/2$ different pairs of vertices, and a simple graph has at most one edge per
+pair. So $m$ is $O(n^2)$. A graph is called **dense** if $m$ is close to $n^2$ and **sparse**
+if $m$ is closer to $n$. Most graphs from the real world (road networks, social networks, the
+web) are sparse: a person may know a few hundred others, not most of the planet. This
+matters, because an algorithm that takes $O(n + m)$ time is then far faster than one that
+takes $O(n^2)$.
 
-> **Proposition 4.** Let $G$ be an undirected graph. Connected graphs have $m \ge n - 1$; trees have exactly
-> $m = n - 1$; forests have $m \le n - 1$.
+> **Fact 4.** In an undirected graph: a connected graph has $m \ge n - 1$; a tree has exactly
+> $m = n - 1$; a forest has $m \le n - 1$.
 
 ## 2. The graph ADT
 
-The book models a graph with three types: `Vertex` (with `element()`), `Edge` (with `element()`,
-`endpoints()` returning `(u, v)`, and `opposite(v)`), and `Graph`:
+As an abstract data type, a graph involves three kinds of object. A `Vertex` stores an
+element (a name, say), retrieved with `element()`. An `Edge` also stores an element (a
+distance or a cost, perhaps) and offers `endpoints()`, returning the pair `(u, v)`, and
+`opposite(v)`, returning the endpoint that is not `v`. The `Graph` itself offers:
 
 | Method | Meaning |
 |---|---|
@@ -100,43 +146,63 @@ The book models a graph with three types: `Vertex` (with `element()`), `Edge` (w
 
 ## 3. Four data structures for graphs
 
-All four keep a collection of vertices; they differ in how edges are organised.
+All four keep a collection of the vertices. They differ in how the edges are organised, and
+therefore in which questions they answer quickly. Two questions matter most: "what are the
+neighbours of $v$?" and "is there an edge between $u$ and $v$?". As a running example take the
+small undirected graph with vertices A, B, C, D and edges A-B, A-C, B-C, C-D.
 
 ### 3.1 Edge list
 
-An unordered list $V$ of vertex objects and an unordered list $E$ of edge objects, each edge
-referencing its two endpoints. Simplest, compact ($O(n + m)$ space), but locating a particular edge
-$(u, v)$ or all edges incident to $v$ requires scanning the **whole** edge list: $O(m)$.
-Good as an input format and for algorithms that process edges in bulk (Kruskal sorts the edges).
+Keep one unordered list of the vertices and one unordered list of the edges, each edge
+recording its two endpoints. For the example: `[(A,B), (A,C), (B,C), (C,D)]`. This is the
+most basic structure and is compact, $O(n + m)$ space. But to find a particular edge, or all
+the edges at one vertex, the **whole** edge list must be scanned: $O(m)$. An edge list is fine
+as an input format and for algorithms that handle all the edges in one sweep, such as
+Kruskal's algorithm later in this module, which begins by sorting them.
 
 ### 3.2 Adjacency list
 
-For each vertex $v$, a separate list $I(v)$ of its incident edges (the **incidence collection**).
-Each edge appears in the lists of both endpoints (for a digraph, separate outgoing and incoming
-lists). Space $O(n + m)$, since $\sum_v \deg(v) = 2m$.
+For each vertex, keep a separate list of the edges incident to it. For the example:
+`A: [B, C]`, `B: [A, C]`, `C: [A, B, D]`, `D: [C]`. Every undirected edge appears twice, once
+in the list of each endpoint. (A directed graph keeps separate lists of outgoing and incoming
+edges.) The space is $O(n + m)$, because the lists have total length $2m$ by Fact 1.
 
-- `incident_edges(v)`: $O(\deg(v))$ — optimal;
-- `get_edge(u, v)`: scan the shorter of the two lists: $O(\min(\deg(u), \deg(v)))$;
-- `remove_vertex(v)`: $O(\deg(v))$.
+- `incident_edges(v)` takes $O(\deg(v))$, which is the best possible: the answer has that
+  many items.
+- `get_edge(u, v)` scans the shorter of the two lists: $O(\min(\deg(u), \deg(v)))$.
+- `remove_vertex(v)` takes $O(\deg(v))$.
 
 ### 3.3 Adjacency map
 
-Like an adjacency list, but each $I(v)$ is a **hash map** keyed by the opposite endpoint. Then
-`get_edge(u, v)` is **expected $O(1)$**, while all the adjacency-list bounds are preserved
-(expected). This is the book's implementation of choice, and in Python it is simply a
-**dict of dicts**: `adj[u][v] = edge`.
+The same idea, except that each vertex's collection is a **hash map** (a dictionary) whose
+keys are the neighbouring vertices. Then `get_edge(u, v)` is one dictionary lookup,
+**expected $O(1)$**, and everything else is as fast as with an adjacency list (in the expected
+sense). This is the best all-round choice, and in Python it is a **dictionary of
+dictionaries**: `adj[u][v]` holds the edge between `u` and `v`.
 
 ### 3.4 Adjacency matrix
 
-Number the vertices $0..n-1$ and keep an $n \times n$ array $A$ where $A[i][j]$ holds the edge from
-vertex $i$ to vertex $j$ (or `None`/0). For an undirected graph the matrix is symmetric.
+Number the vertices from 0 to $n - 1$ and keep an $n \times n$ grid $A$ in which $A[i][j]$
+holds the edge from vertex $i$ to vertex $j$, or a blank (`None` or 0) if there is none. For
+the example, with A, B, C, D numbered 0 to 3 and 1 meaning "edge present":
 
-- `get_edge(u, v)`: **worst-case $O(1)$**;
-- `incident_edges(v)`: must scan a whole row: $O(n)$, even if $v$ has few neighbours;
-- space **$O(n^2)$** regardless of $m$; adding or removing a vertex means rebuilding: $O(n^2)$.
+```
+     A  B  C  D
+A  [ 0, 1, 1, 0 ]
+B  [ 1, 0, 1, 0 ]
+C  [ 1, 1, 0, 1 ]
+D  [ 0, 0, 1, 0 ]
+```
 
-Worth it only for dense graphs or when the matrix itself is the algorithm's workspace
-(Floyd-Warshall).
+For an undirected graph the grid is symmetric: row $i$, column $j$ equals row $j$, column $i$.
+
+- `get_edge(u, v)` reads one cell: **$O(1)$ in the worst case**.
+- `incident_edges(v)` must scan an entire row: $O(n)$, even if $v$ has only two neighbours.
+- The space is **$O(n^2)$** however few edges there are, and adding or removing a vertex means
+  rebuilding the grid: $O(n^2)$.
+
+A matrix is worth its cost only for dense graphs, or when the grid itself is the working
+space of the algorithm.
 
 ### 3.5 Comparison
 
@@ -161,9 +227,15 @@ given vertices are adjacent.
 
 ## 4. Python implementation: adjacency map
 
-The book's `Graph` class keeps two dictionaries, `_outgoing` and `_incoming`, each mapping a vertex
-to its incidence map `{opposite vertex: edge}`. For an undirected graph the two names alias the
-**same** dictionary.
+The `Graph` class below implements the ADT with an adjacency map. It keeps two dictionaries,
+`_outgoing` and `_incoming`. Each maps a vertex to a second dictionary of the form
+`{neighbouring vertex: edge}`. For a directed graph the two are separate. For an undirected
+graph every edge is both outgoing and incoming, so the two names refer to the **same**
+dictionary, and `insert_edge` then records the edge under both endpoints with its two
+assignments.
+
+Two details: `Vertex.__hash__` lets vertex objects be used as dictionary keys, and
+`__repr__` controls how an object is shown when printed.
 
 ```python-run
 class Graph:
@@ -231,10 +303,19 @@ print("SFO-JFK edge:", g.get_edge(V["SFO"], V["JFK"]), " ORD-JFK edge:", g.get_e
 print("sum of degrees =", sum(g.degree(v) for v in g.vertices()), "= 2m")
 ```
 
+The demo builds five airports and six routes labelled with distances in miles. It prints
+`5 vertices, 6 edges`; the degree of ORD is 3, with neighbours SFO, DFW and JFK; there is no
+SFO-JFK edge (`None`) but there is an ORD-JFK edge of 740 miles; and the degrees add up to 12,
+twice the number of edges, as Fact 1 says.
+
 ### 4.1 Lightweight representations for everyday code
 
-In interviews and scripts, vertices are usually integers $0..n-1$ or strings, and you build the
-structure directly from an edge list:
+In interviews and in quick scripts nobody writes `Vertex` and `Edge` classes. Vertices are
+whole numbers from 0 to $n - 1$, or strings, and the structure is built directly from a list
+of edges. The demo builds all three useful forms from the same edge list. Each edge here
+carries a number, its **weight** (a distance or cost), which the later lessons of this module
+use. In the matrix, `INF` (infinity) marks "no edge", so that a missing edge reads as an
+infinitely long one.
 
 ```python-run
 from collections import defaultdict
@@ -259,28 +340,58 @@ print("edge (2,1)?", 1 in adj_map[2], " weight:", adj_map[2].get(1), " edge (0,4
 ```
 
 > [!INTERVIEW]
-> "How would you represent this graph?" — default to an **adjacency list** (or dict of
-> lists/sets): $O(n + m)$ space and neighbours in $O(\deg)$, which is what BFS/DFS/Dijkstra need.
-> Choose an adjacency **matrix** when the graph is dense, $n$ is small (≤ a few thousand), or you
-> need $O(1)$ edge tests / all-pairs algorithms. Always ask: directed or undirected? weighted?
-> can there be self-loops, parallel edges, disconnected parts?
+> "How would you represent this graph?" Default to an **adjacency list** (in Python, a
+> dictionary or list of lists or sets): $O(n + m)$ space, and the neighbours of a vertex in
+> time proportional to its degree, which is what the traversal and shortest-path algorithms of
+> the next lessons need. Choose an adjacency **matrix** when the graph is dense, when $n$ is
+> small (up to a few thousand), or when you need constant-time "is there an edge?" tests.
+> Always ask the clarifying questions first: directed or undirected? weighted? can there be
+> self-loops, parallel edges, or several disconnected pieces?
 
 ## 5. Pitfalls
 
-- For undirected graphs, forgetting to add the edge in **both** directions.
-- Using an adjacency matrix for a sparse graph with $10^5$ vertices: $10^{10}$ cells.
-- Double-counting undirected edges when iterating all adjacency lists.
-- Using mutable or unhashable vertex objects as dict keys.
-- Assuming the graph is connected: iterate over all vertices when traversing.
+- **Adding an undirected edge in one direction only.** It must be recorded under **both**
+  endpoints.
+- **An adjacency matrix for a large sparse graph.** With $10^5$ vertices the grid has
+  $10^{10}$ cells, tens of gigabytes, to store perhaps a million edges.
+- **Counting undirected edges twice** when looping over every adjacency list.
+- **Using something unhashable as a vertex.** Dictionary keys must be hashable, so a list
+  cannot be a vertex; use a tuple, a string or a number.
+- **Assuming the graph is connected.** A traversal started at one vertex reaches only that
+  vertex's component; loop over all vertices to cover everything.
 
 ## 6. Summary
 
-- Graph = vertices + edges; directed/undirected; degree sum = $2m$; simple graphs have $O(n^2)$ edges;
-  trees have $n - 1$.
-- Edge list (simple, slow lookups), adjacency list (the workhorse), adjacency map (plus $O(1)$
-  `get_edge`), adjacency matrix ($O(1)$ lookups, $O(n^2)$ space).
+- A graph is a set of vertices plus edges joining pairs of them; edges may be directed or
+  undirected.
+- The degrees add up to $2m$; a simple graph has $O(n^2)$ edges; a tree has exactly $n - 1$.
+- Four representations: the edge list (basic, slow to query), the adjacency list (the usual
+  choice), the adjacency map (the same plus expected $O(1)$ edge lookup), and the adjacency
+  matrix ($O(1)$ edge lookup but $O(n^2)$ space).
 
 > **Source:** Goodrich, Tamassia & Goldwasser, *Data Structures and Algorithms in Python*, ch. 14.1–14.2.
+
+## Glossary
+
+- **Graph**: a set of vertices together with edges joining pairs of them.
+- **Vertex (node) / edge (arc)**: one of the things / one of the connections.
+- **Directed / undirected edge**: an edge with / without a direction.
+- **Digraph**: a directed graph.
+- **Endpoints**: the two vertices an edge joins.
+- **Adjacent**: joined by an edge. **Incident**: an edge touching a vertex.
+- **Degree**: the number of edges at a vertex; in-degree and out-degree count incoming and
+  outgoing edges.
+- **Simple graph**: a graph with no parallel edges and no self-loops.
+- **Path / cycle**: a route along edges / a path that returns to its start.
+- **DAG**: a directed acyclic graph, a directed graph with no directed cycle.
+- **Connected / strongly connected**: every vertex reaches every other (in a directed graph,
+  in both directions).
+- **Connected component**: one of the separate connected pieces of a graph.
+- **Spanning tree**: a tree made of the graph's edges that includes every vertex.
+- **Dense / sparse**: having close to $n^2$ edges / close to $n$ edges.
+- **Edge list, adjacency list, adjacency map, adjacency matrix**: the four standard ways of
+  storing a graph.
+- **Weight**: a number attached to an edge, such as a distance or cost.
 
 ## Check yourself
 

@@ -1,19 +1,62 @@
 # Big-O, Big-Omega and Big-Theta
 
-Counting primitive operations exactly is tedious and, worse, the exact count depends on details we
-do not care about (is `A[i] += 1` one operation or three?). **Asymptotic analysis** throws those
-details away on purpose: we keep only the growth rate of the running time as $n$ becomes large.
+> **Before this lesson:** You should know what an input size $n$, a primitive operation and the
+> seven growth functions (constant, $\log n$, $n$, $n \log n$, $n^2$, $n^3$, $2^n$) are. All of
+> that is taught in the previous lesson,
+> [Measuring algorithms and the seven functions](#/lesson/dsa-foundations/seven-functions). Basic
+> Python is enough for the code.
+
+## In plain words
+
+Big-O notation is a way of describing how fast a cost grows while deliberately ignoring the fine
+print. Saying "this search is $O(n)$" means: as the list gets longer, the work grows in proportion
+to its length at worst. It does not say how many seconds the search takes.
+
+An everyday comparison: when a friend asks how far away a town is, you answer "about an hour", not
+"61 minutes and 14 seconds in today's traffic in my car". The rough answer is more useful, because
+it stays true for other cars and other days and it lets you compare with "about a day" or "about
+five minutes". Big-O is the "about an hour" of algorithms: precise enough to compare methods,
+loose enough to survive a change of computer or programming language.
+
+Why it matters for a job: big-O is the shared language of every technical interview and every
+design discussion. "That lookup is linear, can we make it constant?" is a sentence you will hear
+in your first week. This lesson gives the exact meaning of the three symbols ($O$, $\Omega$,
+$\Theta$) so that you can use them correctly and spot when others do not.
 
 ## 1. The big-O notation
 
-Let $f(n)$ and $g(n)$ be functions from non-negative integers to real numbers.
+### 1.1 Why throw detail away?
 
-> We say $f(n)$ is $O(g(n))$ if there is a real constant $c > 0$ and an integer constant
-> $n_0 \ge 1$ such that
+The previous lesson counted primitive operations and got answers such as $2n + 3$. Counting that
+exactly is tedious, and worse, the exact count depends on choices nobody cares about: is
+`A[i] += 1` one step or three (read, add, write)? On a different machine the answer changes; the
+growth shape does not. **Asymptotic analysis** keeps only the growth shape. ("Asymptotic" means
+"concerning what happens as $n$ becomes very large".) Two things get thrown away on purpose:
+
+- **Constant factors.** $2n$ and $50n$ are both "linear".
+- **Lower-order terms.** In $n^2 + 10n$, the $10n$ part stops mattering once $n$ is large: at
+  $n = 1000$ it contributes 10,000 out of 1,010,000, about one percent.
+
+### 1.2 The definition, built up slowly
+
+Take two step-count functions $f(n)$ and $g(n)$. Think of $f$ as the true cost of some algorithm,
+messy and detailed, and $g$ as one of the seven clean shapes. We want to say "$f$ grows no faster
+than $g$". The formal sentence is:
+
+> $f(n)$ is $O(g(n))$ if there are a positive number $c$ and a whole number $n_0 \ge 1$ such that
 > $$f(n) \le c \cdot g(n) \quad \text{for every } n \ge n_0.$$
 
-Read it as "$f(n)$ is **big-Oh** of $g(n)$" or "$f$ is order at most $g$". Picture it: beyond some
-point $n_0$, the curve of $f$ stays under the curve of $c \cdot g$ forever.
+Each piece of that sentence does one job:
+
+- $c$ is a multiplier you are allowed to choose. It is how the definition ignores constant
+  factors: if $f$ is ten times $g$, pick $c = 10$.
+- $n_0$ is a starting point you are allowed to choose. It is how the definition ignores small
+  inputs: the inequality only has to hold from $n_0$ onwards.
+- The inequality must then hold for **every** larger $n$, forever. One lucky value is not enough.
+
+The symbol $\le$ means "less than or equal to" and $\ge$ means "greater than or equal to". Read
+the whole thing aloud as "$f(n)$ is **big-Oh** of $g(n)$". As a picture: beyond some point $n_0$,
+the curve of $f$ stays under the curve of $c \cdot g$ forever.
 
 ```mermaid
 graph LR
@@ -22,75 +65,111 @@ graph LR
   C --> D["f(n) <= c g(n)  =>  f is O(g)"]
 ```
 
+The pair $(c, n_0)$ is called a **witness**, because producing one pair that works proves the
+claim.
+
 ### Worked example 1
 
 Claim: $8n + 5$ is $O(n)$.
 
-We need $c$ and $n_0$ with $8n + 5 \le c n$ for all $n \ge n_0$. Choose $c = 9$: then we need
-$5 \le n$, so $n_0 = 5$ works. (Many other pairs work too, e.g. $c = 13, n_0 = 1$, because
-$8n + 5 \le 8n + 5n$ when $n \ge 1$.) The witness pair is not unique — you only need one.
+We must find $c$ and $n_0$ with $8n + 5 \le c \cdot n$ for all $n \ge n_0$. Try $c = 9$. The
+inequality $8n + 5 \le 9n$ is the same as $5 \le n$ (subtract $8n$ from both sides), so it holds
+from $n_0 = 5$ onwards. Check one value: at $n = 5$, $8 \cdot 5 + 5 = 45$ and $9 \cdot 5 = 45$. It
+holds, with nothing to spare, and the gap only widens after that.
+
+Many other witnesses work too. For instance $c = 13, n_0 = 1$: when $n \ge 1$ we have $5 \le 5n$,
+so $8n + 5 \le 8n + 5n = 13n$. You need only one witness, and there is no prize for the smallest.
+
+Note that $c = 8$ can never work: $8n + 5 \le 8n$ is false for every $n$. The multiplier has to
+leave room for the extra 5.
 
 ### Worked example 2
 
 Claim: $5n^4 + 3n^3 + 2n^2 + 4n + 1$ is $O(n^4)$.
 
-For $n \ge 1$ every lower power is at most $n^4$, so the sum is at most
-$(5+3+2+4+1) n^4 = 15 n^4$. Take $c = 15$, $n_0 = 1$.
+The trick is to replace every lower power by the highest one. For $n \ge 1$, each of $n^3$, $n^2$,
+$n$ and $1$ is at most $n^4$. So the sum is at most
+$5n^4 + 3n^4 + 2n^4 + 4n^4 + 1n^4 = 15 n^4$. Take $c = 15$, $n_0 = 1$.
 
-This generalises into the most useful rule of thumb:
+The same trick proves the most useful rule of thumb in this lesson:
 
-> **Proposition.** If $f(n)$ is a polynomial of degree $d$ with positive leading coefficient,
+> **Rule.** If $f(n)$ is a polynomial of degree $d$ whose highest term has a positive multiplier,
 > $f(n) = a_0 + a_1 n + \cdots + a_d n^d$, then $f(n)$ is $O(n^d)$.
 
-The proof is exactly the one above: for $n \ge 1$, $n^i \le n^d$ whenever $i \le d$, so
-$f(n) \le (|a_0| + |a_1| + \cdots + |a_d|) n^d$.
+In words: **keep the highest power, drop everything else, drop its multiplier.** The proof is the
+one above: for $n \ge 1$, $n^i \le n^d$ whenever $i \le d$, so
+$f(n) \le (|a_0| + |a_1| + \cdots + |a_d|) n^d$. (The bars $|a|$ mean "the size of $a$ ignoring
+its sign", which covers polynomials with some negative multipliers.)
 
 ### Worked example 3
 
-- $5n^2 + 3n \log n + 2n + 5$ is $O(n^2)$: each term is at most a constant times $n^2$ for $n \ge 2$
-  ($c = 15$ works).
+The same "replace every term by the biggest one" move handles mixed functions. In each line, the
+logarithm is base 2, so $\log 1 = 0$, $\log 2 = 1$, and $\log n \le n$ for every $n \ge 1$.
+
+- $5n^2 + 3n \log n + 2n + 5$ is $O(n^2)$: for $n \ge 1$ each term is at most its multiplier times
+  $n^2$, so $c = 5 + 3 + 2 + 5 = 15$ works.
 - $20 n^3 + 10 n \log n + 5$ is $O(n^3)$ with $c = 35$, $n_0 = 1$.
-- $3 \log n + 2$ is $O(\log n)$ with $c = 5$, $n_0 = 2$ (we need $n_0 = 2$ because $\log 1 = 0$).
-- $2^{n+2}$ is $O(2^n)$: $2^{n+2} = 4 \cdot 2^n$, so $c = 4$.
+- $3 \log n + 2$ is $O(\log n)$ with $c = 5$, $n_0 = 2$. Here $n_0 = 1$ would fail: $\log 1 = 0$,
+  so the right-hand side would be 0 while the left-hand side is 2.
+- $2^{n+2}$ is $O(2^n)$: $2^{n+2} = 2^2 \cdot 2^n = 4 \cdot 2^n$, so $c = 4$.
 - $2n + 100 \log n$ is $O(n)$: $c = 102$, $n_0 = 1$.
 
-### 1.1 Style rules for big-O
+### 1.3 Style rules for big-O
 
 Big-O lets us ignore constant factors and lower-order terms, and we should **use that freedom**:
 
 1. Use the *simplest* $g$: say $O(n)$, not $O(4n + 3)$.
-2. Use the *tightest* reasonable $g$: $8n + 5$ is technically $O(n^2)$ and even $O(2^n)$, but saying
-   so is true and useless. Characterise as closely as you can.
-3. Never write "$f(n) \le O(g(n))$" or "$f(n) = O(g(n))$" as if it were an equation — "is" is the
-   right word, because $O(g(n))$ is really a *set* of functions.
+2. Use the *tightest* reasonable $g$. $8n + 5$ is technically $O(n^2)$ and even $O(2^n)$, because
+   those functions are also above it; saying so is true and useless. Describe the growth as
+   closely as you can.
+3. Say "$f(n)$ **is** $O(g(n))$". You will often see it written $f(n) = O(g(n))$, and that is
+   accepted shorthand, but it is not an equation: $O(g(n))$ stands for a whole *collection* of
+   functions (all those that grow no faster than $g$), and $f$ is one member of it.
 
 > [!WARNING]
-> Big-O is an **upper bound**. A statement such as "this algorithm is $O(n^2)$" does not say it is
-> slow; an $O(n)$ algorithm is also $O(n^2)$. When you want to say "exactly this fast, no faster"
-> use big-Theta.
+> Big-O is an **upper bound**, a ceiling on growth. A statement such as "this algorithm is
+> $O(n^2)$" does not say it is slow; an $O(n)$ algorithm is also $O(n^2)$, in the same way that a
+> person under 2 metres tall is also under 3 metres tall. When you want to say "exactly this
+> growth, no faster and no slower", use big-Theta (section 3).
 
 ## 2. Big-Omega
 
-Big-O gives an "at most" statement. The mirror image gives "at least":
+Big-O is an "at most" statement. Its mirror image is an "at least" statement, written with the
+Greek capital letter omega, $\Omega$:
 
-> $f(n)$ is $\Omega(g(n))$ if there exist $c > 0$ and $n_0 \ge 1$ with
+> $f(n)$ is $\Omega(g(n))$ if there are a positive number $c$ and a whole number $n_0 \ge 1$ with
 > $f(n) \ge c \cdot g(n)$ for all $n \ge n_0$.
 
-Equivalently, $f(n)$ is $\Omega(g(n))$ exactly when $g(n)$ is $O(f(n))$.
+The only change from big-O is the direction of the inequality. Now $c \cdot g$ is a floor that $f$
+stays above. Put another way, $f(n)$ is $\Omega(g(n))$ exactly when $g(n)$ is $O(f(n))$.
 
-**Example.** $3n \log n - 2n$ is $\Omega(n \log n)$. For $n \ge 2$, $\log n \ge 1$, so
-$2n \le 2n\log n$ and therefore $3n\log n - 2n \ge n\log n$. Take $c = 1$, $n_0 = 2$.
+**Why would anyone want a lower bound?** To show that something cannot be improved. "Finding the
+largest of $n$ unsorted numbers takes $\Omega(n)$ steps" says that no algorithm, however clever,
+can avoid looking at every number.
+
+**Example.** $3n \log n - 2n$ is $\Omega(n \log n)$. For $n \ge 2$ we have $\log n \ge 1$, so
+$2n \le 2n\log n$. Subtracting a smaller amount leaves more, therefore
+$3n\log n - 2n \ge 3n\log n - 2n\log n = n\log n$. Take $c = 1$, $n_0 = 2$.
 
 ## 3. Big-Theta
 
-When both bounds hold we have the full picture:
+When the same $g$ works as both a ceiling and a floor, we know the growth exactly. The symbol is
+the Greek capital letter theta, $\Theta$:
 
-> $f(n)$ is $\Theta(g(n))$ if $f(n)$ is $O(g(n))$ **and** $f(n)$ is $\Omega(g(n))$; that is, there
-> are constants $c' > 0$, $c'' > 0$ and $n_0 \ge 1$ such that
+> $f(n)$ is $\Theta(g(n))$ if $f(n)$ is $O(g(n))$ **and** $f(n)$ is $\Omega(g(n))$. That is,
+> there are positive numbers $c'$ and $c''$ and a whole number $n_0 \ge 1$ such that
 > $c' g(n) \le f(n) \le c'' g(n)$ for $n \ge n_0$.
 
-**Example.** $3n\log n + 4n + 5\log n$ is $\Theta(n\log n)$: it is at least $3 n \log n$ and, for
-$n \ge 2$, at most $(3 + 4 + 5) n \log n$.
+Picture $f$ trapped in a corridor between two scaled copies of $g$. It can wobble inside the
+corridor but can never leave it.
+
+**Example.** $3n\log n + 4n + 5\log n$ is $\Theta(n\log n)$. It is at least $3 n \log n$ (the other
+two terms only add). And for $n \ge 2$, both $n$ and $\log n$ are at most $n \log n$, so it is at
+most $(3 + 4 + 5) n \log n = 12 n \log n$.
+
+In casual speech programmers say "big-O" when they mean $\Theta$. In an interview, "this is
+$O(n \log n)$" is normally understood as "and not better". Knowing the difference lets you be
+exact when it matters.
 
 | Notation | Meaning | Analogy |
 |---|---|---|
@@ -100,22 +179,26 @@ $n \ge 2$, at most $(3 + 4 + 5) n \log n$.
 | $f$ is $o(g)$ | strictly slower: $f/g \to 0$ | $<$ |
 | $f$ is $\omega(g)$ | strictly faster: $f/g \to \infty$ | $>$ |
 
-The little-o and little-omega are rarely needed in this book but handy in conversation: $n$ is
+The last two rows use lower-case letters. In the table, $f/g \to 0$ is read "the ratio of $f$ to
+$g$ shrinks towards zero as $n$ grows", and $\to \infty$ is read "grows without limit". Little-o
+and little-omega are rarely needed in this track but are handy in conversation: $n$ is
 $o(n \log n)$, and $2^n$ is $\omega(n^{100})$.
 
 > [!INTERVIEW]
-> A classic confusion: "worst case" and "big-O" are *different axes*. Worst case vs average case says
-> **which input** you analyse; O vs Ω vs Θ says **what kind of bound** you give for it. Quick-sort's
-> worst-case running time is $\Theta(n^2)$; its expected running time is $\Theta(n \log n)$. Both
-> are tight bounds — on different quantities.
+> A classic confusion: "worst case" and "big-O" are *two separate choices*. Worst case versus
+> average case says **which input** you are analysing; $O$ versus $\Omega$ versus $\Theta$ says
+> **what kind of bound** you are giving for it. Quick-sort, a sorting algorithm covered later in
+> this track, has worst-case running time $\Theta(n^2)$ and average running time
+> $\Theta(n \log n)$. Both are exact statements, about different quantities.
 
 ## 4. Comparative analysis
 
-Asymptotic notation lets us rank algorithms. If algorithm A runs in $O(n)$ and B in $\Theta(n^2)$,
-then A is *asymptotically better*: for all sufficiently large inputs, A wins, no matter the
-constants.
+Asymptotic notation lets us rank algorithms. If algorithm A runs in $O(n)$ and algorithm B in
+$\Theta(n^2)$, then A is *asymptotically better*: for all large enough inputs A wins, whatever the
+constant factors are.
 
-How large an input can each solve? Suppose one operation takes 1 microsecond:
+How large an input can each handle? Suppose one operation takes 1 microsecond (a millionth of a
+second), so a second buys a million operations:
 
 | Running time | max $n$ in 1 second | in 1 minute | in 1 hour |
 |---|---|---|---|
@@ -123,9 +206,18 @@ How large an input can each solve? Suppose one operation takes 1 microsecond:
 | $2 n^2$ | 707 | 5,477 | 42,426 |
 | $2^n$ | 19 | 25 | 31 |
 
+Check one cell to see where the numbers come from: $2n^2 \le 1{,}000{,}000$ means
+$n^2 \le 500{,}000$, so $n \le 707$. Giving the quadratic algorithm sixty times longer (a minute)
+raises $n$ only to 5,477, about eight times more, because $\sqrt{60} \approx 7.7$. The exponential
+row barely moves at all.
+
 And what does a faster computer buy you? If a machine is 256 times faster, an $O(n)$ algorithm can
-handle inputs 256 times larger; an $O(n^2)$ algorithm 16 times larger; an $O(2^n)$ algorithm only 8
-more items. **Better algorithms beat better hardware.**
+handle inputs 256 times larger; an $O(n^2)$ algorithm only 16 times larger (since $16^2 = 256$);
+an $O(2^n)$ algorithm only 8 more items (since $2^8 = 256$). **Better algorithms beat better
+hardware.**
+
+The demo below computes, for five growth shapes, the largest $n$ that fits in a budget of one
+hundred million operations.
 
 ```python-run
 import math
@@ -145,48 +237,78 @@ for name, f in [("n", lambda n: n), ("n log n", lambda n: n * math.log2(max(n, 2
     print(f"{name:8s} -> n up to {largest_n(f):,}")
 ```
 
+**Reading this code.** `budget = 10**8` is the allowance of operations. `largest_n(f)` finds the
+biggest `n` for which `f(n)` still fits. It works in two phases. First it doubles `hi` until
+`f(hi)` exceeds the budget, so the answer lies somewhere between `lo` and `hi`. Then it repeatedly
+tests the midpoint `mid` and throws away the half that cannot contain the answer; this halving
+search is called *binary search* and gets its own treatment in the recursion module. The final
+loop runs `largest_n` on five functions written with `lambda` (a one-line unnamed function). In
+`math.log2(max(n, 2))` the `max` guards against $\log 1 = 0$. The output is:
+
+```
+n        -> n up to 100,000,000
+n log n  -> n up to 4,523,071
+n^2      -> n up to 10,000
+n^3      -> n up to 464
+2^n      -> n up to 26
+```
+
+With the same budget, the linear method handles a hundred million items and the exponential one
+handles twenty-six.
+
 ### 4.1 Some words of caution
 
 - **Constants can matter in practice.** $10^{100} n$ is $O(n)$, but nobody would choose it over
-  $10 n \log n$ for realistic inputs. The book's rule of thumb: be suspicious of an algorithm whose
-  hidden constant is enormous, and treat any running time that is exponential as infeasible except
-  for small $n$.
+  $10 n \log n$ for any input that exists. Be suspicious of an algorithm whose hidden multiplier
+  is enormous, and treat any exponential running time as unusable except for small $n$.
 - **The line between efficient and inefficient** is usually drawn between polynomial time
-  ($O(n^c)$) and exponential time ($\Omega(b^n)$ for $b > 1$). An $n^{100}$ algorithm is
-  "polynomial" but not practical; the dividing line is a useful idealisation.
-- **Asymptotics speak about large $n$.** For tiny inputs, an $O(n^2)$ insertion sort often beats
-  $O(n\log n)$ merge-sort, which is why real libraries switch to insertion sort for short runs.
+  ($O(n^c)$ for some fixed $c$) and exponential time ($\Omega(b^n)$ for some $b > 1$). An
+  $n^{100}$ algorithm is "polynomial" and still hopeless; the dividing line is a convenient
+  simplification, not a law.
+- **Asymptotics speak about large $n$.** For tiny inputs a quadratic sorting method with almost no
+  overhead often beats an $n \log n$ method with more bookkeeping, which is why real sorting
+  libraries switch to the plain quadratic method for short lists.
 
 ## 5. Useful facts for manipulating bounds
 
-These follow directly from the definitions and let you analyse code compositionally:
+These follow from the definitions and let you analyse a program one piece at a time:
 
 1. **Sum rule.** If $f_1$ is $O(g_1)$ and $f_2$ is $O(g_2)$, then $f_1 + f_2$ is
-   $O(\max(g_1, g_2))$. Sequential code costs as much as its most expensive part.
-2. **Product rule.** $f_1 \cdot f_2$ is $O(g_1 \cdot g_2)$. A loop of $O(n)$ iterations with an
-   $O(\log n)$ body costs $O(n \log n)$.
-3. **Transitivity.** If $f$ is $O(g)$ and $g$ is $O(h)$, then $f$ is $O(h)$.
-4. **Logs vs polynomials.** $\log^k n$ is $O(n^\epsilon)$ for every constant $k$ and every
-   $\epsilon > 0$: any power of a log grows slower than any positive power of $n$.
-5. **Polynomials vs exponentials.** $n^k$ is $O(b^n)$ for every $k$ and every $b > 1$.
+   $O(\max(g_1, g_2))$. Code that does one thing and then another costs as much as its more
+   expensive part. A linear pass followed by a quadratic one is quadratic overall.
+2. **Product rule.** $f_1 \cdot f_2$ is $O(g_1 \cdot g_2)$. A loop that runs $O(n)$ times with a
+   body costing $O(\log n)$ costs $O(n \log n)$ in total.
+3. **Transitivity.** If $f$ is $O(g)$ and $g$ is $O(h)$, then $f$ is $O(h)$: bounds chain together.
+4. **Logs lose to powers.** $\log^k n$ (meaning $\log n$ raised to the power $k$) is
+   $O(n^\epsilon)$ for every fixed $k$ and every fixed $\epsilon > 0$, however small. Any power of
+   a logarithm grows more slowly than even $n^{0.01}$, eventually.
+5. **Powers lose to exponentials.** $n^k$ is $O(b^n)$ for every fixed $k$ and every $b > 1$.
 
 ### Proving that something is NOT big-O
 
-To show $n^2$ is **not** $O(n)$, argue by contradiction: suppose $n^2 \le c n$ for all
-$n \ge n_0$. Dividing by $n$ gives $n \le c$ for all $n \ge n_0$, which fails at
-$n = \max(n_0, \lceil c \rceil + 1)$. Contradiction. This "contra" style appears again in the next
-lesson.
+To prove a negative, use **proof by contradiction**: assume the claim is true and show that the
+assumption leads to something impossible. To show $n^2$ is **not** $O(n)$, suppose it were. Then
+some witness $(c, n_0)$ would give $n^2 \le c \cdot n$ for all $n \ge n_0$. Dividing both sides by
+$n$ gives $n \le c$ for all $n \ge n_0$. But $n$ can be chosen larger than both $c$ and $n_0$,
+for example $n = \max(n_0, \lceil c \rceil + 1)$, and then $n \le c$ is false. The assumption has
+broken, so no witness exists. The same style of argument appears again in the next lesson.
 
 ## 6. Using limits (a shortcut)
 
-If $L = \lim_{n\to\infty} f(n)/g(n)$ exists, then:
+A quicker test is to look at the ratio $f(n)/g(n)$ and ask what it does as $n$ grows. The value
+that a quantity settles towards is called its **limit**, written $\lim_{n\to\infty}$ ("the limit
+as $n$ goes to infinity"). If the ratio settles to a value $L$, then:
 
-- $L = 0$ ⇒ $f$ is $o(g)$ (hence $O(g)$, not $\Omega(g)$),
-- $0 < L < \infty$ ⇒ $f$ is $\Theta(g)$,
-- $L = \infty$ ⇒ $f$ is $\omega(g)$.
+- $L = 0$ means $f$ is $o(g)$: $f$ becomes negligible next to $g$ (so $f$ is $O(g)$ but not
+  $\Omega(g)$).
+- $L$ is a positive, finite number means $f$ is $\Theta(g)$: they grow together, $L$ being the
+  constant factor between them.
+- $L = \infty$ (the ratio grows without limit) means $f$ is $\omega(g)$.
 
-For example $\lim (n \log n) / n^2 = \lim \log n / n = 0$, so $n\log n$ is $o(n^2)$. L'Hôpital's
-rule is often the quickest route for logs and exponentials.
+For example $(n \log n) / n^2 = \log n / n$, and since a logarithm loses to $n$ this ratio heads
+to 0. So $n\log n$ is $o(n^2)$. If you have studied calculus, L'Hôpital's rule is often the
+quickest way to evaluate such ratios; if you have not, plugging in a few growing values of $n$, as
+the next demo does, tells you what is happening.
 
 ```python-run
 import math
@@ -198,10 +320,23 @@ for fn, gn, f, g in pairs:
     print(f"{fn} / {gn}:", [round(f(n)/g(n), 4) for n in [2, 16, 64, 128]])
 ```
 
+**Reading the output.** Each line shows one ratio at $n = 2, 16, 64, 128$:
+
+```
+3n^2+10n / n^2: [8.0, 3.625, 3.1562, 3.0781]
+n log n / n^2: [0.5, 0.25, 0.0938, 0.0547]
+2^n / n^5: [0.125, 0.0625, 17179869184.0, 9.903520314283042e+27]
+```
+
+The first ratio settles towards 3, a positive finite number, so $3n^2 + 10n$ is $\Theta(n^2)$.
+The second keeps shrinking towards 0, so $n \log n$ is $o(n^2)$. The third starts *below* 1 and
+then explodes: for small $n$ the polynomial $n^5$ is bigger, but the exponential overtakes it and
+never looks back. That is a reminder that asymptotic statements are about large $n$ only.
+
 ## 7. Worked exercises: simplifying and proving bounds
 
-Practice turns the definitions into reflexes. For each function, the tight bound and the one-line
-reason:
+Practice turns the definitions into reflexes. For each function below, the table gives the tight
+bound (the $\Theta$ form) and a one-line reason:
 
 | $f(n)$ | Tight bound | Why |
 |---|---|---|
@@ -258,21 +393,44 @@ however small its base, eventually overtakes any polynomial.
 
 ## 8. Pitfalls
 
-- Writing $O(2n)$ or $O(n + 5)$ — always simplify.
-- Forgetting $n_0$: $\log n$ is $0$ at $n = 1$, so a claim like "$3\log n \le c \log n$ for all
-  $n \ge 1$" is fine, but "$5 \le c\log n$ for all $n \ge 1$" is not.
-- Claiming $2^{2n}$ is $O(2^n)$. It is not: $2^{2n} = (2^n)^2 = 4^n$, and $4^n/2^n = 2^n \to \infty$.
-  Constants in the **exponent** matter.
-- Mixing up Θ and "average case".
+- **Unsimplified answers.** Writing $O(2n)$ or $O(n + 5)$ signals that the idea has not landed.
+  Always reduce to the bare shape, $O(n)$.
+- **Forgetting $n_0$.** $\log n$ is $0$ at $n = 1$, so a claim like "$3\log n \le c \log n$ for
+  all $n \ge 1$" is fine, but "$5 \le c\log n$ for all $n \ge 1$" is false at $n = 1$ whatever $c$
+  is. Starting from $n_0 = 2$ repairs it.
+- **Dropping a constant from an exponent.** $2^{2n}$ is **not** $O(2^n)$:
+  $2^{2n} = (2^n)^2 = 4^n$, and the ratio $4^n/2^n = 2^n$ grows without limit. Multipliers in
+  front of a function can be dropped; multipliers inside an exponent cannot.
+- **Reading $O$ as "equals".** An $O(n^2)$ bound on a method that is really linear is true and
+  misleading. If you know the exact growth, say $\Theta$ or say "tight".
+- **Mixing up $\Theta$ and "average case".** One names a kind of bound, the other names which
+  inputs are being considered.
 
 ## 9. Summary
 
-- $O$ = asymptotic upper bound, $\Omega$ = lower bound, $\Theta$ = both.
-- Drop constants and lower-order terms; a degree-$d$ polynomial is $\Theta(n^d)$.
-- Asymptotically faster algorithms dominate on large inputs, and improvements in hardware cannot
+- $O$ is an upper bound on growth, $\Omega$ a lower bound, and $\Theta$ both at once.
+- A bound is proved by exhibiting a witness: a multiplier $c$ and a starting point $n_0$.
+- Drop constant factors and lower-order terms; a polynomial of degree $d$ is $\Theta(n^d)$.
+- Faster-growing costs lose on large inputs whatever the constants, and faster hardware cannot
   rescue an exponential algorithm.
 
 > **Source:** Goodrich, Tamassia & Goldwasser, *Data Structures and Algorithms in Python*, ch. 3.3.1–3.3.2.
+
+## Glossary
+
+- **Asymptotic analysis**: studying how a cost behaves as the input size becomes very large.
+- **Constant factor**: a fixed multiplier in front of a function, such as the 8 in $8n$.
+- **Lower-order term**: a part of a formula that grows more slowly than its largest part.
+- **Big-O, $O(g)$**: "grows no faster than $g$"; an upper bound.
+- **Big-Omega, $\Omega(g)$**: "grows at least as fast as $g$"; a lower bound.
+- **Big-Theta, $\Theta(g)$**: "grows at the same rate as $g$"; both bounds together.
+- **Little-o, little-omega**: strictly slower than, strictly faster than.
+- **Witness $(c, n_0)$**: the multiplier and starting point that make a big-O inequality hold.
+- **Tight bound**: a bound that cannot be improved; the $\Theta$ form.
+- **Polynomial time / exponential time**: step counts bounded by a power of $n$ / growing like
+  $b^n$.
+- **Proof by contradiction**: assuming the opposite of a claim and deriving an impossibility.
+- **Limit**: the value a quantity settles towards as $n$ grows without bound.
 
 ## Check yourself
 
@@ -292,7 +450,7 @@ however small its base, eventually overtakes any polynomial.
    "explain": "Which input (worst/average/best) and which bound type (O/Omega/Theta) are separate axes."},
   {"q": "A 256x faster computer lets an O(n^2) algorithm solve inputs how many times larger in the same time?",
    "options": ["256", "16", "8", "2"], "answer": 1,
-   "explain": "(kn)^2 = 256 n^2 gives k = 16. A linear algorithm would gain 256x, an exponential one just +8 items."},
+   "explain": "(kn)^2 = 256 n^2 gives k = 16. A linear algorithm would gain 256x, an exponential one only 8 more items."},
   {"q": "lim n->inf f(n)/g(n) = 7. Then f is...",
    "options": ["o(g)", "Theta(g)", "omega(g)", "unrelated to g"], "answer": 1,
    "explain": "A finite positive limit means f and g grow at the same rate up to a constant."},

@@ -1,12 +1,34 @@
 # Queues, circular arrays and deques
 
-A **queue** is the stack's cousin: a collection whose elements are inserted and removed according
-to the **first-in, first-out (FIFO)** principle. Elements enter at the **back** and leave from the
-**front**, like people in a line at a ticket counter, calls waiting at a customer-service centre,
-or jobs waiting for a printer. A **deque** ("deck", double-ended queue) generalises both: insert and
-remove at either end.
+> **Before this lesson:** You should know what a stack and an abstract data type are, from
+> [Stacks and their applications](#/lesson/dsa-foundations/stacks); why removing the first item
+> of a Python list is slow, from
+> [Low-level arrays](#/lesson/dsa-foundations/low-level-arrays); and the modulo operator `%`,
+> from [Using arrays](#/lesson/dsa-foundations/using-arrays).
+
+## In plain words
+
+A **queue** is a collection where items leave in the same order they arrived. The rule is
+**first-in, first-out**, shortened to **FIFO**. Items join at the **back** and leave from the
+**front**.
+
+It is the queue you already know: people waiting at a ticket counter, callers on hold at a
+support line, documents waiting for a printer. Whoever has waited longest is served next, which
+is the fair order. A stack, by contrast, serves the newest arrival first.
+
+A **deque** (pronounced "deck", short for double-ended queue) relaxes the rule: items may be
+added or removed at either end, though still never in the middle.
+
+Why it matters for a job: queues sit between every pair of systems that work at different
+speeds, such as a web server and the jobs it hands to background workers. In interviews, a queue
+drives breadth-first search (the standard way to find a shortest route in a maze or a network),
+and a deque drives the "sliding window" problems. This lesson also teaches a neat trick, the
+circular array, that makes a queue fast.
 
 ## 1. The queue ADT
+
+To **enqueue** is to add an item at the back; to **dequeue** is to remove the item at the front
+and hand it back.
 
 | Operation | Meaning |
 |---|---|
@@ -29,23 +51,31 @@ remove at either end.
 
 ## 2. Why a plain list is not good enough
 
-Adapting a list as for the stack: `enqueue` = `append` ($O(1)$), `dequeue` = `pop(0)` — but
-`pop(0)` shifts every remaining element: **$\Theta(n)$**.
+The obvious first attempt is to adapt a list as we did for the stack: `enqueue` is `append`,
+which is $O(1)$, and `dequeue` is `pop(0)`. The trouble is `pop(0)`. Removing cell 0 of an array
+leaves a hole at the start, and Python closes it by moving every remaining item one cell to the
+left: **$\Theta(n)$** work for every dequeue.
 
-A second idea: on dequeue, don't shift; just replace `data[f]` with `None` and advance a front index
-`f`. Now dequeue is $O(1)$, but the list grows forever: after many enqueue/dequeue cycles a queue
-holding 3 elements could occupy a list of millions of cells — the "dead" prefix is never reclaimed.
+A second attempt: on dequeue, do not shift anything. Replace `data[f]` with `None` and move a
+"front" index `f` one step to the right. Now dequeue is $O(1)$, but the list grows without end.
+After millions of enqueue and dequeue operations, a queue holding three items could occupy a
+list of millions of cells, almost all of them dead space at the start that is never reused.
 
 ## 3. Using an array circularly
 
-The fix: let the front index **wrap around**. Treat the underlying array of capacity $N$ as a
-circle. The front is at index `f`; the queue's elements occupy the `size` cells starting at `f`,
-wrapping past the end back to index 0. The next free cell for enqueue is
+The fix is to reuse the dead space: let the indices **wrap around**. Imagine the array of
+capacity $N$ bent into a ring, so that the cell after the last one is cell 0. The front of the
+queue is at index `f`, and the queue's items occupy the next `size` cells going round the ring.
+When the back of the queue reaches the end of the array, it continues at cell 0, into space
+that earlier dequeues freed.
+
+The wrap-around is modular arithmetic, the clock arithmetic from the Caesar cipher. The next
+free cell for an enqueue is
 
 $$\text{avail} = (f + \text{size}) \bmod N,$$
 
-and after a dequeue the front advances to $f = (f + 1) \bmod N$. The modulo operator makes the
-array circular.
+and after a dequeue the front moves to $f = (f + 1) \bmod N$. With $N = 10$, the cell after
+index 9 is $(9 + 1) \bmod 10 = 0$.
 
 ```mermaid
 graph LR
@@ -54,10 +84,15 @@ graph LR
   c9 -->|wraps| c0
 ```
 
-In the picture $N = 10$, $f = 7$, size $= 5$: elements B, C, D, E, F; the next enqueue goes to
-$(7 + 5) \bmod 10 = 2$.
+In the picture $N = 10$, $f = 7$ and the size is 5. The queue holds B, C, D, E, F in that order:
+B, C, D in cells 7 to 9, then E and F in cells 0 and 1 after wrapping. The next enqueue goes to
+cell $(7 + 5) \bmod 10 = 2$.
 
 ### 3.1 The ArrayQueue implementation
+
+The class keeps three things: the array `_data`, the number of items `_size`, and the index
+`_front` of the first item. Read `dequeue` and `enqueue` first; each is the formula above plus a
+check for whether the array should change size.
 
 ```python-run
 class Empty(Exception):
@@ -121,14 +156,27 @@ while len(Q) > 2:
 print("after draining: size", len(Q), "capacity", len(Q._data), "contents", [Q._data[(Q._front + k) % len(Q._data)] for k in range(len(Q))])
 ```
 
-Key details:
+**Reading this code.**
 
-- **Resizing** cannot just copy the list: the elements may wrap around. `_resize` walks from the old
-  front, copying in queue order, so in the new array the front is index 0. (Note that it uses the
-  *old* length as the modulus.)
-- **Shrinking** at one-quarter full keeps memory proportional to the number of elements, with the
-  same amortised guarantees as the dynamic array.
-- Setting the vacated cell to `None` lets the garbage collector reclaim the object.
+- `dequeue` saves the front item, clears its cell, moves `_front` one step round the ring, and
+  reduces the size. If the array is now less than a quarter full, it halves the capacity.
+- `enqueue` doubles the capacity if the array is full, computes `avail`, and stores the item.
+- `_resize` builds a new array and copies the items across **in queue order**: `walk` starts at
+  the old front and steps round the *old* ring (note the modulus `len(old)`), while `k` counts
+  0, 1, 2, ... in the new array. Afterwards the front is at index 0 again. A plain copy of the
+  old list would not do, because wrapped items sit at the start of the old array although they
+  belong at the back of the queue.
+- Setting a vacated cell to `None` removes the queue's reference to the departed item, so that
+  the garbage collector can reclaim it.
+
+The test enqueues 0 to 24 and dequeues after every third enqueue, leaving 17 items; it prints
+`size 17 capacity 20 front index 4 first 8`. (The front *index* is 4 although the front *item*
+is 8, because the resize from capacity 10 to 20 moved the queue back to the start of the new
+array.) Draining down to two items triggers the shrinking
+rule several times and ends with capacity 10 and contents `[23, 24]`.
+
+Shrinking at one quarter full, as in the dynamic-arrays lesson, keeps memory proportional to the
+number of items without thrashing.
 
 ### 3.2 Performance
 
@@ -142,10 +190,11 @@ Space $O(n)$. The amortisation is due to resizing, exactly as with dynamic array
 
 ### 3.3 A fixed-capacity ring buffer
 
-Many systems (audio buffers, network packet queues, logging) use a **bounded** circular buffer
-that never resizes: enqueue fails (or overwrites the oldest item) when full. Then every operation
-is $O(1)$ *worst case*, with no allocation at all — important in real-time code. You will
-implement this in the circular-queue exercise.
+Many systems (sound playback, network equipment, logging) use a **bounded** circular array that
+never changes size, usually called a **ring buffer**. When it is full, an enqueue either fails
+or overwrites the oldest item, depending on the design. Because nothing is ever copied or
+allocated, every operation is $O(1)$ in the *worst case*, which matters in software that must
+never pause. You will build one in the circular-queue exercise.
 
 > [!WARNING]
 > With only `front` and `back` indices (no `size` counter), "full" and "empty" both look like
@@ -162,13 +211,17 @@ A **deque** supports insertion and deletion at both front and back:
 | `D.first()` / `D.last()` | peek at front / back |
 | `D.is_empty()`, `len(D)` | as usual |
 
-A circular array implements it just as well. The only new arithmetic is moving the front
-**backwards** for `add_first`:
+A circular array handles a deque equally well. Two pieces of arithmetic are new. Adding at the
+front moves the front index one step **backwards** round the ring:
 
-$$f = (f - 1) \bmod N,$$
+$$f = (f - 1) \bmod N.$$
 
-and the index of the last element, $(f + \text{size} - 1) \bmod N$. Python's `%` always returns a
-non-negative result for positive $N$, so `(0 - 1) % 10 == 9` wraps correctly.
+And the last item sits at index $(f + \text{size} - 1) \bmod N$. Python's `%` never returns a
+negative result when $N$ is positive, so `(0 - 1) % 10` is `9` and stepping back from cell 0
+lands on the last cell, as it should.
+
+The compact class below starts with capacity 4. Its `_grow` method rebuilds the array in deque
+order with twice the room.
 
 ```python-run
 class ArrayDeque:
@@ -203,10 +256,16 @@ print([D._data[(D._front + k) % len(D._data)] for k in range(len(D))])
 print(D.delete_last(), D.delete_first(), len(D))
 ```
 
+The five additions leave the deque as `[7, 3, 5, 9, 1]` (7 and 3 were added at the front, so the
+later one is first). Then `delete_last()` returns 1, `delete_first()` returns 7, and three items
+remain: the second line of output is `1 7 3`.
+
 ### 4.1 Python's `collections.deque`
 
-The standard library's `deque` is implemented in C as a doubly linked list of fixed-size blocks
-(a hybrid). All end operations are $O(1)$ worst case. Its method names differ from the ADT:
+In real Python code you do not write your own. The standard library's `collections.deque` is
+written in C as a chain of fixed-size blocks of cells (a cross between an array and the linked
+lists of the next module). Every operation at either end is $O(1)$ in the worst case. Its method
+names differ from the ADT's:
 
 | ADT | `collections.deque` |
 |---|---|
@@ -215,9 +274,11 @@ The standard library's `deque` is implemented in C as a doubly linked list of fi
 | `first` / `last` | `D[0]` / `D[-1]` |
 | — | `rotate(k)`, `extend`, `extendleft`, `remove`, `maxlen=` bounded mode |
 
-Indexing `D[j]` in the middle is $O(n)$ (it walks blocks), unlike a list. Creating
-`deque(maxlen=k)` gives a bounded buffer that silently discards from the opposite end — perfect for
-"last $k$ items" windows.
+Reading `D[j]` in the middle is $O(n)$, unlike a list, because the deque has to walk along its
+blocks to get there. Creating `deque(maxlen=k)` gives a bounded buffer: once it holds `k` items,
+each append at one end silently drops an item from the other end. That is ideal for "the last
+$k$ items" windows. In the demo the window holds at most three numbers, and `rotate(1)` moves
+the last item round to the front.
 
 ```python-run
 from collections import deque
@@ -236,11 +297,16 @@ print("rotated:", list(D))
 
 ## 5. Applications
 
-- **Round-robin scheduling**: dequeue a process, run it for a time slice, enqueue it again (the
-  linked-lists module does this with a circular list).
-- **Breadth-first search**: the frontier is a queue (graphs module, and level-order tree traversal).
-- **Sliding windows**: a deque of indices gives the maximum of every window of size $k$ in $O(n)$.
-- **Buffers** between producer and consumer threads (`queue.Queue` wraps a deque with locks).
+- **Round-robin scheduling**: an operating system shares one processor among many running
+  programs by taking a program from the front of a queue, letting it run for a short time
+  slice, and putting it at the back again.
+- **Breadth-first search**: exploring a maze, tree or network outwards from a starting point,
+  nearest places first. The places waiting to be explored are kept in a queue (section 7, and
+  the trees and graphs modules).
+- **Sliding windows**: a deque of positions gives the maximum of every window of $k$ consecutive
+  values in $O(n)$ overall (section 7).
+- **Buffers** between a part of a program that produces work and a part that consumes it.
+  Python's `queue.Queue` is a deque plus the locking needed for safe sharing.
 
 ## 6. Worked dry run: a circular queue of capacity 5
 
@@ -293,9 +359,16 @@ print("queue order:", [data[(front + k) % N] for k in range(size)])
 
 ## 7. Worked applications: level-by-level search and a sliding window
 
-**Breadth-first search.** A queue processes items in the order they were discovered, which makes it
-the engine of any "nearest first" exploration. Finding the fewest moves through a grid maze is the
-standard example: every cell that is $d$ steps away is dequeued before any cell $d + 1$ steps away.
+**Breadth-first search.** A queue hands items back in the order they were discovered, which
+makes it the engine of any "nearest first" exploration. Finding the fewest moves through a grid
+maze is the standard example: every cell that is $d$ steps from the start is dequeued before any
+cell that is $d + 1$ steps away.
+
+In the maze below, `S` is the start, `E` the exit, `#` a wall and `.` open floor. The dictionary
+`dist` records the number of moves to each cell reached so far, and doubles as the record of
+which cells have been seen. The loop takes the oldest waiting cell, and for each of its four
+neighbours that is inside the grid, not a wall and not yet seen, records a distance one greater
+and adds it to the queue.
 
 ```python-run
 from collections import deque
@@ -366,19 +439,43 @@ is why neither a stack nor a queue suffices.
 
 ## 8. Pitfalls
 
-- `list.pop(0)` in a BFS loop: quadratic. Use `collections.deque.popleft`.
-- Resizing a circular buffer with a plain slice copy: the wrapped elements end up out of order.
-- Computing `avail` with the *new* length while copying from the old array.
-- Off-by-one in `last`: it is `(f + size - 1) % N`, not `(f + size) % N`.
+- **`list.pop(0)` inside a breadth-first search loop.** Each call is $O(n)$, making the whole
+  search quadratic. Use `collections.deque` and `popleft`.
+- **Resizing a circular array with a plain copy.** The wrapped items end up out of order. Copy
+  from the front, stepping round the ring.
+- **Using the new length as the modulus** while copying out of the old array.
+- **An off-by-one error for the last item.** Its index is `(f + size - 1) % N`; the formula
+  `(f + size) % N` gives the next *free* cell.
+- **Telling full from empty by comparing indices.** Both states look the same; keep a size count.
+- **Marking a cell as seen only when it is dequeued.** In breadth-first search, mark it when it
+  is enqueued, or the same cell is added many times.
 
 ## 9. Summary
 
-- Queue = FIFO; circular arrays make enqueue/dequeue $O(1)$ amortised with $O(n)$ space.
+- A queue is first-in, first-out. A circular array makes enqueue and dequeue $O(1)$ amortised
+  using $O(n)$ space.
 - Index arithmetic modulo the capacity is the whole trick: `avail = (f + size) % N`,
   `f = (f + 1) % N`, and for deques `f = (f - 1) % N`.
-- Use `collections.deque` in real Python code.
+- A deque allows insertion and removal at both ends; in real Python code use
+  `collections.deque`.
+- Queues power breadth-first search; deques power sliding-window algorithms.
 
 > **Source:** Goodrich, Tamassia & Goldwasser, *Data Structures and Algorithms in Python*, ch. 6.2–6.3.
+
+## Glossary
+
+- **Queue**: a collection in which the item that has waited longest is removed first.
+- **FIFO**: first-in, first-out.
+- **Enqueue / dequeue**: add an item at the back / remove and return the item at the front.
+- **Circular array**: an array whose indices wrap from the last cell back to cell 0.
+- **Modular arithmetic**: arithmetic on remainders, used here to wrap indices.
+- **Ring buffer**: a fixed-capacity circular array that never resizes.
+- **Deque**: a double-ended queue, allowing insertion and removal at both ends.
+- **`collections.deque`**: Python's built-in deque, with $O(1)$ operations at both ends.
+- **Round-robin scheduling**: giving each waiting task a turn in rotation.
+- **Breadth-first search (BFS)**: exploring outwards from a start, nearest first, using a queue.
+- **Sliding window**: a fixed-width stretch of a sequence that moves along one position at a
+  time.
 
 ## Check yourself
 
@@ -390,7 +487,7 @@ is why neither a stack nor a queue suffices.
   {"q": "A circular queue has capacity N = 8, front f = 6 and size 4. Where does the next enqueue go?",
    "options": ["index 2", "index 10", "index 7", "index 0"], "answer": 0,
    "explain": "(6 + 4) mod 8 = 2."},
-  {"q": "In ArrayQueue._resize, why can't we just copy old[0:size]?",
+  {"q": "In ArrayQueue._resize, why is copying old[0:size] not enough?",
    "options": ["Python forbids slicing", "The elements may wrap around, so queue order differs from index order", "It would be O(n^2)", "Because of garbage collection"], "answer": 1,
    "explain": "Walking from the old front with modular indexing copies elements in queue order and resets front to 0."},
   {"q": "For a circular deque with front f and capacity N, add_first places the new element at...",

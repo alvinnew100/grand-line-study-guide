@@ -1,17 +1,39 @@
 # Maps and hash functions
 
-Python's `dict` is arguably the most important data structure in the language: namespaces, object
-attributes, keyword arguments, JSON data — all dictionaries. Abstractly a dictionary is a **map**: a
-collection of key–value pairs in which keys are unique and serve as addresses for values. This
-lesson introduces the map ADT, a trivially simple (and slow) implementation, and then the idea that
-makes maps fast: **hashing**.
+> **Before this lesson:** You should be able to use a Python dictionary (`d[k] = v`, `d[k]`,
+> `k in d`), know why reading `A[i]` from an array is $O(1)$
+> ([Low-level arrays](#/lesson/dsa-foundations/low-level-arrays)), know the modulo operator `%`
+> ([Using arrays](#/lesson/dsa-foundations/using-arrays)), and know what mutable and immutable
+> mean (the low-level arrays lesson again).
+
+## In plain words
+
+A **map** stores pairs: a **key** that you look things up by, and a **value** that you get
+back. A paper dictionary is a map from words to definitions; a phone's contact list is a map
+from names to numbers. Each key appears at most once.
+
+The question of this lesson is how to make lookups instant even with millions of keys. The
+answer is a cloakroom trick. Imagine a cloakroom with 100 numbered hooks. A slow attendant
+would hang coats anywhere and search every hook when you come back. A clever one computes a
+hook number *from your name* by some fixed rule (say, add up the letters and keep the last two
+digits) and hangs your coat there. When you return, the same rule gives the same hook, and the
+attendant walks straight to it. The rule is called a **hash function**, and a table organised
+this way is a **hash table**.
+
+Why it matters for a job: Python's `dict` and `set` are hash tables, and so are their
+equivalents in every mainstream language. "Use a hash map" is the single most common way to turn
+a slow interview solution into a fast one, and "how does a hash map work?" is a standard
+question in its own right.
 
 ## 1. The map ADT
 
-Maps are also called **associative arrays**: like an array, but "indexed" by arbitrary keys —
-a student ID, a domain name, an (x, y) coordinate.
+A map is also called an **associative array**: it behaves like an array, except that the
+"index" can be any key at all, such as a student number, a web address or a pair of coordinates.
+Python's `dict` is the language's built-in map, and Python itself leans on it everywhere, from
+storing the variables of a module to holding parsed JSON data.
 
-The five core behaviours of a map `M` (matching Python's `dict` syntax):
+A map `M` has five core operations, written here in Python's `dict` syntax. The names in
+parentheses are the hook methods that Python calls for each piece of syntax:
 
 | Operation | Meaning |
 |---|---|
@@ -26,7 +48,11 @@ Derived conveniences: `k in M`, `M.get(k, d)`, `M.setdefault(k, d)`, `M.pop(k, d
 
 ### 1.1 Application: counting word frequencies
 
-A classic use: map each word to the number of times it occurs.
+A classic use of a map is counting: map each word of a text to the number of times it occurs.
+In the code, `freq.get(word, 0)` returns the count so far, or 0 if the word has not been seen
+yet, so the line `freq[word] = 1 + freq.get(word, 0)` works for new and old words alike. The
+loop afterwards walks over the (word, count) pairs to find the largest count; here the answer
+is `it`, the first of several words that occur 4 times.
 
 ```python-run
 text = """it was the best of times it was the worst of times it was the age of wisdom
@@ -47,10 +73,13 @@ print(sorted(freq.items(), key=lambda kv: -kv[1])[:5])
 
 ### 1.2 The MutableMapping abstract base class
 
-Python's `collections.abc.MutableMapping` provides *concrete* implementations of all the derived
-methods (`get`, `items`, `__contains__`, `update`, …) in terms of the five *abstract* core
-methods. A new map class only needs to supply `__getitem__`, `__setitem__`, `__delitem__`,
-`__len__` and `__iter__` — everything else is inherited. For example `__contains__` is essentially:
+If you write your own map class, you do not have to write all of those conveniences again.
+Python's `collections.abc.MutableMapping` is an abstract base class (introduced in the trees
+module) that implements every derived method (`get`, `items`, `__contains__`, `update` and the
+rest) in terms of the five core ones. A new map class supplies only `__getitem__`,
+`__setitem__`, `__delitem__`, `__len__` and `__iter__`, and inherits everything else. For
+example, `__contains__`, the hook behind `k in M`, amounts to "try to look the key up, and see
+whether that fails":
 
 ```python
 def __contains__(self, k):
@@ -61,12 +90,14 @@ def __contains__(self, k):
         return False
 ```
 
-The book's `MapBase` class extends `MutableMapping` and adds a nested `_Item` class (key + value,
-with `__eq__` and `__lt__` based on the key), reused by every map implementation in chapters 10–11.
+The map classes in this module all follow the same pattern: inherit from `MutableMapping`, and
+keep each key-value pair in a small `_Item` object, as the heap did.
 
 ### 1.3 A simple unsorted map
 
-Store items in an unsorted list; every core operation scans it.
+The most direct implementation keeps the items in an unsorted list and searches the list for
+every operation. It is the "slow attendant" of the cloakroom. It is worth reading because every
+later map has the same five methods with cleverer insides.
 
 ```python-run
 from collections.abc import MutableMapping
@@ -107,18 +138,27 @@ M['K'] = 2; M['B'] = 4; M['U'] = 2; M['B'] = 7
 print(len(M), M['B'], M.get('F', 'absent'), 'K' in M, list(M.items()))   # inherited: get, in, items
 ```
 
-Each of `__getitem__`, `__setitem__`, `__delitem__` is $O(n)$. Fine for a handful of items; hopeless
-for a million.
+The test stores K, B and U, then stores B again with a new value, which replaces the old one
+instead of adding a fourth item. It prints
+`3 7 absent True [('K', 2), ('B', 7), ('U', 2)]`. Note that `get`, `in` and `items` were never
+written in our class; they came from `MutableMapping`.
+
+Each of `__getitem__`, `__setitem__` and `__delitem__` is $O(n)$, because each may scan the
+whole list. That is fine for a handful of items and hopeless for a million.
 
 ## 2. Hash tables: the idea
 
-If the keys were integers in the range $0..N-1$, we could use a **lookup table**: an array of length
-$N$, storing the value for key $k$ at index $k$. All operations $O(1)$.
+Start with an easy special case. If the keys were whole numbers from $0$ to $N-1$, a map could
+be a plain array of length $N$, with the value for key $k$ stored at index $k$. Such an array
+is called a **lookup table**, and every operation on it is $O(1)$, because indexing an array is.
 
-Two obstacles: keys may not be integers (strings, tuples), and the key range may be vastly larger
-than the number of items (9-digit IDs for 500 students). A **hash function** $h$ solves both: it maps
-each key $k$ to an integer $h(k)$ in $[0, N-1]$, and item $(k, v)$ is stored in **bucket**
-$A[h(k)]$.
+Two obstacles stand between that and a general map. Keys may not be numbers at all (strings,
+tuples). And even numeric keys may spread over a range vastly larger than the number of items:
+500 students with 9-digit student numbers would need an array of a billion cells. A **hash
+function** $h$ removes both obstacles. It converts any key $k$ into a whole number $h(k)$
+between $0$ and $N-1$, and the item $(k, v)$ is stored in cell $A[h(k)]$ of an array of length
+$N$. The cells are called **buckets**, and the array a **bucket array**. The notation
+$[0, N-1]$ used below means "the whole numbers from 0 to $N - 1$ inclusive".
 
 ```mermaid
 graph LR
@@ -127,45 +167,59 @@ graph LR
   J --> B["bucket array A"]
 ```
 
-If two distinct keys get the same index we have a **collision**. Collisions are unavoidable in
-general (pigeonhole), so we need (1) hash functions that make them rare, and (2) a scheme to handle
-them (next lesson). A hash function is **good** if it minimises collisions and is fast to compute.
+When two different keys are sent to the same bucket, that is a **collision**. Collisions cannot
+be ruled out: there are more possible keys than buckets, so some keys must share (if you put 11
+letters into 10 pigeonholes, some hole gets two; this is called the pigeonhole principle). So a
+hash table needs two things: a hash function that makes collisions rare, and a plan for
+handling the ones that happen (the next lesson). A hash function is **good** if it spreads keys
+evenly over the buckets and is quick to compute.
 
-It is evaluated in two stages:
+The function is computed in two stages:
 
-1. the **hash code** maps a key to an integer (any integer);
-2. the **compression function** maps that integer into $[0, N - 1]$.
+1. the **hash code** turns a key into a whole number, of any size, possibly negative;
+2. the **compression function** squeezes that number into the range $[0, N - 1]$.
 
-Separating the two lets the hash code be independent of the table size — so the table can be resized
-without recomputing how keys are interpreted.
+Keeping the stages separate means the hash code does not depend on the size of the table, so
+the table can be made larger later without changing how keys are turned into numbers.
 
 ## 3. Hash codes
 
 ### 3.1 Treating the bit representation as an integer
 
-For a type whose representation fits in a machine word (a 32-bit int, a float), use its bits as the
-hash code. For longer representations (a 64-bit value with 32-bit hash codes) we must combine the
-parts: e.g. **sum** or **exclusive-or** of the high and low halves.
+Everything in a computer is stored as bits. For a value that fits in one machine word (a small
+whole number, a floating-point number), its bits, read as a whole number, can serve directly as
+the hash code. If the value has more bits than the hash code may have (a 64-bit value when hash
+codes are 32 bits), the pieces must be combined, for example by adding the upper and lower
+halves or by taking their **exclusive-or** (XOR, written `^` in Python: a bit-by-bit operation
+that gives 1 where the two inputs differ).
 
 ### 3.2 Polynomial hash codes
 
-For variable-length objects such as strings, summing or XOR-ing the components is a poor choice:
-the order of characters is ignored, so `"stop"`, `"tops"`, `"pots"` and `"spot"` all collide. A
-better code takes positions into account. View the object as a tuple $(x_0, x_1, \ldots, x_{n-1})$
-and compute, for a constant $a \ne 1$,
+For objects of varying length such as strings, adding up or XOR-ing the parts is a poor choice,
+because it ignores the *order* of the characters: `"stop"`, `"tops"`, `"pots"` and `"spot"`
+would all get the same code. A better code makes each character's contribution depend on its
+position. Treat the string as a sequence of numbers $(x_0, x_1, \ldots, x_{n-1})$, one per
+character, pick a constant $a \ne 1$, and compute
 
-$$x_0 a^{n-1} + x_1 a^{n-2} + \cdots + x_{n-2} a + x_{n-1},$$
+$$x_0 a^{n-1} + x_1 a^{n-2} + \cdots + x_{n-2} a + x_{n-1}.$$
 
-evaluated by **Horner's rule** in $O(n)$:
-$x_{n-1} + a(x_{n-2} + a(x_{n-3} + \cdots + a(x_1 + a x_0)\cdots))$. Overflow is simply ignored
-(arithmetic wraps modulo $2^{32}$ or $2^{64}$). Experiments reported in the book on a list of over
-50,000 English words found that $a = 33, 37, 39$ or $41$ each produce fewer than 7 collisions.
+This is a polynomial in $a$, hence the name. It is like reading the characters as the digits of
+a number written in base $a$. It can be computed with one multiplication and one addition per
+character by starting at 0 and repeating "multiply by $a$, add the next character":
+$x_{n-1} + a(x_{n-2} + a(x_{n-3} + \cdots + a(x_1 + a x_0)\cdots))$. This arrangement is called
+**Horner's rule**, and section 5 works an example by hand. The running value quickly becomes
+too large for a machine word; the excess high bits are discarded (the arithmetic wraps round
+modulo $2^{32}$ or $2^{64}$), which does no harm. Experiments on tens of thousands of English
+words have found that multipliers such as $a = 33, 37, 39$ or $41$ leave only a handful of
+words sharing a code.
 
 ### 3.3 Cyclic-shift hash codes
 
-A variant replaces multiplication by a cyclic shift of the partial sum by a fixed number of bits —
-fast, and it also mixes positions. The book's experiment over 230,000 words found a 5-bit shift gave
-the fewest collisions.
+A variant replaces the multiplication by a **cyclic shift**: slide the bits of the running
+value a fixed number of places to the left, and bring the bits that fall off the left end back
+in on the right. It is very fast and also makes position matter. On large word lists, a shift of
+5 bits has been found to give the fewest collisions. In the code, `<<` and `>>` shift bits left
+and right, `&` keeps only the bits allowed by the mask, and `|` combines the two parts.
 
 ```python
 def hash_code(s):
@@ -194,13 +248,18 @@ for w in ["stop", "tops", "pots", "spot"]:
     print(f"{w}: sum={sum_code(w)}  poly={poly_code(w)}  cyclic={cyclic_code(w)}")
 ```
 
+The demo shows the four anagrams getting the same `sum` code (454) but four different
+polynomial codes and four different cyclic-shift codes.
+
 ### 3.4 Hash codes in Python
 
-The built-in `hash(x)` returns an integer hash code. Key rules:
+The built-in function `hash(x)` returns a whole-number hash code for `x`. A value that `hash`
+accepts is called **hashable**. The rules worth knowing:
 
-- Only **immutable** built-in types are hashable: `int`, `float`, `str`, `tuple`, `frozenset`.
-  `hash([1, 2])` raises `TypeError` — if a key could change after insertion, its bucket would be
-  wrong.
+- Among the built-in types, only **immutable** ones are hashable: `int`, `float`, `str`,
+  `tuple`, `frozenset`. `hash([1, 2])` raises `TypeError`. The reason is the cloakroom rule: if
+  a key could change after being stored, the rule would now point to a different hook, and the
+  item would be lost.
 - **Equal objects must have equal hash codes**: if `x == y` then `hash(x) == hash(y)`. Hence
   `hash(5) == hash(5.0)`.
 - Instances of user classes are hashable by default (based on identity). If you define `__eq__` you
@@ -211,31 +270,38 @@ def __hash__(self):
     return hash((self._red, self._green, self._blue))
 ```
 
-- String hashing is **randomised per process** (salted) to defend against attackers who craft many
-  colliding keys to degrade a server's dictionaries to $O(n)$ per operation.
+- The hash of a string is **different each time Python starts**, because a random value (a
+  "salt") is mixed in. This defends servers against attackers who would otherwise prepare
+  thousands of keys that all collide, turning every dictionary operation from $O(1)$ into
+  $O(n)$.
 
 ## 4. Compression functions
 
-The hash code may be any integer, so we still need to squeeze it into $[0, N-1]$.
+A hash code can be any whole number, so the second stage must squeeze it into $[0, N-1]$.
 
 ### 4.1 The division method
 
+Take the remainder on division by the table size:
+
 $$i \bmod N.$$
 
-Simple, but if $N$ is not prime, patterns in the hash codes can cause patterns of collisions. For
-example with codes $\{200, 205, 210, \ldots, 600\}$ and $N = 100$, each code collides with three
-others; with $N = 101$ there are no collisions. Even a prime $N$ will not help against codes of the
-form $pN + q$ for several different $p$.
+It is as easy as can be, but if $N$ is not a prime number, regularities in the hash codes turn
+into regular collisions. For example, take the codes $200, 205, 210, \ldots, 600$ and
+$N = 100$: the codes 200, 300, 400, 500 and 600 all land in bucket 0, and similarly throughout.
+With $N = 101$, a prime, there are no collisions at all. Even a prime $N$ cannot help if many
+codes differ by exact multiples of $N$.
 
 ### 4.2 The MAD method
 
-**Multiply-Add-and-Divide** removes such repeated patterns:
+The **Multiply-Add-and-Divide** method, MAD for short, scrambles the code before taking the
+remainder, which destroys such regularities:
 
 $$[(a i + b) \bmod p] \bmod N,$$
 
-where $p$ is a prime larger than $N$, and $a \in [1, p-1]$, $b \in [0, p-1]$ are chosen at random.
-This gets close to the ideal in which the probability that two different keys collide is $1/N$.
-The book's `HashMapBase` uses exactly this:
+where $p$ is a prime number larger than $N$, and $a$ (from 1 to $p-1$) and $b$ (from 0 to
+$p-1$) are chosen at random when the table is created. This comes close to the ideal, in which
+any two different keys collide with probability $1/N$, the same as if buckets were assigned by
+rolling an $N$-sided die. The hash map built in the next lesson uses exactly this:
 
 ```python
 def _hash_function(self, k):
@@ -337,22 +403,48 @@ last character. A prime modulus removes such arithmetic coincidences.
 
 ## 6. Pitfalls
 
-- Using a mutable object as a key (or mutating a key object that defines its own hash).
-- Defining `__eq__` without `__hash__` (Python then makes the class unhashable) or with an
-  inconsistent hash.
-- A hash code that ignores order or uses only part of the key (first few characters).
-- Assuming iteration order from hashing (Python dicts preserve *insertion* order since 3.7; sets do
-  not guarantee order).
-- Relying on `hash(str)` being the same across program runs.
+- **Using a mutable object as a key**, or changing an object of your own class after using it
+  as a key. Its hash changes and the table can no longer find it.
+- **Defining `__eq__` without a matching `__hash__`.** Python then makes the class unhashable;
+  and if you do define both, equal objects must hash equally.
+- **A hash code that ignores order or reads only part of the key**, such as the first few
+  characters.
+- **Expecting an order from hashing.** Python dictionaries hand back keys in *insertion* order
+  (guaranteed since version 3.7), which is a separate mechanism; sets promise no order at all.
+- **Relying on `hash("some text")` being the same in two runs of a program.** It is not, so
+  never store hash values in a file.
 
 ## 7. Summary
 
-- Map ADT: get/set/delete by key, length, iteration; `MutableMapping` supplies the rest.
-- Unsorted list map: $O(n)$ per operation.
-- Hash function = hash code (key → integer) + compression (integer → bucket index).
-- Polynomial and cyclic-shift codes respect position; MAD compression spreads codes well.
+- The map ADT: get, set and delete by key, plus length and iteration. `MutableMapping`
+  supplies every other method.
+- A map kept as an unsorted list costs $O(n)$ per operation.
+- A hash function is a hash code (key to whole number) followed by a compression function
+  (whole number to bucket index).
+- Polynomial and cyclic-shift hash codes take position into account; MAD compression spreads
+  the codes evenly over the buckets.
 
 > **Source:** Goodrich, Tamassia & Goldwasser, *Data Structures and Algorithms in Python*, ch. 10.1–10.2.1.
+
+## Glossary
+
+- **Map (associative array, dictionary)**: a collection of key-value pairs with unique keys.
+- **Key / value**: what you look up by / what you get back.
+- **Lookup table**: an array indexed directly by a small whole-number key.
+- **Hash function**: a rule that turns a key into a bucket index.
+- **Bucket / bucket array**: one cell of a hash table / the array of all its cells.
+- **Collision**: two different keys assigned to the same bucket.
+- **Hash code**: the first stage of a hash function, turning a key into a whole number.
+- **Compression function**: the second stage, reducing that number to the range of indices.
+- **Polynomial hash code**: a code in which each character is weighted by a power of a constant.
+- **Horner's rule**: evaluating a polynomial by repeated "multiply, then add".
+- **Cyclic shift**: rotating the bits of a number, with bits leaving one end re-entering at
+  the other.
+- **XOR (exclusive-or)**: a bitwise operation giving 1 where two bits differ.
+- **Hashable**: usable as a dictionary key; having a hash that never changes.
+- **Division method / MAD method**: compression by $i \bmod N$ / by
+  $((ai + b) \bmod p) \bmod N$.
+- **Salt**: a random value mixed into a hash so that it differs from run to run.
 
 ## Check yourself
 

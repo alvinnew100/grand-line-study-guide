@@ -1,14 +1,33 @@
 # Traversals, Euler tours and expression trees
 
-A **traversal** of a tree is a systematic way of visiting all its positions. "Visiting" can mean
-anything: printing, summing, checking a property. The order of visits is what distinguishes
-traversals, and choosing the right order is the key to dozens of tree algorithms. This lesson covers
-preorder, postorder, breadth-first and inorder traversals, the unifying **Euler tour**, and the
-book's case study: the **expression tree**.
+> **Before this lesson:** You should know the tree vocabulary (root, child, leaf, subtree, depth,
+> height) and what a binary tree is, from
+> [Tree terminology, ADTs and representations](#/lesson/dsa-foundations/tree-basics); stacks and
+> postfix notation from [Stacks](#/lesson/dsa-foundations/stacks); and queues from
+> [Queues, circular arrays and deques](#/lesson/dsa-foundations/queues-deques).
+
+## In plain words
+
+A list has one obvious order in which to go through its items: front to back. A tree does not.
+A **traversal** is a rule for visiting every node of a tree exactly once, and there are several
+sensible rules, each useful for different jobs.
+
+Imagine visiting every room of a house with several floors and wings. You could note each room
+as you first enter it, before exploring the rooms beyond it. You could note it on your way back
+out, after everything beyond it has been seen. Or you could do every room on the ground floor,
+then every room on the first floor, and so on. All three plans see every room; they differ in
+the order of the notes. Those are, roughly, preorder, postorder and breadth-first.
+
+"Visiting" a node can mean anything: printing it, adding it to a total, checking a condition.
+
+Why it matters for a job: most tree problems in interviews are solved by picking the right
+traversal and doing a small amount of work at each node. Choosing among "before the children",
+"after the children" and "level by level" is often the entire insight.
 
 ## 1. Preorder traversal
 
-Visit the root **first**, then recursively traverse the subtrees of its children in order.
+Visit the root **first**, then traverse the subtree of each child in turn, using the same rule
+recursively. In pseudocode, for a tree `T` and a position `p`:
 
 ```
 preorder(T, p):
@@ -17,13 +36,15 @@ preorder(T, p):
         preorder(T, c)
 ```
 
-The preorder of a book's table-of-contents tree is the table of contents itself: book title, then
-chapter 1, its sections, then chapter 2, … Preorder is natural whenever a parent must be handled
-before its children (printing indented outlines, copying a tree).
+Take a book as a tree: the title at the root, chapters as its children, sections as theirs. The
+preorder traversal reads title, chapter 1, section 1.1, section 1.2, chapter 2, and so on. That
+is the table of contents. Preorder is the natural choice whenever a parent has to be dealt with
+before its children: printing an indented outline, or copying a tree (a node must exist before
+its children can be attached to it).
 
 ## 2. Postorder traversal
 
-Recursively traverse the children first, then visit the root **last**.
+Traverse the subtree of each child first, then visit the root **last**.
 
 ```
 postorder(T, p):
@@ -32,18 +53,22 @@ postorder(T, p):
     visit(p)
 ```
 
-Postorder is natural when a node's result depends on its children's results: disk usage (a
-directory's total is known only after its contents are summed), height, evaluating an expression,
-deleting a tree (free children before the parent).
+Postorder is the natural choice when a node's answer depends on its children's answers. Disk
+usage is the standard example: a folder's total is known only after the totals of everything
+inside it. The same goes for computing height, evaluating an arithmetic expression, and
+deleting a tree (remove the children before the parent).
 
-**Running time:** both are $O(n)$ when visiting costs $O(1)$: at each position the non-recursive
-work is $O(c_p + 1)$, which sums to $O(n)$ as shown in the previous lesson.
+**Running time.** Both traversals take $O(n)$ when a visit costs $O(1)$. At each position the
+work, apart from the recursive calls, is $O(c_p + 1)$ for its $c_p$ children, and the previous
+lesson showed that this adds up to $O(n)$ over the whole tree.
 
 ## 3. Breadth-first traversal
 
-Visit all positions at depth $d$ before any position at depth $d + 1$ — level by level. Used in game
-trees (examine all moves one step ahead before deeper ones) and shortest-path search. It is **not**
-recursive; it uses a **queue**:
+Visit every position at depth $d$ before any position at depth $d + 1$: the root, then its
+children, then their children, level by level. This order is used when nearer things matter
+first, for example examining all the moves available now in a game before any reply to them,
+or searching for a shortest route. Breadth-first traversal is **not** recursive. It keeps the
+positions waiting to be visited in a **queue**:
 
 ```
 breadthfirst(T):
@@ -55,11 +80,15 @@ breadthfirst(T):
             Q.enqueue(c)
 ```
 
-Each position is enqueued and dequeued once: $O(n)$.
+Why does a queue produce level order? The root is dequeued first and its children join the
+queue. They are dequeued next, in order, and *their* children join behind them. Because a queue
+is first-in, first-out, everything from one level leaves before anything from the next. Each
+position is enqueued once and dequeued once: $O(n)$.
 
 ## 4. Inorder traversal of a binary tree
 
-For binary trees we can visit a node **between** its left and right subtrees:
+A binary tree offers one more option, because each node has a distinct left and right side:
+visit a node **between** its left subtree and its right subtree.
 
 ```
 inorder(p):
@@ -68,11 +97,15 @@ inorder(p):
     if p has a right child: inorder(right(p))
 ```
 
-Informally, inorder visits nodes left to right, as if the tree were squashed flat. Its key
-application: in a **binary search tree** (every key in the left subtree $\le$ the node's key $\le$
-every key in the right subtree), an inorder traversal lists the keys in **sorted order**.
+Informally, inorder visits the nodes from left to right, as if the tree had been squashed flat
+onto a line. Its main use comes later in this track: in a **binary search tree**, where
+everything in a node's left subtree is smaller than the node and everything in its right
+subtree is larger, an inorder traversal lists the values in **sorted order**.
 
 ### Dry run
+
+Work out all four orders for the tree below before reading the table. For preorder, say each
+node as you first reach it. For postorder, say it when you leave it for the last time.
 
 ```mermaid
 graph TD
@@ -119,18 +152,30 @@ print("post", postorder(root, []))
 print("bfs ", breadthfirst(root))
 ```
 
+**Reading this code.** `N` is a minimal node with a value `v`, a left child `l` and a right child
+`r`. The three recursive functions are identical except for *where* the line
+`out.append(p.v)` sits: before both recursive calls, between them, or after them. `if p:` skips
+a missing child (`None`). `breadthfirst` uses a `deque` as its queue. The output matches the
+table.
+
 ### Reconstructing a tree
 
-Given the preorder and inorder sequences of a binary tree with distinct labels, the tree is uniquely
-determined: the first preorder element is the root; its position in the inorder sequence splits
-the left and right subtrees. (Postorder + inorder also works; preorder + postorder does not in
-general.)
+Given both the preorder and the inorder sequence of a binary tree whose labels are all
+different, the tree can be rebuilt, and there is only one tree that fits. The first item of the
+preorder is the root. Find it in the inorder sequence: everything to its left belongs to the
+left subtree, everything to its right to the right subtree. Then repeat on each part. With
+preorder `A B D E C F G` and inorder `D B E A F C G`: the root is A; `D B E` is the left
+subtree and `F C G` the right; the next preorder item, B, is the root of the left part; and so
+on. (Postorder with inorder works the same way. Preorder with postorder is not enough in
+general, because neither says which side an only child is on.)
 
 ## 5. Implementing traversals in Python: generators
 
-The book implements traversals as **generators** that `yield` positions, so callers can write
-`for p in T.preorder():` and stop early if they wish. A recursive generator uses `yield from`
-(or an explicit loop) to pass along the positions produced by the recursive call:
+A traversal is most convenient when the caller can write `for p in preorder(tree):` and stop
+early if they wish. Python supports this with **generators**: functions that use `yield` to
+hand out one value at a time, pausing in between. A recursive generator passes along everything
+produced by its recursive calls with `yield from`. The node class here keeps a list of children
+(`kids`), so the same code works for trees of any shape.
 
 ```python-run
 class N:
@@ -185,13 +230,18 @@ print(parenthesize(book))
 
 ## 6. The Euler tour and the template method pattern
 
-Pre-, in- and postorder are special cases of a more general traversal. Imagine walking around the
-tree, starting at the root and keeping the edges always on your left — like tracing its outline.
-This **Euler tour** encounters each node several times:
+Preorder, inorder and postorder are three views of one walk. Picture the tree drawn on the
+ground with its edges as walls, and walk all the way round it, starting at the root and keeping
+the wall on your left, as if tracing its outline with a finger. This walk is called an **Euler
+tour** (after the mathematician Leonhard Euler, pronounced "oiler"). It passes each node
+several times:
 
-- a **"pre visit"** when first reaching it (on the left, for a binary tree),
-- for a binary tree, an **"in visit"** from below (between its left and right subtrees),
-- a **"post visit"** when leaving it for the last time (on the right).
+- a **pre visit** when it first reaches the node, coming down on the node's left side;
+- for a binary tree, an **in visit** when it passes underneath, between the two subtrees;
+- a **post visit** when it leaves the node for the last time, going up on its right side.
+
+Doing your work at the pre visit gives a preorder traversal, at the in visit an inorder
+traversal, and at the post visit a postorder traversal.
 
 ```mermaid
 graph TD
@@ -201,11 +251,14 @@ graph TD
   R --> R2["4"]
 ```
 
-The book captures this with the **template method pattern**: an `EulerTour` class implements the
-generic tour, calling *hook* methods `_hook_previsit(p, d, path)` and
-`_hook_postvisit(p, d, path, results)` that do nothing by default. Subclasses override only the
-hooks to create specific algorithms. The post-visit hook receives the list of results returned by the
-children's tours — so it naturally computes bottom-up values (disk space, expression value, layout).
+This suggests writing the walk once and plugging different work into it, a design known as the
+**template method pattern**. The `EulerTour` class below implements the walk. At the right
+moments it calls two **hook** methods, `_hook_previsit(p, d, path)` and
+`_hook_postvisit(p, d, path, results)`, which do nothing by default. A subclass overrides only
+the hooks it needs, and a new algorithm is a few lines long. Here `d` is the depth of `p`,
+`path` records which child was taken at each level on the way down, and `results` is the list
+of values returned by the tours of the children, so the post-visit hook is the natural place to
+compute anything that is built up from the bottom, such as disk space.
 
 ```python-run
 class EulerTour:
@@ -241,14 +294,20 @@ print("disk space:", DiskSpace(fs).execute())
 PreorderPrinter(N("root", [N("left", [N("ll")]), N("right")])).execute()
 ```
 
-The binary version adds `_hook_invisit`, called between the left and right subtrees.
+`DiskSpace` overrides only the post-visit hook: a node's total is its own size plus the totals
+of its children, giving `disk space: 43` ($1 + 5 + 10 + 20 + 7$). `PreorderPrinter` overrides
+only the pre-visit hook and prints an indented outline. A version for binary trees adds a third
+hook, `_hook_invisit`, called between the left and right subtrees.
 
 ## 7. Case study: expression trees
 
 An arithmetic expression such as $((((3 + 1) \times 3) / ((9 - 5) + 2)) - ((3 \times (7 - 4)) + 6))$
-can be represented by a proper binary tree: **leaves** hold operands (numbers or variables) and
-**internal nodes** hold operators $+, -, \times, /$. The value of an internal node is its operator
-applied to the values of its two subtrees.
+has a tree hidden inside it. Every operator combines two smaller expressions, so make the
+operator a node and the two smaller expressions its left and right subtrees. The result is a
+proper binary tree called an **expression tree**: its **leaves** hold the operands (numbers or
+variables) and its **internal nodes** hold the operators $+, -, \times, /$. The value of an
+internal node is its operator applied to the values of its two subtrees. The parentheses are no
+longer needed, because the shape of the tree says what is grouped with what.
 
 ```mermaid
 graph TD
@@ -279,10 +338,12 @@ graph TD
 
 ### Building a tree from postfix
 
-Scan postfix tokens with a stack of trees: an operand becomes a one-node tree pushed on the stack; an
-operator pops the right tree, then the left tree, and pushes a new tree with the operator at the
-root. At the end the stack holds exactly one tree. (The book builds trees from a fully parenthesised
-infix string with the same stack idea.)
+The stack algorithm that *evaluated* postfix in the stacks lesson also *builds* the tree, with
+one change: push trees instead of numbers. Read the postfix tokens left to right. An operand
+becomes a one-node tree and is pushed. An operator pops the right subtree, then the left
+subtree, and pushes a new tree with the operator at its root and those two below it. At the
+end the stack holds exactly one tree. In the demo, the tree built from the postfix string is
+printed back as fully parenthesised infix and evaluated; the value is $-13$.
 
 ```python-run
 class ExpressionTree:
@@ -401,10 +462,16 @@ Euler tour. Seen this way, all three orders are the same walk around the tree; t
 
 ## 9. Pitfalls
 
-- Recursing on `None` children without a guard (or guarding inconsistently).
-- Popping operands in the wrong order when building expression trees (`a - b` vs `b - a`).
-- Using a stack instead of a queue for level order (that gives a DFS order).
-- Deep recursion on degenerate trees (height ~ $n$): use an explicit stack in Python for large inputs.
+- **Recursing into a missing child.** Decide once where the check for `None` lives (at the top
+  of the function, or before each call) and keep to it.
+- **Popping operands in the wrong order** when building an expression tree. The first pop is the
+  right operand; getting it backwards turns `a - b` into `b - a`.
+- **Using a stack where a queue is needed.** Level order requires a queue; a stack gives a
+  depth-first order instead.
+- **Deep recursion on a lopsided tree.** When the height is close to $n$, a recursive traversal
+  exceeds Python's limit on large inputs. Use an explicit stack.
+- **Doing expensive work at each visit.** The $O(n)$ bound assumes a visit costs $O(1)$;
+  building a new list or string at every node can quietly make the whole traversal quadratic.
 
 ## 10. Summary
 
@@ -417,6 +484,25 @@ Euler tour. Seen this way, all three orders are the same walk around the tree; t
 | Euler tour | pre/in/post hooks | unifies all of the above |
 
 > **Source:** Goodrich, Tamassia & Goldwasser, *Data Structures and Algorithms in Python*, ch. 8.4–8.5.
+
+## Glossary
+
+- **Traversal**: a rule for visiting every node of a tree exactly once.
+- **Visit**: whatever work is done at a node during a traversal.
+- **Preorder**: visit a node before its children.
+- **Postorder**: visit a node after its children.
+- **Inorder**: in a binary tree, visit a node between its left and right subtrees.
+- **Breadth-first (level order)**: visit nodes level by level, using a queue.
+- **Depth-first**: any traversal that goes as deep as possible before backing up (preorder,
+  inorder and postorder are all depth-first).
+- **Generator**: a Python function that produces values one at a time with `yield`.
+- **Euler tour**: a walk around the outline of a tree that passes each node several times.
+- **Template method pattern**: a fixed algorithm that calls replaceable hook methods.
+- **Hook**: a method that does nothing by default and is overridden to add behaviour.
+- **Expression tree**: a binary tree with operands at the leaves and operators at internal
+  nodes.
+- **Prefix / postfix form**: an expression written with each operator before / after its
+  operands.
 
 ## Check yourself
 

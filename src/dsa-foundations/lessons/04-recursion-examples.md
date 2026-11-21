@@ -1,31 +1,59 @@
 # Thinking recursively: four classic examples
 
-**Recursion** is a technique in which a function solves a problem by calling itself on smaller
-instances of the same problem. It is an elegant alternative to loops, and for some structures —
-trees, nested folders, divide-and-conquer — it is by far the most natural way to think.
+> **Before this lesson:** You should be able to write and call a Python function, and know what
+> $O(n)$ and $O(\log n)$ mean from
+> [Big-O, Big-Omega and Big-Theta](#/lesson/dsa-foundations/asymptotic-notation). Induction, used
+> in section 7, is introduced in
+> [Analysing real code and proving it correct](#/lesson/dsa-foundations/analysis-examples).
 
-Recursion shows up everywhere outside programming too: a Russian Matryoshka doll contains a smaller
-doll that contains a smaller doll; a fractal is made of smaller copies of itself; a directory holds
-files and other directories. Goodrich et al. introduce the idea with four examples, which we follow
-here.
+## In plain words
+
+**Recursion** is a way of solving a problem in which a function calls *itself* on a smaller
+version of the same problem, and keeps doing so until the problem is small enough to answer
+outright.
+
+Picture a queue outside a cinema. You want to know your position, but you cannot see the front.
+So you ask the person ahead, "what number are you?" They do not know either, so they ask the
+person ahead of them, and so on. The person at the very front knows without asking: "I am number
+1." That answer travels back down the line, each person adding one, until it reaches you. Nobody
+counted the whole queue; everyone did one small step and trusted the person in front. That is
+recursion: a question passed along in ever smaller form, one case that can be answered directly,
+and answers assembled on the way back.
+
+The same shape appears in a Russian doll that contains a smaller doll, and in a folder that
+contains files and other folders.
+
+Why it matters for a job: trees, nested data such as JSON, file systems, and most "divide the
+problem in half" algorithms are written recursively. Interviewers reach for recursion constantly,
+and being able to say what the smallest case is and how the problem shrinks is the main skill
+they are checking. This lesson teaches it through four examples.
 
 ## 1. Anatomy of a recursive function
 
-Every correct recursive function has:
+Every correct recursive function has two kinds of branches:
 
-1. One or more **base cases** — inputs small enough to answer directly, with no recursive call.
-2. One or more **recursive cases** — the function calls itself on inputs that are *closer to a base
-   case*, then combines the results.
+1. One or more **base cases**: inputs small enough to answer directly, with no further call. In
+   the queue, this is the person at the front.
+2. One or more **recursive cases**: the function calls itself on an input that is *closer to a
+   base case*, then uses the result to build its own answer.
 
-Each call gets its own **activation record** (or *frame*) holding its parameters and local
-variables. When a call is made, the caller's frame is suspended; when the callee returns, the
-caller resumes. Python keeps these frames on the **call stack**.
+How can a function be "inside itself" without confusion? Each call is a separate piece of work
+with its own private copy of the parameters and local variables. Python stores those in a small
+record called an **activation record**, or **frame**. When a function makes a call, its own frame
+is put on hold; when the call returns, the frame picks up where it left off. The frames are kept
+in a pile called the **call stack**: the newest call on top, finished calls removed from the top.
 
-## 2. Example 1 — the factorial
+## 2. Example 1: the factorial
+
+The **factorial** of a whole number $n$, written $n!$, is the product of every whole number from
+1 up to $n$. So $4! = 4 \times 3 \times 2 \times 1 = 24$. It counts the number of ways to arrange
+$n$ different things in a row. Notice that $4! = 4 \times 3!$: a factorial contains a smaller
+factorial. That gives a definition in two lines:
 
 $$n! = \begin{cases} 1 & n = 0 \\ n \cdot (n-1)! & n \ge 1 \end{cases}$$
 
-The definition is itself recursive, and the code mirrors it:
+The first line is the base case (by convention $0! = 1$); the second defines $n!$ using a smaller
+factorial. The code copies the definition:
 
 ```python-run
 def factorial(n):
@@ -36,10 +64,24 @@ def factorial(n):
 print([factorial(k) for k in range(8)])
 ```
 
+**Reading this code line by line**
+
+- `if n == 0: return 1` is the base case. `return` hands a value back to whoever called the
+  function and ends that call.
+- `return n * factorial(n - 1)` is the recursive case. To evaluate it Python must first finish
+  the inner call `factorial(n - 1)`; only then can it multiply by `n` and return.
+- The last line builds a list by calling `factorial(k)` for `k = 0, 1, ..., 7`.
+- Output: `[1, 1, 2, 6, 24, 120, 720, 5040]`.
+
+Follow `factorial(3)` by hand. It needs `factorial(2)`, which needs `factorial(1)`, which needs
+`factorial(0)`, which returns 1 at once. Now the waiting calls finish in reverse order:
+`factorial(1)` returns $1 \times 1 = 1$, `factorial(2)` returns $2 \times 1 = 2$, and
+`factorial(3)` returns $3 \times 2 = 6$. The calls go down, the answers come back up.
+
 ### Recursion traces
 
-A **recursion trace** draws each call as a box, with arrows to the calls it makes and the values
-returned. For `factorial(4)`:
+A **recursion trace** is a drawing of that process: each call is a box, with an arrow to the call
+it makes and a note of the value it returns. For `factorial(4)`:
 
 ```mermaid
 graph TD
@@ -49,8 +91,12 @@ graph TD
   D --> E["factorial(0) returns 1 - base case"]
 ```
 
-There are $n+1$ activations, each doing constant work, so `factorial(n)` runs in $O(n)$ time and
-uses $O(n)$ stack space.
+There are $n+1$ calls, each doing a constant amount of work (one comparison, one multiplication),
+so `factorial(n)` runs in $O(n)$ time. It also uses $O(n)$ memory, because at the deepest point
+all $n + 1$ frames are on the call stack at once, each waiting for the one above it.
+
+The next version prints a line when each call starts and when it returns, indented by how deep
+the call is, so you can watch the stack grow and shrink:
 
 ```python-run
 def factorial_traced(n, depth=0):
@@ -61,16 +107,23 @@ def factorial_traced(n, depth=0):
 factorial_traced(4)
 ```
 
-## 3. Example 2 — drawing an English ruler
+The extra parameter `depth` starts at 0 and grows by one with each nested call; `"  " * depth`
+repeats two spaces that many times to make the indentation. The first five lines of output are
+the "called" messages marching inwards, and the last five are the "returns" messages coming back
+out with the values 1, 1, 2, 6, 24.
 
-An English ruler has a long tick at each whole inch, a slightly shorter tick at each half inch,
-shorter still at quarters, and so on. Look at the pattern between two inch marks with a *central
-tick* of length $L$:
+## 3. Example 2: drawing an English ruler
 
-> an interval with central tick length $L \ge 1$ is: an interval with central length $L-1$, a single
-> tick of length $L$, then another interval with central length $L-1$.
+A ruler marked in inches has a long tick at each whole inch, a slightly shorter tick at each half
+inch, a shorter one at each quarter, and so on. Look at the stretch between two inch marks. In
+the middle is the longest of the minor ticks, say of length $L$. On either side of it is a
+smaller copy of the same pattern, whose middle tick has length $L - 1$:
 
-That **is** a recursive definition. The base case is $L = 0$: draw nothing.
+> an interval with central tick length $L \ge 1$ is: an interval with central length $L-1$, a
+> single tick of length $L$, then another interval with central length $L-1$.
+
+That sentence **is** a recursive definition: the pattern is described using smaller copies of
+itself. The base case is $L = 0$: draw nothing.
 
 ```python-run
 def draw_line(tick_length, tick_label=''):
@@ -94,22 +147,38 @@ def draw_ruler(num_inches, major_length):
 draw_ruler(2, 4)
 ```
 
-`draw_interval` makes **two** recursive calls — this is *binary recursion*, and its trace is a full
-binary tree. How many lines does `draw_interval(c)` print? Let $L(c)$ be that number:
-$L(0) = 0$ and $L(c) = 2L(c-1) + 1$. Unrolling: $L(c) = 2^c - 1$. (Proof by induction:
-$2(2^{c-1} - 1) + 1 = 2^c - 1$.) The output itself is exponential in $c$, so no algorithm could
-do better; the recursion is optimal for this task.
+**Reading this code.** `draw_line` prints one tick: `'-' * tick_length` is a string of that many
+dashes, with an optional label after it. `draw_interval` is the recursive part: draw the smaller
+pattern, then the middle tick, then the smaller pattern again. `draw_ruler(2, 4)` prints a ruler
+two inches long whose inch marks are four dashes: a labelled tick, then for each inch an interval
+followed by the next labelled tick. The output begins `---- 0`, `-`, `--`, `-`, `---`, `-`, `--`,
+`-`, `---- 1` and repeats the same seven minor ticks before `---- 2`.
 
-## 4. Example 3 — binary search
+`draw_interval` makes **two** recursive calls each time. This is called *binary recursion*, and
+its trace branches like a family tree instead of forming a single chain. How many lines does
+`draw_interval(c)` print? Call that number $L(c)$. Nothing is printed for 0, so $L(0) = 0$; and a
+call with $c$ prints two smaller patterns plus one tick, so $L(c) = 2L(c-1) + 1$. Work out a few:
+$L(1) = 1$, $L(2) = 3$, $L(3) = 7$, $L(4) = 15$. Each is one less than a power of two, and
+indeed $L(c) = 2^c - 1$ (check by induction: $2(2^{c-1} - 1) + 1 = 2^c - 1$). The running time is
+exponential in $c$, but so is the amount of output required, so no method could be faster; the
+recursion is as good as possible for this task.
 
-Given a **sorted** sequence `data` and a `target`, binary search keeps a candidate range
-`[low, high]`. Compare against the middle element `data[mid]` with `mid = (low + high) // 2`:
+## 4. Example 3: binary search
 
-- if `target == data[mid]`, found;
-- if `target < data[mid]`, recur on `[low, mid - 1]`;
-- if `target > data[mid]`, recur on `[mid + 1, high]`.
+Suppose a list is **sorted** (in increasing order) and you want to know whether it contains some
+value, the `target`. Checking every item in turn, called **sequential search**, takes $O(n)$.
+Sorted order allows something far better, the method you use to find a word in a dictionary: open
+it in the middle and discard the half that cannot contain the word.
 
-If `low > high` the range is empty: not found.
+**Binary search** keeps two positions, `low` and `high`, marking the stretch of the list that
+could still contain the target. It looks at the middle position, `mid = (low + high) // 2` (`//`
+divides and rounds down), and compares:
+
+- if `target == data[mid]`, it is found;
+- if `target < data[mid]`, the target can only be to the left, so search `[low, mid - 1]`;
+- if `target > data[mid]`, it can only be to the right, so search `[mid + 1, high]`.
+
+If `low > high`, the stretch is empty and the target is absent. That is the base case.
 
 ```python-run
 def binary_search(data, target, low, high):
@@ -137,21 +206,25 @@ print(binary_search(data, 22, 0, len(data) - 1), binary_search(data, 23, 0, len(
 | 3 | 8 | 10 | 9 | 19 | 22 > 19 → right |
 | 4 | 10 | 10 | 10 | 22 | found |
 
-Each call at least halves the number of candidates (`high - low + 1`), so there are at most
-$\lfloor \log_2 n \rfloor + 1$ calls: $O(\log n)$. Compare with **sequential search**, $O(n)$, which
-works on unsorted data. For a billion sorted items, binary search needs about 30 probes.
+The number of candidates still in play is `high - low + 1`. Every call that does not find the
+target cuts that number at least in half, so starting from $n$ there can be at most
+$\lfloor \log_2 n \rfloor + 1$ calls: $O(\log n)$. For 16 items that is at most 5 calls; for a
+billion sorted items, about 30. Sequential search would need up to a billion. The price is that
+the data must be sorted first.
 
 > [!INTERVIEW]
-> Binary search bugs are classic: using `mid = (low + high) / 2` (float in Python 3), updating with
-> `high = mid` instead of `mid - 1` (infinite loop), or using `low < high` and missing the
-> one-element case. State your invariant — "if target is present, it lies in `data[low..high]`" —
-> and every update follows from it.
+> Binary search is famous for small bugs: writing `mid = (low + high) / 2` (in Python 3 a single
+> slash gives a fraction such as `7.5`, which cannot be used as a position), updating with
+> `high = mid` instead of `mid - 1` (the range can stop shrinking, so the search never ends), or
+> looping while `low < high` and skipping the one-element case. Say your invariant aloud, "if the
+> target is present, it lies in `data[low..high]`", and every update follows from it.
 
-## 5. Example 4 — file systems
+## 5. Example 4: file systems
 
-A directory contains files and other directories, nested arbitrarily deep. The *cumulative disk
-usage* of a directory is its own immediate size plus the cumulative usage of every entry inside it.
-Recursive by nature:
+A folder (programmers say **directory**) contains files and other directories, nested as deep as
+you like. The *total disk usage* of a directory is the space it takes itself plus the total
+usage of everything inside it. The definition refers to itself, so the computation is recursive.
+In **pseudocode**, an informal mix of code and English used to describe an algorithm:
 
 ```
 DiskUsage(path):
@@ -162,9 +235,11 @@ DiskUsage(path):
     return total
 ```
 
-The book implements this with the `os` module: `os.path.getsize`, `os.path.isdir`, `os.listdir` and
-`os.path.join`. Here is a self-contained version over a simulated file system (nested dicts), so you
-can run it in the browser:
+Notice that this function can make *many* recursive calls, one per child. On a real computer you
+would write it with Python's `os` module (`os.path.getsize`, `os.path.isdir`, `os.listdir` and
+`os.path.join`). So that it runs in the browser, the version below works on a pretend file system
+built from nested dictionaries: a dictionary stands for a directory, and a whole number stands
+for a file of that many kilobytes.
 
 ```python-run
 # A simulated file system: dict = directory, int = file size in KB; directories themselves cost 1 KB
@@ -188,23 +263,38 @@ def disk_usage(name, node, depth=0):
 disk_usage("/", fs)
 ```
 
-Notice the report is printed **after** children are processed — this is a *postorder* traversal,
-which we revisit with trees. The Unix `du` command reports exactly this.
+**Reading this code.** `isinstance(node, int)` asks "is this a whole number?", in other words "is
+this a file?". The line `total = node if isinstance(node, int) else 1` starts the total at the
+file's size, or at 1 KB for a directory's own bookkeeping. If the node is a dictionary, the loop
+`for child, sub in node.items()` visits each name and its contents, and adds the usage of each by
+calling `disk_usage` again. The `print` comes last, so a directory's line appears only after all
+the lines of its contents. The final line of output is `5126  /`, the grand total in kilobytes.
+
+Handling the children first and the parent afterwards is called a *postorder* visit; it returns
+in the trees module. The Unix command `du` ("disk usage") prints a report in exactly this order.
 
 ### How expensive is it?
 
-A single call may loop over many children, so we cannot simply say "constant work per call". The
-book's insight is to **count the total across all calls**: every entry of the file system is the
-argument of exactly one recursive call, and each entry appears in exactly one parent's loop. So the
-total work is proportional to the number $n$ of entries: $O(n)$. This style — charging the cost of
-loop iterations to the children rather than the parent — previews amortised reasoning.
+One call may loop over many children, so "a constant amount of work per call" is not true here.
+The way out is to **count the total across all calls** instead of call by call. Every entry of
+the file system is the subject of exactly one call. And every entry is handled exactly once by a
+loop, the loop of its one parent directory. So the total number of loop iterations, over the
+whole run, is the number of entries $n$, and the total work is $O(n)$. Billing each loop
+iteration to the child instead of the parent is a small example of the amortised reasoning
+mentioned in the previous lesson.
 
 ## 6. How Python runs recursion
 
-- Each call pushes a frame; returning pops it. The depth of recursion is the stack height.
-- Python limits the depth (by default about 1000 frames) to catch infinite recursion; exceeding it
-  raises `RecursionError`. You can raise the limit with `sys.setrecursionlimit`, but deep linear
-  recursion is better rewritten as a loop (see the design lesson).
+- Each call adds a frame to the top of the call stack (programmers say it is *pushed*), and
+  returning removes it (*popped*). The depth of the recursion is the height of the stack.
+- Python refuses to let the stack grow past a fixed depth, about 1000 frames by default. This
+  catches recursions that would never end; exceeding the limit raises an error named
+  `RecursionError`. The limit can be raised with `sys.setrecursionlimit`, but a recursion that
+  goes thousands of levels deep in a single chain is better rewritten as a loop (the design
+  lesson shows how).
+
+The demo asks for the limit, then deliberately exceeds it. `try:` runs the risky call and
+`except RecursionError as e:` catches the error so that the program can print it and carry on.
 
 ```python-run
 import sys
@@ -226,7 +316,9 @@ the proof, and the recursive call is justified by the induction hypothesis.
 **Claim.** `binary_search(data, target, low, high)` returns `True` if and only if `target` occurs in
 `data[low..high]`, provided `data` is sorted.
 
-*Proof by strong induction on the size $r = high - low + 1$ of the range.*
+*Proof by induction on the size $r = high - low + 1$ of the range.* (This is the "strong" form of
+induction, in which the step may assume the claim for every smaller size, not only for $r - 1$.
+Below, "iff" abbreviates "if and only if", and the mark ∎ signals the end of a proof.)
 
 - **Base case, $r \le 0$** (`low > high`): the range is empty, so the target cannot occur in it, and
   the function returns `False`. Correct.
@@ -245,11 +337,16 @@ recursion) terminate. Drop either one and both the proof and the program break.
 
 ### Variation: the first position at or after the target
 
-The yes/no version throws information away. A more useful primitive — the one behind Python's
-`bisect` module and the sorted maps later in this track — returns the **leftmost index whose element
-is $\ge$ target** (equal to `len(data)` if there is none). It is where the target *is* if present,
-and where it *would be inserted* if absent. The recursion needs only a small change: never stop
-early, and keep `mid` as a candidate when `data[mid] >= target`.
+The yes/no version throws information away. A more useful building block, the one behind
+Python's `bisect` module and the sorted maps later in this track, returns the **leftmost position
+whose element is $\ge$ the target** (or `len(data)` if every element is smaller). That position
+is where the target *is* if it is present, and where it *would be inserted* to keep the list
+sorted if it is absent. The recursion needs two small changes: never stop early, and keep `mid`
+as a candidate when `data[mid] >= target`.
+
+In the code, `low=0, high=None` are **default values**: a caller may leave those arguments out,
+and the function fills in `high = len(data)` on the first call. The last lines compare each
+answer with `bisect.bisect_left`, the standard-library function that computes the same thing.
 
 ```python-run
 import bisect
@@ -300,11 +397,18 @@ lower bounds, as in the last line of the cell).
 
 ## 8. Pitfalls
 
-- **Missing or unreachable base case** → infinite recursion → `RecursionError`.
-- **Not making progress**: `binary_search(data, target, low, mid)` can loop forever when
-  `low == mid`.
-- **Recomputing work** in multiple recursive calls (the next lesson's `bad_fibonacci`).
-- **Hidden copying**: passing `data[1:]` to each call costs $O(n)$ per call — pass indices instead.
+- **A missing or unreachable base case.** The calls never stop, the stack fills up, and Python
+  raises `RecursionError`. `factorial(-1)` does this with the code above: it counts down past
+  zero and never meets `n == 0`.
+- **Not making progress.** Recursing with `binary_search(data, target, low, mid)` can repeat the
+  same range forever when `low == mid`. Every recursive call must be on a strictly smaller
+  problem.
+- **Recomputing work** in several recursive calls. The next lesson's `bad_fibonacci` solves the
+  same subproblems again and again and becomes exponentially slow.
+- **Hidden copying.** Passing a slice such as `data[1:]` to each call copies the rest of the list
+  every time, costing $O(n)$ per call. Pass positions (`low`, `high`) and leave the list alone.
+- **Trying to hold the whole trace in your head.** Trust the recursive call to do its job on the
+  smaller input, and check only the base case and the combining step.
 
 ## 9. Summary
 
@@ -316,6 +420,23 @@ lower bounds, as in the last line of the cell).
 | disk usage | multiple | $O(n)$ for $n$ entries |
 
 > **Source:** Goodrich, Tamassia & Goldwasser, *Data Structures and Algorithms in Python*, ch. 4.1.
+
+## Glossary
+
+- **Recursion**: solving a problem by having a function call itself on smaller inputs.
+- **Base case**: an input answered directly, with no recursive call.
+- **Recursive case**: a branch in which the function calls itself on a smaller input.
+- **Activation record (frame)**: the private storage for one call's parameters and variables.
+- **Call stack**: the pile of frames for calls that have started and not yet returned.
+- **Recursion trace**: a diagram of the calls a recursion makes and the values they return.
+- **Factorial ($n!$)**: the product $1 \times 2 \times \cdots \times n$, with $0! = 1$.
+- **Binary recursion**: recursion in which a call makes two recursive calls.
+- **Sequential search**: checking items one after another; $O(n)$.
+- **Binary search**: repeatedly halving a sorted range to find a value; $O(\log n)$.
+- **Lower bound**: the leftmost position in a sorted list whose element is at least the target.
+- **Directory**: a folder; a file-system entry that contains other entries.
+- **Pseudocode**: an informal, language-neutral description of an algorithm.
+- **RecursionError**: the error Python raises when calls nest deeper than its limit.
 
 ## Check yourself
 

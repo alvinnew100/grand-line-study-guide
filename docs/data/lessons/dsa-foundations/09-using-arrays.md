@@ -1,17 +1,36 @@
 # Using arrays: insertion sort, ciphers and 2-D data
 
-Having seen how arrays work, we now put them to use in four classic case studies from the book:
-maintaining a high-score table, sorting with insertion sort, the Caesar cipher, and two-dimensional
-data such as game boards.
+> **Before this lesson:** You should know that a list is an array of cells, that inserting into
+> the middle means shifting items along, and what a reference is. All of that is in
+> [Low-level arrays and Python's sequence types](#/lesson/dsa-foundations/low-level-arrays).
+> Python classes were introduced in
+> [Dynamic arrays and amortised analysis](#/lesson/dsa-foundations/dynamic-arrays).
+
+## In plain words
+
+The last two lessons explained what an array *is*. This one is four small projects that use
+arrays the way working programs do: a leaderboard that stays in order, a method for sorting, a
+secret code, and grids such as game boards and tables of numbers.
+
+One picture ties the first two together. When you are dealt playing cards one at a time, you
+keep the cards in your hand in order. Each new card is slid leftwards past every card that is
+bigger than it, until it sits in the right place. A leaderboard does this with each new score,
+and doing it for every item of a list is a sorting method called insertion sort.
+
+Why it matters for a job: insertion sort is the first sorting algorithm interviewers expect you
+to write from memory, and real sorting libraries still use it for short lists. Grids built from
+lists of lists appear in a large share of interview problems (boards, images, mazes), and the
+"all my rows changed at once" bug in section 4 catches almost everyone once.
 
 ## 1. Storing high scores
 
-A game keeps the top 10 scores in descending order. Each entry has a name and a score. The book's
-`Scoreboard` stores entries in a fixed-capacity list and maintains them sorted.
+A game keeps its best few scores in order, highest first. Each entry has a player's name and a
+score. The `Scoreboard` class below stores entries in a list of fixed capacity and keeps them
+sorted at all times.
 
-**Adding an entry** — a new score qualifies if the board is not full or it beats the lowest score.
-Starting at the end, shift every entry with a lower score one cell to the right, then drop the new
-entry into the gap.
+**Adding an entry.** A new score earns a place if the board still has room or if it beats the
+lowest score on the board. To place it, start at the bottom of the board and move every entry
+with a lower score one cell to the right, then put the new entry into the gap that opens up.
 
 ```python-run
 class GameEntry:
@@ -45,17 +64,36 @@ for name, s in [("Mike", 1105), ("Rob", 750), ("Paul", 720), ("Anna", 660),
 print(board)
 ```
 
-Adding costs $O(c)$ for capacity $c$ — the shifting. Note "Jack" never makes the board, and when
-"Jill" arrives the lowest entry drops off the end. This shifting step is exactly the inner loop of
-insertion sort.
+**Reading this code.**
+
+- `GameEntry` is a small class holding a name and a score. `__str__` is the hook Python calls
+  when an object is printed.
+- `Scoreboard.__init__` creates `capacity` empty cells (`None`) and sets the count `_n` to 0.
+- In `add`, the variable `good` is `True` when the board has room, or when the new score beats
+  the last entry (`self._board[-1]`; index `-1` means "last cell").
+- If the board is not full, `_n` grows by one. If it is full, `_n` stays put, and the lowest
+  entry is about to be overwritten.
+- `j` starts at the last used cell. The `while` loop copies the entry on the left into cell `j`
+  as long as that entry has a lower score, moving `j` leftwards. When it stops, cell `j` is the
+  right home for the new entry.
+
+The board printed at the end is Ruffy 1200, Mike 1105, Rob 750, Jill 740, Paul 720. Jack (510)
+arrived when the board was full and did not beat the lowest score, so he never appears. Jill's
+arrival pushed Rose off the bottom, and Ruffy's pushed Anna off.
+
+Adding costs $O(c)$ for a board of capacity $c$, all of it shifting. That shifting loop is
+exactly the inner loop of insertion sort.
 
 ## 2. Insertion sort
 
-**Problem:** rearrange a sequence so its elements are in nondecreasing order.
+**Problem:** rearrange a list so that its items are in *nondecreasing* order, meaning each item
+is at least as large as the one before it. (We say "nondecreasing" and not "increasing" because
+equal items are allowed.)
 
-**Idea:** grow a sorted prefix one element at a time. The first element alone is sorted. Take the
-next element (the *current* element) and slide it left past every larger element until it is in
-place. Repeat for each element.
+**Idea:** grow a sorted stretch at the front of the list, one item at a time. A single item is
+sorted by definition. Take the next item (the *current* one) and slide it left past every larger
+item until it is in place; now the sorted stretch is one longer. Repeat until the stretch is the
+whole list.
 
 ```
 Algorithm InsertionSort(A):
@@ -79,9 +117,18 @@ def insertion_sort(A):
 insertion_sort(['B', 'C', 'D', 'A', 'E', 'H', 'G', 'F'])
 ```
 
+**Reading this code.** The outer loop takes `k = 1, 2, ..., n - 1`; item 0 needs no work. `cur`
+keeps a copy of the item being inserted, because its cell is about to be overwritten. The
+`while` loop runs as long as there is an item to the left (`j > 0`) and that item is larger than
+`cur`; each pass copies the larger item one cell right and steps `j` left. When the loop ends,
+`A[j] = cur` drops the saved item into the gap. The `print` shows the list after each insertion:
+the letters `B C D` stay put, then `A` travels all the way to the front, and so on until the
+list reads `A B C D E F G H`.
+
 ### Dry run
 
-Sorting `[5, 2, 4, 6, 1, 3]`:
+A **dry run** means carrying out an algorithm by hand on a small input. Sorting
+`[5, 2, 4, 6, 1, 3]`, with a bar marking the end of the sorted stretch:
 
 | k | cur | sorted prefix after insertion |
 |---|---|---|
@@ -93,39 +140,55 @@ Sorting `[5, 2, 4, 6, 1, 3]`:
 
 ### Analysis
 
-- **Worst case** (reverse-sorted input): the inner loop runs $k$ times for each $k$, so
+- **Worst case** (the input is in reverse order): every new item must travel to the front, so
+  the inner loop runs $k$ times for each $k$, and
   $1 + 2 + \cdots + (n-1) = n(n-1)/2 = \Theta(n^2)$.
-- **Best case** (already sorted): the inner loop exits immediately: $\Theta(n)$.
-- More precisely the running time is $O(n + I)$ where $I$ is the number of **inversions** — pairs
-  $(i, j)$ with $i < j$ but $A[i] > A[j]$ — because each shift fixes exactly one inversion. So
-  insertion sort is excellent for *nearly sorted* data.
-- It is **in place** ($O(1)$ extra space) and **stable** (equal elements keep their order, since we
-  shift only strictly greater elements).
+- **Best case** (the input is already sorted): the inner loop's test fails at once every time:
+  $\Theta(n)$.
+- **In between.** An **inversion** is a pair of items that are in the wrong order relative to
+  each other: positions $i < j$ with $A[i] > A[j]$. The list `[2, 3, 1]` has two inversions,
+  (2, 1) and (3, 1). Each shift in insertion sort repairs exactly one inversion, so the running
+  time is $O(n + I)$, where $I$ is the number of inversions. A nearly sorted list has few
+  inversions, which makes insertion sort excellent for nearly sorted data.
+- It is **in place**: it rearranges the list using only $O(1)$ extra memory (the variables
+  `cur`, `j`, `k`).
+- It is **stable**: items that compare equal stay in their original relative order, because the
+  loop shifts only items that are *strictly* greater. Stability matters when records are sorted
+  by one field after another (by name, then by date, for instance).
 
 > [!INTERVIEW]
-> Why do production sorts (Timsort, introsort) use insertion sort for small runs? For $n$ below
-> roughly 16–64, its tiny constant factor and cache-friendly shifting beat $O(n \log n)$ algorithms,
-> and it is adaptive to existing order.
+> Why do the sorting routines inside real languages (Python's Timsort, C++'s introsort) switch
+> to insertion sort for short stretches? For $n$ below roughly 16 to 64, its tiny overhead and
+> its habit of touching neighbouring memory cells beat the $O(n \log n)$ algorithms, and it
+> speeds up automatically when the data is already partly ordered (it is *adaptive*).
 
 ### Loop invariant
 
-At the start of iteration $k$, `A[0:k]` holds the original first $k$ elements in sorted order.
-Initially true ($k = 1$); each iteration inserts `A[k]` in place, maintaining it; at termination
-$k = n$, so the whole list is sorted.
+Using the tool from the analysis lesson: at the start of iteration $k$, `A[0:k]` holds the
+original first $k$ items in sorted order. This is true at the start ($k = 1$, a single item).
+Each iteration inserts `A[k]` into its place, so the statement holds for $k + 1$. When the loop
+finishes, $k = n$, and the statement says the whole list is sorted.
 
 ## 3. Simple cryptography: the Caesar cipher
 
-**Encryption** turns *plaintext* into *ciphertext*; **decryption** reverses it. The Caesar cipher,
-reportedly used by Julius Caesar, replaces each letter with the letter $r$ positions later in the
-alphabet, wrapping from Z back to A. With $r = 3$: A→D, B→E, …, X→A, Y→B, Z→C.
+**Encryption** turns a readable message, the *plaintext*, into a scrambled one, the
+*ciphertext*; **decryption** reverses it. The Caesar cipher, said to have been used by Julius
+Caesar, replaces each letter by the letter $r$ places later in the alphabet, wrapping round from
+Z back to A. With $r = 3$: A becomes D, B becomes E, and at the end X becomes A, Y becomes B and
+Z becomes C.
 
-Treat letters as numbers $A = 0, \ldots, Z = 25$. Then
+To compute with letters, number them $A = 0, \ldots, Z = 25$. The wrap-around is handled by the
+**modulo** operation, written `mod` in mathematics and `%` in Python: $a \bmod 26$ is the
+remainder when $a$ is divided by 26. So $(23 + 3) \bmod 26 = 0$, which turns X into A. It is
+clock arithmetic with 26 hours. The two rules are
 
 $$\text{encrypt}(x) = (x + r) \bmod 26, \qquad \text{decrypt}(y) = (y - r) \bmod 26.$$
 
-Python's `ord` and `chr` convert between characters and code points: `ord('C') - ord('A')` is 2. The
-book builds two 26-character lookup strings (an *encoder* and a *decoder*) and translates using a
-**list of characters**, because strings are immutable:
+Python's `ord` gives the number that stands for a character and `chr` goes the other way; since
+the capital letters have consecutive numbers, `ord('C') - ord('A')` is 2. The class below
+prepares two 26-character lookup strings (an *encoder* and a *decoder*) once, and then
+translates a message by replacing its letters in a **list of characters**, because a string
+cannot be modified in place:
 
 ```python-run
 class CaesarCipher:
@@ -160,14 +223,21 @@ print('Secret: ', coded)
 print('Message:', cipher.decrypt(coded))
 ```
 
-Each message of length $n$ is transformed in $O(n)$. Note that Python's `%` returns a non-negative
-result for a positive modulus even when the left side is negative — `(-3) % 26 == 23` — which makes
-decryption painless.
+The demo prints `Secret:  WKH HDJOH LV LQ SODB; PHHW DW MRH'V.` and then the original message
+again. In `_transform`, `isupper()` is true only for capital letters, so spaces and punctuation
+pass through unchanged. Each character is handled in constant time, so a message of length $n$
+takes $O(n)$.
+
+One detail makes decryption painless in Python: `%` with a positive number on the right never
+gives a negative result, even when the left side is negative. `(-3) % 26` is `23`, so
+decrypting A with shift 3 gives X as it should. In several other languages (C, Java,
+JavaScript) the same expression gives $-3$ and you must add 26 yourself.
 
 > [!WARNING]
-> The Caesar cipher is trivially breakable: there are only 25 possible shifts, so try them all
-> (brute force), or use letter-frequency analysis — "E" is the most common English letter. It is a
-> teaching example, not security.
+> The Caesar cipher offers no real secrecy. There are only 25 useful shifts, so an attacker can
+> try them all, an approach called **brute force**. Or they can count letters: E is the most
+> common letter in English, so the most common letter in the ciphertext probably stands for E.
+> It is a teaching example, not security.
 
 ```python-run
 # Breaking a Caesar cipher by brute force: print all 26 candidates
@@ -190,8 +260,11 @@ data = [[0] * c] * r          # WRONG: r references to the SAME row
 data = [[0] * c for j in range(r)]   # RIGHT: r independent rows
 ```
 
-The second form is a notorious bug: changing `data[2][0]` changes column 0 of *every* row, because
-all rows are the same list object.
+Here `r` is the number of rows and `c` the number of columns. The second form is a notorious
+bug, and the referential-array model explains it: `[[0] * c]` is a list with one cell that
+refers to one row, and `* r` copies that *reference* `r` times. Every "row" is the same list
+object, so changing `data[2][0]` changes column 0 of *every* row. The third form runs
+`[0] * c` afresh for each row and so creates `r` separate lists.
 
 ```python-run
 bad = [[0] * 3] * 2
@@ -204,8 +277,12 @@ print("good:", good)
 
 ### 4.2 Case study: tic-tac-toe
 
-The book represents the board as a 3×3 list of lists of characters (`'X'`, `'O'` or a space) and
-checks for a winner by examining all rows, columns and both diagonals.
+The output is `bad:  [[99, 0, 0], [99, 0, 0]]` and `good: [[99, 0, 0], [0, 0, 0]]`.
+
+A noughts-and-crosses board is a 3×3 list of lists of characters (`'X'`, `'O'` or a space). The
+class below places marks, refuses illegal moves by raising `ValueError`, and checks for a winner
+by testing all three rows, all three columns and both diagonals. The expression
+`mark == b[0][0] == b[0][1] == b[0][2]` is true when all three cells of the top row hold `mark`.
 
 ```python-run
 class TicTacToe:
@@ -242,17 +319,21 @@ print('Winner:', game.winner() or 'tie')
 
 ### 4.3 Row-major order and cost
 
-For an $r \times c$ grid, visiting every cell is $\Theta(rc)$. In compact array libraries (NumPy, C),
-a 2-D array is stored in **row-major order** — row 0, then row 1, … — as one contiguous block, and
-`A[i][j]` lives at offset $i \cdot c + j$. Iterating row by row walks memory sequentially (cache
-friendly); iterating column by column jumps by $c$ each step. A Python list of lists is not
-contiguous, but the same "iterate rows in the outer loop" habit is still the idiomatic choice.
+For a grid with $r$ rows and $c$ columns, visiting every cell takes $\Theta(rc)$ time. In
+libraries that store grids compactly (NumPy, or arrays in C), a two-dimensional array is laid
+out in memory as one unbroken block: all of row 0, then all of row 1, and so on. This layout is
+called **row-major order**, and cell `A[i][j]` sits $i \cdot c + j$ cells from the start. Going
+through such a grid row by row walks straight through memory, which processors handle quickly;
+going column by column jumps $c$ cells at every step. A Python list of lists is not one block,
+but "rows in the outer loop, columns in the inner loop" is still the customary way to write it.
 
 ## 5. Completing the scoreboard: removal, and the cost of keeping an array sorted
 
-The book's scoreboard discussion also covers **removing** the entry at a given rank (say, a
-disqualified cheater). It is the mirror image of insertion: every entry *below* the removed one
-shifts one cell **left** to close the gap, and the vacated last cell is reset to `None`.
+A scoreboard also needs to **remove** the entry at a given rank, for instance a player caught
+cheating. Removal is the mirror image of insertion: every entry *below* the removed one moves
+one cell **left** to close the gap, and the last used cell is reset to `None`. This demo uses
+plain tuples `(name, score)` and module-level functions; `global n` lets a function change the
+variable `n` defined outside it.
 
 ```python-run
 board = [("Mike", 1105), ("Rob", 750), ("Paul", 720), ("Anna", 660), ("Rose", 590), None, None]
@@ -304,8 +385,15 @@ later modules are designed to resolve.
 
 ## 6. Working with matrices as lists of lists
 
-A table of numbers with $r$ rows and $c$ columns is the workhorse of scientific computing. Three
-operations show how to reason about cost on 2-D data.
+A rectangular table of numbers with $r$ rows and $c$ columns is called a **matrix**, and it is
+the workhorse of scientific computing and machine learning. Three operations show how to reason
+about cost on two-dimensional data:
+
+- The **transpose** of a matrix swaps rows and columns: row $i$ becomes column $i$.
+- The **product** of an $r \times m$ matrix $A$ and an $m \times c$ matrix $B$ is an
+  $r \times c$ matrix whose entry in row $i$, column $j$ is found by going along row $i$ of $A$
+  and down column $j$ of $B$ together, multiplying matching entries and adding the results.
+- **Spiral order** lists the cells starting along the top row and winding inwards clockwise.
 
 ```python-run
 def transpose(A):
@@ -366,20 +454,44 @@ code — typically 10 to 100 times faster than the pure-Python versions above.
 
 ## 7. Pitfalls
 
-- `[[0]*c]*r` aliasing.
-- In insertion sort, comparing with `>=` instead of `>` breaks stability.
-- Forgetting to wrap with `% 26` in ciphers (or using `-` with a language whose `%` can be negative).
-- Mutating a string in place — impossible; convert to a list, then `join`.
+- **Rows that are all the same list.** `[[0]*c]*r` makes `r` references to one row.
+- **Breaking stability.** In insertion sort, shifting while `A[j-1] >= cur` (instead of `>`)
+  moves equal items past each other, and the sort is no longer stable.
+- **Forgetting the wrap-around.** Leave out `% 26` in a cipher and Z turns into a symbol beyond
+  the alphabet. And in languages whose `%` can return a negative number, add 26 before taking
+  the remainder when decrypting.
+- **Trying to change a string in place.** It cannot be done; convert to a list, change the list,
+  then `join`.
+- **Shifting in the wrong direction.** Insertion copies right to left, removal left to right.
 
 ## 8. Summary
 
-- Sorted arrays support insertion by shifting: $O(n)$ per insert.
-- Insertion sort: $O(n^2)$ worst, $O(n)$ best, $O(n + \text{inversions})$ in general; in place and
-  stable.
-- Caesar cipher: modular arithmetic on letter indices, $O(n)$ per message.
-- 2-D data: list of lists built with a comprehension.
+- A sorted array accepts a new item by shifting larger items along: $O(n)$ per insertion.
+- Insertion sort repeats that step for each item: $O(n^2)$ in the worst case, $O(n)$ in the
+  best, $O(n + \text{inversions})$ in general; it is in place and stable.
+- The Caesar cipher is modular arithmetic on letter numbers, $O(n)$ per message, and easy to
+  break.
+- Two-dimensional data is a list of lists, built with a comprehension so that the rows are
+  separate objects.
 
 > **Source:** Goodrich, Tamassia & Goldwasser, *Data Structures and Algorithms in Python*, ch. 5.5–5.6.
+
+## Glossary
+
+- **Nondecreasing order**: each item is greater than or equal to the one before it.
+- **Insertion sort**: sorting by inserting each item into a growing sorted stretch at the front.
+- **Dry run**: executing an algorithm by hand on a small example.
+- **Inversion**: a pair of items that appear in the wrong order relative to each other.
+- **In place**: using only a constant amount of memory beyond the input itself.
+- **Stable sort**: a sort that keeps equal items in their original relative order.
+- **Adaptive**: faster on inputs that are already partly sorted.
+- **Encryption / decryption**: scrambling a message / recovering the original.
+- **Plaintext / ciphertext**: the readable message / its scrambled form.
+- **Modulo (`%`)**: the remainder after division; arithmetic that wraps round.
+- **Brute force**: solving a problem by trying every possibility.
+- **Matrix**: a rectangular table of numbers.
+- **Transpose**: a matrix with its rows and columns swapped.
+- **Row-major order**: storing a grid row after row in one block of memory.
 
 ## Check yourself
 

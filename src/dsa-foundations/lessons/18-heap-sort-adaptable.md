@@ -1,12 +1,35 @@
 # PQ sorting, heap-sort and adaptable priority queues
 
-A priority queue hands back its elements in key order — so any priority queue is secretly a sorting
-algorithm. This lesson shows how the choice of PQ implementation yields **selection-sort**,
-**insertion-sort** or **heap-sort**, develops the in-place version of heap-sort, and then extends
-the heap to an **adaptable priority queue** that supports updating and removing arbitrary entries —
-the structure Dijkstra's and Prim's algorithms need.
+> **Before this lesson:** You should know the priority queue ADT, the binary heap, up-heap and
+> down-heap bubbling, and bottom-up construction, all from
+> [Priority queues and binary heaps](#/lesson/dsa-foundations/heaps). Insertion sort, "in place"
+> and "stable" come from [Using arrays](#/lesson/dsa-foundations/using-arrays).
+
+## In plain words
+
+This lesson does two things with the heap from the previous lesson.
+
+First, it turns a priority queue into a way of sorting. The idea is almost embarrassingly
+direct: put everything into a priority queue, then take everything out. Since a priority queue
+always hands back the smallest item, the items come out in order. It is like sorting a hand of
+cards by throwing them all on the table and repeatedly picking up the lowest one. How fast this
+is depends entirely on how the priority queue is built, and using a heap gives **heap-sort**,
+one of the classic fast sorting algorithms.
+
+Second, it fixes a limitation. In a real emergency room a patient sometimes gets worse (their
+priority must change) or goes home (they must be removed from the middle of the queue). A plain
+heap cannot find a particular item quickly. Giving each item a "ticket" that records where it
+currently sits in the heap solves that.
+
+Why it matters for a job: heap-sort is the standard answer to "which sort is guaranteed
+$O(n \log n)$ and needs no extra memory?". And updating priorities is exactly what the
+shortest-path and network-design algorithms later in this track need.
 
 ## 1. Sorting with a priority queue
+
+The abbreviation **PQ** means priority queue. The sorting recipe has two phases. Here `C` is the
+collection to sort, held in a positional list, and `PriorityQueue` stands for any implementation
+of the ADT:
 
 ```python
 def pq_sort(C):
@@ -21,12 +44,17 @@ def pq_sort(C):
         C.add_last(v)
 ```
 
-The running time depends entirely on the PQ's `add` and `remove_min`.
+Each item is used as both its own key and its value. The running time depends entirely on how
+fast the priority queue's `add` and `remove_min` are, so each of the three implementations from
+the previous lesson gives a different sorting algorithm, and two of them turn out to be
+algorithms with names of their own.
 
 ### 1.1 Selection-sort: unsorted-list PQ
 
-Phase 1 is $O(n)$ ($n$ constant-time adds). Phase 2 repeatedly *selects* the minimum from what is
-left: $O(n) + O(n-1) + \cdots + O(1) = O(n^2)$.
+With an unsorted list, each `add` is $O(1)$, so phase 1 costs $O(n)$. In phase 2 every
+`remove_min` scans whatever is left to *select* the smallest:
+$O(n) + O(n-1) + \cdots + O(1) = O(n^2)$. This is **selection-sort**: repeatedly find the
+smallest remaining item and move it to the output.
 
 | stage | output collection C | unsorted priority queue P |
 |---|---|---|
@@ -39,22 +67,26 @@ left: $O(n) + O(n-1) + \cdots + O(1) = O(n^2)$.
 | 5th | (1, 2, 3, 6, 8) | (9) |
 | 6th | (1, 2, 3, 6, 8, 9) | () |
 
-Selection sort is $\Theta(n^2)$ on **every** input — the scan for the minimum never gets shorter.
+Selection-sort is $\Theta(n^2)$ on **every** input, even one that is already sorted, because the
+scan for the smallest item must always look at everything that remains.
 
 ### 1.2 Insertion-sort: sorted-list PQ
 
-Phase 1 inserts each element into its sorted position: $O(1) + O(2) + \cdots + O(n) = O(n^2)$ worst
-case. Phase 2 is $O(n)$. This is exactly insertion sort; its best case (already sorted input,
-scanning from the back) is $O(n)$.
+With a sorted list, the work moves to phase 1: each `add` walks to the right place for the new
+item, $O(1) + O(2) + \cdots + O(n) = O(n^2)$ in the worst case. Phase 2 takes the first item
+$n$ times, $O(n)$ in all. This is the **insertion-sort** of the arrays module, and as there, its
+best case (input already in order, with the walk starting from the back) is $O(n)$.
 
 ### 1.3 Heap-sort: heap PQ
 
-Phase 1: $n$ adds at $O(\log n)$ each — or $O(n)$ using bottom-up construction. Phase 2: $n$
-`remove_min` calls, the $j$-th costing $O(\log(n - j + 1))$. Total:
+With a heap, both phases are fast. Phase 1 is $n$ adds at $O(\log n)$ each, or $O(n)$ in total
+using bottom-up construction. Phase 2 is $n$ calls of `remove_min`, each $O(\log n)$. Together:
 
-> **Proposition.** Even on its worst input, heap-sort needs only $O(n\log n)$ time for $n$ items.
+> **Claim.** Even on its worst input, heap-sort needs only $O(n\log n)$ time for $n$ items.
 
-That is dramatically better than $O(n^2)$, and it is a *guarantee*, unlike quick-sort's.
+For a million items that is roughly twenty million steps instead of a million million. And it is
+a *guarantee* on every input, which the otherwise excellent quick-sort of a later lesson cannot
+offer.
 
 | PQ implementation | Phase 1 | Phase 2 | Name |
 |---|---|---|---|
@@ -64,15 +96,20 @@ That is dramatically better than $O(n^2)$, and it is a *guarantee*, unlike quick
 
 ## 2. In-place heap-sort
 
-If the collection is an array, heap-sort needs **no auxiliary structure**: use the left part of the
-array as the heap and the right part as the sorted output.
+The recipe above uses a separate priority queue, which costs $O(n)$ extra memory. When the data
+is in an array, heap-sort needs **no second structure at all**. A heap *is* an array, so let the
+left part of the array be the heap and the right part hold the finished, sorted output, with the
+boundary between them moving left one cell at a time.
 
-To sort into **increasing** order, use a **max-heap** (parent key $\ge$ children's keys):
+To end up in **increasing** order, use a **max-heap** (each parent at least as large as its
+children). That may look backwards, but it is what makes the trick work: the largest item
+belongs in the last cell, and removing it from the heap frees exactly that cell.
 
-1. **Phase 1 — build.** Turn the array into a max-heap. Either grow the heap one element at a time
-   (the heap occupies `A[0..i-1]`, add `A[i]` with up-heap), or better, heapify bottom-up in $O(n)$.
-2. **Phase 2 — extract.** For `end = n-1` down to `1`: swap the maximum `A[0]` with `A[end]` (it is
-   now in its final place), shrink the heap to `A[0..end-1]`, and down-heap the new root.
+1. **Phase 1: build.** Rearrange the array into a max-heap, ideally with bottom-up heapify in
+   $O(n)$.
+2. **Phase 2: extract.** For `end` going from `n-1` down to `1`: swap the largest item `A[0]`
+   with `A[end]`, which puts it in its final place; treat the heap as now ending at
+   `A[end-1]`; and bubble the new root down to restore heap order.
 
 ```mermaid
 graph LR
@@ -115,13 +152,23 @@ def heap_sort(A):
 heap_sort([7, 4, 8, 2, 5, 3, 9, 1])
 ```
 
+**Reading this code.** The inner function `downheap(j, size)` is the sift-down of the previous
+lesson with two changes: comparisons are reversed (it is a max-heap, so it looks for the
+*larger* child), and it takes `size`, the current length of the heap region, so that it never
+reaches into the sorted part. The first loop is bottom-up heapify, starting from the last node
+that has a child, index `n // 2 - 1`. The second loop does the extractions and prints the heap
+part and the sorted part after each one, so you can watch the bar move left: the first line
+shows `[9]` on the right, the next `[8, 9]`, and so on.
+
 ### Properties of heap-sort
 
-- **Time** $O(n \log n)$ worst case; **extra space** $O(1)$ (in place).
-- **Not stable**: swapping the root with the last heap cell can reorder equal keys.
-- Poor cache locality (jumps between index $j$ and $2j+1$), so in practice it is usually slower than
-  a well-implemented quick-sort — but it is the fallback inside *introsort* when quick-sort's
-  recursion gets too deep.
+- **Time** $O(n \log n)$ in the worst case; **extra space** $O(1)$, since it works in place.
+- **Not stable.** Swapping the root with the last cell of the heap moves an item a long way
+  past others, which can change the relative order of items with equal keys.
+- **Unfriendly to the processor's cache.** It hops between index $j$ and index $2j+1$, far
+  apart in a large array, so in practice it is usually slower than a well-written quick-sort.
+  It still earns its place as the safety net inside *introsort*, the algorithm behind C++'s
+  standard sort, which starts with quick-sort and switches to heap-sort if things go badly.
 
 > [!INTERVIEW]
 > "Which sort is $O(n\log n)$ worst case **and** in place?" Heap-sort. Merge-sort needs $O(n)$
@@ -129,14 +176,17 @@ heap_sort([7, 4, 8, 2, 5, 3, 9, 1])
 
 ## 3. Adaptable priority queues
 
-The basic ADT only lets us look at or remove the minimum. Real scenarios need more:
+The basic ADT lets us look at or remove only the minimum. Real situations need more. Picture a
+standby list for a flight:
 
-- a standby passenger gives up and leaves the queue — **remove an arbitrary entry**;
-- a passenger finds a frequent-flyer card — **update the key (priority)** of an existing entry.
+- a waiting passenger gives up and goes home: **remove an entry from the middle**;
+- a passenger turns out to have priority status: **change the key** of an existing entry.
 
-Finding an arbitrary entry in a heap takes $O(n)$ (a heap is not a search structure). The fix is a
-**locator**: when an item is added, the PQ returns a small token object to the caller. Later the
-caller hands the locator back to say *which* entry to update or remove.
+A heap cannot find a particular entry quickly; the only way is to look through the whole array,
+$O(n)$. The fix is a **locator**: when an item is added, the priority queue hands the caller a
+small token, like a cloakroom ticket. Later the caller presents the ticket to say *which* entry
+should be updated or removed, and the queue can go straight to it. A priority queue with these
+extra operations is called **adaptable**.
 
 | New operation | Meaning |
 |---|---|
@@ -146,13 +196,18 @@ caller hands the locator back to say *which* entry to update or remove.
 
 ### 3.1 Implementation
 
-A `Locator` is an `_Item` with one extra field: its current **index** in the heap array. Whenever
-two items are swapped, their index fields are updated. With the index available in $O(1)$:
+A `Locator` is the key-value item of the previous lesson with one extra field: its current
+**index** in the heap array. The heap stores the locators themselves, and whenever two of them
+are swapped, both index fields are rewritten. So a locator always knows where it is, and the
+queue can find any entry in $O(1)$:
 
-- **update(loc, k, v):** set the new key/value, then `_bubble(j)`: if the new key is smaller than
-  the parent's, up-heap; otherwise down-heap. $O(\log n)$.
-- **remove(loc):** swap the item with the last item, pop it, then `_bubble(j)` on the item that took
-  its place. $O(\log n)$.
+- **update(loc, k, v):** store the new key and value, then call `_bubble(j)`, which bubbles up
+  if the new key is smaller than the parent's and bubbles down otherwise. $O(\log n)$.
+- **remove(loc):** swap the entry with the last item, pop it off the end, then `_bubble(j)` the
+  item that took its place. $O(\log n)$.
+
+In the demo, four people are added, Bob's priority is changed from 9 to 1, Cat is removed, and
+the rest are served in order: `(1, 'bob')`, `(5, 'ann')`, `(7, 'dan')`.
 
 ```python-run
 class AdaptableHeapPriorityQueue:
@@ -208,7 +263,7 @@ class AdaptableHeapPriorityQueue:
     def remove(self, loc):
         j = self._check(loc)
         if j == len(self) - 1:
-            self._data.pop()                         # item at last position; just remove it
+            self._data.pop()                         # item at last position: remove it directly
         else:
             self._swap(j, len(self) - 1)             # swap item to the last position
             self._data.pop()                         # remove it from the list
@@ -233,10 +288,16 @@ while not P.is_empty():
 
 ### 3.2 The lazy alternative with `heapq`
 
-Python's `heapq` has no locators. The standard workaround is **lazy deletion**: to "update" an entry,
-push a *new* entry with the new priority and remember (in a dict) which entry is current; when
-popping, skip entries that are stale. The heap may hold more than $n$ entries, but each operation
-remains logarithmic. This is how Dijkstra's algorithm is usually written in Python (graphs module).
+Python's `heapq` has no locators. The usual workaround is **lazy deletion**: do not remove or
+change anything inside the heap. To "update" an entry, push a *new* entry with the new priority
+and note in a dictionary which priority is the current one for that task. When popping, check
+each entry against the dictionary and throw away any that are out of date (**stale**). The heap
+may hold more entries than there are tasks, but every operation is still logarithmic. This is
+how Dijkstra's shortest-path algorithm is usually written in Python (graphs module).
+
+In the demo, task `b` is given priority 9 and then 1. The heap holds both entries; the entry
+with 9 is skipped when it eventually surfaces, and the fourth `pop_task()` finds the heap
+exhausted and returns `None`.
 
 ```python-run
 import heapq
@@ -347,20 +408,44 @@ a worst-case $O(n\log n)$ guarantee looks like in numbers.
 
 ## 6. Pitfalls
 
-- In-place heap-sort with a *min*-heap sorts into decreasing order (or forces a final reversal).
-- Forgetting to shrink the heap boundary before sifting down — the just-placed maximum gets pulled
-  back in.
-- In an adaptable PQ, forgetting to update indices in `_swap` silently corrupts every locator.
-- After `remove(loc)`, the displaced item may need to go **up or down** — always `_bubble`.
+- **Using a min-heap for in-place heap-sort.** It sorts into decreasing order, or forces a
+  reversal at the end. Use a max-heap for increasing order.
+- **Forgetting to shrink the heap before sifting down.** If the down-heap is allowed to reach
+  the cell that received the maximum, that maximum is pulled straight back into the heap.
+- **Not updating indices in `_swap`.** In an adaptable priority queue this silently corrupts
+  every locator, and the failure shows up far from its cause.
+- **Assuming a displaced item only moves down.** After `remove(loc)`, the item that filled the
+  hole came from elsewhere in the tree and may need to go **up or down**; always call `_bubble`.
+- **Forgetting stale entries with lazy deletion.** Every pop must check that the entry is
+  current.
 
 ## 7. Summary
 
-- `pq_sort` + unsorted list = selection-sort ($O(n^2)$); + sorted list = insertion-sort ($O(n^2)$);
-  + heap = heap-sort ($O(n\log n)$).
-- In-place heap-sort: build a max-heap, then repeatedly swap the root to the end and sift down.
-- Locators (items that know their heap index) give $O(\log n)$ `update` and `remove`.
+- Sorting with a priority queue: an unsorted list gives selection-sort ($O(n^2)$), a sorted
+  list gives insertion-sort ($O(n^2)$), and a heap gives heap-sort ($O(n\log n)$).
+- In-place heap-sort builds a max-heap, then repeatedly swaps the root to the end of the heap
+  region and sifts down. It uses $O(1)$ extra space and is not stable.
+- Locators, items that know their own index in the heap, give $O(\log n)$ `update` and `remove`.
+- With `heapq`, the same effect is achieved by lazy deletion.
 
 > **Source:** Goodrich, Tamassia & Goldwasser, *Data Structures and Algorithms in Python*, ch. 9.4–9.5.
+
+## Glossary
+
+- **PQ**: abbreviation for priority queue.
+- **Selection-sort**: sorting by repeatedly selecting the smallest remaining item; always
+  $\Theta(n^2)$.
+- **Heap-sort**: sorting by building a heap and repeatedly removing its extreme item;
+  $O(n \log n)$.
+- **Max-heap**: a heap in which every parent is at least as large as its children.
+- **In-place heap-sort**: heap-sort that uses the array itself as the heap.
+- **Introsort**: a hybrid sort that starts as quick-sort and falls back to heap-sort.
+- **Adaptable priority queue**: a priority queue that also supports updating and removing
+  arbitrary entries.
+- **Locator**: a token returned on insertion that records an entry's current place in the heap.
+- **Lazy deletion**: leaving outdated entries in a heap and discarding them when they are
+  popped.
+- **Stale entry**: an entry that has been superseded by a newer one.
 
 ## Check yourself
 

@@ -1,18 +1,37 @@
 # Analysing real code and proving it correct
 
-With the notation in hand we can analyse real algorithms. This lesson works through the book's
-running examples — finding a maximum, prefix averages, three-way set disjointness and element
-uniqueness — and then covers the justification techniques you need to *prove* claims about
-algorithms: counterexamples, contrapositive and contradiction, induction, and loop invariants.
+> **Before this lesson:** You should know the seven growth functions and the meaning of $O$,
+> $\Omega$ and $\Theta$. Those are taught in
+> [Measuring algorithms and the seven functions](#/lesson/dsa-foundations/seven-functions) and
+> [Big-O, Big-Omega and Big-Theta](#/lesson/dsa-foundations/asymptotic-notation). You should also
+> be comfortable reading Python loops and lists.
+
+## In plain words
+
+The last two lessons gave you a ruler for measuring algorithms. This lesson is where you pick up
+the ruler and measure things. It does two jobs. First, it reads several short Python functions
+and works out, loop by loop, how their cost grows. Second, it shows the standard ways to *argue
+that a claim is true*, so that "I think this works" can become "here is why this must work".
+
+An analogy: an accountant reading a restaurant bill does not time the kitchen. They look at each
+line, ask "how many of these, at what price each?", and add up. Analysing code is the same
+bookkeeping. For each line you ask "how many times does this run, and what does one run cost?",
+then add the lines together and keep the biggest term.
+
+Why it matters for a job: this is the exact skill an interviewer tests after you write a
+solution, when they ask for its running time and whether it can be improved. It is also how
+engineers find the one innocent-looking line that makes a nightly report take six hours.
 
 ## 1. Constant-time operations in Python
 
-Before analysing code we must know the cost of its building blocks:
+Before analysing code we must know the price of its building blocks. In Python these are all
+$O(1)$, meaning their cost does not depend on how much data there is:
 
-- `len(data)` is $O(1)$ — lists, tuples and strings store their length.
-- `data[j]` is $O(1)$ — Python lists are arrays of references, so element $j$ is at a computable
-  address (the arrays module explains why).
-- Arithmetic on small ints, comparisons, assignments: $O(1)$.
+- `len(data)`: lists, tuples and strings keep a note of their own length, so nothing is counted.
+- `data[j]`: a Python list stores its items in numbered slots next to each other in memory, so
+  the computer can jump straight to slot `j` (the arrays module explains the mechanism).
+- Arithmetic on ordinary-sized whole numbers, comparisons such as `a < b`, and assignments such
+  as `x = 5`.
 
 ## 2. Finding the maximum
 
@@ -25,19 +44,30 @@ def find_max(data):
     return biggest
 ```
 
-The loop runs $n$ times with constant work, so the running time is $O(n)$ — and since every element
-must be inspected, $\Theta(n)$.
+Go through it as the accountant would. The first and last lines run once and cost $O(1)$ each.
+The loop body runs once per item, $n$ times, and each run does a comparison and perhaps an
+assignment: $O(1)$. So the total is $n \times O(1) + O(1)$, which is $O(n)$. No algorithm can do
+better, because skipping even one item risks missing the largest; so the running time is
+$\Theta(n)$, exactly linear.
 
-**A subtler question:** how many times is `biggest` *updated*? In the worst case (increasing
-input), $n$ times. But if the input is a random permutation, element $j$ is the largest of the first
-$j$ with probability $1/j$, so the expected number of updates is the **harmonic number**
+**A subtler question:** how many times is `biggest` *replaced*? If the numbers arrive in
+increasing order, every item is a new record. But suppose the order is random; such a shuffled
+arrangement is called a random **permutation**. The $j$-th item is a new record only if it is the
+largest of the first $j$ items, and by symmetry each of those $j$ items is equally likely to be
+the largest, so the chance is $1/j$. Adding the chances for $j = 1, 2, \ldots, n$ gives the
+expected (long-run average) number of records, a famous sum called the **harmonic number**:
 
 $$H_n = 1 + \tfrac12 + \tfrac13 + \cdots + \tfrac1n = O(\log n).$$
 
-## 3. Prefix averages — three algorithms
+For a million shuffled numbers that is only about 14 updates. The harmonic number is the third
+sum worth recognising, after the arithmetic sum $1 + 2 + \cdots + n$ and the geometric sum
+$1 + 2 + 4 + \cdots$ from the first lesson.
 
-Given $S$ of $n$ numbers, compute $A$ where $A[j]$ is the average of $S[0], \ldots, S[j]$. (Think of
-a fund's average annual return over the last 1, 2, 3... years.)
+## 3. Prefix averages: three algorithms
+
+Given a list $S$ of $n$ numbers, compute a list $A$ in which $A[j]$ is the average of
+$S[0], \ldots, S[j]$. (Think of an investment's average yearly return over its first 1, 2, 3...
+years.) The first lesson timed two solutions; here we count their steps.
 
 ### 3.1 Quadratic, explicit
 
@@ -53,7 +83,9 @@ def prefix_average1(S):
     return A
 ```
 
-The inner body runs $1 + 2 + \cdots + n = n(n+1)/2$ times: $O(n^2)$.
+The outer loop runs $n$ times, but the inner loop does not run a fixed number of times: when
+`j` is 0 it runs once, when `j` is 1 it runs twice, and so on up to $n$ times. The line
+`total += S[i]` therefore runs $1 + 2 + \cdots + n = n(n+1)/2$ times in all. That is $O(n^2)$.
 
 ### 3.2 Quadratic, hidden
 
@@ -66,8 +98,12 @@ def prefix_average2(S):
     return A
 ```
 
-It looks like a single loop, but `S[0:j+1]` builds a new list of $j+1$ items and `sum` walks it.
-Still $O(n^2)$. **Built-ins are not free.**
+It looks like a single loop, so it is tempting to call it linear. But look inside the one line.
+The expression `S[0:j + 1]` is a **slice**: it builds a brand-new list containing copies of the
+first $j + 1$ entries, which takes $j + 1$ steps. Then `sum(...)` walks along that new list adding
+as it goes, another $j + 1$ steps. The work per iteration is proportional to $j$, exactly as in
+the first version, so the total is still $O(n^2)$. **Built-in functions are not free**: each one
+is a loop written by somebody else.
 
 ### 3.3 Linear
 
@@ -82,13 +118,16 @@ def prefix_average3(S):
     return A
 ```
 
-Each element is added once: $O(n)$. The key idea — **reuse work from the previous iteration** — is
-the seed of dynamic programming.
+Each element is added to `total` exactly once, and nothing else in the loop depends on $j$: $O(n)$.
+The idea that made the difference is to **reuse the work of the previous iteration** instead of
+starting again. The sum of the first five numbers is the sum of the first four plus one more.
+That idea, grown up, becomes the technique called dynamic programming later in this track.
 
 ## 4. Three-way set disjointness
 
-Given three sequences $A$, $B$, $C$ (no duplicates inside each), decide whether some element is in
-all three.
+Given three lists $A$, $B$, $C$, each with no repeated values inside it, decide whether the three
+are **disjoint**, meaning no single value appears in all three. The function returns `True` when
+they are disjoint and `False` as soon as it finds a value common to all.
 
 ```python
 def disjoint1(A, B, C):
@@ -100,7 +139,12 @@ def disjoint1(A, B, C):
     return True
 ```
 
-$O(n^3)$ if each has size $n$. Improvement: there is no point looping over $C$ unless $a = b$.
+`a == b == c` is Python shorthand for "`a` equals `b` and `b` equals `c`". Three loops are nested,
+each over $n$ items, and the test sits inside all three, so in the worst case (no common value)
+it runs $n \times n \times n$ times: $O(n^3)$.
+
+One observation improves it: there is no point looking through $C$ unless `a` and `b` already
+match.
 
 ```python
 def disjoint2(A, B, C):
@@ -113,14 +157,19 @@ def disjoint2(A, B, C):
     return True
 ```
 
-The test `a == b` runs $n^2$ times. Because $A$ has no duplicates, at most $n$ pairs $(a, b)$ are
-equal, so the innermost loop runs at most $n$ times, costing $O(n^2)$ in total. Overall
-$O(n^2)$ — a real improvement that comes from **counting how often an inner loop can actually
-execute**, not just multiplying loop bounds.
+There are still three nested loops, so a quick glance says $n^3$. Count more carefully. The test
+`a == b` runs $n^2$ times, once for each pair. How often is it true? Each value `b` can equal at
+most one `a`, because $A$ contains no repeats, so at most $n$ of the $n^2$ pairs match. The loop
+over $C$ therefore starts at most $n$ times, and each time costs at most $n$ steps: $n \times n =
+n^2$ steps in total for the innermost loop, across the whole run. Adding the $n^2$ tests gives
+$O(n^2)$ overall.
+
+The improvement came from **counting how often an inner loop can really run**, which is different
+from multiplying the sizes of the loops that surround it.
 
 ## 5. Element uniqueness
 
-Are all elements of $S$ distinct?
+Are all elements of $S$ different from one another?
 
 ```python
 def unique1(S):
@@ -131,7 +180,13 @@ def unique1(S):
     return True
 ```
 
-Pairs examined: $(n-1) + (n-2) + \cdots + 1 = n(n-1)/2$, so $O(n^2)$.
+This compares every element with every later element. `range(j + 1, len(S))` starts the inner
+loop one place after `j`, so no pair is checked twice and nothing is compared with itself. The
+first element is compared with $n - 1$ others, the second with $n - 2$, and so on:
+$(n-1) + (n-2) + \cdots + 1 = n(n-1)/2$ pairs, so $O(n^2)$.
+
+A different idea: if the list were in sorted order, any two equal values would end up side by
+side, and one pass comparing neighbours would find them.
 
 ```python
 def unique2(S):
@@ -142,8 +197,14 @@ def unique2(S):
     return True
 ```
 
-After sorting, duplicates are adjacent. Total $O(n \log n)$. (With a hash set it is $O(n)$
-expected — see the hashing module.)
+`sorted(S)` returns a new list with the same items in increasing order; Python's built-in sort
+costs $O(n \log n)$. The loop then compares each item with the one before it, $O(n)$. By the sum
+rule the total is $O(n \log n)$, the cost of the more expensive part. (A third approach, using a
+*hash set* that remembers which values have been seen, brings this down to $O(n)$ on average; the
+hashing module covers it.)
+
+The demo times both versions on lists with no repeats, which is the worst case because neither
+function can stop early.
 
 ```python-run
 import random, time
@@ -165,47 +226,71 @@ for n in [500, 1000, 2000]:
     print(f"n={n}: unique1 {1000*(t1-t0):7.1f} ms   unique2 {1000*(t2-t1):5.2f} ms")
 ```
 
+**Reading the demo.** `random.sample(range(10 * n), n)` picks `n` different numbers at random, so
+the list has no duplicates. The clock is read before, between and after the two calls. Each time
+`n` doubles, `unique1` should take about four times as long (quadratic) and `unique2` only a
+little more than twice as long (n-log-n). At `n = 2000` the gap is already a factor of several
+hundred.
+
 > [!INTERVIEW]
-> "Can you do better than $O(n^2)$?" is almost always answered by one of: sort first
-> ($O(n\log n)$), hash ($O(n)$ expected), or keep a running aggregate (prefix sums). Element
-> uniqueness is the archetype.
+> "Can you do better than $O(n^2)$?" is almost always answered by one of three moves: sort first
+> ($O(n\log n)$), remember what you have seen in a hash set or dictionary ($O(n)$ on average), or
+> keep a running total instead of recomputing it (prefix sums). Element uniqueness shows the
+> first two, prefix averages the third.
 
 ## 6. A note on amortisation
 
-Some operations are usually cheap but occasionally expensive — appending to a Python list sometimes
-triggers a resize that copies everything. **Amortised analysis** bounds the *total* cost of a
-sequence of operations and divides by the number of operations. We do this carefully in the
-dynamic-arrays lesson, where we prove that $n$ appends cost $O(n)$ total, i.e. $O(1)$ amortised each,
-even though a single append can cost $\Theta(n)$.
+Some operations are cheap most of the time and expensive once in a while. Appending to a Python
+list is the standard case: now and then the list has run out of room and must copy everything to
+a larger block of memory. **Amortised analysis** handles this by bounding the *total* cost of a
+long sequence of operations and then dividing by the number of operations, like spreading the
+cost of an annual train pass over every journey of the year. The dynamic-arrays lesson does this
+carefully and proves that $n$ appends cost $O(n)$ in total, which is $O(1)$ each *on average over
+the sequence*, even though one unlucky append can cost $\Theta(n)$.
 
 ## 7. Simple justification techniques
 
-Claims like "this algorithm is correct" or "this runs in $O(n)$" need proofs. Four tools cover most
-needs.
+A claim such as "this algorithm is correct" or "this runs in $O(n)$" needs an argument that leaves
+no gaps. Such an argument is called a **proof**. Four tools cover most needs.
 
 ### 7.1 By example (and counterexample)
 
-To prove "there exists an $x$ with property $P$", exhibit one. To *disprove* "every $x$ has $P$",
-exhibit one counterexample. Example from the book: the claim "every number of the form $2^i - 1$ is
-prime when $i > 1$" is false, since $2^4 - 1 = 15 = 3 \cdot 5$.
+To prove "there exists an $x$ with property $P$", show one. To *disprove* "every $x$ has property
+$P$", show one $x$ that lacks it; that single case is a **counterexample**. For instance, the
+claim "every number of the form $2^i - 1$ is prime when $i > 1$" looks plausible for a while
+($3, 7, \ldots$) and is false, since $2^4 - 1 = 15 = 3 \cdot 5$. (A **prime** is a whole number
+greater than 1 that only 1 and itself divide evenly.) Note the asymmetry: one example can never
+*prove* a claim about every case, however many you collect.
 
 ### 7.2 The "contra" attack
 
-- **Contrapositive.** To prove "if $p$ then $q$", prove "if not $q$ then not $p$". Example: whenever a product $ab$
-  is even, at least one of the two factors is even. Contrapositive: if $a$ and $b$ are both odd, then
-  $a = 2j+1$, $b = 2k+1$ and $ab = 4jk + 2j + 2k + 1$ is odd. Done.
-- **De Morgan's laws** help form negations: not ($p$ or $q$) = (not $p$) and (not $q$).
-- **Contradiction.** Assume the statement is false and derive something absurd. Example: if $ab$ is
-  odd then $a$ and $b$ are both odd. Suppose not — say $a = 2j$ is even. Then $ab = 2(jb)$ is even,
-  contradicting the assumption.
+Two techniques prove a statement by attacking its opposite.
+
+- **Contrapositive.** The statement "if $p$ then $q$" says exactly the same thing as "if not $q$
+  then not $p$". ("If it is raining, the street is wet" matches "if the street is dry, it is not
+  raining".) Sometimes the second form is easier. Example: *whenever a product $ab$ is even, at
+  least one of $a$, $b$ is even.* The contrapositive is: if $a$ and $b$ are both odd then $ab$ is
+  odd. An odd number is one more than an even number, so write $a = 2j+1$ and $b = 2k+1$; then
+  $ab = 4jk + 2j + 2k + 1 = 2(2jk + j + k) + 1$, which is odd. Done.
+- **De Morgan's laws** tell you how to negate "and" and "or": not ($p$ or $q$) is the same as
+  (not $p$) and (not $q$). That is how "not (a even or b even)" became "a odd and b odd" above.
+- **Contradiction.** Assume the statement is false and derive something impossible. Example: *if
+  $ab$ is odd then $a$ and $b$ are both odd.* Suppose not, so at least one of them, say $a$, is
+  even: $a = 2j$. Then $ab = 2(jb)$ is even, which clashes with $ab$ being odd. The assumption
+  must have been wrong.
 
 ### 7.3 Induction
 
-To prove $q(n)$ for all $n \ge 1$: show the **base case** $q(1)$ (perhaps a few base cases), then the
-**inductive step**: assuming $q(j)$ for all $j < n$, show $q(n)$.
+Induction proves that a statement $q(n)$ holds for every whole number $n \ge 1$ in two moves,
+like knocking over a row of dominoes. Show that the first domino falls: the **base case** $q(1)$.
+Then show that each domino knocks over the next: the **inductive step**, in which you assume the
+statement for all values smaller than $n$ (the *inductive hypothesis*) and use that to prove it
+for $n$. Together they cover every $n$.
 
-**Example.** $\sum_{i=1}^n i = n(n+1)/2$. Base: $n = 1$ gives $1 = 1 \cdot 2 / 2$. Step:
-$\sum_{i=1}^{n} i = n + \sum_{i=1}^{n-1} i = n + \frac{(n-1)n}{2} = \frac{n(n+1)}{2}$.
+**Example.** Claim: $\sum_{i=1}^n i = n(n+1)/2$. Base case: for $n = 1$ the left side is 1 and
+the right side is $1 \cdot 2 / 2 = 1$. Step: split off the last term and apply the hypothesis to
+the rest,
+$\sum_{i=1}^{n} i = n + \sum_{i=1}^{n-1} i = n + \frac{(n-1)n}{2} = \frac{2n + n^2 - n}{2} = \frac{n(n+1)}{2}$.
 
 **A second example (two base cases).** Define $G(1) = 1$, $G(2) = 3$ and, from then on, each term
 as the sum of the previous two: $1, 3, 4, 7, 11, 18, \ldots$ Claim: $G(n) < 2^n$ for every
@@ -223,14 +308,16 @@ with a fixed constant instead.
 
 ### 7.4 Loop invariants
 
-To prove a loop correct, state a property $L$ that:
+A **loop invariant** is a statement about the program's variables that is true every time the
+loop comes round to its top. It is induction applied to a loop, and it is the standard way to
+prove a loop correct. You must show three things about your chosen statement $L$:
 
-1. **Initialisation:** holds before the loop starts;
-2. **Maintenance:** if it holds before an iteration, it holds after it;
-3. **Termination:** when the loop ends, $L$ together with the exit condition implies the desired
-   result.
+1. **Initialisation:** $L$ holds before the first iteration;
+2. **Maintenance:** if $L$ holds before an iteration, it still holds after that iteration;
+3. **Termination:** when the loop stops, $L$ combined with the reason for stopping gives the
+   result you wanted.
 
-**Example** — linear search:
+**Example: linear search**, which returns the position of `val` in `S`, or `-1` if it is absent:
 
 ```python
 def find(S, val):
@@ -243,9 +330,17 @@ def find(S, val):
     return -1
 ```
 
-Invariant $L_j$: *none of $S[0], \ldots, S[j-1]$ equals `val`.* Initially $j = 0$ and
-the claim is vacuous. If the iteration does not return, $S[j] \ne$ `val`, so $L_{j+1}$ holds. If the
-loop ends with $j = n$, $L_n$ says `val` is nowhere in $S$, so returning $-1$ is correct.
+Invariant $L_j$: *none of $S[0], \ldots, S[j-1]$ equals `val`.*
+
+- *Initialisation.* At the start $j = 0$, so the statement talks about no elements at all and is
+  true automatically. (Mathematicians call a claim about an empty collection *vacuously* true.)
+- *Maintenance.* If an iteration does not return, then $S[j] \ne$ `val`. Together with $L_j$,
+  that gives $L_{j+1}$, and `j += 1` makes the names line up again.
+- *Termination.* If the loop ends because $j = n$, then $L_n$ says `val` is nowhere in $S$, so
+  returning $-1$ is correct. If it ends early, it returned a `j` with `S[j] == val`, also correct.
+
+Python can check an invariant for you while the program runs. An `assert` statement stops the
+program with an error if the condition after it is false, and does nothing otherwise:
 
 ```python-run
 # Check a loop invariant mechanically with assertions
@@ -260,13 +355,19 @@ def prefix_average3(S):
 print(prefix_average3([10, 20, 30, 40]))
 ```
 
-Asserting invariants while developing is a cheap, powerful debugging habit.
+The output is `[10.0, 15.0, 20.0, 25.0]` and no assertion fires, so the invariant "`total` equals
+the sum of the first `j` items" held at the top of every iteration. Change `total += S[j]` to
+`total += S[j] + 1` and run it again: the assertion fails on the second iteration and points
+straight at the bug. (The check itself costs $O(j)$, so remove such assertions from finished
+code.) Writing invariants as assertions while developing is a cheap and effective habit.
 
 ## 8. Loops that are not what they seem
 
-Most analysis mistakes come from assuming "a loop inside a loop is $n^2$". The inner loop's bound
-often depends on the outer variable, and the total must be **summed**, not multiplied. Four
-instructive shapes:
+Most analysis mistakes come from the reflex "a loop inside a loop is $n^2$". The number of times
+an inner loop runs often depends on the outer loop's variable, and then the total has to be
+**added up** term by term; multiplying the two loop sizes gives the wrong answer. Four shapes
+are worth studying. In the code, `j *= 2` doubles `j`, `range(0, n, i)` counts from 0 up to `n`
+in steps of `i`, and `pass` is a placeholder statement that does nothing.
 
 ```python
 def shape_a(n):                 # inner loop doubles
@@ -330,18 +431,30 @@ for n in [1000, 10000, 100000]:
     print(f"{n:>7} {count_a(n):>9} {int(n*math.log2(n)):>9} {count_b(n):>9} {int(n*math.log(n)):>9} {count_c(n):>7} {count_d(n):>7}")
 ```
 
-Multiply $n$ by 10 and columns A and B grow by a little more than 10 (the extra logarithmic
-factor), while C and D grow by about 10: linear. **Method:** write the cost of the inner loop as a
-function of the outer variable, then sum that function over the outer loop's range — using the
-arithmetic, geometric or harmonic sum as appropriate — or find a quantity that only ever increases
-and bound it.
+Each `count_` function mirrors one shape and counts how many times its innermost statement runs.
+The columns `n log2 n` and `n ln n` are formulas to compare against (`ln` is the *natural*
+logarithm, which differs from $\log_2$ only by a constant factor). Multiply $n$ by 10 and columns
+A and B grow by a little more than 10 (the extra logarithmic factor), while C and D grow by about
+10: linear.
+
+**The method, in two sentences.** Write the cost of the inner loop as a formula in the outer
+loop's variable, then add that formula up over the outer loop's range, using the arithmetic,
+geometric or harmonic sum as appropriate. Or find a quantity that only ever increases, and bound
+how far it can go.
 
 ## 9. Pitfalls
 
-- Multiplying loop bounds blindly: `disjoint2` has three nested loops but is $O(n^2)$.
-- Forgetting the cost of slicing, `sum`, `in`, `sorted`, string `+` in loops.
-- Induction with too few base cases.
-- Loop invariants that are true but too weak to imply the result at termination.
+- **Multiplying loop sizes without thinking.** `disjoint2` has three nested loops and is still
+  $O(n^2)$; shape C has two and is $O(n)$.
+- **Forgetting the cost of built-ins.** Slicing, `sum`, `in` on a list, `sorted`, and joining
+  strings with `+` inside a loop all contain loops of their own.
+- **Induction with too few base cases.** If the step reaches back two values, two base cases are
+  needed.
+- **Invariants that are true but too weak.** "`j` is not negative" holds throughout linear
+  search and proves nothing. The invariant has to be strong enough that, at the end, it gives
+  you the result.
+- **Confusing evidence with proof.** A hundred passing tests show that those hundred inputs
+  work. Only an argument covers the inputs you did not try.
 
 ## 10. Summary
 
@@ -354,6 +467,21 @@ and bound it.
 | `unique1` / `unique2` | $O(n^2)$ / $O(n\log n)$ |
 
 > **Source:** Goodrich, Tamassia & Goldwasser, *Data Structures and Algorithms in Python*, ch. 3.3.3–3.4.
+
+## Glossary
+
+- **Slice**: an expression such as `S[a:b]` that copies part of a list into a new list.
+- **Permutation**: one particular ordering of a collection of items.
+- **Harmonic number $H_n$**: the sum $1 + 1/2 + \cdots + 1/n$, which grows like $\log n$.
+- **Disjoint**: having no element in common.
+- **Amortised cost**: the average cost per operation over a long sequence of operations.
+- **Proof**: an argument that establishes a claim for every case, leaving no gaps.
+- **Counterexample**: a single case that shows a general claim is false.
+- **Contrapositive**: the equivalent form "if not $q$ then not $p$" of "if $p$ then $q$".
+- **Proof by contradiction**: assuming a claim is false and deriving an impossibility.
+- **Induction**: proving a base case and a step from smaller cases to the next one.
+- **Loop invariant**: a statement that is true at the start of every iteration of a loop.
+- **Assertion**: a check (`assert`) that halts the program if a condition is false.
 
 ## Check yourself
 

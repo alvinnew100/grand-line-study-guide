@@ -1,16 +1,35 @@
 # Priority queues and binary heaps
 
-A FIFO queue serves whoever has waited longest. Real systems often need something smarter: an
-air-traffic controller lands the plane that is lowest on fuel, an operating system runs the most
-urgent job, an emergency room treats the most critical patient. A **priority queue** is a collection
-of prioritised elements that allows arbitrary insertion and removal of the element with *first
-priority*. This lesson defines the ADT, examines two simple list implementations, and then builds
-the data structure that makes it fast: the **binary heap**.
+> **Before this lesson:** You should know binary trees, complete binary trees and level
+> numbering (children of index $i$ at $2i+1$ and $2i+2$), all from
+> [Tree terminology, ADTs and representations](#/lesson/dsa-foundations/tree-basics); the queue
+> ADT from [Queues, circular arrays and deques](#/lesson/dsa-foundations/queues-deques); and
+> logarithms from [Measuring algorithms and the seven functions](#/lesson/dsa-foundations/seven-functions).
+
+## In plain words
+
+An ordinary queue serves whoever has waited longest. A **priority queue** serves whoever is most
+urgent, regardless of when they arrived.
+
+A hospital emergency department works this way. Patients are not seen in order of arrival: a
+nurse gives each a priority, and the most critical patient is treated next, even if they came
+through the door a minute ago. New patients keep arriving, and at every moment the question is
+the same: who is the most urgent person waiting *right now*?
+
+The data structure that answers that question quickly is the **heap**. Its trick is to stay only
+partly organised: tidy enough that the most urgent item is always at the top, but no tidier, so
+that adding and removing remain cheap.
+
+Why it matters for a job: operating systems choose the next task to run with a priority queue;
+route-finding (Dijkstra's algorithm, later in this track) is built on one; and "find the top
+$k$ items" is among the most common interview patterns. Python's `heapq` module, covered at the
+end, is the tool you will reach for in practice.
 
 ## 1. The priority queue ADT
 
-Each element is stored with a **key** that determines its priority. By convention the element with
-the **minimum key** is served first. Keys can be any objects that are mutually comparable with `<`.
+Each item is stored with a **key**, a value that states its priority. By convention the item
+with the **smallest key** is served first (think "priority 1 is the most urgent"). Keys can be
+any values that can be compared with `<`: numbers, strings, tuples.
 
 | Operation | Meaning |
 |---|---|
@@ -19,7 +38,9 @@ the **minimum key** is served first. Keys can be any objects that are mutually c
 | `P.remove_min()` | remove and return a `(k, v)` with minimum key; error if empty |
 | `P.is_empty()`, `len(P)` | as usual |
 
-Several items may share a key; then `min` may return any of them.
+Several items may share a key; then `min` may return any one of them. The trace below shows the
+contents written in key order for readability. A priority queue does not have to store them in
+that order internally, and the heap will not.
 
 | Operation | Returns | Contents afterwards |
 |---|---|---|
@@ -37,9 +58,11 @@ Entries come out in key order no matter what order they went in.
 
 ### The composition pattern
 
-The book stores each key–value pair as a single `_Item` object — the **composition design pattern**
-— with `__lt__` defined to compare keys only. This keeps key and value together as they move through
-the data structure.
+A key and its value must travel together as they are moved around inside the data structure. The
+tidy way to ensure that is to bundle each pair into one small object, an approach called the
+**composition design pattern**. The `_Item` class below does so, and defines `__lt__`, the hook
+Python calls for the `<` operator, to compare keys only. With that in place, two items can be
+compared directly with `a < b`.
 
 ```python
 class _Item:
@@ -52,11 +75,15 @@ class _Item:
 
 ## 2. Two list-based implementations
 
-**Unsorted list.** `add` appends at the end: $O(1)$. `min` and `remove_min` must scan all items for
-the smallest key: $O(n)$.
+Before the heap, consider the two obvious designs.
 
-**Sorted list.** Keep items in nondecreasing key order. `min` and `remove_min` take the first item:
-$O(1)$. `add` must walk to find the right spot (as in insertion sort): $O(n)$.
+**Unsorted list.** Put each new item at the end: `add` is $O(1)$. But to find the smallest key,
+`min` and `remove_min` must look at every item: $O(n)$. This is a waiting room with no system at
+all; the nurse rereads every chart each time.
+
+**Sorted list.** Keep the items in order of key. Now the smallest is always first, so `min` and
+`remove_min` are $O(1)$. But `add` must find the right place for the newcomer by walking along
+the list, as in insertion sort: $O(n)$.
 
 | Operation | Unsorted list | Sorted list |
 |---|---|---|
@@ -65,18 +92,24 @@ $O(1)$. `add` must walk to find the right spot (as in insertion sort): $O(n)$.
 | `min` | $O(n)$ | $O(1)$ |
 | `remove_min` | $O(n)$ | $O(1)$ |
 
-One side is always linear. A heap balances both at $O(\log n)$.
+Either way, one operation is linear. The unsorted list does no organising and pays when
+removing; the sorted list organises completely and pays when adding. A heap organises *partly*
+and pays $O(\log n)$ for both.
 
 ## 3. The heap data structure
 
-A **binary heap** is a binary tree $T$ storing items at its positions that satisfies two properties:
+A **binary heap** is a binary tree that stores one item at each node and obeys two rules:
 
-1. **Heap-order property** (relational): every non-root position holds a key that is **at
-   least as large as** the key stored in its parent. Consequently keys along any root-to-leaf
-   path are nondecreasing and **the minimum key is at the root**.
-2. **Complete binary tree property** (structural): levels $0, 1, \ldots, h-1$ have the maximum
-   possible number of nodes ($2^i$ at level $i$), and the nodes at level $h$ occupy the **leftmost**
-   positions.
+1. **Heap order** (a rule about the keys): every node other than the root holds a key that is
+   **at least as large as** the key of its parent. Follow any path from the root down to a
+   leaf and the keys never decrease, so **the smallest key is at the root**.
+2. **Completeness** (a rule about the shape): the tree is a complete binary tree. Every level is
+   full ($2^i$ nodes at level $i$) except possibly the bottom one, and the nodes of the bottom
+   level sit as far **left** as possible.
+
+Rule 1 puts the answer at the top. Rule 2 keeps the tree as short as it can be, which is what
+makes updates fast. In the picture each node shows a key and a value; check that every child's
+key is at least its parent's.
 
 ```mermaid
 graph TD
@@ -94,52 +127,68 @@ graph TD
   F --> M["13,W"]
 ```
 
-Note what heap order does **not** say: there is no ordering between siblings or between the left and
-right subtrees. A heap is only *partially* sorted — just enough to find the minimum instantly.
+Notice what heap order does **not** say. It says nothing about siblings (6 may sit to the right
+of 5, or to the left), and nothing about how the left subtree compares with the right. In the
+picture, 15 is higher up than 7. A heap is only *partly* sorted: enough to find the smallest
+key instantly, and no more. The tree shown here is a **min-heap**; reversing the rule so that
+parents are at least as large as their children gives a **max-heap**, with the largest key at
+the root.
 
 ### Height of a heap
 
-> **Proposition.** A heap storing $n$ entries has height $h = \lfloor \log n \rfloor$.
+> **Claim.** A heap storing $n$ entries has height $h = \lfloor \log n \rfloor$.
 
-*Justification.* Completeness gives $1 + 2 + 4 + \cdots + 2^{h-1} + 1 \le n \le 2^{h+1} - 1$, i.e.
-$2^h \le n \le 2^{h+1} - 1$. Taking logs: $\log(n+1) - 1 \le h \le \log n$, and since $h$ is an
-integer, $h = \lfloor \log n \rfloor$. ∎
+*Why.* A complete tree of height $h$ has all of levels 0 to $h - 1$ full, which is
+$1 + 2 + 4 + \cdots + 2^{h-1} = 2^h - 1$ nodes, plus at least 1 and at most $2^h$ nodes on the
+bottom level. So $2^h \le n \le 2^{h+1} - 1$. Taking logarithms gives
+$\log(n+1) - 1 \le h \le \log n$, and the only whole number in that range is
+$\lfloor \log n \rfloor$. ∎
 
-So if we can do updates in time proportional to the height, they are $O(\log n)$.
+A heap of a million items is only 19 levels deep. If updates can be done in time proportional to
+the height, they cost $O(\log n)$.
 
 ## 4. Adding an item: up-heap bubbling
 
-1. **Keep the tree complete:** place the new item at the position just beyond the rightmost node of
-   the bottom level (or the leftmost position of a new level).
-2. **Restore heap order:** compare the new item with its parent; if its key is smaller, swap. Repeat
-   until the parent's key is $\le$ or the item reaches the root. This is **up-heap bubbling**
-   (also *sift-up*, *swim*).
+A new item has to go somewhere without breaking either rule. Take the rules one at a time.
 
-At most one swap per level: $O(\log n)$.
+1. **Keep the tree complete.** There is only one place a new node can go: the next free spot on
+   the bottom level, immediately to the right of the last node (or the leftmost spot of a new
+   level, if the bottom level is full).
+2. **Restore heap order.** The new item may be smaller than its parent. Compare them; if the new
+   key is smaller, swap the two. Now compare with the new parent, and so on, until the parent's
+   key is no larger or the item has reached the root. The item rises like a bubble, so this is
+   called **up-heap bubbling** (you will also see *sift-up* and *swim*).
+
+Only the path from the new node to the root is touched, with at most one swap per level:
+$O(\log n)$.
 
 ## 5. Removing the minimum: down-heap bubbling
 
-The minimum is at the root, but removing the root would break the tree. Instead:
+The smallest key is at the root, but plucking out the root would leave two separate trees. So:
 
-1. Copy the **last** item (rightmost at the bottom level) into the root and delete the last position
-   — the tree stays complete.
-2. **Restore heap order** by **down-heap bubbling** (*sift-down*, *sink*): at position $p$, find the
-   child $c$ with the **smaller** key; if key($c$) < key($p$), swap and continue from $c$; otherwise
-   stop.
+1. Take the **last** item (the rightmost node on the bottom level), put it in the root's place,
+   and delete the last node. The shape is still a complete tree.
+2. **Restore heap order.** The item now at the root is probably too large to be there. Compare
+   it with its children. Find the child with the **smaller** key; if that child's key is smaller
+   than the item's, swap them and continue from the child's position. Stop when the item is no
+   larger than its children or has become a leaf. This is **down-heap bubbling** (also
+   *sift-down* or *sink*).
 
-Why the smaller child? After the swap, that child becomes the parent of the other child, so it must
-not be larger than it. Again one swap per level: $O(\log n)$.
+Why the smaller child? After the swap, that child sits above the other child, so it must not be
+larger than it. Choosing the smaller of the two guarantees that. Again there is at most one swap
+per level: $O(\log n)$.
 
 ## 6. Array-based representation
 
-A complete binary tree maps perfectly onto an array using level numbering (trees module): root at
-index 0, and for the item at index $j$:
+A complete binary tree fits an array perfectly, using the level numbering from the trees module:
+the root at index 0 and, for the item at index $j$,
 
 $$\text{left}(j) = 2j + 1, \qquad \text{right}(j) = 2j + 2, \qquad \text{parent}(j) = \lfloor (j - 1)/2 \rfloor.$$
 
-Because the tree is complete, the $n$ items occupy exactly indices $0..n-1$ with **no gaps**. The
-"last position" is simply index $n - 1$; adding is `append`, removing the last is `pop`. No node
-objects, no references — this is why heaps are so fast in practice.
+Because the tree is complete, its $n$ items fill indices $0$ to $n-1$ with **no gaps**. The
+"last node" is index $n - 1$; adding a node is `append` and removing the last is `pop`. There
+are no node objects and no references, only a list and some arithmetic, which is why heaps are
+so fast in practice.
 
 Reading the drawing above level by level, left to right, gives exactly the array layout: the root
 first, then its two children, then the four grandchildren, and finally the six entries of the
@@ -209,11 +258,28 @@ while not P.is_empty():
     print("remove_min", P.remove_min(), "->", [i._key for i in P._data])
 ```
 
+**Reading this code.**
+
+- `_parent`, `_left` and `_right` are the three formulas. `_has_left(j)` checks that the left
+  child's index is inside the list, in other words that the child exists.
+- `_upheap(j)`: if `j` is not the root and its item is smaller than its parent's, swap and
+  repeat from the parent's index.
+- `_downheap(j)`: if there is a left child, assume it is the smaller child; if there is also a
+  right child and it is smaller, choose that one. If the chosen child is smaller than the item
+  at `j`, swap and repeat from the child's index.
+- `add` appends and bubbles up. `remove_min` swaps the root with the last item, pops it off the
+  end, and bubbles the new root down.
+
+In the output, the list after each `add` shows the heap as an array. After adding 5, 9, 3 it is
+`[3, 9, 5]`: the 3 was appended at index 2 and swapped with the root. The removals then come out
+as 1, 3, 5, 7, 8, 9, in key order.
+
 ### Dry run: adding key 2 to `[4, 5, 6, 15, 9, 7, 20]`
 
-Append → index 7 (parent index 3, key 15): 2 < 15, swap. Now at index 3 (parent 1, key 5): swap.
-Now at index 1 (parent 0, key 4): swap. At the root: stop. Result
-`[2, 4, 6, 5, 9, 7, 20, 15]` — three swaps, the height of the tree.
+Append 2 at index 7. Its parent is at index $(7-1)//2 = 3$ and holds 15; since $2 < 15$, swap.
+The 2 is now at index 3, whose parent is index 1 holding 5: swap. Now at index 1, whose parent
+is index 0 holding 4: swap. At the root: stop. The result is
+`[2, 4, 6, 5, 9, 7, 20, 15]`, after three swaps, which is the height of the tree.
 
 ### Analysis
 
@@ -243,15 +309,22 @@ def _heapify(self):
         self._downheap(j)
 ```
 
-**Why $O(n)$?** Down-heap from a node costs time proportional to its *height*, and most nodes are
-near the bottom: about $n/2$ are leaves (height 0, no work), $n/4$ have height 1, $n/8$ height 2, …
+**Why $O(n)$ and not $O(n \log n)$?** A down-heap from a node costs time proportional to that
+node's *height*, and in a complete tree most nodes are near the bottom, where heights are tiny.
+About $n/2$ of the nodes are leaves (height 0, no work at all), about $n/4$ have height 1,
+about $n/8$ have height 2, and so on. Only one node, the root, pays the full $\log n$. Adding
+up "number of nodes times height":
 
 $$\sum_{h \ge 0} \frac{n}{2^{h+1}} \cdot h = \frac{n}{2}\sum_{h\ge 0} \frac{h}{2^h} = \frac{n}{2} \cdot 2 = n.$$
 
-The book gives a lovely combinatorial proof: associate with each internal node $p$ the path that
-goes to its right child and then left as far as possible. These paths are edge-disjoint and have
-length equal to the height of $p$, so the total down-heap work is at most the number of edges,
-$n - 1$.
+(The inner sum $0 + \tfrac12 + \tfrac24 + \tfrac38 + \tfrac4{16} + \cdots$ comes to exactly 2.)
+Compare this with inserting one at a time, where the many bottom-level items are the ones that
+may each have to climb the whole height.
+
+There is also a neat way to see the bound without any algebra. For each internal node, draw the
+path that steps to its right child and then goes left as far as possible. That path has as many
+edges as the node's height, and no two such paths share an edge. So all the down-heap work
+together is at most the number of edges in the tree, $n - 1$.
 
 ```python-run
 import random
@@ -288,9 +361,13 @@ Python does not have a priority-queue class but provides heap functions that ope
 | `heapify(L)` | bottom-up construction in place | $O(n)$ |
 | `nlargest(k, it)`, `nsmallest(k, it)` | $k$ extreme values | $O(n + k\log n)$ |
 
-There is no max-heap variant in the classic API; push negated keys (or wrap in a reversing class).
-For key–value pairs push tuples `(key, tiebreak, value)` — include a counter as a tie-breaker so
-that values are never compared.
+The module has traditionally offered only a min-heap. For max-heap behaviour, push the keys
+negated (`-key`), so that the largest original key becomes the smallest stored one. For
+key-value pairs, push tuples. Python compares tuples item by item from the left, so
+`(key, value)` works until two keys are equal, at which point it tries to compare the values
+and may fail. The standard fix is a three-part tuple `(key, counter, value)` with a counter
+that increases on every push: ties are settled by arrival order and the values are never
+compared. The demo does this for a list of jobs.
 
 ```python-run
 import heapq, itertools
@@ -312,19 +389,44 @@ print(heapq.nlargest(3, [5, 1, 9, 3, 7, 8]))
 
 ## 9. Pitfalls
 
-- Swapping with *any* smaller child in down-heap rather than the **smaller** one.
-- Starting heapify from index 0 and going up — it must go from the last parent **down to** the root.
-- Off-by-one in parent/child formulas when using 1-based vs 0-based arrays.
-- Expecting the heap array to be sorted, or iterating a heap list and assuming sorted order.
+- **Swapping with the wrong child.** Down-heap must swap with the **smaller** of the two
+  children, not with whichever child happens to be smaller than the item.
+- **Running heapify in the wrong direction.** It must go from the last parent **back to** the
+  root, so that both subtrees are already heaps when a node is processed.
+- **Index formula slips.** The formulas here assume the root is at index 0. Some textbooks put
+  the root at index 1, where the children of $j$ are $2j$ and $2j + 1$.
+- **Expecting the heap array to be sorted.** Only index 0 is guaranteed to be the smallest.
+  Looping over a heap list does not give sorted order; popping repeatedly does.
+- **Searching a heap.** Finding an arbitrary key takes $O(n)$; a heap only knows its minimum.
 
 ## 10. Summary
 
-- Priority queue ADT: `add`, `min`, `remove_min`.
-- Heap = complete binary tree + heap order; height $\lfloor \log n \rfloor$; stored in an array.
-- `add` = append + up-heap; `remove_min` = swap root with last, pop, down-heap; both $O(\log n)$.
-- Bottom-up construction: $O(n)$.
+- A priority queue offers `add`, `min` and `remove_min`, serving the smallest key first.
+- A heap is a complete binary tree with heap order; its height is $\lfloor \log n \rfloor$, and
+  it is stored in an array with no references.
+- `add` appends and bubbles up; `remove_min` moves the last item to the root and bubbles down;
+  both are $O(\log n)$, and `min` is $O(1)$.
+- Building a heap from $n$ known items bottom-up takes $O(n)$.
+- In Python, use `heapq` on a plain list.
 
 > **Source:** Goodrich, Tamassia & Goldwasser, *Data Structures and Algorithms in Python*, ch. 9.1–9.3.
+
+## Glossary
+
+- **Priority queue**: a collection that always removes the item with the smallest key next.
+- **Key**: the value that determines an item's priority.
+- **Composition pattern**: bundling several values (here key and value) into one object.
+- **Binary heap**: a complete binary tree in which no child has a smaller key than its parent.
+- **Heap-order property**: every non-root key is at least its parent's key.
+- **Complete binary tree**: every level full except possibly the last, which is filled from
+  the left.
+- **Min-heap / max-heap**: a heap with the smallest / largest key at the root.
+- **Up-heap bubbling (sift-up)**: swapping a new item upwards until heap order holds.
+- **Down-heap bubbling (sift-down)**: swapping an item downwards with its smaller child until
+  heap order holds.
+- **Heapify (bottom-up construction)**: turning an arbitrary array into a heap in $O(n)$.
+- **`heapq`**: Python's standard module of heap functions on a list.
+- **Tie-breaker**: an extra value used to order items whose keys are equal.
 
 ## Check yourself
 
