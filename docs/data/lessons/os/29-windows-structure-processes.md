@@ -165,6 +165,61 @@ One mechanism here deserves a mention because the name appears often. When an in
 
 Is Windows a microkernel, in the sense used earlier in this track? No. Although it is cleanly divided into layers and managers, all of them run together in kernel mode. It is best described as a well-structured **monolithic** kernel, sometimes called a *hybrid*.
 
+## How Windows boots
+
+When you press the power button, none of the structure above exists yet. Memory is empty, there are no objects, no handles and no registry in memory. **Booting** is the process of building all of it, one stage at a time, where each stage is a small program whose only job is to load and start the next, slightly larger one. A relay race is a good picture: each runner carries the baton a short distance and hands it on, and the race fails if any hand-over is dropped.
+
+```mermaid
+flowchart TB
+    FW["Firmware: UEFI, or BIOS on old PCs"] --> BM["Windows Boot Manager reads the boot configuration"]
+    BM -->|"was hibernating"| WR["winresume: reload saved memory image"]
+    BM -->|"fresh start"| WL["winload: load kernel, HAL, SYSTEM hive, boot drivers"]
+    WL --> K["ntoskrnl: initialise HAL, kernel layer, executive, drivers"]
+    K --> SMSS["smss.exe: session manager, first user-mode process"]
+    SMSS --> S0["Session 0: csrss.exe and wininit.exe"]
+    SMSS --> S1["Session 1 and later: csrss.exe and winlogon.exe"]
+    S0 --> SVC["wininit starts services.exe and lsass.exe"]
+    S1 --> LOGON["winlogon shows the sign-in screen, then starts the user's shell"]
+```
+
+**1. Firmware.** The processor starts by running code stored in a memory chip on the main board, written by the board's manufacturer. Because it lives in the hardware and is rarely changed (updating it is called *flashing*), it is called **firmware**. Old PCs used firmware called the **BIOS** (*Basic Input/Output System*); modern ones use **UEFI** (*Unified Extensible Firmware Interface*), which understands modern disks and file systems, is less tied to one processor family, and can be extended — for example to boot over a network or run diagnostics. The firmware checks the hardware and then finds and starts the operating system's boot program on the disk.
+
+UEFI adds an important security step called **Secure Boot**: the firmware runs a boot program only if it carries a valid digital signature from a trusted publisher. This blocks a class of malware, sometimes called *bootkits*, that tries to load itself before the operating system so that it can hide from everything that starts later.
+
+**2. The Windows Boot Manager.** The first Windows program to run is the **boot manager**. It reads the *boot configuration data*, a small database listing the installed systems and their options, and makes one decision: was the machine **hibernating** (memory saved to disk before power-off)? If so, it starts **winresume**, which reloads the saved memory image and continues where the system left off. Otherwise it starts **winload** for a fresh boot.
+
+**3. winload.** This loader brings the essential pieces into memory before any of them runs:
+
+- the kernel and executive, a file normally called `ntoskrnl.exe`;
+- the hardware abstraction layer, `hal.dll`;
+- the **SYSTEM hive** — the part of the registry that says how the machine is configured, including which drivers to load;
+- the drivers marked in that hive as **boot drivers**, the ones needed before the system can read anything else, such as the driver for the disk it is booting from;
+- if the Hyper-V virtualisation feature is enabled, the **hypervisor** (the layer that runs operating systems as virtual machines), which starts beneath Windows.
+
+**4. The kernel initialises itself.** winload hands control to `ntoskrnl`, which sets up the HAL, the kernel layer and each manager of the executive in turn, connects the boot drivers, and reads the SYSTEM hive to learn what else to start. Only at this point do objects begin to exist: even the object *types* are created during this phase. Plug-and-play then finds the remaining devices and loads their drivers.
+
+**5. smss.exe, the session manager.** When kernel mode is ready, the kernel creates the first user-mode process, which runs `smss.exe`. It plays the role that `init` plays on Linux. It finishes setting up the machine — creating the paging files, loading the rest of the registry, defining system-wide environment settings — and then creates **sessions**. A session is the set of processes belonging to one logged-in desktop, plus a special *session 0* for system services, kept separate so that services never share a desktop with a user's programs. For each session, `smss` starts a copy of **csrss.exe**, the user-mode part of the Win32 subsystem.
+
+**6. wininit, services and lsass (session 0).** In session 0, `smss` starts **wininit.exe**, which launches two essential processes:
+
+- **services.exe**, the *service control manager*, which starts all the background services configured to start automatically (recall that services are Windows' daemons);
+- **lsass.exe**, the *local security authority*, which checks passwords and other credentials and creates the access tokens that record who a process is acting for.
+
+**7. winlogon and the user's shell.** In each interactive session, `smss` starts **winlogon.exe**, which shows the sign-in screen. When someone signs in, winlogon passes the credentials to `lsass` for checking; if they are accepted, it creates the user's first process with the new token, which in turn starts the familiar desktop shell, `explorer.exe`. From here on, every program the user starts inherits that token. (The *Ctrl+Alt+Del* key combination exists because Windows reserves it and always delivers it to winlogon: no ordinary program can intercept it, so it is a safe way to reach the genuine sign-in screen rather than a fake one.)
+
+**When booting goes wrong.** Because every stage depends on the previous one, Windows offers ways around the usual causes of failure. A newly installed driver or a damaged registry can stop the boot, so the boot manager can offer the *last known good configuration* (on older versions), **safe mode** (only the essential drivers are loaded), and a **recovery environment** with a command prompt, comparable to single-user mode on UNIX. Because faulty memory chips turned out to cause many mysterious crashes, Windows can also run a thorough memory test at boot.
+
+**Measured boot and the TPM.** Many PCs contain a **TPM** (*Trusted Platform Module*), a small security chip that stores secret keys and keeps a tamper-evident record of each boot stage as it loads. It can be set to release a key — such as the key that unlocks a disk encrypted with BitLocker — only if every stage was the expected one, so a thief who boots the disk with modified software gets nothing. The same record can be used to prove to a remote server that the machine started cleanly.
+
+| Stage | Windows | Rough Linux equivalent |
+|---|---|---|
+| Firmware | UEFI or BIOS | the same firmware |
+| Boot loader | Boot Manager, then winload | a boot loader such as GRUB |
+| Kernel | `ntoskrnl.exe` with `hal.dll` | `vmlinuz` |
+| First user process | `smss.exe` | `init` (often systemd) |
+| Background programs | `services.exe` starts services | init starts daemons |
+| Sign-in | winlogon with lsass | a login manager with PAM |
+
 ## Processes and threads
 
 Windows has four related notions, from largest to smallest.
@@ -277,12 +332,14 @@ On machines with several processors, each thread has an *ideal processor* that t
 - **"A process runs."** In Windows a process is a container; its threads run.
 - **"A higher number means lower priority, as with nice values."** In Windows a higher number is *more* important.
 - **"A boost is permanent."** It decays by one level for each quantum used.
+- **"winlogon checks my password."** winlogon collects it and runs the sign-in screen; **lsass** checks it and builds the access token.
 
 ## Summary
 
 - Modern Windows descends from **Windows NT** (1993), a ground-up design that replaced the MS-DOS-based line.
 - Programs use the documented **Win32 API**, layered over the undocumented **native NT API**. Kernel resources are **objects** managed uniformly by the **object manager** and reached through per-process **handles**. Configuration lives in the **registry**.
 - Kernel mode consists of the **HAL**, the **kernel layer** (scheduling, interrupts, **DPCs**), the **executive** (object, process, memory, I/O, cache, security and configuration managers) and **device drivers**; user mode holds applications, **services** and **DLLs**.
+- Booting is a relay: **firmware** (UEFI, with **Secure Boot**) starts the **boot manager**, which starts **winload** (or **winresume** after hibernation); winload loads the kernel, HAL, SYSTEM hive and boot drivers; the kernel initialises and starts **smss.exe**, which starts **csrss**, **wininit** (then **services.exe** and **lsass**) and **winlogon**.
 - Windows has **jobs**, **processes**, **threads** and **fibers**; `CreateProcess` creates and loads in one call. Waiting is unified through **dispatcher objects** that are signalled or not.
 - Scheduling uses **32 priority levels**: 16–31 real-time, 1–15 dynamic. The highest-priority ready thread always runs; temporary **boosts** keep the system responsive and rescue starved threads.
 
@@ -303,6 +360,17 @@ On machines with several processors, each thread has an *ideal processor* that t
 - **Deferred procedure call (DPC)** — work postponed from an interrupt handler to run shortly afterwards.
 - **Executive** — the upper part of the Windows kernel, containing the managers.
 - **Service** — a background system program (a daemon, in UNIX terms).
+- **Firmware** — start-up code stored on the main board; **BIOS** is the old kind, **UEFI** the modern kind.
+- **Secure Boot** — a UEFI feature that runs only boot programs carrying a trusted digital signature.
+- **Boot manager / winload / winresume** — the Windows program that chooses how to start / the loader for a fresh boot / the loader that resumes from hibernation.
+- **SYSTEM hive** — the part of the registry describing the machine's configuration and boot drivers.
+- **Boot driver** — a driver loaded before the kernel starts because it is needed to continue booting.
+- **smss.exe** — the session manager, the first user-mode process (like `init`).
+- **Session** — the processes of one desktop; session 0 holds system services.
+- **csrss.exe / wininit.exe / winlogon.exe** — the user-mode Win32 subsystem process / the starter of system services and lsass / the sign-in manager of an interactive session.
+- **services.exe** — the service control manager, which starts and stops services.
+- **lsass.exe** — the local security authority, which checks credentials and creates access tokens.
+- **TPM** — Trusted Platform Module: a security chip that stores keys and records each boot stage.
 - **DLL** — dynamic-link library: a shared library loaded when a program runs.
 - **Job** — a group of processes managed and limited as a unit.
 - **Fiber** — a lightweight thread scheduled by the program, not the kernel.
@@ -348,8 +416,20 @@ On machines with several processors, each thread has an *ideal processor* that t
   {"q": "A thread with base priority 8 is boosted to 14 when keyboard input arrives. What happens to its priority afterwards?",
    "options": ["It stays at 14 permanently", "It drops by one level each time it uses a full quantum, until it returns to 8", "It drops immediately to 0", "It rises to 31"],
    "answer": 1,
-   "explain": "Boosts are temporary and decay step by step, so a thread that keeps computing gradually loses the advantage."}
+   "explain": "Boosts are temporary and decay step by step, so a thread that keeps computing gradually loses the advantage."},
+  {"q": "Put these Windows boot stages in order: smss.exe, winload, firmware, ntoskrnl initialisation, Boot Manager.",
+   "options": ["Boot Manager, firmware, winload, smss.exe, ntoskrnl", "firmware, Boot Manager, winload, ntoskrnl initialisation, smss.exe", "firmware, winload, smss.exe, Boot Manager, ntoskrnl", "ntoskrnl, firmware, Boot Manager, winload, smss.exe"],
+   "answer": 1,
+   "explain": "Each stage loads the next: firmware finds the boot manager, which starts winload, which loads the kernel; the kernel initialises and then creates smss.exe as the first user-mode process."},
+  {"q": "Which process checks a user's password and creates the access token at sign-in?",
+   "options": ["smss.exe", "winlogon.exe on its own", "lsass.exe, the local security authority, called by winlogon", "services.exe"],
+   "answer": 2,
+   "explain": "winlogon runs the sign-in screen and passes the credentials to lsass, which verifies them and builds the token that the user's processes then inherit."},
+  {"q": "What does UEFI Secure Boot protect against?",
+   "options": ["Disk crashes", "Malware that loads before the operating system by replacing the boot program, because unsigned boot programs are refused", "Slow boots", "Users forgetting their passwords"],
+   "answer": 1,
+   "explain": "The firmware checks the digital signature of each boot program before running it, so a tampered loader is not started."}
 ]
 ```
 
-> **Source:** Tanenbaum & Bos, Modern Operating Systems 4e, §11.1 (History of Windows), §11.2 (Programming Windows), §11.3 (System structure), §11.4 (Processes and threads in Windows)
+> **Source:** Tanenbaum & Bos, Modern Operating Systems 4e, §11.1 (History of Windows), §11.2 (Programming Windows), §11.3 (System structure, including §11.3.2 Booting Windows), §11.4 (Processes and threads in Windows)

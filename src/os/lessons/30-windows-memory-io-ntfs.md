@@ -314,10 +314,71 @@ Windows therefore adds **integrity levels** — low, medium, high and system —
 
 Related to this is **User Account Control** (UAC). Even an administrator's programs normally run with an ordinary user's powers. When an action needs full administrative power, Windows shows a confirmation prompt on a separate, protected screen, and only that one program is given the higher power.
 
-Windows also applies the general defences described in the lesson on attacks: randomising where programs are placed in memory, forbidding execution of data areas, checking guard values on the stack, and requiring kernel drivers to be digitally signed.
+Windows also applies the general defences described in the lesson on attacks; they have their own section below, after the interview note.
 
 > [!INTERVIEW]
 > "How does Windows decide whether to grant access to a file?" The process presents its **access token** (user SID, group SIDs, privileges). The file's **security descriptor** contains a DACL of allow and deny **ACEs**. The security reference monitor walks the DACL in order: a matching deny for a requested right refuses immediately; allows accumulate until every requested right is granted; reaching the end with something missing means refusal. Add: deny entries come first, an empty DACL denies everyone, the check happens when the handle is opened (the handle then records the granted rights), and integrity levels can further restrict writing.
+
+## Security mitigations
+
+Everything in the previous section assumes the software works as designed. Real software has bugs, and some bugs let an attacker take control of a program — most famously the **buffer overflow** from the lesson on attacks, where too much input spills past the end of a buffer and overwrites nearby memory, including the address the function will return to. Nobody can promise bug-free code, so Windows adds **mitigations**: measures that do not remove bugs but make them much harder to turn into a working attack. A good comparison is a car: brakes are meant to prevent crashes, while seat belts and airbags assume a crash will sometimes happen and limit the harm. The general ideas were introduced in [Classes of attack and the defences against them](#/lesson/os/attacks-defences); here is how Windows applies them, roughly in the order they arrived.
+
+**Stack cookies (`/GS`).** Microsoft's C and C++ compiler has an option, `/GS`, that places a secret random value, the **security cookie**, between a function's local buffers and its saved return address. (The general idea is often called a *stack canary*.) A fresh cookie is chosen each time the program starts. Just before the function returns, the added code checks that the cookie is unchanged; an overflow that reaches the return address must have trampled the cookie on the way, so the check fails and the process is ended immediately instead of jumping to the attacker's chosen address. The compiler also rearranges local variables so that buffers sit above other locals, so an overflow cannot quietly change a neighbouring pointer before the check happens.
+
+**Exception-handler hardening.** On 32-bit Windows, the records that say which code handles an error (an *exception*) are kept on the stack, which made them another favourite target: overwrite a handler record, then cause an error. Two fixes followed: programs can carry a table of their legitimate handlers so the system refuses any other (SafeSEH), and the system checks that the chain of handler records is intact before using it (SEHOP).
+
+**DEP and the NX bit.** Since Windows XP Service Pack 2 (2004), Windows can use the processor's **NX** (*no-execute*) bit to mark the stack, the heap and other data areas as non-executable. Windows calls this **Data Execution Prevention** (DEP). An attacker can still place their own instructions in a buffer, but the processor refuses to run them. Every 64-bit program has DEP; for 32-bit programs it applies to system components and to programs built with the `/NXCOMPAT` linker option, depending on system settings.
+
+**ASLR.** DEP drove attackers to *code reuse*: instead of bringing their own instructions, they chain together fragments of code already present in the program and its libraries — techniques called *return-oriented programming* and *return-to-libc*. These require knowing *where* the fragments are. **Address space layout randomisation** (ASLR), added in Windows Vista, loads programs and DLLs at unpredictable addresses and also randomises the stacks and heaps. One Windows detail is worth knowing: a DLL is randomised once per boot and then kept at that address in every process, so that its pages can be shared between processes; a restart picks new addresses. 64-bit programs can ask for *high-entropy* ASLR, which uses far more possible positions and makes guessing hopeless.
+
+**Control Flow Guard (CFG).** Many attacks redirect an *indirect call* — a call through a function pointer, such as a C++ virtual function — to a place the programmer never intended. CFG, introduced with Windows 8.1 and Windows 10, closes much of that door. When a program is built with the `/guard:cf` option, the compiler records every function that may legitimately be called indirectly, and the loader turns that list into a fast lookup table (a bitmap with one entry per possible start address). Before each indirect call, a short check asks: is the destination the start of a valid function? If not, the process is ended. CFG protects *calls*, not *returns*; return addresses are covered by the stack cookie and, on recent processors, by hardware **shadow stacks** that keep a second, protected copy of every return address.
+
+**Heap hardening and VTGuard.** The Windows heap (the allocator behind `malloc` and `new`) checks its own bookkeeping for signs of corruption, such as writes past the end of a block or a block freed twice, and stops the program when it finds them. VTGuard adds checks to sensitive code that uses C++ virtual-function tables, which are a common target after a *use-after-free* bug (using memory after giving it back).
+
+**Code integrity and driver signing.** The kernel checks that executable code was digitally signed by a trusted publisher, page by page as it is read from disk. 64-bit Windows refuses to load kernel drivers that are not signed. On recent versions this can be enforced by the hypervisor from outside the kernel (*memory integrity*), so that even a compromised kernel cannot mark unsigned memory as executable.
+
+**PatchGuard (Kernel Patch Protection).** In the past, rootkits — and, awkwardly, some security products — changed the running kernel itself, for example by replacing entries in the system-call table so that their own code ran on every call. On 64-bit Windows, **PatchGuard** checks at random intervals that critical kernel code and tables are unchanged. If they have been modified, it deliberately crashes the system with a "critical structure corruption" error. Crashing sounds harsh, but a kernel that has been silently altered can no longer be trusted, and a crash is visible where a rootkit wants to be invisible.
+
+**Patching, zero-days and antivirus.** The remaining defences are operational. **Windows Update** delivers fixes, normally on the second Tuesday of each month (*Patch Tuesday*). There is an irony here: publishing a fix reveals the bug, because attackers compare the old and new versions of the patched file to find what changed, then attack machines that have not yet updated. So most real attacks use already-fixed bugs, and installing updates promptly is among the most effective protections there is. The dangerous exception is a **zero-day**: a vulnerability used by attackers before the vendor knows about it, so no fix exists yet. Mitigations matter most here, because they make even an unknown bug hard to exploit reliably, which is why working zero-days have become expensive. Finally, **Microsoft Defender** provides built-in antivirus scanning that looks both for known malicious files and for suspicious behaviour, such as a program altering start-up settings to survive a reboot.
+
+**Mitigations must be switched on.** Many of these protections depend on how a program was compiled and linked. A single old DLL built without ASLR support, loaded into an otherwise protected process, sits at a predictable address and hands the attacker the fragments they need. This is why security reviews check build flags, and why modern toolchains turn the protections on by default.
+
+```python-run
+import random
+
+VALID_TARGETS = {"draw_circle", "draw_square", "save_file"}   # recorded at build time for CFG
+
+def call_indirect(target):
+    if target not in VALID_TARGETS:                            # CFG check before the call
+        return f"CFG: '{target}' is not a valid call target -> process ended"
+    return f"called {target}"
+
+def run_function(user_input, buffer_size=8):
+    cookie = random.getrandbits(32)                            # chosen at program start
+    frame = list(user_input[:buffer_size].ljust(buffer_size)) + [cookie, "return_to_caller"]
+    overflow = user_input[buffer_size:]
+    for i, ch in enumerate(overflow[:2]):                      # bytes written past the buffer
+        frame[buffer_size + i] = ch
+    if frame[buffer_size] != cookie:                           # /GS check before returning
+        return "/GS: security cookie changed -> process ended"
+    return f"returned normally to {frame[buffer_size + 1]}"
+
+print(run_function("hello"))
+print(run_function("A" * 8 + "XY"))
+print(call_indirect("draw_circle"))
+print(call_indirect("middle_of_some_function"))
+```
+
+**What each part does.**
+
+- `VALID_TARGETS` plays the role of the CFG table: the functions the compiler recorded as legitimate destinations for indirect calls. `call_indirect` checks the destination before calling, and refuses anything else.
+- `run_function` builds a toy stack frame: an 8-character buffer, then the cookie, then the return address. Input longer than 8 characters spills over the cookie and then the return address, just as a real overflow would.
+- Before "returning", it compares the cookie slot with the value chosen at the start.
+
+**The output.** Short input returns normally. Ten characters overwrite both the cookie and the return address, but the cookie check runs first and catches the overflow before the corrupted return address could be used. A call to a listed function goes ahead; a call into the middle of some other function — what a code-reuse attack would need — is refused by CFG. Neither mitigation fixes the underlying bug; each turns a takeover into a crash, which is far less harmful.
+
+> [!INTERVIEW]
+> "Name the main exploit mitigations in Windows and what each one stops." **/GS stack cookies** detect overwritten return addresses; **DEP/NX** stops injected code from running; **ASLR** makes code-reuse attacks guess addresses; **CFG** checks indirect call targets (shadow stacks cover returns); **code integrity and driver signing** keep unsigned code out of the kernel; **PatchGuard** detects modification of the running kernel. Then make the key point: these are *defence in depth* — each can be bypassed alone, and an information leak that reveals addresses weakens ASLR, so prompt patching still matters.
 
 ## Common mistakes and confusions
 
@@ -326,6 +387,8 @@ Windows also applies the general defences described in the lesson on attacks: ra
 - **"Every page fault reads the disk."** A soft fault recovers a page still in memory.
 - **"Small files waste a whole block."** In NTFS a very small file lives entirely inside its master file table record.
 - **"A user in an allowed group always gets access."** A deny entry met earlier in the list wins.
+- **"DEP makes buffer overflows harmless."** It stops injected code, not code reuse; that is why ASLR and CFG were added.
+- **"ASLR picks new DLL addresses for every process."** On Windows a DLL's random address is chosen once per boot and shared by all processes.
 - **"An empty access control list means everyone is allowed."** It means nobody is. (An object with *no* list at all is the case that allows everyone.)
 
 ## Summary
@@ -336,6 +399,7 @@ Windows also applies the general defences described in the lesson on attacks: ra
 - The **I/O manager** represents each operation as an **IRP** passed down a **stack** of drivers, possibly with **filter drivers**; I/O is fundamentally **asynchronous**, with **completion ports** for busy servers. Plug and play and power management coordinate devices.
 - **NTFS** is built on the **master file table**, whose records hold **attributes**; small data is **resident**, large data is described by **runs**. It offers journaling, compression, encryption, links and multiple data streams.
 - Security uses **SIDs**, **access tokens**, and **security descriptors** whose ordered **DACL** of allow and deny entries is checked by the security reference monitor, supplemented by **integrity levels** and **User Account Control**.
+- **Mitigations** make bugs hard to exploit: **/GS stack cookies**, exception-handler hardening, **DEP/NX**, **ASLR**, **Control Flow Guard**, heap hardening, **code integrity** and driver signing, **PatchGuard**, plus prompt **patching** and antivirus.
 
 ## Glossary
 
@@ -369,6 +433,16 @@ Windows also applies the general defences described in the lesson on attacks: ra
 - **Access control entry (ACE)** — one allow or deny line in a list.
 - **Integrity level** — a trust level limiting what a process may modify.
 - **User Account Control (UAC)** — the mechanism that asks for confirmation before granting administrative power.
+- **Mitigation** — a measure that makes exploiting a bug harder without removing the bug.
+- **Security cookie (/GS)** — a random value placed before the return address and checked before a function returns.
+- **DEP / NX bit** — Data Execution Prevention, using the processor's no-execute bit to stop data areas being run as code.
+- **ASLR** — address space layout randomisation: loading code and data at unpredictable addresses.
+- **Code reuse (return-oriented programming)** — attacking by chaining fragments of code already in memory.
+- **Control Flow Guard (CFG)** — a check before each indirect call that the destination is a valid function start.
+- **Shadow stack** — a hardware-protected second copy of return addresses used to detect tampering.
+- **Code integrity** — the kernel's check that executable code is signed by a trusted publisher.
+- **PatchGuard (Kernel Patch Protection)** — the 64-bit Windows check that the running kernel has not been modified.
+- **Zero-day** — a vulnerability exploited before the vendor knows of it or has a fix.
 
 ## Check yourself
 
@@ -405,8 +479,24 @@ Windows also applies the general defences described in the lesson on attacks: ra
   {"q": "A DACL contains, in order: deny Mona write; allow Staff read and write. Mona is a member of Staff and requests write access. What is the result?",
    "options": ["Allowed, because Staff has write", "Refused, because the deny entry for Mona is reached first", "Allowed, because later entries override earlier ones", "Refused, because Staff may only read"],
    "answer": 1,
-   "explain": "Entries are examined in order and a matching deny refuses immediately. That is why deny entries are placed before allow entries."}
+   "explain": "Entries are examined in order and a matching deny refuses immediately. That is why deny entries are placed before allow entries."},
+  {"q": "A program has DEP enabled. An attacker overflows a buffer and redirects execution to existing code fragments in a DLL instead of injecting new code. Which mitigation most directly makes this harder?",
+   "options": ["DEP", "ASLR, because the attacker must know where the DLL's code fragments are", "UAC", "NTFS encryption"],
+   "answer": 1,
+   "explain": "Code reuse sidesteps DEP because nothing new is executed from data memory. It relies on known addresses, which ASLR randomises."},
+  {"q": "What does Control Flow Guard check?",
+   "options": ["That every return address matches a saved copy", "That the destination of each indirect call is the start of a function recorded as a valid target", "That files are signed", "That the stack cookie is unchanged"],
+   "answer": 1,
+   "explain": "CFG guards calls through function pointers. Return addresses are protected by stack cookies and, on newer hardware, shadow stacks."},
+  {"q": "Why does PatchGuard deliberately crash the system when it detects a modified kernel?",
+   "options": ["To save power", "A kernel that has been silently altered, for example by a rootkit, can no longer be trusted, and a visible crash defeats a rootkit's goal of hiding", "Because the modification always comes from Windows Update", "To force a disk check"],
+   "answer": 1,
+   "explain": "Rootkits hook kernel tables to hide. Detecting the change and stopping makes the compromise visible instead of letting it continue unseen."},
+  {"q": "Why do most real-world attacks use vulnerabilities for which a fix has already been published?",
+   "options": ["Old bugs are easier to type", "Attackers compare patched and unpatched files to find the bug, then target machines that have not installed the update yet", "Fixes introduce new bugs every time", "Zero-days do not exist"],
+   "answer": 1,
+   "explain": "A published patch points at the flaw. Systems that delay updating remain exposed, which is why prompt patching is so effective."}
 ]
 ```
 
-> **Source:** Tanenbaum & Bos, Modern Operating Systems 4e, §11.5 (Memory management), §11.6 (Caching in Windows), §11.7 (Input/output in Windows), §11.8 (The Windows NT file system), §11.9 (Windows power management), §11.10 (Security in Windows)
+> **Source:** Tanenbaum & Bos, Modern Operating Systems 4e, §11.5 (Memory management), §11.6 (Caching in Windows), §11.7 (Input/output in Windows), §11.8 (The Windows NT file system), §11.9 (Windows power management), §11.10 (Security in Windows, including §11.10.4 Security mitigations)

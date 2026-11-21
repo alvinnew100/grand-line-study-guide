@@ -127,7 +127,8 @@ TRACK = dict(
             summary="How Linux (and Android on top of it) realises processes, scheduling, memory, I/O, files and security.",
             lessons=[
                 dict(id="linux-processes", title="Linux: history, structure, processes and scheduling", file="27-linux-processes.md"),
-                dict(id="linux-memory-io-fs", title="Linux: memory, I/O, file systems, security and Android", file="28-linux-memory-io-fs.md"),
+                dict(id="linux-memory-io-fs", title="Linux: memory, I/O, file systems and security", file="28-linux-memory-io-fs.md"),
+                dict(id="android", title="Android: runtime, Zygote, Binder, apps and their lifecycle", file="28a-android.md"),
             ],
             problems=[],
         ),

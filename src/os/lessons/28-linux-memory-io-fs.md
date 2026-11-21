@@ -1,4 +1,4 @@
-# Linux: memory, I/O, file systems, security and Android
+# Linux: memory, I/O, file systems and security
 
 > **Before this lesson:** read the first half of this case study, [Linux: history, structure, processes and scheduling](#/lesson/os/linux-processes). You will also need the general ideas from [Virtual memory: paging, page tables and TLBs](#/lesson/os/paging-tlb), [Page replacement algorithms](#/lesson/os/page-replacement), [File-system implementation](#/lesson/os/fs-implementation) and [I/O hardware and the layers of I/O software](#/lesson/os/io-hardware-software).
 
@@ -8,7 +8,7 @@ The previous lesson looked at how Linux runs programs and shares out the process
 
 A useful picture is a large workshop. Memory is the workbench space, which must be shared among the workers and tidied when it fills up. I/O is the loading dock, where goods of every shape arrive and leave. The file system is the storeroom with its shelves and its catalogue. Security is the key cabinet, which records who may open which door.
 
-This lesson walks through how Linux handles each of those four, using the general ideas from earlier modules, and ends with **Android**, the phone system built on top of the Linux kernel.
+This lesson walks through how Linux handles each of those four, using the general ideas from earlier modules. The next lesson then shows how **Android**, the phone system, builds a very different world on top of the same kernel.
 
 Why it matters for a job: when a server "runs out of memory", when a disk is slow, when a file cannot be opened because of permissions — these are everyday problems, and diagnosing them requires knowing roughly what Linux is doing underneath.
 
@@ -304,21 +304,9 @@ print("stranger reads:", can(0o077, 1000, 50, 1002, [60], "r"))
 > [!INTERVIEW]
 > Favourite Linux questions from this lesson: *"Why does Linux show almost no free memory?"* — unused memory holds the page cache and is released on demand. *"What happens when memory runs out?"* — the kernel reclaims cache and inactive pages, swaps, and finally the out-of-memory killer ends a process. *"What is an i-node?"* — the record of a file's metadata and block locations; names live in directories, which is why hard links work. *"What does setuid do?"* — the program runs with its owner's identity. *"What does mode 754 mean?"* — owner rwx, group r-x, others r--.
 
-## Android
+## Looking ahead: Android
 
-Android is the most widely used operating system on phones. It is built on the Linux kernel, with a different world on top of it. Studying it shows how the same kernel can serve very different goals.
-
-**Different assumptions.** A phone has one user, limited memory, a battery, and runs applications ("apps") written by thousands of unknown developers, which must be kept away from each other and from the owner's private data.
-
-**The layers.** At the bottom is a Linux kernel with some additions. Above it are system libraries and a runtime that executes apps, which are mostly written in Java or Kotlin and distributed in a compact intermediate form. Above that is a framework of system services (managing windows, notifications, location and so on), and at the top are the apps.
-
-**Each app is its own user.** Android reuses Linux's user-ID protection in a clever way: every installed app is given its *own* UID. Since Linux prevents one user from touching another's files or processes, apps are automatically isolated from each other. On top of that sits a system of **permissions**: an app must declare, and the owner must agree, before it may use the camera, the contact list or the location.
-
-**Communication between apps.** Because apps are isolated, they need a controlled way to cooperate. Android adds a mechanism to the kernel called **Binder**, which lets one process call a function in another — a remote procedure call within a single machine — while reliably telling the receiver which app is calling, so that permissions can be checked.
-
-**Saving energy.** A phone should sleep whenever nothing needs to be done. Android's default is to let the whole device go to sleep, and an app that must keep it awake has to hold a **wake lock** explicitly while it does its work.
-
-**Managing memory without the user's help.** Phones have no "quit" button for apps. Android keeps apps in memory after the user leaves them, so that returning is instant, and when memory runs short it kills the least important ones — those in the background that the user has not used recently — without asking. Apps are written to save their state so that they can be restarted invisibly. Each app is made of components, the most visible being an **activity** (one screen of the user interface), and the system starts and stops these components as needed.
+Android, the most widely used phone operating system, runs on this same Linux kernel but builds a very different world on top of it. It reuses the features from this lesson in new ways: every app gets its *own* user ID, so the ordinary permission bits above keep apps out of each other's files; and the out-of-memory killer, a last resort on a server, becomes a routine tool that quietly removes background apps. Android also adds a few things to the kernel, such as the Binder mechanism for calls between processes and wake locks for saving battery. All of this is covered in the next lesson, [Android: runtime, Zygote, Binder, apps and their lifecycle](#/lesson/os/android).
 
 ## Common mistakes and confusions
 
@@ -327,7 +315,6 @@ Android is the most widely used operating system on phones. It is built on the L
 - **"Permissions add up."** Exactly one group of three bits applies to any given process.
 - **"Execute permission on a directory means running it."** It means permission to pass through it.
 - **"setuid gives the user root powers."** It gives one *program* its owner's powers while it runs.
-- **"Android apps are Linux users in the ordinary sense."** They are separate UIDs used purely for isolation; there is no login.
 
 ## Summary
 
@@ -336,7 +323,7 @@ Android is the most widely used operating system on phones. It is built on the L
 - Devices are **special files** (block or character) with **major** and **minor** numbers; networking uses **sockets**; the block layer applies an **I/O scheduler**.
 - **ext2** uses block groups, i-nodes and name-to-i-node directories; **ext3** adds a **journal**; **ext4** adds **extents**. The **VFS** unifies all file systems through superblock, i-node, dentry and file objects; `/proc` exposes kernel information as files.
 - Security rests on **UIDs**, **GIDs** and nine **permission bits**, with **setuid** and finer-grained **capabilities** for controlled privilege.
-- **Android** runs on the Linux kernel, isolates each app under its own UID, connects apps with **Binder**, saves power with **wake locks**, and reclaims memory by killing background apps.
+- **Android** builds on the same kernel, reusing UIDs to isolate apps; it is the subject of the next lesson.
 
 ## Glossary
 
@@ -368,9 +355,6 @@ Android is the most widely used operating system on phones. It is built on the L
 - **Dentry** — the kernel's record linking one name in a path to an i-node.
 - **Root** — the administrator account, user ID 0.
 - **setuid bit** — a mark on a program file making it run with its owner's identity.
-- **Binder** — Android's mechanism for calls between processes.
-- **Wake lock** — an Android request to keep the device from sleeping.
-- **Activity** — one screen of an Android app's user interface.
 
 ## Check yourself
 
@@ -403,12 +387,8 @@ Android is the most widely used operating system on phones. It is built on the L
   {"q": "A file has mode 640, owner UID 1000 and group GID 50. A process with UID 1001 belonging to group 50 tries to write it. What happens?",
    "options": ["Allowed, because 6 includes write", "Refused, because the group's bits are 4 (read only)", "Allowed, because the process is in the group", "Refused, because only root may write files"],
    "answer": 1,
-   "explain": "The process is not the owner but is in the group, so the middle digit applies. 4 means read only."},
-  {"q": "How does Android keep one app from reading another app's files?",
-   "options": ["Apps are encrypted with different passwords", "Each app is given its own Linux user ID, so the kernel's ordinary user-based protection separates them", "Apps run on different processors", "The files are stored on different phones"],
-   "answer": 1,
-   "explain": "Android reuses the kernel's existing separation between users by treating every app as a distinct user."}
+   "explain": "The process is not the owner but is in the group, so the middle digit applies. 4 means read only."}
 ]
 ```
 
-> **Source:** Tanenbaum & Bos, Modern Operating Systems 4e, §10.4 (Memory management in Linux), §10.5 (Input/output in Linux), §10.6 (The Linux file system), §10.7 (Security in Linux), §10.8 (Android)
+> **Source:** Tanenbaum & Bos, Modern Operating Systems 4e, §10.4 (Memory management in Linux), §10.5 (Input/output in Linux), §10.6 (The Linux file system), §10.7 (Security in Linux)
