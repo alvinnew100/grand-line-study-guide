@@ -309,10 +309,10 @@
    "FastAPI official documentation — https://fastapi.tiangolo.com/",
    "Pydantic v2 documentation — https://docs.pydantic.dev/"
   ],
-  "words": 126652,
+  "words": 126707,
   "modules": 12,
   "lessons": 29,
-  "problems": 24
+  "problems": 30
  },
  {
   "id": "javascript",
