@@ -115,6 +115,27 @@ window.WebKit = (() => {
     return f;
   }
 
+  // ---- Plotly figures from Python lesson demos: figure JSON drawn by Plotly.js inside a sandboxed frame
+  // (scripts only, opaque origin). The Plotly.js major version must match the plotly wheel in worker.js.
+  const PLOTLY_JS = "https://cdn.jsdelivr.net/npm/plotly.js-dist-min@3.0.1/plotly.min.js";
+  function plotlyFrame(figJson, n) {
+    let height = 420;
+    try { const lay = JSON.parse(figJson).layout || {}; if (lay.height) height = Math.min(900, Math.max(200, +lay.height)); } catch (_) {}
+    const f = document.createElement("iframe");
+    f.setAttribute("sandbox", "allow-scripts");
+    f.className = "plotly-frame";
+    f.title = `Interactive chart ${n || ""} drawn by the code above`.replace("  ", " ");
+    f.style.height = height + "px";
+    f.srcdoc = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<style>html,body{margin:0;height:100%;background:#fff;font:14px system-ui,sans-serif;color:#334155}#p{width:100%;height:100%}#m{padding:16px}</style>
+<script src="${PLOTLY_JS}"></scr` + `ipt></head><body><div id="p"><div id="m">Loading Plotly…</div></div>
+<script type="application/json" id="d">${figJson.replace(/</g, "\\u003c")}</scr` + `ipt>
+<script>try{var f=JSON.parse(document.getElementById("d").textContent);document.getElementById("p").innerHTML="";
+Plotly.newPlot("p",f.data||[],Object.assign({autosize:true,margin:{l:48,r:16,t:f.layout&&f.layout.title?48:16,b:40}},f.layout||{},{height:undefined,width:undefined}),{responsive:true,displaylogo:false});}
+catch(e){document.getElementById("p").innerHTML='<div id="m">Could not draw the chart: '+String(e).replace(/</g,"&lt;")+"</div>";}</scr` + `ipt></body></html>`;
+    return f;
+  }
+
   // ---- lesson blocks
   function bar(label) {
     return `<div class="runnable-bar"><span class="lang">${label}</span><button class="reset" type="button">Reset</button><button class="run" type="button">▶ Run</button></div><div class="cm"></div>`;
@@ -144,5 +165,5 @@ window.WebKit = (() => {
     el.querySelector(".run").onclick = go;
     go();
   }
-  return { runJs, runWeb, eq, preview, withSrcdocBase, mountJs, mountHtml };
+  return { runJs, runWeb, eq, preview, withSrcdocBase, plotlyFrame, mountJs, mountHtml };
 })();

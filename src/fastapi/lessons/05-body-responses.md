@@ -32,8 +32,9 @@ as a password hash. Interviewers ask about exactly this.
 shape by writing a class that inherits from `BaseModel` and listing the fields with type hints. Such a
 class is called a **model**.
 
-```python
+```fastapi-run method=POST path=/items/
 from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from pydantic import BaseModel
 
 class Item(BaseModel):
@@ -50,6 +51,11 @@ def create_item(item: Item):
     if item.tax is not None:
         data["price_with_tax"] = item.price + item.tax
     return data
+
+client = TestClient(app)
+print(client.post("/items/", json={"name": "Hammer", "price": 9.5, "tax": 0.5}).json())
+r = client.post("/items/", json={"name": "Hammer", "price": "abc"})
+print(r.status_code, r.json())
 ```
 
 Reading it from the top:
@@ -63,6 +69,14 @@ Reading it from the top:
   whole trick: because `Item` is a model, FastAPI knows the value must come from the body.
 - `item.model_dump()` converts the model object into an ordinary dictionary. The function then adds a
   computed field when a tax was given, and returns the dictionary.
+- The last four lines use the test client from lesson 4. `client.post(url, json=...)` sends a `POST`
+  request whose body is the given dictionary, written out as JSON. The first request is valid and
+  prints the stored item with `price_with_tax` added; the second sends text where a number belongs
+  and prints `422` followed by the error explained below.
+
+Press **Run**, then use the request panel under the code: its body box starts with an example built
+from the `Item` model. Press **Send** once as it is, then delete the `"name"` line or give `price` the
+value `"abc"`, send again, and read the 422.
 
 Because of that single hint, FastAPI will:
 
@@ -419,10 +433,16 @@ with `mode="json"`, shows what goes on the wire: the id as the string
 
 Now everything together for one resource: a separate model for each direction, correct status codes,
 and a partial update. `Field(...)` attaches rules to a field (`min_length`, `gt` for "greater than");
-lesson 7 covers it fully. `repo` stands for some storage object with `insert`, `get`, `save` and
-`delete` methods.
+lesson 7 covers it fully. `repo` is a small stand-in for a database: an object that keeps the items
+in a dictionary and offers `insert`, `get`, `save` and `delete` methods, so that the whole example
+runs here. Press **Run**:
 
-```python
+```fastapi-run method=POST path=/items
+from datetime import datetime, timezone
+from fastapi import FastAPI, HTTPException, Response, status
+from fastapi.testclient import TestClient
+from pydantic import BaseModel, Field
+
 class ItemBase(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     price: float = Field(gt=0)
@@ -444,6 +464,26 @@ class ItemInDB(ItemPublic):                 # what we store: extra internal fiel
     cost_price: float
     supplier_id: int
 
+class Repo:                                 # stand-in for a database table
+    def __init__(self):
+        self.rows, self.next_id = {}, 1
+    def insert(self, item: ItemCreate) -> ItemInDB:
+        stored = ItemInDB(**item.model_dump(), id=self.next_id, created_at=datetime.now(timezone.utc),
+                          cost_price=round(item.price * 0.4, 2), supplier_id=7)
+        self.rows[stored.id] = stored
+        self.next_id += 1
+        return stored
+    def get(self, item_id: int) -> ItemInDB | None:
+        return self.rows.get(item_id)
+    def save(self, item: ItemInDB) -> ItemInDB:
+        self.rows[item.id] = item
+        return item
+    def delete(self, item_id: int) -> bool:
+        return self.rows.pop(item_id, None) is not None
+
+repo = Repo()
+app = FastAPI()
+
 @app.post("/items", response_model=ItemPublic, status_code=status.HTTP_201_CREATED)
 def create_item(item: ItemCreate, response: Response):
     stored = repo.insert(item)                               # -> ItemInDB
@@ -462,7 +502,20 @@ def patch_item(item_id: int, patch: ItemUpdate):
 def delete_item(item_id: int) -> None:
     if not repo.delete(item_id):
         raise HTTPException(status_code=404, detail="Item not found")
+
+client = TestClient(app)
+r = client.post("/items", json={"name": "Hammer", "price": 9.5, "cost_price": 1})
+print(r.status_code, r.headers["location"], r.json())
+print(client.patch("/items/1", json={"price": 11.0}).json())
+print(client.delete("/items/1").status_code)
+print(client.delete("/items/1").json())
 ```
+
+The four printed lines are the story of one item. The `POST` answers `201`, a `Location` header
+pointing at `/items/1`, and the public fields only. The `PATCH` changes the price and keeps the
+name. The first `DELETE` answers `204` (deleted, nothing to send back) and the second answers
+`{'detail': 'Item not found'}`, because the item is already gone. In the request panel, try
+`PATCH /items/1` with the body `{"price": -1}` to watch `Field(gt=0)` refuse it.
 
 Trace `POST /items` with the body `{"name": "Hammer", "price": 9.5, "cost_price": 1}`:
 

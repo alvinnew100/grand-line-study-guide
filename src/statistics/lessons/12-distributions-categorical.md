@@ -98,6 +98,39 @@ The text histogram shows the shape at once: a peak in the 3 to 6 minute bin (234
 
 Bin width matters. Too few bins hide structure (everything lands in one or two bars); too many make a noisy comb in which every bar is a handful of points. Try a few widths. Rules of thumb exist (Sturges' rule, the Freedman-Diaconis rule, which uses the IQR), and `np.histogram_bin_edges(x, bins="fd")` applies the latter.
 
+Now draw the two pictures for real. The demo uses **matplotlib**, Python's standard plotting library, and puts a histogram of the same 500 sessions above a boxplot that shares its horizontal axis, so you can see how the box and whiskers summarise the shape above them. The first run downloads the plotting library, which takes a few seconds.
+
+```python-run
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+rng = np.random.default_rng(7)
+session = pd.Series(np.round(rng.lognormal(mean=1.6, sigma=0.6, size=500), 1))
+
+fig, (top, bottom) = plt.subplots(2, 1, sharex=True, figsize=(7, 4.5),
+                                  gridspec_kw={"height_ratios": [3, 1]})
+top.hist(session, bins=range(0, 27, 3), color="#1f5f8b", edgecolor="white")
+top.axvline(session.median(), color="#d1412b", linestyle="--", label=f"median {session.median():.1f}")
+top.axvline(session.mean(), color="#a16207", linestyle=":", label=f"mean {session.mean():.2f}")
+top.set_ylabel("number of sessions")
+top.legend()
+bottom.boxplot(session, vert=False, widths=0.6)
+bottom.set_yticks([])
+bottom.set_xlabel("session length (minutes)")
+fig.tight_layout()
+plt.show()
+```
+
+**Reading this code line by line**
+
+- `plt.subplots(2, 1, sharex=True, ...)` creates a **figure** (the whole image) holding two **axes** (individual plots) stacked in 2 rows and 1 column, sharing one horizontal scale. `figsize` is the size in inches; `height_ratios` makes the top plot three times as tall as the bottom one.
+- `top.hist(session, bins=range(0, 27, 3))` draws the histogram with the same 3-minute bins as the table (the last edge is 24, so the one session above 21 minutes is included).
+- `axvline` draws a vertical line across the plot: dashed for the median, dotted for the mean. `label=` gives the text that `legend()` shows in the key.
+- `bottom.boxplot(session, vert=False)` draws a horizontal boxplot with the default 1.5 × IQR whiskers; `set_yticks([])` removes the meaningless vertical tick marks.
+- `fig.tight_layout()` stops labels from overlapping, and `plt.show()` displays the figure below the output.
+
+Compare the two plots. The tallest bar is the 3 to 6 minute bin, which holds the box. The median line sits left of the mean line, the signature of right skew. The right whisker ends near 12, and the small circles beyond it are the 23 sessions past the upper fence, spread thinly along the tail the histogram shows. Change the bin step from 3 to 1 or to 6 and run again to see the bin-width trade-off described above.
+
 ## 4. Density estimates
 
 A **density plot** is a smoothed histogram: a continuous curve whose area underneath equals 1. It is computed by **kernel density estimation** (KDE): place a small bump (the **kernel**, usually a normal curve) on every data point and add up the bumps. The width of each bump is the **bandwidth**, which plays the same role as bin width: small bandwidths give a wiggly curve, large ones over-smooth.

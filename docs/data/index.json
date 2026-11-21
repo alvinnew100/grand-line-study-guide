@@ -334,7 +334,7 @@
    "FastAPI official documentation — https://fastapi.tiangolo.com/",
    "Pydantic v2 documentation — https://docs.pydantic.dev/"
   ],
-  "words": 126707,
+  "words": 127627,
   "modules": 12,
   "lessons": 29,
   "problems": 30
@@ -664,7 +664,7 @@
    "SciPy, statsmodels and scikit-learn documentation",
    "Kohavi, Tang & Xu, Trustworthy Online Controlled Experiments (2020) - background for A/B testing pitfalls"
   ],
-  "words": 85777,
+  "words": 86878,
   "modules": 9,
   "lessons": 32,
   "problems": 31
@@ -681,7 +681,7 @@
    "Chip Huyen, AI Engineering (O'Reilly) — background for deep learning and system design",
    "Goodfellow, Bengio & Courville, Deep Learning — background for the maths and optimisers"
   ],
-  "words": 124437,
+  "words": 124697,
   "modules": 10,
   "lessons": 26,
   "problems": 25
@@ -697,7 +697,7 @@
    "PyTorch documentation (docs.pytorch.org): torch.amp, torch.compile, torch.export, torch.onnx, torch.utils.data",
    "Goodfellow, Bengio & Courville, Deep Learning — background for optimisation and regularisation"
   ],
-  "words": 87014,
+  "words": 87561,
   "modules": 10,
   "lessons": 30,
   "problems": 30

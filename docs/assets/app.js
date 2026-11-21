@@ -213,6 +213,7 @@
     if (lang === "python-run" || lang === "py-run") { pending[id] = { type: "py", code }; return `<div class="runnable" id="${id}"></div>`; }
     if (lang === "js-run") { pending[id] = { type: "js", code }; return `<div class="runnable" id="${id}"></div>`; }
     if (lang === "html-run") { pending[id] = { type: "html", code }; return `<div class="runnable" id="${id}"></div>`; }
+    if (lang === "fastapi-run") { pending[id] = { type: "api", code, info: infoStr }; return `<div class="runnable" id="${id}"></div>`; }
     if (lang === "sql-run") {
       const ds = (infoStr.match(/dataset=([\w-]+)/) || [])[1];
       pending[id] = { type: "sql", code, dataset: ds };
@@ -258,6 +259,7 @@
         else if (b.type === "sql") mountRunnable(el, b.code, "sql", b.dataset);
         else if (b.type === "js") WebKit.mountJs(el, b.code, makeEditor);
         else if (b.type === "html") WebKit.mountHtml(el, b.code, makeEditor);
+        else if (b.type === "api") mountApi(el, b.code, b.info);
       } catch (e) {
         el.innerHTML = `<pre class="io err">${esc(e.message)}</pre>`;
       }
@@ -359,7 +361,7 @@
     let worker = null, ready = null, seq = 0;
     const handlers = new Map();
     function start() {
-      worker = new Worker("assets/judge/worker.js?v=6");
+      worker = new Worker("assets/judge/worker.js?v=8");
       ready = new Promise((res, rej) => {
         const onmsg = (e) => {
           if (e.data.type === "ready") res();
@@ -379,13 +381,20 @@
       await ensure();
       const id = ++seq;
       return new Promise((resolve, reject) => {
-        const timer = setTimeout(() => {
-          handlers.delete(id);
-          restart();
-          reject(Object.assign(new Error("Time Limit Exceeded"), { tle: true }));
-        }, timeoutMs);
+        let timer = null;
+        const arm = (ms) => {
+          clearTimeout(timer);
+          timer = setTimeout(() => {
+            handlers.delete(id);
+            restart();
+            reject(Object.assign(new Error("Time Limit Exceeded"), { tle: true }));
+          }, ms);
+        };
+        arm(timeoutMs);
         handlers.set(id, (d) => {
-          if (d.type === "done") { clearTimeout(timer); handlers.delete(id); resolve(d.data); }
+          // package downloads ask for a longer limit; ms 0 restores the normal one
+          if (d.type === "timer") arm(d.ms || timeoutMs);
+          else if (d.type === "done") { clearTimeout(timer); handlers.delete(id); resolve(d.data); }
           else if (d.type === "error") { clearTimeout(timer); handlers.delete(id); reject(new Error(d.data)); }
           else onEvent && onEvent(d);
         });
@@ -396,6 +405,8 @@
       warm: () => ensure().catch(() => {}),
       isReady: () => !!worker,
       run: (code, onEvent, t = 30000) => call({ type: "run", code }, onEvent, t),
+      appRun: (code, key, onEvent, t = 30000) => call({ type: "app-run", code, key }, onEvent, t),
+      appRequest: (key, req, onEvent, t = 15000) => call({ type: "app-request", key, ...req }, onEvent, t),
       judge: (code, track, pid, mode, lines, onEvent, t = 20000) => call({ type: "judge", code, track, pid, mode, lines }, onEvent, t),
     };
   })();
@@ -456,11 +467,147 @@
     return cm;
   }
 
+  // Output of one Python run: text in `out`, matplotlib PNGs and Plotly frames in `figs`.
+  function pyOutput(out, figs) {
+    figs.innerHTML = "";
+    out.textContent = Py.isReady() ? "" : "Starting Python (first run downloads ~10 MB)…\n";
+    let first = true, nFig = 0;
+    const span = (s, cls) => { const sp = document.createElement("span"); if (cls) sp.className = cls; sp.textContent = s; out.appendChild(sp); };
+    const write = (s, cls) => { if (first) { out.textContent = ""; first = false; } span(s, cls); };
+    const onEvent = (d) => {
+      if (d.type === "stdout" || d.type === "stderr") write(d.data, d.type === "stderr" ? "err" : "");
+      else if (d.type === "status") { if (first) out.textContent = ""; span(d.data + "\n", "note"); }
+      else if (d.type === "image") {
+        const n = ++nFig;
+        const img = h(`<figure class="run-fig"><img alt="Figure ${n} drawn by the code above" width="${d.data.w}" height="${d.data.h}" decoding="async"></figure>`);
+        img.firstElementChild.src = "data:image/png;base64," + d.data.png;
+        // wide multi-panel figures scroll sideways on phones instead of shrinking to unreadable
+        if (d.data.w > 760) { img.firstElementChild.style.minWidth = "520px"; img.tabIndex = 0; }
+        figs.appendChild(img);
+      } else if (d.type === "plotly") figs.appendChild(WebKit.plotlyFrame(d.data, ++nFig));
+    };
+    const end = () => {
+      if (!first) return;
+      if (figs.childElementCount) out.textContent = "";
+      else write("(no output)");
+    };
+    return { write, onEvent, end };
+  }
+
+  // ```fastapi-run: the block defines a FastAPI `app`; a request panel calls it in-process (no network).
+  function mountApi(el, code, info) {
+    const opt = (k) => (info.match(new RegExp(`\\b${k}=(\\S+)`)) || [])[1];
+    const key = el.id;
+    el.innerHTML = `<div class="runnable-bar"><span class="lang">FastAPI</span>
+      <button class="reset" type="button">Reset</button><button class="run" type="button">▶ Run</button></div><div class="cm"></div>
+      <pre class="runnable-out"></pre><div class="runnable-figs"></div>
+      <form class="api" novalidate>
+        <div class="api-head"><span class="api-title">Try a request</span><span class="api-hint">Send runs the code above first if it changed.</span></div>
+        <div class="api-routes" role="group" aria-label="Routes in this app" hidden></div>
+        <div class="api-row">
+          <select class="api-method" aria-label="HTTP method">${["GET", "POST", "PUT", "PATCH", "DELETE"].map((m) => `<option>${m}</option>`).join("")}</select>
+          <input class="api-path" type="text" aria-label="Path and query string" autocomplete="off" autocapitalize="off" spellcheck="false">
+          <button class="api-send" type="submit">Send</button>
+        </div>
+        <label class="api-field api-body-wrap"><span>JSON body</span><textarea class="api-body" rows="5" spellcheck="false" autocapitalize="off"></textarea></label>
+        <details class="api-more"><summary>Request headers</summary>
+          <label class="api-field"><span>One per line, as <code>Name: value</code></span><textarea class="api-headers" rows="2" spellcheck="false" autocapitalize="off" placeholder="X-Token: secret"></textarea></label></details>
+        <div class="api-resp" aria-live="polite"></div>
+      </form>`;
+    const original = code.replace(/\n$/, "");
+    const out = $(".runnable-out", el), figs = $(".runnable-figs", el), runBtn = $(".run", el), sendBtn = $(".api-send", el);
+    const method = $(".api-method", el), path = $(".api-path", el), body = $(".api-body", el), hdrs = $(".api-headers", el);
+    const resp = $(".api-resp", el), routesBox = $(".api-routes", el), bodyWrap = $(".api-body-wrap", el);
+    method.value = (opt("method") || "GET").toUpperCase();
+    path.value = opt("path") || "/";
+    let lastRun = null, routes = [], autoBody = "";
+    const syncBody = () => { bodyWrap.hidden = method.value === "GET"; };
+    method.onchange = syncBody; syncBody();
+    const cm = makeEditor($(".cm", el), original, "python", { auto: true, keys: { "Ctrl-Enter": () => run(), "Cmd-Enter": () => run() } });
+    $(".reset", el).onclick = () => cm.setValue(original);
+    const busy = (on, label) => {
+      runBtn.disabled = sendBtn.disabled = on;
+      runBtn.textContent = on && label === "run" ? "Running…" : "▶ Run";
+      sendBtn.textContent = on && label === "send" ? "Sending…" : "Send";
+    };
+    const pick = (r, focus) => {
+      method.value = r.method; path.value = r.path; syncBody();
+      if (r.body && (!body.value.trim() || body.value === autoBody)) body.value = autoBody = r.body;
+      if (!focus) return;
+      path.focus();
+      const m = r.path.match(/\{[^}]+\}/);   // select the first {param} so it can be typed over
+      if (m) path.setSelectionRange(m.index, m.index + m[0].length);
+    };
+    // the route a concrete request goes to, e.g. POST /items/7 -> POST /items/{item_id}
+    const routeFor = (m, p) => routes.find((r) => r.method === m &&
+      new RegExp("^" + r.path.replace(/[.*+?^$()|[\]\\]/g, "\\$&").replace(/\{[^}]+\}/g, "[^/]+") + "$").test(p.split("?")[0]));
+    function showRoutes() {
+      routesBox.innerHTML = "";
+      routes.filter((r) => !/^\/(docs|redoc|openapi\.json)/.test(r.path)).forEach((r) => {
+        const b = h(`<button type="button" class="api-route"><b>${esc(r.method)}</b> ${esc(r.path)}</button>`);
+        if (r.summary) b.title = r.summary;
+        b.onclick = () => pick(r, true);
+        routesBox.appendChild(b);
+      });
+      routesBox.hidden = !routesBox.childElementCount;
+    }
+    async function run() {
+      busy(true, "run");
+      const src = cm.getValue(), o = pyOutput(out, figs);
+      let ok = false;
+      try {
+        const r = await Py.appRun(src, key, o.onEvent, 30000);
+        if (r.repr && r.repr !== "None") o.write(r.repr + "\n");
+        routes = r.routes || []; showRoutes(); lastRun = src; ok = true;
+        if (!opt("path") && path.value === "/" && routes.length && !routes.some((x) => x.path === "/")) pick(routes[0]);
+        else if (!body.value.trim()) { const r0 = routeFor(method.value, path.value); if (r0 && r0.body) body.value = autoBody = r0.body; }
+      } catch (e) { o.write((e.tle ? "⏱ Stopped after 30 s.\n" : "") + e.message, "err"); lastRun = null; }
+      o.end();
+      if (ok && out.textContent === "(no output)") out.textContent = "";
+      busy(false);
+      return ok;
+    }
+    function render(req, r) {
+      const cls = r.status >= 500 ? "s5" : r.status >= 400 ? "s4" : r.status >= 300 ? "s3" : "s2";
+      resp.innerHTML = `<div class="api-line"><span class="api-req">${esc(req.method)} ${esc(req.path)}</span>
+        <span class="api-status ${cls}">${r.status} ${esc(r.reason || "")}</span><span class="api-ms">${r.ms} ms</span></div>
+        <details class="api-hdrs"><summary>Response headers (${r.headers.length})</summary><pre>${esc(r.headers.map(([k, v]) => `${k}: ${v}`).join("\n"))}</pre></details>
+        <pre class="api-json">${r.body === "" ? '<span class="muted">(empty body)</span>' : esc(r.body)}</pre>
+        ${r.error ? `<div class="api-err">${esc(r.error)}</div>` : ""}`;
+    }
+    async function send(ev) {
+      if (ev) ev.preventDefault();
+      if (cm.getValue() !== lastRun && !(await run())) { resp.innerHTML = `<div class="api-err">Fix the error in the code above, then send again.</div>`; return; }
+      let p = path.value.trim() || "/";
+      if (!p.startsWith("/")) p = "/" + p;
+      const headers = {};
+      hdrs.value.split("\n").forEach((line) => { const i = line.indexOf(":"); if (i > 0) headers[line.slice(0, i).trim()] = line.slice(i + 1).trim(); });
+      const req = { method: method.value, path: p, body: method.value === "GET" ? "" : body.value.trim(), headers };
+      busy(true, "send");
+      resp.innerHTML = `<div class="meta">Sending…</div>`;
+      try {
+        let r;
+        const log = (d) => { if (d.type === "stdout" || d.type === "stderr") { const sp = document.createElement("span"); if (d.type === "stderr") sp.className = "err"; sp.textContent = d.data; out.appendChild(sp); } };
+        try { r = await Py.appRequest(key, req, log); }
+        catch (e) {
+          if (e.message !== "NOAPP") throw e;
+          busy(false); if (!(await run())) return; busy(true, "send");   // Python restarted since the last run
+          r = await Py.appRequest(key, req, log);
+        }
+        render(req, r);
+      } catch (e) { resp.innerHTML = `<div class="api-err">${esc(e.tle ? "⏱ The request took longer than 15 s." : e.message)}</div>`; }
+      busy(false);
+    }
+    $("form.api", el).onsubmit = send;
+    runBtn.onclick = run;
+  }
+
   function mountRunnable(el, code, lang, dataset) {
     el.innerHTML = `<div class="runnable-bar"><span class="lang">${lang === "sql" ? "SQL" + (dataset ? " · " + esc(dataset) : "") : "Python"}</span>
       <button class="reset" type="button">Reset</button><button class="run" type="button">▶ Run</button></div><div class="cm"></div>`;
     const out = h(lang === "sql" ? `<div class="sql-result" hidden></div>` : `<pre class="runnable-out"></pre>`);
     el.appendChild(out);
+    const figs = lang === "sql" ? null : el.appendChild(h(`<div class="runnable-figs"></div>`));
     const original = code.replace(/\n$/, "");
     const cm = makeEditor($(".cm", el), original, lang, { auto: true, keys: { "Ctrl-Enter": () => go(), "Cmd-Enter": () => go() } });
     const btn = $(".run", el);
@@ -476,17 +623,12 @@
           out.innerHTML = (res.length ? res.map(Sql.table).join("") : Sql.table(null)).replace(/<\/div>$/, ` · ${ms.toFixed(1)} ms</div>`);
         } catch (e) { out.innerHTML = `<div class="meta" style="color:var(--bad)">${esc(e.message)}</div>`; }
       } else {
-        out.textContent = Py.isReady() ? "" : "Starting Python (first run downloads ~10 MB)…\n";
-        let first = true;
-        const write = (s, cls) => {
-          if (first) { out.textContent = ""; first = false; }
-          const span = document.createElement("span"); if (cls) span.className = cls; span.textContent = s; out.appendChild(span);
-        };
+        const o = pyOutput(out, figs);
         try {
-          const r = await Py.run(cm.getValue(), (d) => write(d.data, d.type === "stderr" ? "err" : ""));
-          if (r && r.repr && r.repr !== "None") write(r.repr + "\n");
-          if (first) write("(no output)");
-        } catch (e) { write((e.tle ? "⏱ Stopped after 30 s.\n" : "") + e.message, "err"); }
+          const r = await Py.run(cm.getValue(), o.onEvent);
+          if (r && r.repr && r.repr !== "None") o.write(r.repr + "\n");
+        } catch (e) { o.write((e.tle ? "⏱ Stopped after 30 s.\n" : "") + e.message, "err"); }
+        o.end();
       }
       btn.disabled = false;
       btn.textContent = "▶ Run";
@@ -968,7 +1110,7 @@
       if (on && next) location.hash = `#/lesson/${tid}/${next.id}`;
       else viewLesson(tid, lid);
     };
-    if (/```python-run|```py-run/.test(md)) setTimeout(() => Py.warm(), 1500);
+    if (/```(python-run|py-run|fastapi-run)/.test(md)) setTimeout(() => Py.warm(), 1500);
   }
 
   // ---------------------------------------------------------------- problem workspace

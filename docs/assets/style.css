@@ -668,3 +668,47 @@ a.rstep:hover { text-decoration: none; border-color: var(--accent); }
 .pl-later { margin-top: 14px; }
 .pl-later > summary { cursor: pointer; color: var(--muted); font-size: 14px; }
 .pl-later[open] > summary { margin-bottom: 8px; }
+/* figures from Python demos (matplotlib PNGs, Plotly frames) */
+.runnable-out .note { color: #94a3b8; font-style: italic; }
+.runnable-figs { display: grid; gap: 10px; padding: 10px; background: #020617; border-top: 1px solid #1e293b; }
+.runnable-figs:empty { display: none; }
+.run-fig { margin: 0; justify-self: center; max-width: 100%; overflow-x: auto; }
+.run-fig img { display: block; max-width: 100%; height: auto; background: #fff; border-radius: 6px; }
+.plotly-frame { display: block; width: 100%; border: 0; border-radius: 6px; background: #fff; }
+
+/* fastapi-run request panel */
+.api { display: grid; gap: 8px; padding: 10px 12px 12px; background: #0b1222; border-top: 1px solid #1e293b; color: #e2e8f0; font-size: 13px; }
+.api-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.api-title { font-weight: 700; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: #cbd5e1; }
+.api-hint { color: #94a3b8; font-size: 12px; }
+.api-routes { display: flex; flex-wrap: wrap; gap: 6px; }
+.api-routes[hidden] { display: none; }
+.api-route { font: 12px var(--mono); background: #1e293b; color: #e2e8f0; border: 1px solid #334155; border-radius: 999px; padding: 3px 10px; cursor: pointer; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.api-route b { color: #7dd3fc; font-weight: 700; }
+.api-route:hover { border-color: #64748b; }
+.api-row { display: flex; gap: 6px; min-width: 0; }
+.api select, .api input, .api textarea { font: 13px var(--mono); color: #e2e8f0; background: #020617; border: 1px solid #334155; border-radius: 6px; padding: 6px 8px; min-width: 0; }
+.api select { flex: none; }
+.api-path { flex: 1 1 auto; width: 100%; }
+.api-send { flex: none; background: var(--ok); color: #fff; border: 0; border-radius: 6px; padding: 0 14px; font-weight: 700; font-size: 13px; cursor: pointer; }
+.api-send:disabled, .runnable-bar button:disabled { opacity: .6; cursor: progress; }
+.api :focus-visible { outline: 2px solid #7dd3fc; outline-offset: 1px; }
+.api-field { display: grid; gap: 4px; color: #94a3b8; font-size: 12px; }
+.api-field[hidden] { display: none; }
+.api-field code { color: #cbd5e1; }
+.api textarea { resize: vertical; width: 100%; box-sizing: border-box; }
+.api-more summary { cursor: pointer; color: #94a3b8; font-size: 12px; }
+.api-more[open] summary { margin-bottom: 6px; }
+.api-resp:empty { display: none; }
+.api-resp .meta { color: #94a3b8; }
+.api-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-bottom: 6px; }
+.api-req { font-family: var(--mono); color: #cbd5e1; word-break: break-all; }
+.api-status { font: 700 12px var(--mono); padding: 2px 8px; border-radius: 999px; }
+.api-status.s2 { background: #14532d; color: #bbf7d0; }
+.api-status.s3 { background: #1e3a5f; color: #bfdbfe; }
+.api-status.s4 { background: #713f12; color: #fde68a; }
+.api-status.s5 { background: #7f1d1d; color: #fecaca; }
+.api-ms { color: #94a3b8; font-size: 12px; }
+.api-hdrs summary { cursor: pointer; color: #94a3b8; font-size: 12px; }
+.api-hdrs pre, .api-json { margin: 6px 0 0; padding: 8px 10px; background: #020617; border: 1px solid #1e293b; border-radius: 6px; font: 12.5px/1.5 var(--mono); color: #e2e8f0; white-space: pre-wrap; word-break: break-word; max-height: 320px; overflow: auto; }
+.api-err { margin-top: 6px; color: #fca5a5; font-family: var(--mono); white-space: pre-wrap; word-break: break-word; }

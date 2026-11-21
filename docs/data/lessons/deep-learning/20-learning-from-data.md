@@ -213,6 +213,18 @@ For a linear model with squared error, the loss landscape is **convex**: shaped 
 > [!INTERVIEW]
 > **"Your loss goes up every iteration. What happened and what do you try?"** The learning rate is too large: each step overshoots the minimum and lands higher. Lower it (typically by a factor of 3 to 10), check that inputs are standardised (unscaled features force tiny learning rates and make divergence likely), verify the gradient with a finite-difference check on a tiny case, and make sure the sign of the update is a subtraction. If the loss turns into `nan`, the same causes apply, plus numerical problems such as taking the log of zero.
 
+## 8. An old recipe that still works
+
+The idea of learning parameters from data is older than computers. When Johannes Kepler worked out the laws of planetary motion in the early 1600s, he had no theory telling him the answer: he had Tycho Brahe's careful observations and a lot of patience. His process is a good checklist for any model you fit today:
+
+1. **Get good data**, and more of it than you think you need.
+2. **Look at it** before modelling: plot it, so that the shape suggests a family of models.
+3. **Try the simplest model that could fit** (Kepler tried circles before he settled on ellipses).
+4. **Hold some data back** and check that the fitted model predicts observations it was not fitted on.
+5. **Iterate**: when predictions miss in a systematic way, change the model family, not just the numbers.
+
+Gradient descent automates the "adjust the numbers" part of step 3. Steps 1, 2, 4 and 5 remain your job, and skipping them is how models end up fitting noise. The lesson [A complete image classifier](#/lesson/deep-learning/image-classifier) and the validation material that follows turn step 4 into routine practice.
+
 ## Summary
 
 - Learning is parameter estimation: choose a model, a loss, compute gradients, step against them.

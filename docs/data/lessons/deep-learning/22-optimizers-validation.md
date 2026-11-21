@@ -207,10 +207,11 @@ Plot training and validation loss after every epoch:
 - **Both high and flat**: **underfitting**. The model is too small, the learning rate is wrong, or there is a bug. Increase capacity or fix the setup.
 - **Training falling, validation rising**: **overfitting**. Stop at the best validation epoch (**early stopping**), add regularisation or data augmentation, or get more data.
 
-The demo fits a flexible model (a degree-12 polynomial, which has far more freedom than the data's underlying sine curve needs) to 18 noisy training points with Adam, and tracks 6 held-out validation points.
+The demo fits a flexible model (a degree-12 polynomial, which has far more freedom than the data's underlying sine curve needs) to 18 noisy training points with Adam, tracks 6 held-out validation points, and then draws both loss curves with **matplotlib**, Python's plotting library (the first run downloads it, which takes a few seconds).
 
 ```python-run
 import numpy as np
+import matplotlib.pyplot as plt
 
 rng = np.random.default_rng(3)
 n = 24
@@ -225,19 +226,32 @@ m, v, lr = np.zeros(13), np.zeros(13), 0.05
 mse = lambda idx: ((F[idx] @ w + b - y[idx]) ** 2).mean()
 
 best = (np.inf, 0)
+train_curve, val_curve = [], []
 for t in range(1, 10001):
     err = F[train_idx] @ w + b - y[train_idx]
     g = np.append(2 * F[train_idx].T @ err / len(err), 2 * err.mean())
     m = 0.9 * m + 0.1 * g; v = 0.999 * v + 0.001 * g * g          # Adam moments
     step = lr * (m / (1 - 0.9 ** t)) / (np.sqrt(v / (1 - 0.999 ** t)) + 1e-8)
     w, b = w - step[:-1], b - step[-1]
-    best = min(best, (mse(val_idx), t))
+    train_curve.append(mse(train_idx)); val_curve.append(mse(val_idx))
+    best = min(best, (val_curve[-1], t))
     if t in (10, 100, 500, 1000, 2000, 5000, 10000):
         print(f"epoch {t:5d}   train {mse(train_idx):.4f}   validation {mse(val_idx):.4f}")
 print(f"best validation loss {best[0]:.4f} at epoch {best[1]}  <- early stopping would keep this one")
+
+epochs = np.arange(1, 10001)
+plt.plot(epochs, train_curve, label="training loss")
+plt.plot(epochs, val_curve, label="validation loss")
+plt.axvline(best[1], color="gray", linestyle="--", label=f"best validation epoch ({best[1]})")
+plt.xscale("log"); plt.yscale("log")
+plt.xlabel("epoch (log scale)"); plt.ylabel("mean squared error (log scale)")
+plt.legend()
+plt.show()
 ```
 
-Training loss keeps falling all the way to epoch 10,000, but validation loss bottoms out within the first few hundred epochs and then climbs steadily as the polynomial bends to fit individual noisy points. Saving the parameters from the best validation epoch, early stopping, would keep the generalising model. You will implement early-stopping logic as a problem in the model-design module.
+The two lists `train_curve` and `val_curve` collect the losses after every update, `plt.plot` draws each list as a line against the epoch numbers, `plt.axvline` marks the best validation epoch with a dashed vertical line, and `plt.show()` displays the chart. Both axes use a **log scale** (equal steps mean multiplying by 10), so the first few hundred epochs, where the interesting turn happens, are not squashed into the left edge.
+
+Training loss keeps falling all the way to epoch 10,000, but validation loss bottoms out within the first few hundred epochs and then climbs steadily as the polynomial bends to fit individual noisy points. In the chart this is the classic overfitting shape from the list above: the two curves fall together, then separate, with the gap widening to the right of the dashed line. The short spikes late in training are Adam's steps overshooting a little; they do not change the trend. Saving the parameters from the best validation epoch, early stopping, would keep the generalising model. You will implement early-stopping logic as a problem in the model-design module.
 
 > [!INTERVIEW]
 > **"Adam or SGD?"** Adam (in practice AdamW) is the robust default: it converges quickly with little tuning and is standard for transformers and fine-tuning. Well-tuned SGD with momentum and a learning-rate schedule can match or beat it on some vision tasks and uses less memory (one buffer instead of two). Then explain AdamW: plain Adam's L2 term gets divided by the adaptive denominator, so decay is uneven; AdamW applies decay directly to the weights. Bonus: exclude biases and normalisation parameters from weight decay.

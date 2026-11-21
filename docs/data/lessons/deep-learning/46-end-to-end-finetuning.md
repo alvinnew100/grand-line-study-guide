@@ -262,6 +262,16 @@ With only 40 labels, the network trained from scratch generalises worst; both tr
 > [!INTERVIEW]
 > **"You have 500 labelled medical images. How do you build a classifier?"** Start from a pretrained backbone (ImageNet or, better, a medical-imaging model), replace the head, train the head first with the backbone frozen, then fine-tune the whole network with a smaller learning rate (discriminative rates per layer group), strong but valid augmentation, weight decay and early stopping on a patient-level validation split. Compare against a simple baseline, report ROC AUC and recall at a clinically chosen specificity with confidence intervals (small data means wide uncertainty), and consider cross-validation and an ensemble of folds.
 
+### Where to go from here
+
+Finishing a project like this one is the start of the practical part of deep learning, not the end. Good next steps, roughly in order of effort:
+
+- **Reproduce a paper's result** on a small scale. Reading the method and then matching its numbers teaches more than reading ten papers; arXiv and the authors' code releases make this possible.
+- **Enter a data competition** (for example on Kaggle). The datasets are cleaned, the metrics are fixed, and the public discussions show how strong practitioners debug and validate.
+- **Read others' training code** in major open-source projects (the PyTorch examples repository, Hugging Face model implementations) and notice their conventions for data loading, checkpoints and evaluation.
+- **Contribute back**: a documentation fix, a bug report with a minimal reproduction, or a small feature in a library you use.
+- **Keep a lab notebook** for every experiment: data version, code commit, hyperparameters and results. Most "my model got worse and I do not know why" problems are solved by this habit.
+
 ## Summary
 
 - Segmentation probabilities become candidates by thresholding, erosion, connected-component labelling and centres of mass: classic image processing, not deep learning.

@@ -59,6 +59,8 @@ Without standardisation, distances are almost entirely income differences, the d
 
 k-NN is also used as a **feature engine**: the out-of-fold k-NN prediction for each record (the "what similar records did" signal) can be added as a feature to another model.
 
+Standardising treats each feature separately. When features are **correlated** (height and weight, income and spending), plain Euclidean distance still double-counts the information they share. The **Mahalanobis distance** fixes this by measuring distance in units of the data's own covariance: it rescales and "unskews" the space so that a step along a direction where the data naturally varies a lot counts for less than the same step along a direction where it barely varies. It uses the inverse of the features' covariance matrix, and with uncorrelated, standardised features it reduces to ordinary Euclidean distance. It is more principled but costs a matrix inversion and becomes unstable when features are nearly collinear or numerous, which is why scaling plus Euclidean distance is the common default in k-NN, and Mahalanobis distance appears more often in outlier detection.
+
 ## 3. Decision trees
 
 A **decision tree** (also called recursive partitioning, or CART for classification and regression trees) repeatedly splits the data on the single predictor and cut-off value that best separates the outcome, then splits each resulting group again. Prediction for a new record follows the splits to a **leaf** and returns the leaf's majority class (or proportion, or mean).
@@ -220,6 +222,7 @@ Both models fit the training data almost perfectly (training accuracy 1.000 and 
 
 ## Glossary
 
+- **Mahalanobis distance**: a distance that accounts for the scale and correlation of features through their covariance matrix; equal to Euclidean distance for standardised, uncorrelated features.
 - **Statistical machine learning**: flexible, data-driven prediction methods.
 - **Bias / variance / irreducible noise**: error from rigidity / from sensitivity to the sample / from randomness.
 - **k-nearest neighbours (k-NN)**: predicting from the $K$ most similar training records.

@@ -46,6 +46,7 @@ The median of skewed data has a messy theoretical standard error, so it is a nat
 
 ```python-run
 import numpy as np
+import matplotlib.pyplot as plt
 rng = np.random.default_rng(21)
 sample = np.round(rng.lognormal(mean=3.4, sigma=0.8, size=60), 2)
 print("sample median:", np.median(sample))
@@ -58,6 +59,15 @@ print("bootstrap SE of the median:", round(boot_medians.std(ddof=1), 2))
 print("bootstrap estimate of bias:", round(boot_medians.mean() - np.median(sample), 2))
 lo, hi = np.percentile(boot_medians, [2.5, 97.5])
 print(f"95% percentile interval: ({lo:.2f}, {hi:.2f})")
+
+plt.hist(boot_medians, bins=50, color="#1f5f8b", edgecolor="white")
+plt.axvline(np.median(sample), color="black", label="sample median")
+plt.axvline(lo, color="#d1412b", linestyle="--", label="95% interval")
+plt.axvline(hi, color="#d1412b", linestyle="--")
+plt.xlabel("median of one bootstrap resample")
+plt.ylabel("number of resamples")
+plt.legend()
+plt.show()
 ```
 
 **Reading this code line by line**
@@ -68,8 +78,11 @@ print(f"95% percentile interval: ({lo:.2f}, {hi:.2f})")
 - `boot_medians.std(ddof=1)` is the bootstrap standard error.
 - The **bootstrap bias** estimate compares the average bootstrap median with the original median; a value far from zero warns that the statistic is systematically off.
 - `np.percentile(boot_medians, [2.5, 97.5])` cuts off the lowest and highest 2.5% of bootstrap medians, leaving the middle 95%.
+- The last block draws the 5,000 bootstrap medians as a histogram with **matplotlib**, Python's plotting library: `plt.hist` draws the bars, each `plt.axvline` a vertical line (solid for the sample median, dashed for the interval ends), and `plt.show()` displays the chart below the printed output. The first run downloads the plotting library, which takes a few seconds.
 
 The sample median is 30.97, with a bootstrap standard error of 4.21 and a negligible bias of 0.16. The **percentile interval** from 25.06 to 41.08 is a 95% bootstrap confidence interval for the population median. Notice it is not symmetric around 30.97: it stretches further to the right, as it should for right-skewed data. A formula of the form "estimate ± 2 SE" would force symmetry.
+
+The histogram is the bootstrap's picture of the sampling distribution of the median. Two things stand out. The dashed lines are not equally far from the solid one: the right-hand tail is longer. And the bars are spiky rather than smooth, because the median of 60 values is always one of the sample's middle values or the average of two of them, so only a limited set of numbers can ever appear. The percentile interval simply cuts 2.5% of the resamples off each end of this picture.
 
 ## 3. A sanity check: the mean
 
@@ -165,6 +178,26 @@ The bootstrap also measures model uncertainty. Resample the training rows, refit
 
 Both are **resampling** methods, but they answer different questions. The bootstrap samples *with* replacement from one dataset to estimate uncertainty (standard errors and confidence intervals). A **permutation test** shuffles group labels *without* replacement to test whether two groups differ more than chance would allow. You will meet permutation tests in [A/B tests, hypotheses and permutation tests](#/lesson/statistics/ab-tests-permutation).
 
+## 9. The jackknife: the bootstrap's older cousin
+
+Before cheap computing made thousands of resamples practical, statisticians used the **jackknife**: instead of drawing random resamples, you build exactly $n$ new samples, each one the original data with a single observation left out. You compute the statistic on each leave-one-out sample and look at how much those $n$ values wobble. From that spread there are simple formulas for a standard error, and from the gap between their average and the full-sample statistic there is an estimate of the statistic's bias.
+
+The jackknife is deterministic (no random seed, the same answer every time) and needs only $n$ recomputations, which mattered when each one was expensive. Its weakness is that it assumes the statistic changes smoothly when one point is removed. That holds for a mean or a regression coefficient, but not for a median or other percentiles: deleting one value often leaves the median unchanged or makes it jump, so the jackknife's estimate of its variability is unreliable. For everyday work, prefer the bootstrap; the jackknife still appears inside some methods (for example, the bias correction in BCa intervals) and in interview questions about resampling.
+
+```python-run
+import numpy as np
+rng = np.random.default_rng(7)
+x = rng.exponential(scale=10, size=40)
+n = len(x)
+loo_means = np.array([np.delete(x, i).mean() for i in range(n)])     # n leave-one-out means
+se_jack = np.sqrt((n - 1) / n * np.sum((loo_means - loo_means.mean()) ** 2))
+se_formula = x.std(ddof=1) / np.sqrt(n)
+print(f"jackknife SE of the mean: {se_jack:.4f}")
+print(f"textbook SE  s/sqrt(n):   {se_formula:.4f}")
+```
+
+For the mean the two numbers agree exactly, which is a useful check that the jackknife formula is right: for this one statistic the leave-one-out spread reproduces the familiar standard error, the sample standard deviation divided by the square root of $n$.
+
 ## Common mistakes
 
 - **Resampling a different size than the original.** The resample size must equal $n$, because the standard error depends on $n$. Bootstrapping 100 rows out of 10,000 answers a question about samples of 100.
@@ -183,6 +216,7 @@ Both are **resampling** methods, but they answer different questions. The bootst
 
 ## Glossary
 
+- **Jackknife**: estimating a statistic's standard error and bias from the $n$ leave-one-out versions of the data; reliable only for statistics that change smoothly, such as the mean.
 - **Bootstrap**: estimating sampling variability by resampling the data with replacement.
 - **Resample (bootstrap sample)**: a sample of size $n$ drawn with replacement from the original data.
 - **$B$**: the number of bootstrap resamples.

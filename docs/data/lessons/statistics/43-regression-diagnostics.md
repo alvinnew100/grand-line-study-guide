@@ -72,6 +72,7 @@ What to do: investigate before acting. Is it a data-entry error (fix or drop it)
 
 ```python-run
 import numpy as np
+import matplotlib.pyplot as plt
 import statsmodels.api as sm
 from statsmodels.stats.diagnostic import het_breuschpagan
 rng = np.random.default_rng(44)
@@ -88,6 +89,13 @@ lm_stat, lm_p, _, _ = het_breuschpagan(resid, X)
 print(f"Breusch-Pagan p-value {lm_p:.2e}")
 robust = fit.get_robustcov_results(cov_type="HC3")
 print(f"slope SE: ordinary {fit.bse[1]:.4f}, robust HC3 {robust.bse[1]:.4f}")
+
+plt.scatter(fit.fittedvalues, resid, s=10, alpha=0.6, color="#1f5f8b")
+plt.axhline(0, color="#d1412b")
+plt.xlabel("fitted value")
+plt.ylabel("residual")
+plt.title("Residuals against fitted values")
+plt.show()
 ```
 
 **Reading this code line by line**
@@ -96,8 +104,9 @@ print(f"slope SE: ordinary {fit.bse[1]:.4f}, robust HC3 {robust.bse[1]:.4f}")
 - The loop prints the residual standard deviation in three ranges of $x$: the numerical version of looking at a plot of residuals against fitted values for a "funnel" shape.
 - `het_breuschpagan(resid, X)` is the **Breusch-Pagan test**: it regresses squared residuals on the predictors; a small p-value indicates heteroskedasticity. It returns four numbers; we keep the second (the p-value).
 - `get_robustcov_results(cov_type="HC3")` recomputes standard errors that remain valid under heteroskedasticity.
+- The last block draws that plot with **matplotlib**, Python's plotting library: `plt.scatter` puts one dot per observation at (fitted value, residual), `alpha=0.6` makes the dots slightly see-through so that overlaps show, `plt.axhline(0)` draws the zero line a good model's residuals should scatter evenly around, and `plt.show()` displays the chart. The first run downloads the plotting library, which takes a few seconds.
 
-The residual spread triples across the range (1.12, 2.12, 3.12), and the Breusch-Pagan p-value is $1.34 \times 10^{-17}$. Remedies: use **heteroskedasticity-robust standard errors** (also called sandwich or HC errors: here they are somewhat larger, 0.0483 versus 0.0442), transform the response (logs often stabilise variance for positive, multiplicative data), or use weighted least squares with weights matching the variance. In practice many analysts use robust standard errors by default.
+The chart shows the classic **funnel**: a narrow band of residuals on the left that widens steadily to the right. The residual spread triples across the range (1.12, 2.12, 3.12), and the Breusch-Pagan p-value is $1.34 \times 10^{-17}$. Remedies: use **heteroskedasticity-robust standard errors** (also called sandwich or HC errors: here they are somewhat larger, 0.0483 versus 0.0442), transform the response (logs often stabilise variance for positive, multiplicative data), or use weighted least squares with weights matching the variance. In practice many analysts use robust standard errors by default.
 
 Heteroskedasticity can also be a clue: if errors are much larger for expensive homes, the model may be missing a variable that matters at the top of the market.
 

@@ -51,9 +51,10 @@ become responses without a `try` / `except` in every endpoint.
 An **exception handler** is a function you register with the app for one exception class. Whenever
 that exception escapes from any endpoint, FastAPI calls the handler and sends what it returns:
 
-```python
+```fastapi-run path=/explorers/Nobody
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from fastapi.testclient import TestClient
 
 class Missing(Exception):
     def __init__(self, msg: str): self.msg = msg
@@ -70,6 +71,36 @@ async def missing_handler(request: Request, exc: Missing):
 @app.exception_handler(Duplicate)
 async def duplicate_handler(request: Request, exc: Duplicate):
     return JSONResponse(status_code=409, content={"detail": exc.msg})
+
+# --- a tiny service layer that knows nothing about HTTP --------------------
+explorers = {"Claude Hande": "France"}
+
+def get_one(name: str) -> dict:
+    if name not in explorers:
+        raise Missing(f"Explorer {name} not found")
+    return {"name": name, "country": explorers[name]}
+
+def create(name: str, country: str) -> dict:
+    if name in explorers:
+        raise Duplicate(f"Explorer {name} already exists")
+    explorers[name] = country
+    return {"name": name, "country": country}
+
+# --- the web layer: no try / except anywhere --------------------------------
+@app.get("/explorers/{name}")
+def read_explorer(name: str):
+    return get_one(name)
+
+@app.post("/explorers", status_code=201)
+def add_explorer(name: str, country: str):
+    return create(name, country)
+
+client = TestClient(app)
+for method, url in [("GET", "/explorers/Claude Hande"), ("GET", "/explorers/Nobody"),
+                    ("POST", "/explorers?name=Noah Weiser&country=Germany"),
+                    ("POST", "/explorers?name=Noah Weiser&country=Germany")]:
+    r = client.request(method, url)
+    print(method, url, "->", r.status_code, r.json())
 ```
 
 - `Missing` and `Duplicate` are the domain exceptions, each carrying a message.
@@ -77,6 +108,15 @@ async def duplicate_handler(request: Request, exc: Duplicate):
 - The handler receives the request and the exception object, and returns a `JSONResponse` with
   status 404 and the message.
 - The second handler does the same for `Duplicate`, with 409.
+- `get_one` and `create` play the service layer (lesson 15). They raise the domain exceptions and
+  never mention a status code.
+- The two endpoints call the service with no error handling of their own.
+- The loop at the bottom sends four requests with the test client from lesson 4;
+  `client.request(method, url)` is the general form of `client.get` and `client.post`.
+
+Press **Run**. The first request finds the explorer (`200`), the second becomes a `404` through
+`missing_handler`, the third creates Noah Weiser (`201`) and the fourth, a repeat of the third, becomes
+a `409` through `duplicate_handler`. Then try other names in the request panel.
 
 Now an endpoint can call `service.get_one(name)` with no `try` / `except` at all. A `Missing` raised
 three layers down becomes a clean 404. Handlers are chosen by class, the most specific first, and a

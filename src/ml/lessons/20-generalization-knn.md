@@ -115,7 +115,33 @@ It surprises people that *small* $k$ is the *complex* setting. The reason: a mod
 
 A classifier divides the space of possible inputs into regions, one per class. The border between regions is the **decision boundary**. With two features you can picture it as a line drawn on a map of points. For $k=1$ the line is jagged and wraps little islands around individual points; for larger $k$ it is smooth.
 
-Charts are not available here, so we measure the boundary instead: lay a fine grid over the plane, predict a class for every cell, and count the pairs of side-by-side cells that got different predictions. A longer boundary is a more wiggly one.
+To draw it, lay a fine grid of points over the plane, ask the classifier for the class of every grid point, and colour each point's region by the answer. The demo does this for three values of $k$ with **matplotlib**, Python's plotting library (the first run downloads it, which takes a few seconds):
+
+```python-run
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.datasets import make_moons
+from sklearn.neighbors import KNeighborsClassifier
+
+X, y = make_moons(n_samples=200, noise=0.35, random_state=3)
+xx, yy = np.meshgrid(np.linspace(-1.5, 2.5, 200), np.linspace(-1, 1.5, 200))
+grid = np.column_stack([xx.ravel(), yy.ravel()])
+
+fig, axes = plt.subplots(1, 3, figsize=(10, 3.4), sharey=True)
+for ax, k in zip(axes, [1, 15, 100]):
+    p = KNeighborsClassifier(n_neighbors=k).fit(X, y).predict(grid).reshape(xx.shape)
+    ax.contourf(xx, yy, p, levels=[-0.5, 0.5, 1.5], colors=["#cfe3f5", "#fbe0cc"])
+    ax.scatter(X[:, 0], X[:, 1], c=np.where(y == 0, "#1f5f8b", "#c2410c"), s=12)
+    ax.set_title(f"k = {k}")
+    ax.set_xlabel("feature 0")
+axes[0].set_ylabel("feature 1")
+fig.tight_layout()
+plt.show()
+```
+
+`make_moons` makes two interleaving half-moons of points, one per class, with some noise. `plt.subplots(1, 3)` creates one figure with three side-by-side plots, and the loop fills one per $k$: `contourf` colours the plane by the predicted class (light blue for class 0, light orange for class 1), and `scatter` draws the training points on top in the darker shade of their true class. At $k=1$ the boundary is jagged and wraps islands around single points, the picture of overfitting. At $k=15$ it is a smooth curve that follows the two moons. At $k=100$, half the dataset votes on every prediction and the boundary flattens into an almost straight line that slices off the tips of both moons: underfitting.
+
+Pictures are convincing, but a number is easier to compare. So we can also measure the boundary: predict a class for every cell of a grid as above, and count the pairs of side-by-side cells that got different predictions. A longer boundary is a more wiggly one.
 
 ```python-run
 import numpy as np

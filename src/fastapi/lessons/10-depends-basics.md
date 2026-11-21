@@ -44,13 +44,15 @@ problems with that:
 With dependency injection the function *declares* what it needs and something else, the **injector**,
 supplies it. In FastAPI the declaration is a parameter marked with `Depends(...)`:
 
-```python
+```fastapi-run path=/items/?skip=20
 from typing import Annotated
 from fastapi import Depends, FastAPI
+from fastapi.testclient import TestClient
 
 app = FastAPI()
 
 def common_parameters(q: str | None = None, skip: int = 0, limit: int = 100):
+    print(f"  common_parameters called with q={q!r}, skip={skip}, limit={limit}")
     return {"q": q, "skip": skip, "limit": limit}
 
 @app.get("/items/")
@@ -60,6 +62,12 @@ def read_items(commons: Annotated[dict, Depends(common_parameters)]):
 @app.get("/users/")
 def read_users(commons: Annotated[dict, Depends(common_parameters)]):
     return commons
+
+client = TestClient(app)
+for url in ["/items/?skip=20", "/users/?q=ann&limit=5", "/items/?limit=ten"]:
+    print("GET", url)
+    r = client.get(url)
+    print(" ", r.status_code, r.json())
 ```
 
 Reading it:
@@ -70,6 +78,15 @@ Reading it:
   `Annotated[dict, Depends(common_parameters)]`. Read that as "a `dict`, which FastAPI obtains by
   calling `common_parameters`".
 - `read_users` declares exactly the same need.
+- The `print` inside `common_parameters` is there only so that you can watch FastAPI call it. The
+  lines at the bottom send three requests with the test client from lesson 4 (`client.get(url)`
+  sends a `GET` request and returns the response) and print each status and body.
+
+Press **Run**. For each request the dependency's message appears first, because FastAPI calls the
+dependency before the endpoint. The third request, `limit=ten`, never reaches either function: the
+dependency's parameter `limit` is an `int`, so FastAPI answers `422` with `"loc": ["query", "limit"]`
+and the dependency's message does not appear at all. Use the request panel to try your own query
+strings on `/items/` and `/users/`.
 
 What happens for a request such as `GET /items/?skip=20`: FastAPI sees that `read_items` depends on
 `common_parameters`, calls it, and passes the result to the endpoint, which returns

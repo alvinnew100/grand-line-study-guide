@@ -446,9 +446,16 @@ endpoints in a thread pool. A rule of thumb until the async module covers it in 
 
 ## Tracing one request step by step
 
-Take this endpoint, which combines everything above:
+Take this endpoint, which combines everything above. Unlike the toy, this block is real FastAPI,
+running inside your browser, so press **Run**:
 
-```python
+```fastapi-run path=/users/7/items?limit=5&tag=red&tag=blue&debug=1
+from typing import Annotated, Literal
+from fastapi import FastAPI, Path, Query
+from fastapi.testclient import TestClient
+
+app = FastAPI()
+
 @app.get("/users/{user_id}/items")
 def list_user_items(
     user_id: Annotated[int, Path(ge=1)],
@@ -456,10 +463,31 @@ def list_user_items(
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
     tag: Annotated[list[str], Query()] = [],
 ):
-    ...
+    return {"user_id": user_id, "status": status, "limit": limit, "tag": tag}
+
+client = TestClient(app)
+for url in ["/users/7/items?limit=5&tag=red&tag=blue&debug=1",
+            "/users/0/items?limit=500&status=archived"]:
+    r = client.get(url)
+    print(r.status_code, r.json())
 ```
 
-and the request `GET /users/7/items?limit=5&tag=red&tag=blue&debug=1`:
+The endpoint returns its four arguments so that you can see what FastAPI handed it. The last five
+lines send two requests without starting a server:
+
+- `TestClient(app)` creates a **test client**: an object that plays the part of a browser and
+  delivers requests straight to the app object, with no network in between. Lesson 22 covers it in
+  depth.
+- `client.get(url)` sends a `GET` request for that address and returns the response.
+- `r.status_code` is the response's status number, and `r.json()` decodes the JSON body into Python
+  dictionaries and lists.
+
+The first printed line is the successful request, the second the failing one; both are explained
+below. Under the code there is also a **request panel**. Choose a method, edit the path (for example
+`/users/7/items?status=closed`) and press **Send** to see the status, the headers and the JSON body
+the app returns. If you change the code, Send runs it again first.
+
+Now follow the request `GET /users/7/items?limit=5&tag=red&tag=blue&debug=1` step by step:
 
 1. **Routing.** Routes are tried in declaration order. The template becomes a regular expression
    roughly like `^/users/(?P<user_id>[^/]+)/items$`; it matches and captures `user_id="7"`, still text

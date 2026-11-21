@@ -67,6 +67,7 @@ Special blocks:
   Keep labels simple (avoid parentheses/quotes inside node labels; use `A["label (x)"]` if needed).
 - **Runnable Python** (Pyodide, numpy / pandas / scikit-learn available): ```` ```python-run ````.
   The learner can edit and run it; stdout is shown. Use it generously for demos.
+  Charts and FastAPI apps work too; see "Charts and FastAPI demos" below.
 - **Runnable SQL** against a dataset: ```` ```sql-run dataset=shop ```` (dataset = a file in `src/<track>/datasets/`).
 - **Quiz**: a ```` ```quiz ```` fence containing a JSON array (strict JSON: double quotes, no trailing commas):
   ```quiz
@@ -80,6 +81,78 @@ Special blocks:
   (integer/two's-complement/bit explorer), `data-widget="float"` (IEEE-754 float explorer),
   `data-widget="cache"` (direct-mapped/set-associative cache simulator),
   `data-widget="bigo"` (growth-rate plot).
+
+### Charts and FastAPI demos
+
+**Charts in `python-run`.** Import matplotlib and draw as usual; end with `plt.show()` (optional).
+After the run every open figure is saved as a PNG, shown below the text output, and closed, so the
+next run starts clean. The backend is Agg (set for you; do not call `matplotlib.use`).
+
+```python-run
+import numpy as np
+import matplotlib.pyplot as plt
+x = np.random.default_rng(1).normal(size=500)
+plt.hist(x, bins=30, color="#1f5f8b", edgecolor="white")
+plt.xlabel("value"); plt.ylabel("count")
+plt.show()
+```
+
+- matplotlib is Pyodide's 3.5.2: check that an API existed in 3.5 before using it. Up to 8 figures per run.
+- Seaborn (`import seaborn as sns`, 0.13.2) and Plotly (`import plotly.express as px` or
+  `plotly.graph_objects`, 6.0.1) are installed from PyPI on first use. Plotly figures appear as
+  interactive charts in a sandboxed frame when you call `fig.show()` or leave the figure as the last
+  expression (up to 4 per run); Plotly.js 3.0.1 loads from cdn.jsdelivr.net inside that frame.
+- First use downloads the libraries and shows "Loading plotting library…": about 8 MB for
+  matplotlib on top of numpy, about 4.5 MB more for seaborn (pandas), about 15 MB for Plotly (plus
+  pandas for Plotly Express). Prefer
+  matplotlib; use Plotly only when interactivity (hover, zoom) teaches something.
+- Keep figures modest (`figsize` up to about (10, 4)); wide figures scroll sideways on phones. Pick
+  colours that survive colour blindness (blue/orange, not red/green) and label both axes.
+- The judge never loads plotting libraries; never import them in problems.
+
+**FastAPI apps: ```` ```fastapi-run ````.** The block must define a FastAPI instance named `app`. Run
+executes it in the browser and keeps the app alive; a request panel below the code (method, path with
+query string, JSON body, headers) sends requests to it and shows status, headers and the JSON body,
+including 422 validation errors and 500s (the traceback is printed in the output pane). The panel lists
+the app's routes as buttons and pre-fills a JSON body built from the request model. Optional info-string
+options set the panel's starting request:
+
+````
+```fastapi-run method=POST path=/items/
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from pydantic import BaseModel
+
+class Item(BaseModel):
+    name: str
+    price: float
+
+app = FastAPI()
+
+@app.post("/items/", status_code=201)
+def create_item(item: Item):
+    return item
+
+client = TestClient(app)                       # example requests, printed when the block runs
+r = client.post("/items/", json={"name": "Saw", "price": "abc"})
+print(r.status_code, r.json())
+```
+````
+
+- End the block with example requests through `fastapi.testclient.TestClient`, exactly as in a real
+  test (`client.get`, `client.post(json=...)`, `with TestClient(app) as client:` runs lifespan
+  startup/shutdown). In the browser it is a thread-free stand-in with the same interface. It cannot
+  serve requests that wait on real async I/O (`await asyncio.sleep`, `StreamingResponse`,
+  `@app.middleware("http")`, background tasks that await); those still work from the request panel,
+  or with `async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as c:`
+  and `await c.get(...)` at the top level of the block.
+- Sync `def` endpoints and dependencies run inline (Pyodide has no threads), so `time.sleep` blocks the
+  page; keep handlers fast. No network, databases or files outside memory: use a dict as the "database".
+- Installed on first use (about 4 MB): fastapi 0.115.6, starlette 0.41.3, httpx 0.28.1, httpcore 1.0.7,
+  anyio 4.7.0, sniffio 1.3.1, h11 0.14.0, plus Pyodide's pydantic 2.7.0 / pydantic-core 2.18.1 and ssl.
+  `python-multipart` is not installed, so `Form()`/`File()` endpoints fail; WebSockets are not supported.
+- A `python-run` block that imports fastapi also gets these packages and the same `TestClient`, but no
+  request panel.
 
 ## 3. Code problems (`problems/*.py`)
 
