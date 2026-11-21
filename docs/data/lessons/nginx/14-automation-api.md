@@ -311,6 +311,26 @@ server {
 
 The cookbook describes **NGINX Controller**, a separate commercial product that provided a central screen and API for many NGINX Plus instances: push configuration, view traffic analytics, and enable a web application firewall per application. Each instance ran an agent that registered with the controller. F5 has since retired Controller; its role is filled by **NGINX Instance Manager** and the hosted **NGINX One** console, with the same idea: an agent on every instance, a central inventory, configuration pushed and validated from one place, and metrics collected. The open-source equivalent is the pipeline in this lesson: Git as the inventory and history, a configuration management tool as the delivery mechanism, and a metrics stack (covered in the monitoring module) for visibility.
 
+### The lifecycle of NGINX Controller, and three similar names
+
+Product names around NGINX are confusing, so here is the timeline in plain steps. Treat the dates as the ones F5 published when this was written, and confirm them in F5's current notices before basing a decision on them.
+
+- **What it was.** NGINX Controller was a paid management console for NGINX Plus. A small agent on every NGINX Plus machine reported to it, and from one screen you could see traffic, push configuration and apply policies. Variants of it handled application delivery, an API management module, and security.
+- **What happened.** F5 announced the **end of sale** of the Controller products from 1 January 2024 (no new purchases), stopped licence renewals after 30 September 2024 (both stated in F5's Controller release notes), and announced an **end of software development and end of technical support** that is widely reported as 30 September 2025 (check F5's own notice for the exact dates that apply to you). After support ends there are no fixes and no help from F5, so a Controller still running is an unsupported leftover that should be planned out of production.
+- **What took over.** F5's fleet management now goes through **NGINX Instance Manager**, which you install yourself and which uses the same agent idea, and **NGINX One**, a hosted console and package that F5 positions as the main direction. A third product, NGINX Amplify (a monitoring service), was retired as well, with its users pointed towards NGINX One; F5 says NGINX One's console is a new system, so you rebuild your views there instead of importing old ones. The exact feature mapping between these products has changed over time, and I could not confirm every detail, so read F5's current product pages for the one you plan to adopt.
+
+**Three names that sound the same:**
+
+| Name | What it is | Status |
+|---|---|---|
+| NGINX Controller | the paid fleet console for NGINX Plus described above | end of sale 2024; support end reported as 2025 |
+| NGINX Ingress Controller (from F5) | software that configures NGINX from Kubernetes Ingress objects | a separate, current product |
+| `ingress-nginx` (Kubernetes community) | a different community Kubernetes controller | announced for retirement in 2026, as noted in the containers lesson |
+
+The word "controller" appears in all three, but only the first is a management console for many servers; the other two translate Kubernetes objects into NGINX configuration. In an interview, name which one you mean.
+
+**What to do if you inherit Controller.** Export the configuration you need into files kept in Git (the approach of this lesson), choose a successor, and move instance by instance with each change tested using `nginx -t` first. Because the configuration of the NGINX processes themselves is ordinary NGINX configuration, nothing is trapped inside the console.
+
 > [!INTERVIEW]
 > "How do you deploy NGINX configuration changes safely?" Configuration lives in Git and is rendered from templates; CI renders it and runs `nginx -t` in a container plus a linter; a tool such as Ansible deploys to a canary host, validates, then rolls out in batches with a graceful reload; rollback is a revert through the same pipeline. For membership that changes faster than deploys, mention DNS re-resolution, the Plus API, or an orchestrator's controller.
 
@@ -362,6 +382,8 @@ The cookbook describes **NGINX Controller**, a separate commercial product that 
 - **Rendering**: producing a real file from a template and data.
 - **Service registry / discovery**: a live list of running instances, and the act of consulting it.
 - **Template**: a file with placeholders.
+- **End of sale / end of support**: the dates after which a vendor stops selling a product / stops fixing and helping with it.
+- **NGINX One**: F5's hosted console and package for managing NGINX instances, positioned as the successor direction to Controller.
 
 ## Check yourself
 
@@ -387,7 +409,9 @@ The cookbook describes **NGINX Controller**, a separate commercial product that 
    "explain": "Test first so a broken render never reaches the running server; reload so connections are not dropped."},
   {"q": "What replaced NGINX Controller for central management of instances?",
    "options": ["The stream module", "NGINX Instance Manager and the NGINX One console", "consul-template", "stub_status"], "answer": 1,
-   "explain": "Controller was retired; F5's management plane is now Instance Manager and NGINX One."}
+   "explain": "Controller was retired; F5's management plane is now Instance Manager and NGINX One."},
+  {"q": "Which of these is a management console for many NGINX Plus servers that F5 has retired?", "options": ["NGINX Controller", "NGINX Ingress Controller", "ingress-nginx", "nginx -t"], "answer": 0, "explain": "NGINX Controller was the fleet console. The two Ingress controllers translate Kubernetes objects into NGINX configuration and are different products."},
+  {"q": "A team still runs NGINX Controller after the vendor's end-of-support date. What is a sound plan?", "options": ["Keep it forever", "Keep the NGINX configuration as files in Git, pick a supported successor and migrate instance by instance with nginx -t before each change", "Delete all NGINX servers", "Switch to ingress-nginx"], "answer": 1, "explain": "The NGINX configuration itself is ordinary files, so it can be moved. Only the management layer needs replacing."}
 ]
 ```
 

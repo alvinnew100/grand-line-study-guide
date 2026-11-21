@@ -274,7 +274,45 @@ A strong check is to export the latest state from the old system and from the ne
 | Subversion | `git svn` | `git svn clone <url> --stdlayout --authors-file=...` |
 | Mercurial | `hg-fast-export` | `hg-fast-export.sh -r <hg-repo> -A authors.txt` inside an empty Git repository |
 | Perforce | `git p4` | `git p4 clone //depot/path@all` |
+| TFS (TFVC) | Azure DevOps import or `git-tfs` | `git tfs clone <server-url> $/Project/Main` |
 | Anything else | a script feeding `git fast-import` | see below |
+
+### Migrating from TFS and TFVC
+
+Many companies that used Microsoft tools have history in **TFVC**, short for Team Foundation Version Control. It is a centralised system in the same family as Subversion and Perforce: one server holds the truth, you "check out" files, and each check-in becomes a numbered **changeset**. It lived inside **TFS** (Team Foundation Server), the product Microsoft later renamed **Azure DevOps Server**; the cloud version is **Azure DevOps Services**. Note the two meanings of "TFS" here: the server product also hosts ordinary Git repositories, and only the TFVC half needs converting.
+
+TFVC differs from Git in ways that decide how you migrate:
+
+- **It records operations, Git records snapshots.** TFVC knows "this file was renamed" or "this change was rolled back". Git stores only the before and after contents of the whole tree, so a rename shows up as a delete plus an add (Git can often guess the rename later by comparing contents).
+- **Labels are not tags.** A TFVC label can gather files at mixed versions. A Git tag always names one commit, which is one snapshot of everything.
+- **Merges can be partial.** TFVC may merge only some files between branches and finish the rest in a later changeset. A Git merge always covers the whole tree.
+
+Because of these mismatches, Microsoft's own advice is a **tip migration**: import only the latest version of a single branch, keep the old TFVC server online but read-only for archaeology, and start the real history fresh in Git. That is also what Microsoft did for its large products.
+
+**Route 1: the Azure DevOps import.** In a project's Repos area, choose *Import repository*, set the source type to TFVC, and give a path such as `$/Project/Main` (the `$/` is TFVC's root). You may ask for some history. Check the current documentation before relying on the numbers, but at the time of writing the importer takes one branch or folder per import, at most 180 days of history, and a result no larger than 1 GB. It suits small, tidy repositories.
+
+**Route 2: `git-tfs`.** This is a community open-source bridge (not a Microsoft product, and Microsoft does not support it) that talks to a TFS server much as `git svn` talks to Subversion. It handles what the importer cannot: full history, several branches and their merge relationships. Typical commands:
+
+```bash
+$ git tfs clone https://tfs.example.com/tfs/DefaultCollection $/Project/Main project
+$ git tfs quick-clone https://tfs.example.com/tfs/DefaultCollection $/Project/Main project
+```
+
+- `clone` replays every changeset into a commit, so it can take hours on a long history.
+- `quick-clone` takes only the latest changeset, which is the tip migration done with the bridge.
+- Because `git-tfs` is also a two-way bridge, it can send Git commits back as check-ins (`git tfs checkin`) while a team transitions, with the same linear-history cautions as `git svn dcommit`. The tool's own README lists the current commands and options.
+
+An older Microsoft tool called `git-tf` served a similar purpose, but it is no longer maintained, so prefer the two routes above.
+
+**Prepare before you import.** Do these clean-ups in TFVC first, because Git keeps every version of every file for every clone:
+
+1. Remove large binaries, build outputs and checked-in libraries; fetch dependencies with a package manager instead, or use Git LFS (a Git extension that stores big files outside the normal object store).
+2. Translate TFVC's `.tfignore` into a `.gitignore`, and `.tpattributes` into `.gitattributes`.
+3. Choose the branching model you want in Git. You are not obliged to recreate TFVC's branch tree.
+4. Follow the same author map, verify and cut-over steps as in the steps earlier in this part, then make the TFVC project read-only.
+
+> [!NOTE]
+> The facts about the importer's limits come from Microsoft's documentation and can change. Treat the numbers as a prompt to read the current page, not a guarantee.
 
 ### A custom importer with `git fast-import`
 
@@ -389,6 +427,12 @@ Other version control systems differ from Git mainly in being centralised, in nu
 - **Cut-over:** the moment a team stops using the old system and starts using the new one.
 - **`git fast-import`:** a command that creates commits from a text stream.
 - **Mark:** a temporary number in a fast-import stream used to refer to an object created earlier.
+- **TFS / Azure DevOps Server:** Microsoft's team server product; it can host both TFVC and Git repositories.
+- **TFVC:** Team Foundation Version Control, the centralised, changeset-numbered system inside TFS.
+- **Changeset:** TFVC's word for one numbered check-in.
+- **Tip migration:** importing only the latest version of a branch and leaving the old history in the old system.
+- **`git-tfs`:** a community two-way bridge between Git and a TFS server.
+- **Git LFS:** a Git extension that keeps large binary files outside the normal object store.
 
 ## Check yourself
 
@@ -401,7 +445,9 @@ Other version control systems differ from Git mainly in being centralised, in nu
   {"q": "What is the purpose of the authors file in a Subversion import?", "options": ["To list who may push", "To set file permissions", "To sign commits", "To map Subversion login names to Git names and email addresses"], "answer": 3, "explain": "Subversion stores only a login. The mapping gives each imported commit a proper Git identity."},
   {"q": "After `git svn clone`, Subversion tags and branches appear as remote-tracking references. What should a migration do with them?", "options": ["Leave them; Git converts them on push", "Create real Git tags and branches from them, then remove the leftover remote references", "Delete them", "Merge them into main"], "answer": 1, "explain": "They must be turned into local tags and branches so that pushing --all and --tags publishes them."},
   {"q": "What does `git fast-import` consume?", "options": ["A text stream describing commits, their metadata and file contents", "A zip archive", "A Subversion dump file only", "A list of URLs"], "answer": 0, "explain": "Any script that can print the stream format can create a Git history, which makes it the universal importer."},
-  {"q": "Which step should come last in a migration?", "options": ["Making the old system read-only and having everyone clone the new repository", "Building the author map", "Running the importer", "Converting tags"], "answer": 0, "explain": "Only after import, clean-up, verification and publishing is it safe to cut over; freezing the old system prevents stranded commits."}
+  {"q": "Which step should come last in a migration?", "options": ["Making the old system read-only and having everyone clone the new repository", "Building the author map", "Running the importer", "Converting tags"], "answer": 0, "explain": "Only after import, clean-up, verification and publishing is it safe to cut over; freezing the old system prevents stranded commits."},
+  {"q": "Why does Microsoft's guidance recommend a tip migration from TFVC instead of replaying all history?", "options": ["Git cannot store more than a year of history", "TFVC records operations such as renames and partial merges that Git's whole-tree snapshots cannot express, so full-history conversion is lossy", "TFVC history is encrypted", "A tip migration is the only option git-tfs supports"], "answer": 1, "explain": "Snapshots versus operations, labels versus tags, and file-level merges versus whole-tree merges all lose information in translation. Keeping the old server read-only preserves the original record."},
+  {"q": "You must migrate a TFVC project with two years of history and several branches. Which route fits, the Azure DevOps importer or git-tfs?", "options": ["The importer, because it has no limits", "git-tfs, because the importer is limited to one branch, a short span of history and a size cap", "Neither; it is impossible", "git svn"], "answer": 1, "explain": "The importer is meant for small tidy repositories. git-tfs can replay full history and multiple branches, with the caveat that it is community software."}
 ]
 ```
 

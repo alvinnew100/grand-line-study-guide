@@ -354,6 +354,63 @@ The output: approving everything costs 197,000; the best single threshold (0.50)
 > risks (usually label quality and drift), and say what you would build first. Interviewers remember a
 > candidate who thinks in iterations: ship a simple version end to end, measure, then improve.
 
+## Scaling beyond one machine, and further directions
+
+Everything so far assumed the data fits in your computer's memory and trains in minutes. Interviewers often ask the next question: "what if there were a thousand times more data?" A good answer is a ladder of options, starting with the cheapest.
+
+**Step 0: do you need all of it?** Learning curves usually flatten: past some size, more rows improve the model very little. Train on a **random sample** (or a time-based slice) first and check whether more data helps. Also shrink what you have: store numbers as `float32` instead of `float64`, convert text categories to integer codes, and keep mostly-zero tables in a **sparse** format that stores only the non-zero entries. Often a laptop or one bigger cloud machine is enough, and it is far simpler to operate than a cluster.
+
+**Step 1: out-of-core learning.** "Out-of-core" means the data stays on disk and is read in pieces; only one piece is in memory at a time. It works for models that can learn **incrementally**: they update their parameters a little from each batch and then forget the batch. In scikit-learn these models offer a `partial_fit` method ("fit a bit more"), instead of `fit`. Examples include `SGDClassifier` and `SGDRegressor` (linear models trained by stochastic gradient descent, from the optimisation lesson), `MultinomialNB` and the other naive Bayes classifiers, `MiniBatchKMeans` for clustering, `IncrementalPCA`, and `StandardScaler`. For text, `HashingVectorizer` turns words into feature positions with a hash function and needs no vocabulary, so it too can run chunk by chunk. The demo below feeds ten chunks of generated rows to a scaler and a classifier, never holding more than one chunk:
+
+```python-run
+import numpy as np
+from sklearn.linear_model import SGDClassifier
+from sklearn.preprocessing import StandardScaler
+
+rng = np.random.default_rng(0)
+true_w = np.array([2.0, -1.0, 0.5])
+
+def next_chunk(n=2000):
+    """Pretend this reads the next n rows from a file or database that is too big to hold at once."""
+    X = rng.normal(size=(n, 3)) * [1, 10, 100]            # features on very different scales
+    y = ((X / [1, 10, 100]) @ true_w + rng.normal(scale=0.5, size=n) > 0).astype(int)
+    return X, y
+
+scaler = StandardScaler()
+model = SGDClassifier(random_state=0)
+classes = np.array([0, 1])                                 # must be given on the first partial_fit call
+
+for i in range(10):                                        # ten chunks, never all in memory together
+    X, y = next_chunk()
+    scaler.partial_fit(X)                                  # update the running mean and variance
+    model.partial_fit(scaler.transform(X), y, classes=classes)
+    if i in (0, 4, 9):
+        X_test, y_test = next_chunk(5000)
+        acc = model.score(scaler.transform(X_test), y_test)
+        print(f"after chunk {i + 1:>2}: seen {int(scaler.n_samples_seen_):>6} rows, accuracy on fresh data {acc:.3f}")
+```
+
+**Reading the demo**
+
+- `next_chunk` stands for reading the next block of a huge file. The three features are deliberately on very different scales, which would hurt SGD if left alone.
+- `scaler.partial_fit(X)` updates a running mean and variance with each chunk, so the scaling is learned incrementally too. Fitting a scaler on only the first chunk, or scaling each chunk by its own statistics, would be a mistake.
+- The first `model.partial_fit` call must receive `classes=`, because the model cannot know from one chunk whether a rare class exists. Later calls omit it.
+- Accuracy is measured on a fresh chunk the model has not trained on. It is about 0.92 from the very first chunk and then levels off: this data is simple, so more rows add little, which is the sampling point made above.
+- Keep in mind that incremental learning is sensitive to order. If the file is sorted by date or by class, the model drifts toward the most recent chunk, so shuffle before chunking, or use that behaviour deliberately for data that really is a stream.
+
+**Step 2: parallel and distributed tools.** When even one pass is too slow, spread the work over many cores or machines.
+
+- **Dask** is a Python library that mimics pandas and NumPy but splits a large table or array into many pieces, builds a plan of tasks, and runs them across cores or a cluster. Its companion `dask-ml` provides scikit-learn-style tools, and Dask can act as the engine behind scikit-learn's `n_jobs` parallelism (for example, running a grid search over many machines). The learning cost is low if you already know pandas.
+- **Apache Spark** is a widely used engine for big data on clusters. It keeps data as a distributed table (a DataFrame) spread across machines, and its MLlib library offers distributed versions of common algorithms and a pipeline concept like scikit-learn's. Many companies already store their data where Spark can read it, which is the main reason to choose it.
+- **A GPU or a single large machine** is sometimes the right alternative to a cluster, especially for neural networks, where the training loop lesson's frameworks run on GPUs directly.
+
+The costs are real: a cluster adds failures, debugging difficulty, data-shuffling time between machines, and a bill. The usual advice is to climb the ladder only as far as needed.
+
+**Further directions: probabilistic programming.** Most models in this track return one answer per prediction, such as a single set of weights. **Probabilistic programming** takes a different view: you describe the data-generating story as random variables, write down what you believe before seeing data (the **prior**), give the program your observations, and it computes the **posterior**, the updated beliefs, as a whole distribution instead of one number. You get honest uncertainty ("the weight is probably between 0.4 and 0.9") and a natural way to include expert knowledge, which is valuable for small datasets and for decisions with costly mistakes. Libraries such as PyMC and Stan let you write the model in a few lines and compute the posterior by sampling (a family of methods called **MCMC**, Markov chain Monte Carlo), which is much slower than fitting a linear model. It is a specialist tool: know what it is for, and that it connects to the Bayes rule in the probability lesson.
+
+> [!INTERVIEW]
+> "The data no longer fits in memory." Answer as a ladder: sample first and check the learning curve; reduce size with `float32` and sparse formats; use incremental learners with `partial_fit` on shuffled chunks; then Dask or Spark for genuinely distributed data; and say that the pipeline, feature definitions and monitoring discussed above matter more than the framework.
+
 ## Summary
 
 - Follow a fixed path: requirements → framing → data and labels → features → model → evaluation →
@@ -390,6 +447,14 @@ The output: approving everything costs 197,000; the best single threshold (0.50)
 - **Population stability index (PSI)**: a score of how far a feature's distribution has moved from training.
 - **Cold start**: no history yet for a new user or item.
 - **Technical debt**: the future cost of today's shortcuts.
+- **Out-of-core learning**: training from data kept on disk and read in pieces, so only one piece is in memory.
+- **`partial_fit`**: a scikit-learn method that updates a model with one more batch instead of refitting from scratch.
+- **Sparse format**: a way to store a mostly-zero table by recording only its non-zero entries.
+- **Dask**: a Python library that runs pandas- and NumPy-style work in parallel across cores or machines.
+- **Spark / MLlib**: a cluster engine for big data and its machine-learning library.
+- **Probabilistic programming**: writing a model as random variables and computing a posterior distribution from data.
+- **Prior / posterior**: beliefs before seeing data / beliefs after updating on it.
+- **MCMC**: Markov chain Monte Carlo, a sampling method for computing posteriors.
 
 ## Check yourself
 
@@ -410,7 +475,10 @@ The output: approving everything costs 197,000; the best single threshold (0.50)
   {"q": "Concept drift means…", "options": ["the relationship between the inputs and the target changes over time", "the input feature distribution changes while the relationship stays the same", "the model's weights change during training", "the test set is too small"], "answer": 0,
    "explain": "Covariate (data) drift is a change in the inputs; concept drift is a change in P(y | x)."},
   {"q": "For a model that predicts next month's demand, the right way to split data is…", "options": ["by time: train on earlier periods and evaluate on later ones", "a random 80/20 split", "by alphabetical order of the product name", "leave-one-out over all rows"], "answer": 0,
-   "explain": "A random split lets the model train on the future relative to its test points."}
+   "explain": "A random split lets the model train on the future relative to its test points."},
+  {"q": "A table is too big for memory. Which scikit-learn approach lets a linear classifier train on it without a cluster?", "options": ["fit on the whole file", "Read shuffled chunks and call partial_fit on an incremental model such as SGDClassifier for each", "Use grid search", "Convert it to a list"], "answer": 1, "explain": "Incremental learners update from one batch at a time, so only one chunk is in memory. The first call must pass classes=."},
+  {"q": "In which situation is probabilistic programming most attractive?", "options": ["Billions of rows and a strict latency limit", "A small dataset where honest uncertainty and prior knowledge matter", "Image classification at scale", "Sorting a list"], "answer": 1, "explain": "It returns whole posterior distributions and lets you encode expert beliefs, but sampling is slow, so it suits small data and costly decisions."},
+  {"q": "What is the best first step when asked how you would handle 1000 times more data?", "options": ["Buy a Spark cluster", "Check with a sample and a learning curve whether more data actually improves the model, and shrink the data representation", "Switch to deep learning", "Remove the validation set"], "answer": 1, "explain": "Learning curves often flatten, and a smaller representation may fit one machine. Distributed tools add cost and complexity, so use them last."}
 ]
 ```
 

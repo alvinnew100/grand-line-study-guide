@@ -184,6 +184,36 @@ defer resp.Body.Close()
 
 A `//nolint` without a reason is a smell that reviewers pick up.
 
+## revive: a configurable style linter
+
+**revive** is a linter focused on **style and readability** rather than on bugs. It is the practical successor to **golint**, the original Go style checker, which is deprecated and no longer maintained. Where golint had a fixed list of opinions and no switches, revive lets you choose which rules run, how severe each is, and what they are allowed to ignore. It is fast and also runs as one of the linters inside golangci-lint.
+
+```text
+$ go install github.com/mgechev/revive@latest
+$ revive ./...
+shapes/area.go:8:1: exported function Area should have comment or be unexported
+shapes/area.go:14:20: parameter 'scale' seems to be unused, consider removing or renaming it as _
+```
+
+Each line is `file:line:column: message`, the same shape as other tools in this lesson. The first message comes from the `exported` rule, which expects every name visible outside the package to have a doc comment beginning with its own name. The second comes from `unused-parameter`, which spots a parameter the function never reads.
+
+A configuration file, conventionally `revive.toml`, selects the rules. Rules are listed as TOML sections; only the sections you list are applied, so you choose the strictness:
+
+```toml
+ignoreGeneratedHeader = true   # skip files marked as generated
+severity = "warning"
+confidence = 0.8               # drop findings revive is less than 80% sure of
+
+[rule.exported]
+[rule.var-naming]
+[rule.indent-error-flow]
+[rule.unused-parameter]
+```
+
+Run it with `revive -config revive.toml ./...`. A few rule names worth knowing: `var-naming` (names follow Go conventions, such as `userID` not `userId`), `indent-error-flow` (prefer returning early instead of `else` after a `return`), `package-comments` and `blank-imports`.
+
+**When to pick it.** If you already use golangci-lint, turn on its `revive` linter instead of running a separate command, and keep the rules in the same `.golangci.yml`. The advice from earlier applies: start with a handful of rules your team agrees on, because style findings are matters of taste and a long list of them teaches people to ignore the tool. Note that `gofmt` already settles layout, `go vet` and staticcheck look for bugs, so revive's job is the naming and documentation conventions in between.
+
 ## govulncheck: known vulnerabilities
 
 Your program contains other people's code, and other people's code has security bugs. When one is discovered and fixed, it is recorded in the **Go vulnerability database** (`vuln.go.dev`), maintained by the Go security team, with the affected versions and the affected functions.
@@ -359,6 +389,9 @@ Run the same commands from a Makefile target on your machine so that failures sh
 - **Static analysis**: examining code without executing it.
 - **Suppression**: a comment such as `//nolint` that tells a linter to skip a finding.
 - **Vulnerability database**: a curated list of known security defects with affected versions.
+- **golint**: the original, now deprecated Go style checker.
+- **revive**: a fast, configurable style linter that succeeds golint.
+- **Rule (linter)**: one named check, such as `exported` or `unused-parameter`, that can be switched on or off.
 
 ```quiz
 [
@@ -393,7 +426,11 @@ Run the same commands from a Makefile target on your machine so that failures sh
   {"q": "Why should govulncheck also run on a schedule, not only when code changes?",
    "options": ["It is slow", "New vulnerabilities are disclosed for dependency versions you already use, even when your code has not changed", "It needs to warm up a cache", "The database is deleted daily"],
    "answer": 1,
-   "explain": "The vulnerability database grows over time. Unchanged code can become known-vulnerable overnight, so periodic scans are needed."}
+   "explain": "The vulnerability database grows over time. Unchanged code can become known-vulnerable overnight, so periodic scans are needed."},
+  {"q": "What is revive's main difference from the old golint?",
+   "options": ["It compiles code", "It is configurable: you choose which rules run, their severity and confidence", "It finds data races", "It only works inside CI"],
+   "answer": 1,
+   "explain": "golint had a fixed set of opinions and is deprecated. revive reads a config file such as revive.toml and applies only the rules you list."}
 ]
 ```
 

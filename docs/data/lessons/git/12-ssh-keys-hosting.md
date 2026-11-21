@@ -268,6 +268,29 @@ gitGraph
 
 After those three commands the new host holds this same history, commit for commit and tag for tag, because commits are identified by their content and not by where they are stored.
 
+### Gitolite and Gitosis: older self-hosting helpers
+
+The single shared `git` account has one weakness, as noted above: every key holder can reach every repository. Before platforms such as GitLab and Gitea were common, small teams filled that gap with two small tools that sit on top of that same SSH account.
+
+**Gitosis** was the first widely used one. You configured it by editing a text file inside a special administrative Git repository and pushing, and it rewrote the server's `authorized_keys` for you. It is no longer maintained, so you will mostly meet it in old documentation or on very old servers. Do not choose it for new work.
+
+**Gitolite** took the same idea much further and is still maintained. It is software installed under the `git` account. A forced command in each `authorized_keys` entry sends every login through Gitolite, which then looks up the user's key name and decides what is allowed. The configuration lives in a repository called `gitolite-admin`: you add public keys as files in a `keydir/` folder and write rules in a file such as `conf/gitolite.conf`:
+
+```text
+repo orchard
+    RW+  =  alice
+    R    =  bob carol
+
+repo @all
+    R    =  daemon
+```
+
+- `R` means read only, `RW` means read and write, and `RW+` also allows rewriting history (a forced push).
+- Rules can be limited per branch with a reference pattern, and users can be gathered into groups written with `@`.
+- Adding a person is: commit their public key, edit the rules, push `gitolite-admin`. The server updates itself.
+
+Neither tool has a web page, pull requests or issue tracking; they only manage who may read and write which repository. That is why they are described as historical options here: teams that need review and automation now usually choose a self-hosted platform or a hosted service, while Gitolite remains a good fit for a small server where per-repository, per-branch permissions are all you want.
+
 ## Using more than one key or host
 
 A file named `~/.ssh/config` lets you describe each server once. It is useful when you have separate keys for work and personal accounts.
@@ -364,6 +387,9 @@ SSH keys replace passwords with a key pair: the private half stays on your machi
 - **`git-shell`:** a restricted login shell that only permits Git operations.
 - **Merge request / pull request:** a proposal, on a hosting platform, to review and merge a branch.
 - **Self-hosted:** software you install and run on your own servers. **Hosted service:** a provider runs it for you.
+- **Gitosis:** an older, no longer maintained tool that managed SSH access to shared Git repositories from a configuration repository.
+- **Gitolite:** a maintained tool, installed under the shared `git` account, that applies per-repository and per-branch read and write rules to SSH users.
+- **Forced command:** an `authorized_keys` option that makes a key run one fixed program, whatever the client asks for.
 
 ## Check yourself
 
@@ -376,7 +402,8 @@ SSH keys replace passwords with a key pair: the private half stays on your machi
   {"q": "On a self-managed server, why set the git account's login shell to git-shell?", "options": ["It makes pushes faster", "It enables HTTPS", "It limits the account to Git transfer operations, so key holders cannot run arbitrary commands", "It is required for bare repositories"], "answer": 2, "explain": "With a normal shell every contributor can log in and run commands on the server. git-shell allows only push and fetch operations."},
   {"q": "With the single shared `git` account and authorized_keys setup, what can each key holder access?", "options": ["Every repository that account owns, for reading and writing", "Read-only access to all repositories", "Nothing until approved per repository", "Only repositories they created"], "answer": 0, "explain": "File permissions are per account, and everyone logs in as the same account. Finer control needs a platform or additional tooling."},
   {"q": "What does a self-hosted platform such as GitLab add on top of plain Git over SSH?", "options": ["User accounts, per-project permissions, a web interface, review of merge requests and automation", "Nothing significant", "A different commit format", "Faster hashing"], "answer": 0, "explain": "The Git data and protocols are the same. The platform adds collaboration and administration features around them."},
-  {"q": "You see `Permission denied (publickey)` and `ssh-add -l` prints `The agent has no identities`. What is the most likely fix?", "options": ["Delete known_hosts", "Re-clone the repository", "Add your key to the agent with ssh-add", "Switch to the git:// protocol"], "answer": 2, "explain": "No key is being offered. Load the key into the agent, then test again with ssh -T."}
+  {"q": "You see `Permission denied (publickey)` and `ssh-add -l` prints `The agent has no identities`. What is the most likely fix?", "options": ["Delete known_hosts", "Re-clone the repository", "Add your key to the agent with ssh-add", "Switch to the git:// protocol"], "answer": 2, "explain": "No key is being offered. Load the key into the agent, then test again with ssh -T."},
+  {"q": "What problem does Gitolite solve on a server that uses one shared git account?", "options": ["It encrypts the repositories", "It replaces SSH with HTTPS", "It lets you give each key different read or write rights per repository without separate system accounts", "It adds pull requests"], "answer": 2, "explain": "Every login passes through Gitolite, which checks the rules kept in the gitolite-admin repository. It does not provide a web interface or review features."}
 ]
 ```
 

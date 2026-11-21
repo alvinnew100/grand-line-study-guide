@@ -212,6 +212,114 @@ print("HashMap order:      ", [key for b in sorted(buckets) for key in buckets[b
 
 The practice problem [Ordered Ledger](#/problem/ctci-ordered-ledger) asks you to build the neighbour queries of a `TreeMap` in Python.
 
+## Ordering objects: Comparable and Comparator
+
+Sorting needs one fact: given two items, which comes first? For numbers and strings Java already knows. For your own class, such as a `Parcel` with a weight and a destination, you must say. Java gives you two ways, and interviewers like asking for the difference.
+
+**`Comparable<T>`: the class knows its own natural order.** The class implements one method, `compareTo`. It returns a negative number if `this` comes first, zero if they are tied, and a positive number if `this` comes later. Once a class does this, `Collections.sort(list)`, `Arrays.sort(array)`, `TreeSet` and `TreeMap` can order it with no further instructions. A class can have only one `compareTo`, so there is only one "natural" order.
+
+**`Comparator<T>`: a separate judge.** A comparator is a different object (often a lambda) with the method `compare(a, b)`, returning a number by the same rules. You hand it to the sorting call, so you can sort the same class many ways without touching it, and you can sort classes you cannot edit.
+
+```java
+class Parcel implements Comparable<Parcel> {
+    final String city;
+    final int grams;
+    Parcel(String city, int grams) { this.city = city; this.grams = grams; }
+
+    @Override
+    public int compareTo(Parcel other) {          // natural order: lightest first
+        return Integer.compare(this.grams, other.grams);
+    }
+}
+
+List<Parcel> parcels = loadParcels();
+Collections.sort(parcels);                         // uses compareTo
+
+// Other orders, chosen at the call site:
+parcels.sort(Comparator.comparing((Parcel p) -> p.city)
+                       .thenComparing(p -> p.grams, Comparator.reverseOrder()));
+```
+
+- `Integer.compare(x, y)` is used instead of `x - y`. Subtraction can overflow for large values and then flip the sign, giving a silently wrong order.
+- `Comparator.comparing(...)` builds a comparator from a "sort key" function; `thenComparing` breaks ties; `.reversed()` flips the order.
+- Python parallel: `compareTo` is like defining `__lt__` on a class, and a `Comparator` is like the `key=` function given to `sorted`. Python's tools compare keys; Java's compare pairs directly.
+
+```python-run
+from functools import cmp_to_key
+
+parcels = [("Oslo", 900), ("Bern", 300), ("Oslo", 150), ("Bern", 700)]
+
+def by_city_then_heavy_first(a, b):
+    # a comparator: negative = a first, zero = tie, positive = b first
+    if a[0] != b[0]:
+        return -1 if a[0] < b[0] else 1
+    return b[1] - a[1]
+
+print(sorted(parcels, key=cmp_to_key(by_city_then_heavy_first)))
+print(sorted(parcels, key=lambda p: (p[0], -p[1])))      # same order, written as a key
+```
+
+Both lines print the same order. `cmp_to_key` shows that Java's comparator style and Python's key style describe the same thing.
+
+**The consistency trap.** `TreeSet` and `TreeMap` treat `compareTo` returning zero as "same element", ignoring `equals`. Java's `BigDecimal("1.0")` and `BigDecimal("1.00")` are not `equals` but compare as zero, so a `HashSet` keeps both while a `TreeSet` keeps one. The advice is to keep `compareTo` consistent with `equals`, and to say so when you know it is not.
+
+> [!INTERVIEW]
+> "Comparable or Comparator?" Answer: Comparable is the one built-in order inside the class; Comparator is an external order passed in, so there can be many and the class need not change. Mention `Integer.compare` over subtraction.
+
+## Iterators, Iterable and the fail-fast rule
+
+An **iterator** is an object that walks through a collection one item at a time. It has three methods: `hasNext()` ("is there another item?"), `next()` ("give me the next item and move on") and an optional `remove()` ("delete the item you just gave me"). An **`Iterable`** is anything that can hand out a fresh iterator through a method `iterator()`. Every collection is `Iterable`, and the `for (X x : things)` loop works on exactly the things that are. Write your own `Iterable` class and the enhanced `for` works on it too.
+
+In Python terms: an `Iterable` is an object with `__iter__`, an `Iterator` is the object with `__next__`, and Java's for-each is Python's `for` loop. The difference is the ending: Python's `next` raises `StopIteration`, whereas Java asks `hasNext()` first.
+
+```java
+List<String> names = new ArrayList<>(List.of("ana", "bo", "cy", "di"));
+
+Iterator<String> it = names.iterator();
+while (it.hasNext()) {
+    String n = it.next();
+    if (n.length() == 2) it.remove();        // safe: removal done by the iterator itself
+}
+```
+
+**Fail-fast iterators.** Now suppose you remove an item with `names.remove(n)` inside a for-each loop. The loop's hidden iterator did not know about that change, so it could skip items or return stale ones. To catch this class of bug, collections such as `ArrayList` and `HashMap` keep a **modification count**, a counter that goes up each time the collection's structure changes (an item added or removed; replacing an item's value does not count). Each iterator remembers the count when it was created and checks it on every `next()`. If the numbers differ, the iterator throws **`ConcurrentModificationException`**. Such an iterator is called **fail-fast**: it fails immediately and loudly rather than carrying on with doubtful data.
+
+The name misleads. You do not need two threads to trigger it: the single-threaded loop above is the usual cause. Equally, fail-fast is only a best-effort bug detector, not a thread-safety tool; with real concurrent modification it may not fire. A well-known quirk: removing the second-to-last item of an `ArrayList` inside a for-each loop happens not to throw, because `hasNext()` then reports "no more" before the check is reached.
+
+```python-run
+class TinyList:
+    """A toy list that mimics Java's fail-fast behaviour with a modification count."""
+    def __init__(self, items):
+        self.items = list(items)
+        self.mod_count = 0
+
+    def remove(self, value):
+        self.items.remove(value)
+        self.mod_count += 1                       # a structural change
+
+    def iterator(self):
+        expected = self.mod_count                 # the iterator remembers the count
+        pos = 0
+        while pos < len(self.items):
+            if self.mod_count != expected:
+                raise RuntimeError("ConcurrentModificationException")
+            yield self.items[pos]
+            pos += 1
+
+names = TinyList(["ana", "bo", "cy", "di"])
+try:
+    for n in names.iterator():
+        if len(n) == 2:
+            names.remove(n)                       # changes the list behind the iterator's back
+except RuntimeError as e:
+    print("caught:", e)
+
+safe = [n for n in ["ana", "bo", "cy", "di"] if len(n) != 2]   # build a new list instead
+print(safe)
+```
+
+**How to avoid it:** use the iterator's own `remove()`, or `list.removeIf(predicate)`, or build a new list of the survivors, or loop over a copy. For collections truly shared between threads use `CopyOnWriteArrayList` or `ConcurrentHashMap`, whose iterators never throw this exception; they are *weakly consistent*, meaning they may or may not show changes made after they were created.
+
 ## Generics
 
 A **generic** class or method is written with a placeholder for a type, filled in where it is used. `ArrayList<String>` is a list that holds strings; `HashMap<String, Integer>` maps strings to whole numbers.
@@ -408,6 +516,29 @@ print("large orders:", [o[0] for o in orders if is_large(o)])
 
 Each `lambda o: ...` is a function of one order. `filter` keeps the orders for which the first lambda is true, `map` replaces each by its amount, and `sum` adds them: 1250 + 4999 + 80 = 6329.
 
+## Building strings: StringBuilder versus StringBuffer
+
+Because `String` is immutable (see the traps below), code that assembles text piece by piece uses a **mutable character buffer**: an object holding a growing array of characters that can be changed in place. Java has two with the same methods (`append`, `insert`, `reverse`, `deleteCharAt`, `toString`):
+
+| | `StringBuffer` | `StringBuilder` |
+|---|---|---|
+| Since | Java 1.0 | Java 5 |
+| Thread-safe | Yes: its methods are `synchronized` | No |
+| Speed | Slower, because every call takes a lock | Faster |
+| Use it | Rarely; legacy code or a buffer genuinely shared by threads | Almost always |
+
+**Synchronized** means a lock is taken around the method so only one thread runs it at a time. Locking costs time even when only one thread exists, and most string building happens inside one method on one thread, so the lock buys nothing. That is why `StringBuilder` was added. Even when you do share a buffer, `StringBuffer` makes each call safe, not a sequence of calls: "check the length, then append" can still be interleaved by another thread, so you often need your own lock anyway.
+
+```java
+StringBuilder sb = new StringBuilder();
+for (String word : words) {
+    sb.append(word).append(' ');          // appends in place, amortised O(1) per character
+}
+String sentence = sb.toString().trim();
+```
+
+Compared with `s = s + word` in a loop (O(n²) overall, since each step copies everything so far), a builder is O(n) overall. The buffer grows by reallocating a larger array when full, which is the same trick as `ArrayList`'s resizing.
+
 ## Four short traps
 
 **`==` and `equals`.** On primitives `==` compares values. On objects it asks whether two references point to the same object. `new String("hi") == new String("hi")` is `false`; `.equals` is `true`. Compare strings and wrapper objects with `equals`.
@@ -490,6 +621,14 @@ That answer names the structure, the reason, the cost and the edge cases in unde
 - **Functional interface**: an interface with exactly one abstract method, the target type of a lambda.
 - **Effectively final**: a local variable that is never reassigned.
 - **Checked exception**: an exception the compiler forces you to catch or declare.
+- **`Comparable`**: an interface whose `compareTo` method gives a class its single natural order.
+- **`Comparator`**: a separate object whose `compare` method orders two items; many can exist for one class.
+- **Iterator / `Iterable`**: an object that walks a collection with `hasNext` and `next` / anything that can produce an iterator, and so works in for-each.
+- **Modification count**: a counter a collection raises on each structural change, used by iterators to detect interference.
+- **Fail-fast**: throwing `ConcurrentModificationException` at once when the collection changed behind an iterator's back.
+- **Weakly consistent iterator**: an iterator of a concurrent collection that never throws that exception but may not show recent changes.
+- **Mutable buffer**: an object holding characters that can be changed in place, such as `StringBuilder`.
+- **Synchronized**: guarded by a lock so only one thread at a time runs the method.
 
 ```quiz
 [
@@ -524,7 +663,12 @@ That answer names the structure, the reason, the cost and the edge cases in unde
   {"q": "What is a functional interface?",
    "options": ["An interface with no methods", "An interface with exactly one abstract method, which a lambda can implement", "Any interface in java.util", "A class with only static methods"],
    "answer": 1,
-   "explain": "A lambda supplies the body of that single method; Predicate, Function and Comparator are common examples."}
+   "explain": "A lambda supplies the body of that single method; Predicate, Function and Comparator are common examples."},
+  {"q": "What is the difference between StringBuilder and StringBuffer?", "options": ["StringBuffer is immutable", "They are identical in every way", "StringBuffer is synchronized, so thread-safe but slower; StringBuilder is not synchronized and is the usual choice", "StringBuilder is older"], "answer": 2, "explain": "Both are mutable buffers with the same methods. StringBuffer (Java 1.0) locks on each call; StringBuilder (Java 5) does not, which is faster when only one thread uses it."},
+  {"q": "You need to sort Parcel objects by weight in one place and by city in another, and you cannot edit the Parcel class. What do you use?", "options": ["Implement Comparable twice", "A Comparator for each order, passed to the sort call", "Override equals", "Use a HashMap"], "answer": 1, "explain": "Comparable gives only one natural order inside the class. A Comparator is supplied from outside, so any number of orders work without changing the class."},
+  {"q": "Why prefer Integer.compare(a, b) to returning a - b from a comparator?", "options": ["It is shorter", "Subtraction can overflow for large values and give a wrong sign", "Subtraction is not allowed", "compare is faster by a factor of ten"], "answer": 1, "explain": "If a is very large and b very negative, a - b wraps around and the sign flips, giving an inconsistent order. Integer.compare never overflows."},
+  {"q": "A for-each loop over an ArrayList calls list.remove(x) on a matching element. What is the most likely result?", "options": ["Silent success", "ConcurrentModificationException on a later step, because the list's modification count changed behind the iterator", "A compile error", "The list is copied automatically"], "answer": 1, "explain": "The hidden iterator checks the count on each next(). Use the iterator's own remove(), removeIf, or build a new list."},
+  {"q": "Which statement about fail-fast iterators is true?", "options": ["They only throw when two threads are running", "They are a best-effort bug detector, not a guarantee of thread safety", "They never throw in single-threaded code", "They lock the collection"], "answer": 1, "explain": "The exception most often comes from single-threaded code that modifies a collection while looping. It is not guaranteed even with threads, so it is not a synchronisation mechanism."}
 ]
 ```
 

@@ -265,6 +265,127 @@ except AttributeError as e:
 
 The first line prints two sizes in bytes: the ordinary object together with its dictionary, and the much smaller slotted object. Trying to set `b.z` on the slotted object fails with `AttributeError`. Use slots when a program creates millions of small objects (nodes, points, events).
 
+## Designing classes before coding them: CRC cards and a tiny UML diagram
+
+Writing a class is the easy part. Deciding *which* classes to have, and who does what, is the real design work. Two cheap tools help you decide before you type any code, and interviewers like candidates who sketch first.
+
+**Step 1: read the description for nouns and verbs.** Take the problem statement: "A courier delivers parcels to a parcel locker. The locker holds parcels, gives out a pickup code, and releases a parcel when someone enters the right code." The **nouns** (courier, parcel, locker, code) are candidate classes or attributes. The **verbs** (deliver, hold, give out, release) are candidate methods. A noun deserves its own class when it has behaviour or rules of its own; a pickup code is just a number, so it stays plain data.
+
+**Step 2: a CRC card for each class.** CRC stands for **Class, Responsibility, Collaborator**. Originally these were index cards: you write the class name at the top, list what it is responsible for on the left, and name the other classes it must work with on the right. You can use a three-column table instead:
+
+| Class | Responsibilities (what it knows or does) | Collaborators (who it works with) |
+|---|---|---|
+| `Parcel` | knows its id and its owner | none |
+| `Locker` | knows its capacity and what it holds; accepts a parcel and returns a code; releases a parcel for a correct code | `Parcel` |
+| `Courier` | carries parcels to a locker; reports what could not be delivered | `Locker`, `Parcel` |
+
+Two habits make cards useful. Give each class one clear job, and if a card needs a long list, split it. And walk through scenarios by hand ("the locker is full; what happens?"), moving a finger from card to card. A responsibility nobody owns, or a card that talks to every other card, shows a design problem while it is still cheap to fix.
+
+**Step 3: a small UML diagram.** **UML** (Unified Modelling Language) is a standard way of drawing designs. For classes you only need three things: a box per class showing its name, its data and its operations; a prefix on each member (`+` public, `-` internal by convention); and lines showing relationships. Python has no enforced privacy, so `-` simply matches the leading underscore convention from earlier in this lesson. Mermaid, the diagram language this site uses, can draw it from text:
+
+```mermaid
+classDiagram
+  class Parcel {
+    +parcel_id
+    +owner
+  }
+  class Locker {
+    -capacity
+    -slots
+    +deposit(parcel)
+    +collect(code)
+    +is_full()
+  }
+  class Courier {
+    +name
+    +deliver(parcels, locker)
+  }
+  Locker o-- Parcel : holds
+  Courier ..> Locker : uses
+  Courier ..> Parcel : carries
+```
+
+How to read the lines:
+
+- A solid line with an open diamond (`o--`) is **aggregation**: the locker is made up of parcels it holds, but a parcel can exist without it.
+- A dashed arrow (`..>`) is a **dependency**: the courier uses the locker (it calls `deposit`) but does not keep it as part of itself.
+- Inheritance, drawn with a hollow triangle (`<|--`), is the subject of the next lesson.
+
+**Step 4: translate to code.** Each box becomes a class, each `+` or `-` attribute becomes an attribute set in `__init__`, each operation becomes a method, and each collaborator becomes either an argument (a dependency, like `locker` passed to `deliver`) or an attribute (like the locker's own `_slots`). The design runs below:
+
+```python-run
+class Parcel:
+    def __init__(self, parcel_id, owner):
+        self.parcel_id = parcel_id
+        self.owner = owner
+
+    def __repr__(self):
+        return f"Parcel({self.parcel_id!r}, {self.owner!r})"
+
+
+class Locker:
+    """Responsibilities: hold parcels, hand out pickup codes, release a parcel for the right code."""
+
+    def __init__(self, capacity):
+        self._capacity = capacity
+        self._slots = {}                 # pickup code -> Parcel
+        self._next_code = 1000
+
+    def is_full(self):
+        return len(self._slots) >= self._capacity
+
+    def deposit(self, parcel):
+        """Collaborates with Parcel. Returns a pickup code, or None when full."""
+        if self.is_full():
+            return None
+        code = self._next_code
+        self._next_code += 1
+        self._slots[code] = parcel
+        return code
+
+    def collect(self, code):
+        """Returns the parcel for this code and frees the slot, or None for a wrong code."""
+        return self._slots.pop(code, None)
+
+
+class Courier:
+    """Responsibilities: carry parcels to a locker and report what could not be delivered."""
+
+    def __init__(self, name):
+        self.name = name
+
+    def deliver(self, parcels, locker):
+        codes, failed = {}, []
+        for parcel in parcels:
+            code = locker.deposit(parcel)
+            if code is None:
+                failed.append(parcel)
+            else:
+                codes[parcel.parcel_id] = code
+        return codes, failed
+
+
+locker = Locker(capacity=2)
+courier = Courier("Mina")
+parcels = [Parcel("P1", "Ana"), Parcel("P2", "Bo"), Parcel("P3", "Cy")]
+
+codes, failed = courier.deliver(parcels, locker)
+print("codes:", codes)
+print("could not deliver:", failed)
+print(locker.collect(1001))      # right code
+print(locker.collect(1001))      # already collected
+print(locker.is_full())
+```
+
+**Reading the demo**
+
+- The locker has capacity 2 and the courier brings 3 parcels, so the third deposit returns `None` and the courier reports it as undelivered; the card said the courier "reports what could not be delivered".
+- `collect(1001)` hands back `P2` the first time. The second call gets `None`, because `pop` removed it: a code works once.
+- After one parcel is collected, `is_full()` is `False`. Only `Locker` knows about slots and codes; `Courier` never touches them, which is the kind of separation the cards were meant to produce.
+
+> [!TIP]
+> In an interview, say the design aloud in the same order: nouns and verbs, then a card or a sentence per class, then the main relationships, and only then the code.
+
 ## Worked example: a linked-list node and stack
 
 Small classes are the building material of interview data structures. A **linked list** is a chain of small objects called nodes, each holding one value and a reference to the next node. A **stack** is a pile in which the last item put on is the first taken off (LIFO, "last in, first out"). Here is a stack built on a linked list:
@@ -440,6 +561,11 @@ A `class` statement builds a class object; calling it creates instances, which `
 - **Descriptor** - an object with `__get__` that controls what attribute access returns.
 - **Invariant** - a condition about an object's data that must always be true.
 - **Linked list / node** - a chain of small objects, each pointing to the next / one such object.
+- **CRC card** - an index card (or table row) listing a class, its responsibilities and its collaborators, used to plan a design.
+- **Responsibility** - something a class knows or does.
+- **Collaborator** - another class that a class needs help from.
+- **UML** - Unified Modelling Language, a standard notation for drawing designs.
+- **Aggregation / dependency** - "is made up of parts it holds" / "uses another class without holding it".
 
 ```quiz
 [
@@ -456,7 +582,9 @@ A `class` statement builds a class object; calling it creates instances, which `
   {"q": "What should __eq__ return when given an unsupported type?", "options": ["False", "raise TypeError", "NotImplemented", "None"], "answer": 2,
    "explain": "NotImplemented tells Python to try the reflected operation on the other operand and then fall back to identity."},
   {"q": "Main benefit of __slots__?", "options": ["Thread safety", "Smaller instances and faster attribute access by removing the per-instance __dict__", "Private attributes", "Automatic __repr__"], "answer": 1,
-   "explain": "Slots reserve fixed storage; the trade-off is no arbitrary new attributes."}
+   "explain": "Slots reserve fixed storage; the trade-off is no arbitrary new attributes."},
+  {"q": "In the design sentence 'The locker releases a parcel when the right code is entered', what do the verb and the noun usually become?", "options": ["The verb a method, the noun a candidate class or attribute", "The verb a class, the noun a method", "Both become global variables", "Neither is useful"], "answer": 0, "explain": "Verbs suggest operations (methods) and nouns suggest classes or data. A noun becomes a class only if it has behaviour or rules of its own."},
+  {"q": "What does the C in CRC card stand for in its last position: Class, Responsibility, ...?", "options": ["Constructor", "Collaborator", "Container", "Condition"], "answer": 1, "explain": "A collaborator is another class this class works with. Lots of collaborators on one card is a hint the class is doing too much."}
 ]
 ```
 

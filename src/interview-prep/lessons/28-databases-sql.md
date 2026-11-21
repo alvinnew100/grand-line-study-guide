@@ -210,6 +210,68 @@ WHERE i.dish_id IS NULL;
 
 A dish that was ordered pairs with real rows; a dish that was never ordered gets one padded row whose `i.dish_id` is NULL, and the `WHERE` keeps only those. Note `IS NULL`: writing `= NULL` never matches anything, because a comparison with NULL is neither true nor false. An equivalent form is `WHERE NOT EXISTS (SELECT 1 FROM order_items i WHERE i.dish_id = d.dish_id)`, which reads closer to the English.
 
+## Subqueries: a query inside a query
+
+So far every query read from tables. A **subquery** is a complete `SELECT` written in brackets inside another query, so the inner answer feeds the outer question. It is like asking a colleague "what is the average price?" and then using that number in your next sentence. Four shapes cover nearly everything you will meet.
+
+**1. Scalar subquery: it returns one value.** "Scalar" means a single value (one row, one column), so it can stand wherever a number could. Which dishes cost more than the average dish?
+
+```sql-run dataset=ctci_hawker
+SELECT name, price_cents
+FROM dishes
+WHERE price_cents > (SELECT AVG(price_cents) FROM dishes)
+ORDER BY price_cents DESC, name;
+```
+
+The inner query returns 441.25 (the eight prices add to 3530, divided by 8). The outer query keeps the dishes above that: Fish curry 650, Satay set 600, Roasted pork rice 500 and Chicken rice 450. If the inner query could return more than one row, the comparison would be an error or give an arbitrary row, depending on the database, so be sure it is truly scalar.
+
+**2. `IN` with a subquery: it returns a list.** Which dishes are sold by Malay stalls? We do not know the stall numbers, only the cuisine, so a subquery finds the ids first.
+
+```sql-run dataset=ctci_hawker
+SELECT name
+FROM dishes
+WHERE stall_id IN (SELECT stall_id FROM stalls WHERE cuisine = 'Malay')
+ORDER BY name;
+```
+
+The inner query yields the list `(2)`, and the outer keeps dishes whose `stall_id` is in it: Mee rebus, Nasi lemak, Satay set. The same answer comes from a join; the subquery version reads closer to the English and cannot multiply rows the way a join sometimes does.
+
+**3. `EXISTS`: it asks only "is there at least one row?"** `EXISTS (subquery)` is true if the inner query returns anything and false if it returns nothing. What the inner query selects does not matter, which is why `SELECT 1` is the habit.
+
+```sql-run dataset=ctci_hawker
+SELECT c.name
+FROM customers AS c
+WHERE EXISTS (SELECT 1 FROM orders AS o WHERE o.customer_id = c.customer_id)
+ORDER BY c.name;
+```
+
+This inner query mentions `c.customer_id`, a column of the **outer** query. That makes it a **correlated subquery**: it cannot be answered once and for all, because it depends on the current outer row. Conceptually the database visits each customer and asks "does this customer have an order?" The result is Aisha, Bao, Chandra and Devi; Ethan is missing because for him the inner query finds nothing. Changing `EXISTS` to `NOT EXISTS` returns exactly the customers who never ordered (Ethan), the "find what is missing" question from earlier.
+
+**4. A correlated scalar subquery: one value per outer row.** Which dishes cost more than the average dish *of their own stall*?
+
+```sql-run dataset=ctci_hawker
+SELECT d.name, d.price_cents
+FROM dishes AS d
+WHERE d.price_cents > (SELECT AVG(d2.price_cents)
+                       FROM dishes AS d2
+                       WHERE d2.stall_id = d.stall_id)
+ORDER BY d.name;
+```
+
+For each dish the inner query recomputes the average for that dish's stall: 475 for stall 1, 460 for stall 2 and 400 for stall 3. The survivors are Fish curry (650 against 400), Roasted pork rice (500 against 475) and Satay set (600 against 460). The inner table needs its own alias (`d2`) so the two uses of `dishes` can be told apart. Many databases rewrite such a query into a join with a grouped table behind the scenes, so do not assume it is slow, but on a very large table check the plan.
+
+**The `NOT IN` trap.** `x NOT IN (list)` means "x differs from every item", and a comparison with NULL is never true. If the list contains even one NULL, `NOT IN` returns no rows at all. In this dataset `order_items.dish_id` is declared `NOT NULL`, so `dish_id NOT IN (SELECT dish_id FROM order_items)` works (it finds Fish curry), but on a nullable column it silently returns nothing. `NOT EXISTS` has no such trap, which is why interviewers favour it.
+
+| Shape | Inner query returns | Typical use |
+|---|---|---|
+| Scalar | One value | Compare with an average, maximum or count |
+| `IN` | A list of values | "Belongs to any of these" |
+| `EXISTS` / `NOT EXISTS` | Anything or nothing | "Has at least one" / "has none" |
+| Correlated | Depends on the outer row | "Compared with its own group" |
+
+> [!INTERVIEW]
+> When asked for rows with no match, say you would use `NOT EXISTS` or a left join with `IS NULL`, and explain why `NOT IN` is dangerous with NULLs.
+
 ## Normalisation: one fact, one place
 
 **Normalisation** is the practice of organising tables so that each fact is stored once. To see why it matters, imagine the food centre had kept everything in a single wide table:
@@ -464,6 +526,11 @@ For query-writing practice in SQL itself, use the problems of the [SQL track](#/
 - **B-tree**: the balanced, wide search tree in which most database indexes are stored.
 - **Junction table**: a table that represents a many-to-many relationship with two foreign keys.
 - **Transaction**: a group of changes applied completely or not at all.
+- **Subquery**: a `SELECT` written inside another query, usually in brackets.
+- **Scalar subquery**: a subquery that returns exactly one value, usable where a number could be.
+- **`IN`**: a test that a value equals any item in a list or a subquery's result.
+- **`EXISTS`**: a test that is true when its subquery returns at least one row.
+- **Correlated subquery**: a subquery that refers to a column of the outer query, so it is evaluated per outer row.
 
 ```quiz
 [
@@ -498,7 +565,9 @@ For query-writing practice in SQL itself, use the problems of the [SQL track](#/
   {"q": "Customers are joined to orders and then to order_items. Why can COUNT(o.order_id) overstate the number of orders?",
    "options": ["Because of NULLs", "Because an order with several items appears on several rows after the second join", "Because COUNT ignores duplicates", "Because of the ORDER BY"],
    "answer": 1,
-   "explain": "Each one-to-many join multiplies rows. COUNT(DISTINCT o.order_id) counts each order once."}
+   "explain": "Each one-to-many join multiplies rows. COUNT(DISTINCT o.order_id) counts each order once."},
+  {"q": "What makes a subquery correlated?", "options": ["It uses GROUP BY", "It refers to a column of the outer query, so it depends on the current outer row", "It returns exactly one row", "It appears in the FROM clause"], "answer": 1, "explain": "A correlated subquery cannot be evaluated once in isolation; its result changes with each outer row, as in WHERE o.customer_id = c.customer_id."},
+  {"q": "A column used in `x NOT IN (SELECT col FROM t)` contains one NULL. What does the query return?", "options": ["All rows", "No rows, because comparing with NULL is never true", "An error always", "Only rows where x is NULL"], "answer": 1, "explain": "NOT IN requires x to differ from every listed value, and x <> NULL is neither true nor false. NOT EXISTS avoids the trap."}
 ]
 ```
 

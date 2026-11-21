@@ -278,6 +278,61 @@ log.Fatal(srv.ListenAndServe())
 
 Shutting such a server down without cutting off requests in progress is covered in [Postgres, configuration, graceful shutdown and Docker](#/lesson/go/go-db-shutdown-docker).
 
+## Flushing and deadlines: `http.ResponseController`
+
+Two things the plain `ResponseWriter` cannot do on its own are **streaming** (sending part of a response now and the rest later) and **per-request time limits** (different from the one-size `WriteTimeout` on the server). Since Go 1.20 the standard library offers `http.ResponseController` for both.
+
+**Why a response is normally held back.** When your handler calls `w.Write`, the bytes usually go into a **buffer**, a holding area in memory, and are sent in larger pieces for efficiency. That is fine for a normal page but wrong for a progress report or a live feed, where the client should see each line the moment it exists. **Flushing** means pushing the buffered bytes to the client immediately.
+
+```go
+func countdown(w http.ResponseWriter, r *http.Request) {
+	rc := http.NewResponseController(w)
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+
+	for i := 3; i >= 1; i-- {
+		fmt.Fprintf(w, "%d...\n", i)
+		if err := rc.Flush(); err != nil { // send what we have right now
+			return // the client is gone, or flushing is unsupported
+		}
+		select {
+		case <-time.After(time.Second):
+		case <-r.Context().Done(): // stop early if the client disconnects
+			return
+		}
+	}
+	fmt.Fprintln(w, "liftoff")
+}
+```
+
+- `http.NewResponseController(w)` wraps the writer; it does not copy anything and needs no cleanup.
+- `rc.Flush()` returns an error instead of panicking. If the underlying connection cannot flush, the error satisfies `errors.Is(err, http.ErrNotSupported)`.
+- Before Go 1.20 the idiom was a type assertion, `f, ok := w.(http.Flusher)`. That breaks as soon as a middleware wraps the writer in a type that forgot to pass `Flush` along. `ResponseController` also works through wrappers that provide an `Unwrap() http.ResponseWriter` method, which is why it is the recommended way.
+- A streamed response has no known length, so the server sends it in chunks; see the HTTP/1.1 chunked encoding in the networking track.
+
+**Deadlines for one request.** A **deadline** is a fixed moment by which an operation must finish. The `http.Server` fields shown earlier set one policy for every request. But a file-download endpoint legitimately needs longer than a health check. The controller lets one handler change its own limits:
+
+```go
+func export(w http.ResponseWriter, r *http.Request) {
+	rc := http.NewResponseController(w)
+
+	// Allow this slow handler two minutes to finish writing,
+	// even though the server-wide WriteTimeout is 30 seconds.
+	if err := rc.SetWriteDeadline(time.Now().Add(2 * time.Minute)); err != nil {
+		http.Error(w, "cannot extend deadline", http.StatusInternalServerError)
+		return
+	}
+	streamBigReport(w)
+}
+```
+
+- `SetWriteDeadline` and `SetReadDeadline` take an absolute `time.Time`, not a duration, so you add the duration to `time.Now()` yourself.
+- A zero `time.Time{}` removes the deadline for that request. Use it sparingly: it also removes your protection against clients that never read.
+- The server-wide timeouts remain the sensible default; override them only in the handlers that need it.
+- The controller has more methods, for example `Hijack` to take over the raw connection and `EnableFullDuplex` (Go 1.21) to let a handler keep reading the request body after it has started writing. Check the package documentation before relying on them.
+
+> [!WARNING]
+> Flushing sends the status line and headers too. After the first `Flush` you can no longer change the status code, which is the same rule as the one in "Writing the response: order matters".
+
 ## The client
 
 Making a request is as short as `http.Get(url)`, and that short form is a trap: it uses `http.DefaultClient`, which has **no timeout**. If the remote server stops responding, your goroutine waits for ever. Create a client with a timeout and reuse it.
@@ -509,6 +564,11 @@ The pieces:
 - **Status code**: the three-digit outcome of a response.
 - **Structured logging**: logging events as key–value fields.
 - **Wildcard**: a `{name}` segment in a route pattern that matches variable text.
+- **Buffer**: a holding area in memory where bytes wait before being sent or processed.
+- **Deadline**: a fixed moment by which an operation must have finished.
+- **Flush**: push buffered output to the client immediately.
+- **`http.ResponseController`**: a helper (Go 1.20 and later) for flushing, deadlines and other connection-level controls of one response.
+- **Streaming response**: a response sent in parts over time instead of all at once.
 
 ```quiz
 [
@@ -543,7 +603,15 @@ The pieces:
   {"q": "Which slog call follows the structured-logging convention?",
    "options": ["`logger.Info(fmt.Sprintf(\"user %d logged in\", id))`", "`logger.Info(\"user logged in\", \"user_id\", id)`", "`logger.Info(\"user logged in\", id)`", "`logger.Info(id)`"],
    "answer": 1,
-   "explain": "The message is a constant phrase and the variable data goes into key-value fields, so entries can be filtered by `user_id`. The third option has a value without a key."}
+   "explain": "The message is a constant phrase and the variable data goes into key-value fields, so entries can be filtered by `user_id`. The third option has a value without a key."},
+  {"q": "Your handler writes progress lines but the browser only shows them at the end. What do you add after each write?",
+   "options": ["`w.WriteHeader(200)`", "`http.NewResponseController(w).Flush()`", "`time.Sleep`", "`r.Body.Close()`"],
+   "answer": 1,
+   "explain": "Output is buffered. Flush pushes it to the client at once. NewResponseController is the Go 1.20+ way and keeps working when middleware wraps the writer."},
+  {"q": "The server has WriteTimeout 30s, but one export handler needs longer. What is the narrowest fix?",
+   "options": ["Remove WriteTimeout for the whole server", "Call `rc.SetWriteDeadline(time.Now().Add(2*time.Minute))` inside that handler", "Call `rc.SetWriteDeadline(2*time.Minute)`", "Use a goroutine"],
+   "answer": 1,
+   "explain": "The deadline is an absolute time, so you add the duration to time.Now(). Only that request is affected; the other endpoints keep the safer global limit."}
 ]
 ```
 

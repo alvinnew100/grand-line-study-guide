@@ -296,6 +296,115 @@ print(len(everything), [item["id"] for item in everything])
 
 Passing the page-fetching function in as an argument is what makes `fetch_all` testable without a network. Supplying a part from outside instead of hard-wiring it is called **dependency injection**, and the testing lessons use the same idea.
 
+## A worked example: paging through the Hacker News API
+
+The previous section assumed a server that hands you pages and a `next_page` link. Many real APIs are less tidy. A good, free example is the public Hacker News API, which needs no key: it serves the front page of a technology news site as plain JSON. (The browser here cannot make real network calls, so this section shows the code and an explained sample, then runs a pretend server. Run the real version on your own computer.)
+
+The API has two endpoints that matter, both under `https://hacker-news.firebaseio.com/v0/`:
+
+| Endpoint | Returns |
+|---|---|
+| `topstories.json` | one JSON list of item **ids** (whole numbers), the current top stories in ranked order, up to 500 of them |
+| `item/<id>.json` | one JSON object describing the item with that id: a story, a comment, a job ad and so on |
+
+Notice what is missing: there is no page number and no `next` link. The first endpoint gives you the *whole* ranking at once, but only as ids. To show titles you must ask for each id separately. So you page *yourself*: slice the list of ids into chunks and fetch the items of one chunk at a time. This is a common pattern, sometimes called "N+1 requests" (one request for the list, then N more for the details), and it is why you keep the chunks small and cache what you have fetched.
+
+A real call looks like this (static code, not runnable on this page):
+
+```python
+import requests
+
+BASE = "https://hacker-news.firebaseio.com/v0"
+
+def get_json(path):
+    response = requests.get(f"{BASE}/{path}.json", timeout=10)
+    response.raise_for_status()
+    return response.json()                      # may be None: the API answers null for unknown ids
+
+top_ids = get_json("topstories")                # [9101, 9102, ...]
+first_item = get_json(f"item/{top_ids[0]}")
+```
+
+An item for a story looks like the sample below (the values are invented, the field names are the real ones):
+
+```json
+{
+  "by": "alice",
+  "descendants": 12,
+  "id": 9101,
+  "kids": [9201, 9202],
+  "score": 140,
+  "time": 1700000000,
+  "title": "A tiny database in 200 lines",
+  "type": "story",
+  "url": "https://example.com/tiny-db"
+}
+```
+
+- `by` is the author's user name, `score` is the number of points and `title` is the headline.
+- `time` is a **Unix timestamp**: the number of seconds since 1 January 1970 (UTC). Convert it with `datetime.fromtimestamp(item["time"], tz=timezone.utc)`.
+- `descendants` is the total number of comments below the story; `kids` lists the ids of the direct replies, each of which is itself an item you could fetch. A tree of comments is therefore walked one request per node.
+- `type` is `"story"`, `"comment"`, `"job"`, `"poll"` or `"pollopt"`; only some have each field. A text-only "Ask" post has `text` and no `url`; a job has no `descendants`.
+- A deleted item comes back as JSON `null`, which `.json()` turns into `None`. Skip it rather than crashing on `item["title"]`.
+
+These gaps are exactly why the earlier section recommended extracting data defensively: use `item.get("descendants", 0)` rather than `item["descendants"]`.
+
+The runnable version below replaces the two network calls with functions over invented data in the same shape. Look at `top_stories`: it slices the id list for the requested page, fetches each item, skips deleted and non-story items, and returns a clean record.
+
+```python-run
+# Offline stand-in: the same shapes the real API returns, with invented values.
+TOP_IDS = [9101, 9102, 9103, 9104, 9105, 9106, 9107]
+ITEMS = {
+    9101: {"by": "alice", "descendants": 12, "id": 9101, "kids": [9201, 9202], "score": 140,
+           "time": 1700000000, "title": "A tiny database in 200 lines", "type": "story",
+           "url": "https://example.com/tiny-db"},
+    9102: {"by": "bob", "descendants": 3, "id": 9102, "score": 87, "time": 1700000300,
+           "title": "Ask: how do you learn new tools?", "type": "story",
+           "text": "I try to build one small thing..."},
+    9103: None,                                    # deleted items come back as JSON null
+    9104: {"by": "cy", "id": 9104, "score": 40, "time": 1700000600,
+           "title": "Join our team", "type": "job", "url": "https://example.com/jobs"},
+    9105: {"by": "di", "descendants": 0, "id": 9105, "score": 12, "time": 1700000900,
+           "title": "Notes on caching", "type": "story", "url": "https://example.com/cache"},
+    9106: {"by": "ed", "descendants": 5, "id": 9106, "score": 9, "time": 1700001200,
+           "title": "Why my build is slow", "type": "story", "url": "https://example.com/build"},
+    9107: {"by": "flo", "descendants": 1, "id": 9107, "score": 5, "time": 1700001500,
+           "title": "A small proof", "type": "story", "url": "https://example.com/proof"},
+}
+
+def get_top_ids():            # stands in for GET /v0/topstories.json
+    return TOP_IDS
+
+def get_item(item_id):        # stands in for GET /v0/item/<id>.json
+    return ITEMS.get(item_id)
+
+def top_stories(page, per_page=3):
+    ids = get_top_ids()[(page - 1) * per_page : page * per_page]    # slice the id list: that is the paging
+    stories = []
+    for item_id in ids:
+        item = get_item(item_id)
+        if item is None or item.get("type") != "story":              # skip deleted items and non-stories
+            continue
+        stories.append({"title": item["title"], "score": item["score"],
+                        "comments": item.get("descendants", 0),
+                        "url": item.get("url", f"https://news.ycombinator.com/item?id={item['id']}")})
+    return stories
+
+for page in (1, 2, 3):
+    print(f"page {page}")
+    for s in top_stories(page):
+        print("  ", s["score"], s["title"], "|", s["comments"], "comments |", s["url"])
+```
+
+**Reading the output**
+
+- Page 1 asks for ids 9101 to 9103. Item 9103 is `None` (deleted), so it is skipped and only two stories appear.
+- Item 9102 has no `url`, so the code builds a link to its discussion page from the id instead. That is the `item.get("url", default)` pattern.
+- Page 2 covers 9104 to 9106. Item 9104 is a job, not a story, so it is dropped; pages can therefore hold fewer entries than `per_page`.
+- Page 3 has a single story, and asking for page 4 would return an empty list, which is how your loop knows to stop.
+
+**Good manners for this pattern.** Fetch one page when the user asks for it instead of all 500 items. Keep a dictionary of items already fetched, because the ranking changes slowly and ids never change. Pause briefly between bursts of requests, and use the lesson's retry-with-back-off helper for temporary failures. The documentation at the time of writing states no rate limit, but treat that as something to check again, not a licence to flood the service.
+
 ## Keys, limits and good manners
 
 **Authentication.** Many APIs need to know who is calling, which is called **authentication**. Usually you register and receive an **API key** or **token**, a long secret string that identifies you, and send it in a header:
@@ -507,6 +616,9 @@ A web API answers HTTP requests (method, URL, parameters, headers) with a status
 - **Transport layer** - the part of a client that sends requests and receives responses.
 - **OpenAPI** - a standard machine-readable description of an HTTP API.
 - **DNS** - the Domain Name System, which turns host names into server addresses.
+- **Item id** - the whole number that identifies one story, comment or job in the Hacker News API.
+- **N+1 requests** - one request for a list of ids followed by one request per id for the details.
+- **Unix timestamp** - a moment in time written as the number of seconds since 1 January 1970 (UTC).
 
 ```quiz
 [
@@ -525,7 +637,9 @@ A web API answers HTTP requests (method, URL, parameters, headers) with a status
   {"q": "Where should an API key be kept?", "options": ["In the source code, for convenience", "In an environment variable or an ignored config file, read at run time", "In the URL of every request, committed to Git", "In a comment"], "answer": 1,
    "explain": "Keys are secrets; anything committed to a repository should be considered public."},
   {"q": "An endpoint returns 30 items and a `next_page` link, but there are 500 items in total. What must your code do?", "options": ["Nothing; 30 is enough", "Loop, requesting each next page until there is none", "Increase the timeout", "Send a DELETE request"], "answer": 1,
-   "explain": "Paginated APIs return one page at a time; follow the next link (with a sensible upper bound) to collect everything."}
+   "explain": "Paginated APIs return one page at a time; follow the next link (with a sensible upper bound) to collect everything."},
+  {"q": "topstories.json returns a long list of ids with no next link. How do you show the stories ten at a time?", "options": ["Ask the server for page=2", "Slice the id list yourself and fetch the items of the current slice", "Fetch all 500 items on every click", "It cannot be done"], "answer": 1, "explain": "The API gives the whole ranking as ids, so paging is your job: slice the list and request item/<id>.json for each id in the slice."},
+  {"q": "Why should code use item.get(\"descendants\", 0) instead of item[\"descendants\"]?", "options": ["get is faster", "Some item types, such as jobs, have no descendants field, and indexing a missing key raises KeyError", "The field is always present", "It converts the value to text"], "answer": 1, "explain": "Fields differ between item types, and deleted items are null. Tolerant access keeps one odd record from crashing the whole page."}
 ]
 ```
 

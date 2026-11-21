@@ -271,6 +271,30 @@ Normally the cursor lands on the first character of a match. An **offset** after
 
 Typing `//e<CR>` re-uses the last pattern and adds the offset, which is handy after `*`.
 
+### More offsets, and chaining searches with `;`
+
+`/e` is one member of a family. An offset is a short tail after a closing slash, and it tells Vim "find the match, then move the cursor like this". Here is the sample line used below, with the match for `/lang` in brackets:
+
+```text
+use the [lang] option; lang is short
+```
+
+| Search | Where the cursor lands |
+|---|---|
+| `/lang` | on the `l`, the first character of the match |
+| `/lang/e` | on the `g`, the last character |
+| `/lang/e+1` | one character after the end: the space following `lang` |
+| `/lang/e-1` | one character before the end: the `n` |
+| `/lang/s+2` (or `b+2`) | two characters after the start: the `n` (`s` and `b` both mean "start" or "begin") |
+| `/lang/+1` | the first column of the **line below** the match: a whole-line offset |
+
+Two details worth knowing:
+
+- **Operators care.** After `d/lang<CR>` Vim deletes up to but not including the match. After `d/lang/e<CR>` it deletes **through** the last character of the match, because an `e` offset makes the motion inclusive. A line offset such as `/lang/+1` makes the motion work on whole lines, so `d/lang/+0` deletes every line from the cursor to the line holding the match.
+- **The offset sticks.** `n` and `N` reuse the pattern *and* its offset. To go back to plain landing spots, type `//<CR>`: an empty pattern means "the last pattern", and an empty offset means "no offset". (`//e<CR>` re-uses the pattern with a new offset.)
+
+**Chaining with `;`.** Put a semicolon after an offset and Vim runs a second search starting from where the first one landed. `/option/;/lang<CR>` means "find `option`, then from there find the next `lang`". It is like giving directions: "go to the church, then take the second left after it". This is handy when the thing you want is only unique in context, such as the first `=` after the word `port`: `/port/;/=<CR>`. Each search in the chain may have its own offset, for example `/port/;/=/e+1`.
+
 ### Acting on a whole match: `gn`
 
 `gn` is a text object meaning "the next match of the last search". It lets an operator act on exactly what the pattern matched, whatever its length:
@@ -287,6 +311,23 @@ For example, after the search `/\v<(yes|no)><CR>`, typing `gUgn` turns the next 
 ### Counting matches
 
 `:%s/pattern//gn` reports how many matches there are without changing anything (the `n` flag means "count only"; the next lesson explains the rest). With an empty pattern, `:%s///gn`, it counts the last search. Recent versions of Vim also show a running position such as `[3/14]` while you press `n`.
+
+### Counting matches, properly
+
+Besides `:%s///gn`, Vim has a function for the same question. A **function** here is a built-in helper you call inside an expression, and `:echo` prints the result.
+
+```vim
+:%s/lang//gn
+:echo searchcount()
+:echo searchcount({'maxcount': 0}).total
+```
+
+- The first line prints a message such as `3 matches on 2 lines` and changes nothing. The `g` flag matters: without it, Vim counts at most one match per line, so you would see the number of *lines*, not of matches.
+- `searchcount()` returns a **dictionary** (a set of named values). `current` is the number of the match under the cursor, `total` is the overall count, and `exact_match` says whether the cursor sits exactly on the start of a match.
+- By default the count stops at 99 and reports `incomplete` as non-zero; `'maxcount': 0` removes the limit. A very large file may also hit a time limit, so trust `incomplete` over the number.
+- `searchcount()` is in Vim 8.1 and later and in Neovim. It is what powers the `[3/14]` indicator in the command area when you press `n`; if that indicator is missing, check that `S` is not listed in `:set shortmess?`, and remove it with `:set shortmess-=S`.
+
+Use `:%s///gn` for a quick look and `searchcount()` when you want the number inside a mapping, a status line or a script.
 
 ### Searching for what you selected
 
@@ -370,6 +411,11 @@ The magic switches do not change what patterns can express. They only change whi
 | greedy | taking as many characters as possible while still allowing a match |
 | offset | an addition after the pattern, such as `/e`, that adjusts where the cursor lands |
 | incremental search | showing the first match while the pattern is still being typed |
+| start offset (`s` or `b`) | an offset such as `/pat/s+2` that places the cursor a number of characters from the start of the match |
+| line offset | an offset such as `/pat/+1` that moves by whole lines and makes operators work on lines |
+| chained search (`;`) | a second search, written after `;`, that starts where the first one landed |
+| `searchcount()` | a built-in function that returns the current position and total number of matches |
+| dictionary | a set of named values, such as the `current` and `total` fields that `searchcount()` returns |
 
 ## Check yourself
 
@@ -406,7 +452,19 @@ The magic switches do not change what patterns can express. They only change whi
   {"q": "You searched for a pattern and now type cgnDone<Esc>. What does pressing dot afterwards do?",
    "options": ["Repeats the search only", "Changes the next match of the pattern to Done", "Inserts Done at the cursor", "Undoes the change"],
    "answer": 1,
-   "explain": "gn is the text object for the next match, so the stored change finds its own target each time it is repeated."}
+   "explain": "gn is the text object for the next match, so the stored change finds its own target each time it is repeated."},
+  {"q": "The cursor is at the start of the line. Which command deletes everything up to and including the first full word `end` found ahead?",
+   "options": ["d/end<CR>", "d/end/e<CR>", "d/end/s-1<CR>", "d/end/+1<CR>"],
+   "answer": 1,
+   "explain": "An e offset moves the target to the last character of the match and makes the motion inclusive, so the whole word goes. Plain d/end stops just before the match."},
+  {"q": "What does /port/;/=<CR> do?",
+   "options": ["Searches for the text port;/= literally", "Finds port, then finds the next = after that position", "Finds every port and every = at once", "Counts the matches of port"],
+   "answer": 1,
+   "explain": "The semicolon chains two searches: the second begins where the first landed."},
+  {"q": "You run :%s/lang//n and it reports 2 matches on 2 lines, although one line holds lang twice. Why?",
+   "options": ["The file changed", "Without the g flag, only one match per line is counted", "The n flag always counts lines", "searchcount() disagrees"],
+   "answer": 1,
+   "explain": "Add the g flag, as in :%s/lang//gn, to count every match on every line."}
 ]
 ```
 

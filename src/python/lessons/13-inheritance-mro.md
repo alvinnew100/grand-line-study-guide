@@ -113,6 +113,120 @@ for cls in (Exporter, CsvExporter, MarkdownExporter, ShoutingCsvExporter):
 
 `export` exists only in `Exporter`. When it runs on a `CsvExporter`, the calls `self._header(...)` and `self._line(...)` find the `CsvExporter` versions, because the search starts at the object's own class; the output is comma-separated. On a `MarkdownExporter` the same `export` produces a table with `|` separators. `ShoutingCsvExporter` inherits from `CsvExporter`, overrides one hook, and inside it calls `super()._line(row)` to get the normal line before converting it to capitals. Four output formats, one copy of the procedure.
 
+## Case study: a family of number series
+
+Water tanks showed the mechanics. Here is a complete small hierarchy, built the way you would plan one: put what every member shares in a base class, and let each subclass change only what makes it different.
+
+**The problem.** We want several kinds of number series: counting 0, 1, 2, 3...; stepping by a fixed amount; multiplying by a fixed factor; and the Fibonacci series, where each value is the sum of the previous two. All of them must work in a `for` loop and let us ask for "the next 8 values".
+
+**Finding the common part.** Every series has a *current value*, hands it out, and then moves on. Only "move on" differs. So the base class does everything except the moving, and leaves that to a **hook**, a small method meant to be overridden. The base class's loop-facing methods (`__iter__` and `__next__`, the iterator protocol from the iterators lesson) never change; they call `self._advance()`, and **dynamic dispatch** picks the right version for whichever subclass the object belongs to. This arrangement is the template method pattern again, and its payoff is that adding a new series means writing one short method.
+
+The hierarchy, drawn with the diagram notation from the classes lesson (the hollow triangle `<|--` means "is a kind of"):
+
+```mermaid
+classDiagram
+  class Progression {
+    #current
+    +take(n)
+    #advance()
+  }
+  class ArithmeticProgression {
+    -step
+    #advance()
+  }
+  class GeometricProgression {
+    -factor
+    #advance()
+  }
+  class FibonacciProgression {
+    -previous
+    #advance()
+  }
+  Progression <|-- ArithmeticProgression
+  Progression <|-- GeometricProgression
+  Progression <|-- FibonacciProgression
+```
+
+(`#` marks a member meant for subclasses to use, which Python writes with a single leading underscore.)
+
+```python-run
+class Progression:
+    """Base class: a number series that remembers where it is. Steps through 0, 1, 2, ... by default."""
+
+    def __init__(self, start=0):
+        self._current = start
+
+    def _advance(self):
+        """Hook: compute the next value from self._current. Subclasses override this."""
+        self._current += 1
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        value = self._current
+        self._advance()
+        return value
+
+    def take(self, n):
+        """Return the next n values as a list."""
+        return [next(self) for _ in range(n)]
+
+
+class ArithmeticProgression(Progression):
+    """Adds a fixed step each time."""
+
+    def __init__(self, step=1, start=0):
+        super().__init__(start)
+        self._step = step
+
+    def _advance(self):
+        self._current += self._step
+
+
+class GeometricProgression(Progression):
+    """Multiplies by a fixed factor each time."""
+
+    def __init__(self, factor=2, start=1):
+        super().__init__(start)
+        self._factor = factor
+
+    def _advance(self):
+        self._current *= self._factor
+
+
+class FibonacciProgression(Progression):
+    """Each value is the sum of the two before it."""
+
+    def __init__(self, first=0, second=1):
+        super().__init__(first)
+        self._previous = second - first          # so that the first advance yields 'second'
+
+    def _advance(self):
+        self._previous, self._current = self._current, self._previous + self._current
+
+
+for series in (Progression(), ArithmeticProgression(5, start=2),
+               GeometricProgression(3), FibonacciProgression(), FibonacciProgression(4, 6)):
+    print(f"{type(series).__name__:<22}", series.take(8))
+
+print(isinstance(FibonacciProgression(), Progression))
+print([c.__name__ for c in FibonacciProgression.__mro__])
+```
+
+**Reading the code**
+
+- `Progression` stores the current value, `__next__` returns it and then calls `_advance`, and `take(n)` collects `n` values. The default `_advance` adds 1, so the base class on its own is a plain counter.
+- `ArithmeticProgression` and `GeometricProgression` each add one attribute (`_step`, `_factor`), call `super().__init__(start)` so the base class sets up `_current`, and override only `_advance`. Their default starting values (0 and 1) are chosen to be natural for each kind.
+- `FibonacciProgression` needs two values of memory, so it adds `_previous`. Its constructor stores `second - first` there, so that the first move produces `second`; the advance step then shifts the pair along. With the default arguments the series is 0, 1, 1, 2, 3, 5, 8, 13, and with `(4, 6)` it is 4, 6, 10, 16...
+- The loop at the bottom treats all five objects identically, calling `take(8)` without knowing their classes. That is **polymorphism**: one interface, several behaviours.
+- The last two lines show the is-a relationship (`isinstance` is true for the base class) and the **MRO**: the chain Python searches, from the object's own class up through `Progression` to `object`.
+
+**What the design buys.** The three subclasses together contain about a dozen lines of arithmetic, and none of them repeats the iteration code. A fourth series, say squares, is another subclass overriding `_advance`. And because every subclass honours the base class's promise (it can be used in a `for` loop and with `take`), any code written for `Progression` works with all of them. That promise is the Liskov substitution principle from the glossary.
+
+> [!NOTE]
+> The base class chose to expose a protected hook (`_advance`) instead of making subclasses override `__next__`. Hooks keep the part that must stay the same (return the value, then move on) in one place, so a subclass cannot forget half of it.
+
 ## Multiple inheritance and the MRO
 
 A class may name several base classes: `class C(A, B):`. Python then needs a rule for which base to search first when a name is looked up. The rule is an algorithm called **C3 linearisation** ("linearisation" because it arranges the whole family of classes in one line). Its result is stored on the class as `__mro__`, the method resolution order: a list in which
@@ -434,6 +548,8 @@ A subclass inherits attributes and methods, may override them, and may extend th
 - **Composition / delegation** - holding another object as an attribute / passing work on to it.
 - **Polymorphism** - one interface, many implementations.
 - **Liskov substitution principle** - a subclass instance must be usable wherever the base class is expected.
+- **Class hierarchy** - a family tree of classes, with a general base class at the top and more specific subclasses below.
+- **Protected (by convention)** - a member with one leading underscore, meant for the class and its subclasses but not for outside code.
 
 ```quiz
 [
@@ -450,7 +566,9 @@ A subclass inherits attributes and methods, may override them, and may extend th
   {"q": "A Car that holds an Engine object and calls engine.start() is an example of:", "options": ["Multiple inheritance", "Composition and delegation", "A mixin", "Monkey patching"], "answer": 1,
    "explain": "Has-a relationships are modelled by storing a component and delegating to it."},
   {"q": "In the template method pattern, a base-class method calls self._step(). Which _step runs?", "options": ["Always the base version", "The version found first in the MRO of the instance's actual class", "A random one", "None; it raises"], "answer": 1,
-   "explain": "Dynamic dispatch looks up methods starting from type(self)."}
+   "explain": "Dynamic dispatch looks up methods starting from type(self)."},
+  {"q": "In the number-series hierarchy, why do the subclasses override only _advance and not __next__?", "options": ["Python forbids overriding __next__", "The hook keeps the part that must not change (return the current value, then move on) in the base class, so subclasses supply only what differs", "__next__ is slower", "Subclasses cannot call super()"], "answer": 1, "explain": "This is the template method idea: the base class fixes the procedure and calls a hook for the varying step."},
+  {"q": "A new SquaresProgression should yield 1, 4, 9, 16. Which change to the hierarchy is the smallest?", "options": ["Rewrite Progression", "Add a subclass that stores a counter and overrides _advance", "Copy the whole base class into a new file", "Override __iter__ in every class"], "answer": 1, "explain": "Everything else, including iteration and take(n), is inherited. Only the advance step is new."}
 ]
 ```
 

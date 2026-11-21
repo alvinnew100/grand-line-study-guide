@@ -257,6 +257,46 @@ toolchain go1.25.4                            // suggested toolchain for working
 - **`exclude`** removes one version from consideration.
 - **`retract`** is written by a module's own author to mark released versions as faulty. The `go` command then avoids them for `@latest` and warns users who have them.
 
+## The `go` and `toolchain` lines in detail
+
+Two lines near the top of `go.mod` decide which Go release builds your module. They look alike and are easy to confuse.
+
+```text
+module example.com/app
+
+go 1.22.1
+
+toolchain go1.24.3
+```
+
+**The `go` line is the minimum.** It states the oldest Go release that can build this module, and it also fixes the **language version**: which language features and behaviours the compiler allows for your code. (Loop variables, for instance, changed meaning in Go 1.22, and the `go` line decides which meaning your module gets.) Before Go 1.21 this line was only advice; a too-old compiler would try anyway and fail with confusing errors. Since Go 1.21 it is binding: a `go` command older than the line refuses to build, or fetches a newer toolchain. A module's `go` line must also be at least as new as the `go` line of every module it depends on, so adding a dependency can raise yours. If the line is missing, the module is treated as written for Go 1.16.
+
+**The `toolchain` line is a suggestion.** It names a specific toolchain release to use *when working on this module*, which may be newer than the minimum. It was introduced in **Go 1.21**, together with automatic toolchain switching. Leave it out and Go behaves as if it equalled the `go` line. The `toolchain` line only matters in the main module (the one you are building); lines in your dependencies' `go.mod` files are not used to choose your toolchain, though their `go` lines still count towards the minimum.
+
+**Who picks the final toolchain?** The environment variable `GOTOOLCHAIN` does. Its default in standard installs is `auto`: use the installed toolchain unless the `go` or `toolchain` line asks for something newer, in which case download that release and run it (it is cached, and downloads are checksum-verified). Other settings:
+
+| `GOTOOLCHAIN` | Effect |
+|---|---|
+| `local` | never switch; always use the installed toolchain, and fail if the module needs newer |
+| `auto` | default; switch up when the module requires it |
+| `go1.24.3` | always use exactly that release |
+| `go1.22.1+auto` | start from that release, but switch up if needed |
+| `path` | switch only to toolchains already on your `PATH`, never download |
+
+**Changing the lines.** Edit by hand, or let the tool do it so both lines stay consistent:
+
+```bash
+$ go get go@1.23.0              # raise the minimum version
+$ go get toolchain@go1.24.3     # set the suggested toolchain
+$ go get toolchain@none         # remove the toolchain line
+$ go env GOTOOLCHAIN            # see which policy is active
+```
+
+**Choosing values in practice.** Set the `go` line to the *oldest* release your code and its users really need, because raising it forces everyone who imports your module to upgrade. Use the `toolchain` line, or your CI's Go version, for the newer release you actually build and test with. A library should keep `go` low; an application can keep it current. If you work offline or in a locked-down build environment, set `GOTOOLCHAIN=local` so that nothing is silently downloaded.
+
+> [!NOTE]
+> The summary above follows the official Go toolchain documentation (go.dev/doc/toolchain) as of Go 1.24 and 1.25. Details such as default values and the exact format `go mod init` writes have changed between releases, so check `go help mod` and the documentation for your version.
+
 ## Workspaces: several modules at once
 
 Suppose you are changing a library and the application that uses it at the same time, and both are separate modules on your disk. A `replace` in the application's `go.mod` works, but it is easy to commit by accident. A **workspace** does the same thing without touching any `go.mod`:
@@ -349,6 +389,10 @@ There is no upload step and no central registry account. Anyone can now `go get 
 - **Tag**: a named marker on a commit in version control, used to publish a version.
 - **Vendoring**: keeping copies of dependencies inside your own repository.
 - **Workspace**: a `go.work` file that lets several local modules be developed together.
+- **`go` line**: the `go.mod` line giving the minimum Go release for the module and fixing its language version.
+- **`toolchain` line**: the `go.mod` line (Go 1.21 and later) suggesting a specific toolchain release for working on the module.
+- **Language version**: which language features and behaviours the compiler applies to a module, set by its `go` line.
+- **`GOTOOLCHAIN`**: the environment setting that decides whether the `go` command may switch to, or download, another toolchain.
 
 ```quiz
 [
@@ -383,7 +427,15 @@ There is no upload step and no central registry account. Anyone can now `go get 
   {"q": "You are editing a library and an application that uses it, both checked out locally. What is the cleanest way to make the application build against your local library?",
    "options": ["Copy the library's files into the application", "Create a `go.work` workspace that uses both modules", "Delete the library from go.sum", "Set GOPROXY=off"],
    "answer": 1,
-   "explain": "A workspace redirects imports to the local modules without modifying either go.mod. A `replace` directive also works but is easy to commit by mistake."}
+   "explain": "A workspace redirects imports to the local modules without modifying either go.mod. A `replace` directive also works but is easy to commit by mistake."},
+  {"q": "go.mod says `go 1.23` and you have Go 1.21 installed with the default GOTOOLCHAIN. What happens?",
+   "options": ["The build is attempted anyway and may fail oddly", "The go command downloads a newer toolchain and uses it", "The go line is rewritten to 1.21", "Nothing: the go line is only a comment"],
+   "answer": 1,
+   "explain": "Since Go 1.21 the go line is a real minimum, and with GOTOOLCHAIN=auto (the default) the command fetches the required toolchain. With GOTOOLCHAIN=local it would refuse instead."},
+  {"q": "Which statement about the toolchain line is correct?",
+   "options": ["It sets the minimum Go version for importers", "It names a suggested toolchain release for working on the module and exists since Go 1.21", "It replaces the module line", "It lists the vendored packages"],
+   "answer": 1,
+   "explain": "The minimum is the go line. The toolchain line is a recommendation about which release to run, introduced together with automatic toolchain switching in Go 1.21."}
 ]
 ```
 

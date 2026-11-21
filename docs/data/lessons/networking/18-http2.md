@@ -14,6 +14,10 @@ What did *not* change is the meaning: methods, status codes, URLs and headers ar
 
 Why this matters for a job: HTTP/2 is the default for browsers talking to almost any modern site, and it is the transport underneath gRPC, the most common protocol between backend services. It makes several familiar HTTP/1.1 optimisations pointless or harmful. Interviewers ask "what are the differences between HTTP/1.1 and HTTP/2?" at every level of seniority.
 
+## Where HTTP/2 came from: SPDY
+
+HTTP/2 did not appear from nowhere. Around 2009 engineers at Google, frustrated by slow page loads over HTTP/1.1, built an experimental protocol called **SPDY** (pronounced "speedy") that already had the main ideas: many streams multiplexed on one connection, binary framing, header compression, and priorities. Chrome and some big sites started using it in 2010 and 2011, and Firefox and others followed, so it was tested on real traffic at scale before any standard existed. In 2012 the IETF (the body that standardises internet protocols) chose SPDY as the starting draft for HTTP/2 and then reshaped it. The result was published in 2015 as RFC 7540 (since replaced by RFC 9113). One notable change was header compression: SPDY compressed headers with the general-purpose zlib algorithm, which a 2012 attack called CRIME showed could leak secrets such as cookies, so HTTP/2 uses the purpose-built HPACK instead. Once HTTP/2 was available, browsers dropped SPDY (Chrome and Firefox did so in 2016), so you will only meet the name in older articles and in the history of the protocol. The lesson for you: the browser and server vendors proved the design first, then the standard made it interoperable.
+
 ## The vocabulary: frames, streams, messages
 
 Three new terms carry the whole design.
@@ -294,6 +298,32 @@ On a clean network this hardly matters. On a lossy one, such as a poor mobile co
 > [!TIP]
 > In browser developer tools, enable the "Protocol" column in the network panel to see `h2` or `h3` per request, and the "Connection ID" column to confirm that requests to one origin share a single connection. Many distinct connection IDs for one site usually reveal leftover domain sharding.
 
+## Testing an HTTP/2 or HTTP/3 server
+
+After you enable a new protocol you should *check* that clients really use it. Three questions need answering: does the server advertise it, does a client negotiate it, and does the server follow the rules? Here are the tools, from quick to thorough.
+
+**1. curl.** The simplest check asks for the protocol version after the transfer, using `-w` (write-out) to print a variable:
+
+```bash
+$ curl -sI --http2 https://shop.example.com/ -o /dev/null -w '%{http_version}\n'
+2
+$ curl -sI --http3 https://shop.example.com/ -o /dev/null -w '%{http_version}\n'
+3
+```
+
+- `--http2` asks for HTTP/2 over TLS and quietly falls back to HTTP/1.1 if the server does not offer it, so always print `%{http_version}` rather than assuming. It prints `1.1`, `2` or `3`.
+- `--http2-prior-knowledge` talks HTTP/2 without any negotiation, which is how you test the unencrypted `h2c` variant.
+- `--http3` needs a curl built with HTTP/3 support. Run `curl -V` and look for `HTTP3` in the feature list; many distribution builds lack it. `--http3-only` fails instead of falling back. Because HTTP/3 normally begins only after the server advertises it with `Alt-Svc` or a DNS record, a test that must use it from the first request needs `--http3-only`.
+- Add `-v` to see ALPN offers and the pseudo-headers, as in the example above.
+
+**2. The ALPN negotiation itself.** `openssl s_client -connect shop.example.com:443 -alpn h2 </dev/null` shows a line such as `ALPN protocol: h2` if the server accepted `h2`. This checks the TLS layer separately from HTTP.
+
+**3. Browser developer tools.** Open the **Network** panel, right-click the column headers, and enable the **Protocol** column (Chrome and Edge call it *Protocol*; Firefox shows it as *Protocol* too). Each row then reads `http/1.1`, `h2` or `h3`. Reload twice: the first load is often `h2`, and later loads switch to `h3` after the browser has seen the `Alt-Svc` header. Mixed values are normal, because third-party hosts have their own settings.
+
+**4. A conformance tool: h2spec.** Checking by hand cannot cover the many rules of the protocol. **h2spec** is an open-source program that connects to your server and sends deliberately awkward but legal and illegal frame sequences, then checks that the server reacts as the specification requires (for example, closing the connection with the right error code when it receives a frame that is too large). A typical run against a TLS server looks like `h2spec -h shop.example.com -p 443 -t` (`-t` means TLS; `-k` skips certificate verification for a test server with a self-signed certificate). The report lists each numbered section of the HTTP/2 and HPACK specifications with pass or fail. Run it against a server you operate, not against other people's servers, because it deliberately sends malformed traffic. For servers that sit behind a load balancer, remember that you are testing the whole chain, not just your application.
+
+A short checklist for rolling out a protocol: confirm negotiation with curl and ALPN, confirm what real browsers use in the Protocol column, run h2spec for rules, and keep HTTP/1.1 available as a fallback.
+
 ## Pitfalls
 
 - **Saying HTTP/2 is "faster HTTP".** Be specific: it removes request queuing and header repetition; it does not speed up a single large download.
@@ -333,6 +363,11 @@ On a clean network this hardly matters. On a lossy one, such as a poor mobile co
 - **Server push**: a server sending responses before they are requested (deprecated).
 - **103 Early Hints**: an interim response listing resources to fetch early.
 - **h2 / h2c**: the ALPN name for HTTP/2 over TLS / the identifier for unencrypted HTTP/2.
+- **SPDY**: Google's experimental protocol, the starting point for HTTP/2; now obsolete.
+- **CRIME**: a 2012 attack that exploited compression of secret headers, one reason HTTP/2 uses HPACK instead of zlib.
+- **`%{http_version}`**: a curl write-out variable that prints the protocol version actually used.
+- **`h2c` (prior knowledge)**: starting HTTP/2 without TLS negotiation, tested with `--http2-prior-knowledge`.
+- **h2spec**: a conformance tester that checks an HTTP/2 server's behaviour against the specification.
 
 ## Check yourself
 
@@ -361,7 +396,10 @@ On a clean network this hardly matters. On a lossy one, such as a poor mobile co
    "explain": "TCP delivers bytes in order, so data for every stream behind the gap is held back. This transport-level head-of-line blocking is what HTTP/3 removes."},
   {"q": "What is the current status of HTTP/2 server push?",
    "options": ["Required by all browsers", "Deprecated and removed from major browsers, replaced by preload hints and 103 Early Hints", "Replaced by cookies", "Only available over HTTP/1.1"], "answer": 1,
-   "explain": "Push often sent resources the client already had cached. Hint-based mechanisms let the browser decide what to fetch."}
+   "explain": "Push often sent resources the client already had cached. Hint-based mechanisms let the browser decide what to fetch."},
+  {"q": "What was SPDY's relationship to HTTP/2?", "options": ["It replaced HTTP/2", "It was Google's experimental protocol that became the starting draft for HTTP/2", "It is the name of HTTP/2's header compression", "It is the unencrypted variant of HTTP/2"], "answer": 1, "explain": "SPDY proved multiplexing, framing and header compression on real traffic. The IETF started from it in 2012 and published HTTP/2 in 2015, replacing zlib header compression with HPACK."},
+  {"q": "You run `curl --http2 https://site/` and the page loads. How do you know it really used HTTP/2?", "options": ["You cannot", "Print `-w '%{http_version}\\n'` or use -v, because curl falls back to HTTP/1.1 silently", "The page loaded, so it did", "Check the file size"], "answer": 1, "explain": "A fallback is invisible unless you ask. The write-out variable prints 1.1, 2 or 3."},
+  {"q": "What does h2spec do?", "options": ["Measures page speed", "Sends legal and illegal HTTP/2 frame sequences and checks the server reacts as the specification requires", "Converts HTTP/1.1 to HTTP/2", "Issues certificates"], "answer": 1, "explain": "It is a conformance tester. Run it only against servers you operate."}
 ]
 ```
 

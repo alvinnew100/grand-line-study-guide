@@ -59,6 +59,25 @@ Both mechanisms offer three ways to pay; the more you pay at the start, the larg
 > [!WARNING]
 > A commitment is owed **whether or not you use it**. If the project is cancelled after four months, the remaining months are still billed. Commit only to the steady baseline you are confident will exist for the whole term — commonly 60–80 % of the minimum load — and cover the rest with On-Demand and Spot.
 
+### Scheduled Reserved Instances (a legacy option)
+
+Older books, blog posts and practice exams mention a purchasing option called **Scheduled Reserved Instances**, also named **Scheduled Instances** in the API. It is worth knowing so that those questions do not confuse you, but you cannot use it today.
+
+**What it was.** Suppose a payroll job needs a machine every weekday from 06:00 to 10:00 and nothing else. A normal Reserved Instance would bill all 24 hours of every day, while On-Demand carries no promise that capacity is free at 06:00. A Scheduled Reserved Instance let you reserve capacity for a **recurring time window** (daily, weekly or monthly) for a one-year term, at a lower hourly price than On-Demand, and you paid only for the hours in the window. The trade-offs were strict: the term was fixed at one year, the purchase could not be cancelled, modified or resold, and the reservation had to cover a minimum number of hours across the year (AWS's original description gave 1,200 hours, which you should treat as approximate).
+
+**Its status.** AWS's current EC2 documentation says that Scheduled Reserved Instances cannot be purchased at this time, that no capacity is available for them, and that there are no plans to offer them again. The API calls for them still appear in reference pages, which is why they linger in tutorials, but they describe a closed product. If a question on a current exam lists it as an option for a new workload, treat it as a distractor; if you meet an old account that already holds a schedule, it is a leftover.
+
+**What to use instead.** Match the need, not the old name:
+
+| Need | Modern choice |
+|---|---|
+| A lower price for a steady amount of usage | Savings Plans (or Reserved Instances) |
+| A guarantee that a machine exists at a given time | On-Demand Capacity Reservations, which can be given an end date, or Capacity Blocks for GPU capacity booked ahead |
+| Run only during a daily or weekly window, paying only while running | Start and stop instances, or change Auto Scaling group size, on a schedule (Auto Scaling scheduled actions or EventBridge Scheduler) |
+| Flexible batch work at the lowest price | Spot Instances |
+
+The scheduling idea survives in the third row: you may not be able to *buy* a recurring window, but you can still *run* work in one. A layered strategy often combines a Savings Plan for the steady base, scheduled scaling for the predictable daily peak, and Spot for the flexible remainder.
+
 ### Capacity Reservations
 
 A discount does not guarantee that AWS has a free machine of the type you want in the zone you want during a regional incident. An **On-Demand Capacity Reservation** does: it holds capacity for a given type in a given Availability Zone, billed at the On-Demand rate whether used or not, with no term. Combine it with a Savings Plan to get both the guarantee and the discount. Disaster-recovery plans use this.
@@ -279,6 +298,8 @@ Moving from an `x86_64` type to a Graviton type also requires an `arm64` AMI, so
 - **Savings Plan**: a one- or three-year commitment to an hourly spend, discounting matching compute.
 - **Spot Instance**: spare capacity sold at a deep discount and reclaimable with two minutes' notice.
 - **Tenancy**: whether an instance shares physical hardware with other customers.
+- **Scheduled Reserved Instance**: a legacy one-year reservation of capacity for a recurring daily, weekly or monthly window; no longer offered for new purchases.
+- **Scheduled action**: a rule that changes an Auto Scaling group's size (or starts a task) at set times.
 
 ```quiz
 [
@@ -309,7 +330,11 @@ Moving from an `x86_64` type to a Graviton type also requires an `arm64` AMI, so
   {"q": "Before buying a Savings Plan, an engineer finds average CPU at 9 % and p95 CPU at 22 % on a fleet of m6i.2xlarge instances, with memory p95 at 30 %. What should happen first?",
    "options": ["Buy the plan for the current fleet immediately", "Right-size the fleet, then size the commitment to the smaller baseline", "Convert everything to Dedicated Hosts", "Increase the instance size to add headroom"],
    "answer": 1,
-   "explain": "The fleet is heavily over-provisioned. Committing first would lock in spending for capacity that right-sizing would remove."}
+   "explain": "The fleet is heavily over-provisioned. Committing first would lock in spending for capacity that right-sizing would remove."},
+  {"q": "An old practice question offers Scheduled Reserved Instances for a new workload that runs four hours every night. What is the accurate current position?",
+   "options": ["It is the cheapest option and should be bought", "AWS no longer offers them for new purchases, so use Savings Plans, Capacity Reservations, scheduled scaling or Spot depending on the need", "They are available only in one Region", "They are identical to Spot Instances"],
+   "answer": 1,
+   "explain": "The AWS documentation states that Scheduled Reserved Instances cannot be purchased and will not be offered again. The recurring-window need is met today by scheduled start/stop or scaling, with Savings Plans or Spot for price."}
 ]
 ```
 

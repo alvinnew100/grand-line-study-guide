@@ -409,6 +409,132 @@ Under the hood each of these is a loop of rectangle-overlap tests like the one y
 
 One subtlety worth knowing about is **tunnelling**: a fast object can pass *through* a thin one between two frames, because it is on one side in one frame and on the other side in the next, never overlapping in any frame. The cures are limiting speeds, making objects thicker, or moving in several small sub-steps per frame and checking after each.
 
+## Polishing the game: a Play button, levels and a scoreboard
+
+A game that starts the instant you run it and ends with a frozen window feels unfinished. Three small additions turn *Meteor Dodge* into something you could hand to a friend: a way to **start and restart** on purpose, a **difficulty** that rises as you improve, and a **scoreboard** that remembers your best round. Each is a thin slice on top of the loop you already have.
+
+**1. A Play button and a clean restart.** In the Pygame version a button is just a `Rect` you draw and test. Every frame you check the events; when the mouse is pressed inside the rectangle, start a round:
+
+```python
+play_button = pygame.Rect(WIDTH // 2 - 60, HEIGHT // 2 - 20, 120, 40)
+
+for event in pygame.event.get():
+    if event.type == pygame.MOUSEBUTTONDOWN and mode in ("title", "game_over"):
+        if play_button.collidepoint(event.pos):      # was the click inside the rectangle?
+            start_new_round()
+```
+
+`collidepoint` answers "is this point inside this rectangle?", the same overlap test as in the collision section, with a rectangle of size zero. The button belongs only to the `"title"` and `"game_over"` modes from the state machine in the next section; during play, clicks are ignored.
+
+The important part is `start_new_round`. The classic bug is to restart by setting `mode = "playing"` and leaving the old objects, score and lives in place, so round two begins with the wreckage of round one. The cure follows from the earlier rule that **state is the complete description of the world**: to reset, throw the old state away and build a new one (`state = State()`). If every piece of per-round data lives in the state object, there is nothing else to remember to reset.
+
+**2. Rising difficulty.** Define the **level** as a function of the score, such as one level per 30 points, and let other numbers depend on the level: how often a new object appears, how fast objects fall, how many rocks versus fuel. Deriving the level from the score, rather than storing and incrementing it separately, means the two can never disagree.
+
+**3. A scoreboard with a high score.** The current score belongs to a round and resets with it. The **high score** belongs to the whole session, so it must live somewhere that survives a reset: in a separate object (below), in a module variable, or in a file when it should survive closing the program (load at start-up and save at game over, as in the files lesson). Draw both numbers as text: `font.render(f"Score {score}   Best {high}", True, (255, 255, 255))` makes an image of the text, and `screen.blit(image, (10, 10))` stamps it onto the screen.
+
+Here is the idea in the text version, with a small autopilot standing in for the player so it can run without a window. Notice what `State` holds, what `Game` holds, and what `press_play` does.
+
+```python-run
+import random
+from dataclasses import dataclass, field
+
+WIDTH, HEIGHT = 12, 8
+POINTS_PER_LEVEL = 30
+
+@dataclass
+class State:
+    lander_x: int = WIDTH // 2
+    lives: int = 3
+    score: int = 0
+    fallers: list = field(default_factory=list)     # each one is [x, y, kind]
+    frame: int = 0
+
+def level_of(score):
+    return 1 + score // POINTS_PER_LEVEL            # a new level every 30 points
+
+def spawn_gap(level):
+    return max(1, 4 - level)                        # frames between spawns shrink as the level rises
+
+def update(state, rng):
+    state.frame += 1
+    survivors = []
+    for x, y, kind in state.fallers:
+        y += 1
+        if y == HEIGHT - 1 and x == state.lander_x:
+            if kind == "fuel":
+                state.score += 10
+            else:
+                state.lives -= 1
+        elif y < HEIGHT:
+            survivors.append([x, y, kind])
+    state.fallers = survivors
+    if state.frame % spawn_gap(level_of(state.score)) == 0:
+        kind = "fuel" if rng.random() < 0.5 else "rock"
+        state.fallers.append([rng.randrange(WIDTH), 0, kind])
+
+class Game:
+    """Everything that must survive between rounds lives here, not in State."""
+    def __init__(self):
+        self.mode = "title"
+        self.state = State()
+        self.high_score = 0
+
+    def press_play(self):
+        if self.mode in ("title", "game_over"):
+            self.state = State()                    # RESET: a brand-new state, nothing carried over
+            self.mode = "playing"
+
+    def tick(self, rng):
+        if self.mode != "playing":
+            return
+        update(self.state, rng)
+        if self.state.lives <= 0:
+            self.end_round()
+
+    def end_round(self):
+        self.mode = "game_over"
+        self.high_score = max(self.high_score, self.state.score)   # the scoreboard keeps the best
+
+def bot_key(state):
+    """A tiny autopilot: steer toward the lowest falling fuel, away from rocks."""
+    fuel = [f for f in state.fallers if f[2] == "fuel"]
+    if fuel:
+        target = max(fuel, key=lambda f: f[1])[0]
+        return "d" if target > state.lander_x else "a" if target < state.lander_x else "."
+    return "."
+
+def move(state, key):
+    if key == "a": state.lander_x = max(0, state.lander_x - 1)
+    elif key == "d": state.lander_x = min(WIDTH - 1, state.lander_x + 1)
+
+game = Game()
+rng = random.Random(3)
+for round_no in (1, 2, 3):
+    game.press_play()
+    peak = 1
+    for _ in range(60):
+        if game.mode != "playing":
+            break
+        move(game.state, bot_key(game.state))
+        game.tick(rng)
+        peak = max(peak, level_of(game.state.score))
+    if game.mode == "playing":                      # time is up for this demo round
+        game.end_round()
+    print(f"round {round_no}: score {game.state.score:>3}  top level {peak}  lives {game.state.lives}  high score {game.high_score}")
+```
+
+**Reading the demo**
+
+- `level_of(score)` turns a score into a level, and `spawn_gap(level)` turns a level into "spawn an object every N frames": 3 frames at level 1, 2 at level 2, and every frame from level 3. The `update` function asks for the gap each frame, so the game speeds up the moment the score crosses a threshold.
+- `State` holds one round: position, lives, score, falling objects. `Game` holds what outlives a round: the mode and the `high_score`. That split is why `press_play` can replace the state completely without losing the best score.
+- `press_play` only acts in the `"title"` and `"game_over"` modes, like the button above.
+- `end_round` is the single place where the high score is updated, so there is one rule instead of several copies.
+- `bot_key` is a toy autopilot that steers toward the lowest fuel, so no keys are needed. Each demo round is cut off after 60 frames because the bot is too good to die.
+- The output shows each round starting from a fresh state (the score restarts, the level goes back to 1) while the high score only ever rises: 60, then still 60 after a weaker round, then 90.
+
+> [!TIP]
+> Whenever a restart "mostly works", look for a piece of per-round data stored outside the state object. Moving it into the state is nearly always the fix.
+
 ## Growing the game
 
 Each of these is a small, separate feature, exactly the "thin slices" of the previous lesson:
@@ -491,6 +617,10 @@ A game is a loop that handles events, updates state and draws, once per frame. S
 - **HUD (heads-up display)** - information such as score and lives drawn over the game.
 - **State machine** - a set of modes plus rules for moving between them on events.
 - **Tunnelling** - a fast object passing through a thin one between frames without a detected collision.
+- **`collidepoint`** - a `Rect` method that tells whether a point, such as a mouse click, is inside the rectangle; the basis of a button.
+- **Reset** - returning the game to its starting condition, best done by building a fresh state object.
+- **Level** - a difficulty step computed from the score.
+- **High score** - the best score of the session, stored outside the per-round state so a reset cannot erase it.
 
 ```quiz
 [
@@ -509,7 +639,10 @@ A game is a loop that handles events, updates state and draws, once per frame. S
   {"q": "Why should drawing code never change the game state?", "options": ["It would be slower", "Mixing the phases makes behaviour depend on drawing order and makes the logic impossible to test without graphics", "Pygame forbids it", "State is read-only"], "answer": 1,
    "explain": "Keeping render pure means the rules live in one place and can be verified with plain function calls."},
   {"q": "A fast bullet passes through a thin wall without a collision being detected. This is called:", "options": ["Clipping", "Tunnelling", "Blitting", "Flipping"], "answer": 1,
-   "explain": "Between two frames the bullet jumps from one side to the other without ever overlapping; fix with sub-steps, speed limits or thicker colliders."}
+   "explain": "Between two frames the bullet jumps from one side to the other without ever overlapping; fix with sub-steps, speed limits or thicker colliders."},
+  {"q": "Round two starts with the rocks and the score left over from round one. What is the most robust fix?", "options": ["Set every field back one by one when restarting", "Build a fresh state object when a round starts, so no old per-round data remains", "Restart the computer", "Make the score a global variable"], "answer": 1, "explain": "If all per-round data lives in the state object, creating a new one resets everything at once and nothing can be forgotten."},
+  {"q": "Why is the high score kept outside the per-round State object?", "options": ["It is a string", "A reset replaces the State, so anything stored in it would be lost", "Pygame requires it", "It changes every frame"], "answer": 1, "explain": "The high score belongs to the session, not the round. Storing it in a longer-lived object (or a file) lets it survive resets."},
+  {"q": "Which expression is true when the mouse position pos is inside a button Rect called play_button?", "options": ["play_button == pos", "play_button.collidepoint(pos)", "pos.collide(play_button)", "play_button.inside"], "answer": 1, "explain": "Rect.collidepoint takes an (x, y) point and returns True if it lies inside the rectangle."}
 ]
 ```
 
