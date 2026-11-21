@@ -69,7 +69,7 @@
   "sources": [
    "Goodrich, Tamassia & Goldwasser, Data Structures and Algorithms in Python (Wiley, 2013), ch. 3-15"
   ],
-  "words": 100545,
+  "words": 111438,
   "modules": 13,
   "lessons": 38,
   "problems": 33
@@ -212,7 +212,7 @@
    "Apache Kafka documentation (kafka.apache.org/documentation)",
    "Malkov & Yashunin, Efficient and robust approximate nearest neighbor search using HNSW graphs (2016)"
   ],
-  "words": 111722,
+  "words": 128257,
   "modules": 13,
   "lessons": 33,
   "problems": 18
@@ -441,6 +441,22 @@
   "modules": 15,
   "lessons": 34,
   "problems": 33
+ },
+ {
+  "id": "terraform",
+  "title": "Terraform & Infrastructure as Code",
+  "icon": "🧱",
+  "blurb": "Infrastructure as code from zero: how Terraform plans and applies, state, backends and locking, modules, count and for_each, zero-downtime changes, secrets, multiple providers, production-grade modules, testing, team workflows and CI/CD, a worked AWS project and interview answers, with Python simulations of plans, dependency graphs, drift and version constraints.",
+  "color": "#7b42bc",
+  "sources": [
+   "Yevgeniy Brikman, Terraform: Up & Running, 3rd ed. (O'Reilly, 2022), ch. 1-10 (topic map and fact checking; all wording and examples are original)",
+   "Official Terraform documentation: developer.hashicorp.com/terraform (language, CLI, S3 backend, state, tests, import and moved blocks)",
+   "Provider documentation: registry.terraform.io (hashicorp/aws, hashicorp/kubernetes, kreuzwerker/docker)"
+  ],
+  "words": 97741,
+  "modules": 12,
+  "lessons": 27,
+  "problems": 25
  },
  {
   "id": "cicd",
