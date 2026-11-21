@@ -36,19 +36,33 @@ An HTML form (and the OAuth2 token endpoint of lesson 19) sends its fields in an
 `username=ann&password=secret`. To read such fields, mark parameters with `Form()`. This needs the
 `python-multipart` package, which `fastapi[standard]` includes.
 
-```python
+```fastapi-run method=POST path=/login/ body=form
 from typing import Annotated
 from fastapi import FastAPI, Form
+from fastapi.testclient import TestClient
 
 app = FastAPI()
 
 @app.post("/login/")
 async def login(username: Annotated[str, Form()], password: Annotated[str, Form()]):
     return {"username": username}
+
+client = TestClient(app)
+r = client.post("/login/", data={"username": "ann", "password": "secret"})  # a form
+print(r.status_code, r.json())
+r = client.post("/login/", json={"username": "ann", "password": "secret"})  # not a form
+print(r.status_code, [error["loc"] for error in r.json()["detail"]])
 ```
 
 `username: Annotated[str, Form()]` means "a required text value, taken from a form field named
 `username`". It is the same pattern as `Query()` and `Header()`, with a different source.
+
+The two test requests at the bottom show the difference between the encodings. `data=` sends the
+fields as a form, exactly as a browser would, and the answer is `200 {'username': 'ann'}`. The same
+fields sent as JSON get `422`: FastAPI looked for form fields, found none, and reports both as
+missing (`['body', 'username']` and `['body', 'password']`). In the panel under the code, the body
+switch is set to **Form fields** with one row per field. Change the values and press Send, or delete
+the `password` row to see the 422 for a single missing field.
 
 `Form` supports the same validation options as `Query` and `Body` (`min_length`, `pattern` and so
 on). Form fields can also be grouped in a Pydantic model (FastAPI 0.113 and later):
@@ -161,35 +175,58 @@ async def upload_big(file: UploadFile):
 file on disk once it grows past a threshold.
 
 Process large uploads in **chunks** (pieces of a fixed size), so that memory use stays flat however
-large the file is:
+large the file is. This endpoint runs in your browser; a real service would also write each chunk to
+storage, which the demo leaves out:
 
-```python
+```fastapi-run method=POST path=/upload body=file
 import hashlib
+from typing import Annotated
+from fastapi import FastAPI, Form, HTTPException, UploadFile
+from fastapi.testclient import TestClient
+
+MAX_BYTES = 1024 * 1024                                     # 1 MB limit for the demo
+
+app = FastAPI()
 
 @app.post("/upload")
 async def upload(file: UploadFile, description: Annotated[str, Form()] = ""):
     sha, size = hashlib.sha256(), 0
-    with open(dest_path_for(file), "wb") as out:
-        while chunk := await file.read(1024 * 1024):        # 1 MB at a time
-            size += len(chunk)
-            if size > MAX_BYTES:
-                raise HTTPException(status_code=413, detail="File too large")
-            sha.update(chunk)
-            out.write(chunk)
-    return {"sha256": sha.hexdigest(), "size": size, "description": description}
+    while chunk := await file.read(64 * 1024):              # 64 KB at a time
+        size += len(chunk)
+        if size > MAX_BYTES:
+            raise HTTPException(status_code=413, detail="File too large")
+        sha.update(chunk)                       # real code: also write the chunk out
+    return {"filename": file.filename, "content_type": file.content_type, "size": size,
+            "sha256": sha.hexdigest()[:16], "description": description}
+
+client = TestClient(app)
+csv = b"region,revenue\nEMEA,1200\n"
+r = client.post("/upload", files={"file": ("q3.csv", csv, "text/csv")},
+                data={"description": "Quarterly numbers"})
+print(r.status_code, r.json())
+r = client.post("/upload", files={"file": ("big.bin", b"x" * (MAX_BYTES + 1))})
+print(r.status_code, r.json())
 ```
 
 - `file: UploadFile` is the upload, and `description` is an ordinary form field sent alongside it.
 - `hashlib.sha256()` starts a running fingerprint of the content.
-- `while chunk := await file.read(1024 * 1024):` reads up to one megabyte at a time and stops when
-  `read` returns nothing.
+- `while chunk := await file.read(64 * 1024):` reads up to 64 KB at a time and stops when `read`
+  returns nothing. Production code often reads a megabyte at a time; the idea is the same.
 - Each chunk is counted. If the running total passes the limit, the endpoint raises
   `413 Payload Too Large` at once, without reading the rest.
-- Otherwise the chunk is added to the fingerprint and written to the output file.
+- Otherwise the chunk is added to the fingerprint (and, in a real service, written to storage).
+- In the test, `files=` makes the client send a `multipart/form-data` body like the one shown
+  above: each file is a tuple of filename, bytes and content type, and `data=` adds the text fields.
+
+The first test upload answers `200` with the filename `q3.csv`, the type `text/csv`, a size of 25
+bytes and the description. The second sends one byte more than the limit and gets
+`413 {'detail': 'File too large'}`. The panel under the code is in **File upload** mode: choose any
+file on your computer and press Send. Your browser reads the file and hands it to the app running
+in the page, so it never leaves your machine. A file over 1 MB gets the 413.
 
 Several files: `files: list[UploadFile]`. An optional file: `file: UploadFile | None = None`.
 
-The same loop in a form you can run:
+The same loop with tiny numbers, so that you can follow every chunk:
 
 ```python-run
 import hashlib, io

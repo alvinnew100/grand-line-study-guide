@@ -112,10 +112,11 @@ plt.show()
 
 **FastAPI apps: ```` ```fastapi-run ````.** The block must define a FastAPI instance named `app`. Run
 executes it in the browser and keeps the app alive; a request panel below the code (method, path with
-query string, JSON body, headers) sends requests to it and shows status, headers and the JSON body,
-including 422 validation errors and 500s (the traceback is printed in the output pane). The panel lists
-the app's routes as buttons and pre-fills a JSON body built from the request model. Optional info-string
-options set the panel's starting request:
+query string, body, headers) sends requests to it and shows status, headers and the body, including
+422 validation errors and 500s (the traceback is printed in the output pane). The panel lists the app's
+routes as buttons (WebSocket routes as `WS`) and pre-fills the body from the OpenAPI schema. Optional
+info-string options set the panel's starting request: `method=` (GET, POST, PUT, PATCH, DELETE or `WS`),
+`path=`, and `body=form` or `body=file` (default JSON):
 
 ````
 ```fastapi-run method=POST path=/items/
@@ -140,19 +141,67 @@ print(r.status_code, r.json())
 ````
 
 - End the block with example requests through `fastapi.testclient.TestClient`, exactly as in a real
-  test (`client.get`, `client.post(json=...)`, `with TestClient(app) as client:` runs lifespan
-  startup/shutdown). In the browser it is a thread-free stand-in with the same interface. It cannot
-  serve requests that wait on real async I/O (`await asyncio.sleep`, `StreamingResponse`,
-  `@app.middleware("http")`, background tasks that await); those still work from the request panel,
-  or with `async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as c:`
-  and `await c.get(...)` at the top level of the block.
+  test: `client.get`, `client.post(json=...)`, forms with `data={...}`, uploads with
+  `files={"file": ("a.csv", b"...", "text/csv")}`, `with client.stream("GET", ...) as r:`,
+  `with TestClient(app) as client:` (runs lifespan startup/shutdown) and
+  `with client.websocket_connect("/ws") as ws:` with `ws.send_text / receive_text / send_json /
+  receive_json / close`. In the browser it is a thread-free stand-in with the same interface (see
+  "How it runs" below). Middleware, background tasks, `StreamingResponse` and task groups all work.
+  `asyncio.sleep` inside the app finishes **instantly** under the TestClient (it runs on a virtual
+  clock), so do not print timings from TestClient calls; use the panel to show real timing.
+- A test that would wait forever (for example `ws.receive_text()` when the handler is itself waiting
+  for a message) raises a `RuntimeError` saying so, where the real TestClient would hang.
 - Sync `def` endpoints and dependencies run inline (Pyodide has no threads), so `time.sleep` blocks the
   page; keep handlers fast. No network, databases or files outside memory: use a dict as the "database".
-- Installed on first use (about 4 MB): fastapi 0.115.6, starlette 0.41.3, httpx 0.28.1, httpcore 1.0.7,
-  anyio 4.7.0, sniffio 1.3.1, h11 0.14.0, plus Pyodide's pydantic 2.7.0 / pydantic-core 2.18.1 and ssl.
-  `python-multipart` is not installed, so `Form()`/`File()` endpoints fail; WebSockets are not supported.
 - A `python-run` block that imports fastapi also gets these packages and the same `TestClient`, but no
   request panel.
+
+*Request panel modes.*
+
+- **JSON / Form fields / File upload.** For POST, PUT, PATCH and DELETE a body switch appears. Form
+  fields are name / value rows sent as `application/x-www-form-urlencoded`; File upload adds a file
+  picker (field name editable, several files allowed when the parameter is `list[UploadFile]`) and
+  sends `multipart/form-data`. The browser reads the chosen file (up to 5 MB) and hands the bytes to the
+  app in the page; nothing is uploaded anywhere. Clicking a route whose OpenAPI body is a form or
+  multipart switches the mode and fills the rows (file fields from `format: binary`).
+- **Streaming.** When the app sends its body in several ASGI messages (`StreamingResponse`, SSE), the
+  panel lists each chunk as it arrives, stamped with the time the app sent it (`+0.50 s`), and the
+  Send button becomes **Stop** (it cancels the request like a closed tab, so generator `finally`
+  blocks run). A one-chunk body (for example JSON passed through `@app.middleware`) is shown normally.
+  Limits: 2,000 chunks or 2 MB, then the panel stops the stream; a stream that is silent for 15 s
+  times out. Image responses are shown as images; other binary bodies as a byte count.
+- **WebSocket** (`method=WS`, or click a `WS` route). Connect opens the socket, a log shows messages
+  (→ sent, ← received, • status such as close codes or a refused handshake), a text box sends text
+  frames, Close sends a 1000 close. The handler's prints go to the output pane. An open socket has no
+  time limit; running the code again, or leaving the page, closes it. Text frames only from the panel
+  (binary frames the app sends are shown as a hex preview).
+
+*How it runs.* Two drivers, both on Pyodide's single thread, in `docs/assets/judge/worker.js`:
+
+- The **panel** awaits the app on Pyodide's own event loop (real time) and calls it with raw ASGI
+  messages: a request's `http.response.body` messages are forwarded to the page one by one, which is
+  what makes chunks appear live (`httpx.ASGITransport` collects the whole body first, so it is only
+  used to encode the request). WebSockets use an in-process driver: `websocket.connect` /
+  `websocket.receive` / `websocket.disconnect` go in through a queue, `websocket.accept` / `send` /
+  `close` come out as log entries.
+- The **TestClient** runs the app on `VirtualLoop`, a private asyncio loop whose clock jumps straight
+  to the next timer instead of waiting, driven to completion from sync code (`run_until_complete`
+  with the page's loop set aside). WebSocket sessions keep their app task on that loop between calls.
+
+*Packages.* Installed on first use (about 3.2 MB), and preloaded in the background as soon as a lesson
+containing a `fastapi-run` block (or a `python-run` block importing fastapi) is opened: the wheels
+fastapi 0.115.6, starlette 0.41.3, httpx 0.28.1, httpcore 1.0.7, anyio 4.7.0, sniffio 1.3.1,
+h11 0.14.0 and python-multipart 0.0.20 (0.5 MB) are fetched in parallel straight from
+files.pythonhosted.org with sha256 integrity checks (no micropip, no index lookups), while Pyodide's
+pydantic 2.7.0 / pydantic-core 2.18.1, typing-extensions, idna, certifi and ssl (2.7 MB) load from
+the Pyodide CDN. To bump a wheel, update the `WHEELS` list in worker.js (path and sha256 from
+`https://pypi.org/pypi/<name>/<version>/json`), bump its `?v=` stamp in app.js, and update this list.
+
+*Measured cold-load cost* (live site, empty browser cache, fast connection, 2026-11-21): the site opens
+in 0.8 s (352 KB); the first Python demo of a visit takes about 2.2 s (Pyodide, 5.4 MB), re-runs about
+0.35 s; the first matplotlib chart about 7 to 9 s (numpy + matplotlib, about 8 to 14 MB), re-runs about
+0.55 s; the first FastAPI app about 3 s (about 4 MB). Slow mobile connections scale with the download
+size, so use charts where they teach something, not as decoration.
 
 ## 3. Code problems (`problems/*.py`)
 

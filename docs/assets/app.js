@@ -361,7 +361,7 @@
     let worker = null, ready = null, seq = 0;
     const handlers = new Map();
     function start() {
-      worker = new Worker("assets/judge/worker.js?v=8");
+      worker = new Worker("assets/judge/worker.js?v=11");
       ready = new Promise((res, rej) => {
         const onmsg = (e) => {
           if (e.data.type === "ready") res();
@@ -376,9 +376,23 @@
       worker.onerror = (e) => console.error("worker error", e);
     }
     function ensure() { if (!worker) start(); return ready; }
-    function restart() { if (worker) worker.terminate(); worker = null; handlers.clear(); start(); }
+    function restart() {
+      if (worker) worker.terminate();
+      worker = null;
+      const waiting = [...handlers.values()];   // e.g. an open WebSocket: tell it Python is gone
+      handlers.clear();
+      waiting.forEach((hd) => hd({ type: "error", data: "Python was restarted." }));
+      start();
+    }
+    // fastapi-run panels with a live stream or WebSocket; hung up once their block leaves the page
+    const live = new Map();
+    function sweep() {
+      live.forEach((el, key) => { if (!el.isConnected) { live.delete(key); if (worker) worker.postMessage({ type: "app-stop", key }); } });
+    }
+    window.addEventListener("hashchange", () => setTimeout(sweep, 2000));   // after the next page has rendered
     async function call(msg, onEvent, timeoutMs) {
       await ensure();
+      sweep();
       const id = ++seq;
       return new Promise((resolve, reject) => {
         let timer = null;
@@ -393,7 +407,7 @@
         arm(timeoutMs);
         handlers.set(id, (d) => {
           // package downloads ask for a longer limit; ms 0 restores the normal one
-          if (d.type === "timer") arm(d.ms || timeoutMs);
+          if (d.type === "timer") { if (d.ms < 0) clearTimeout(timer); else arm(d.ms || timeoutMs); }
           else if (d.type === "done") { clearTimeout(timer); handlers.delete(id); resolve(d.data); }
           else if (d.type === "error") { clearTimeout(timer); handlers.delete(id); reject(new Error(d.data)); }
           else onEvent && onEvent(d);
@@ -406,7 +420,15 @@
       isReady: () => !!worker,
       run: (code, onEvent, t = 30000) => call({ type: "run", code }, onEvent, t),
       appRun: (code, key, onEvent, t = 30000) => call({ type: "app-run", code, key }, onEvent, t),
-      appRequest: (key, req, onEvent, t = 15000) => call({ type: "app-request", key, ...req }, onEvent, t),
+      appRequest: (key, spec, files, onEvent, t = 15000) => call({ type: "app-request", key, spec, files }, onEvent, t),
+      appStop: (key) => { if (worker) worker.postMessage({ type: "app-stop", key }); },
+      wsOpen: (key, path, headers, onEvent) => call({ type: "ws-open", key, path, headers }, onEvent, 15000),
+      wsSend: (key, text) => call({ type: "ws-send", key, text }, null, 15000),
+      wsClose: (key) => call({ type: "ws-close", key }, null, 15000),
+      track: (key, el) => live.set(key, el),
+      untrack: (key) => live.delete(key),
+      // install FastAPI in the background while the learner reads (first Run is then instant)
+      preload: (what) => ensure().then(() => worker && worker.postMessage({ type: "preload", what })).catch(() => {}),
       judge: (code, track, pid, mode, lines, onEvent, t = 20000) => call({ type: "judge", code, track, pid, mode, lines }, onEvent, t),
     };
   })();
@@ -495,9 +517,13 @@
   }
 
   // ```fastapi-run: the block defines a FastAPI `app`; a request panel calls it in-process (no network).
+  // The panel sends JSON, form fields or file uploads, shows streamed bodies chunk by chunk as the app
+  // sends them, and opens WebSockets (method "WebSocket") with a message log.
   function mountApi(el, code, info) {
     const opt = (k) => (info.match(new RegExp(`\\b${k}=(\\S+)`)) || [])[1];
     const key = el.id;
+    const MODES = [["json", "JSON"], ["form", "Form fields"], ["file", "File upload"]];
+    const MAX_UPLOAD = 5 * 1024 * 1024;
     el.innerHTML = `<div class="runnable-bar"><span class="lang">FastAPI</span>
       <button class="reset" type="button">Reset</button><button class="run" type="button">▶ Run</button></div><div class="cm"></div>
       <pre class="runnable-out"></pre><div class="runnable-figs"></div>
@@ -505,11 +531,28 @@
         <div class="api-head"><span class="api-title">Try a request</span><span class="api-hint">Send runs the code above first if it changed.</span></div>
         <div class="api-routes" role="group" aria-label="Routes in this app" hidden></div>
         <div class="api-row">
-          <select class="api-method" aria-label="HTTP method">${["GET", "POST", "PUT", "PATCH", "DELETE"].map((m) => `<option>${m}</option>`).join("")}</select>
+          <select class="api-method" aria-label="HTTP method, or WebSocket">${["GET", "POST", "PUT", "PATCH", "DELETE"].map((m) => `<option>${m}</option>`).join("")}<option value="WS">WebSocket</option></select>
           <input class="api-path" type="text" aria-label="Path and query string" autocomplete="off" autocapitalize="off" spellcheck="false">
           <button class="api-send" type="submit">Send</button>
         </div>
-        <label class="api-field api-body-wrap"><span>JSON body</span><textarea class="api-body" rows="5" spellcheck="false" autocapitalize="off"></textarea></label>
+        <fieldset class="api-modes"><legend>Body</legend>${MODES.map(([v, l]) =>
+          `<label><input type="radio" name="${key}-mode" value="${v}"><span>${l}</span></label>`).join("")}</fieldset>
+        <label class="api-field api-body-wrap"><span class="sr-only">JSON body</span><textarea class="api-body" rows="5" spellcheck="false" autocapitalize="off"></textarea></label>
+        <div class="api-form" hidden>
+          <div class="api-file-row">
+            <input class="api-file-name" type="text" value="file" aria-label="Form field name for the file" autocomplete="off" autocapitalize="off" spellcheck="false">
+            <input class="api-file" type="file" aria-label="File to upload">
+          </div>
+          <div class="api-kv"></div>
+          <button type="button" class="api-add">+ Add field</button>
+        </div>
+        <div class="api-ws" hidden>
+          <ol class="api-log" aria-label="WebSocket messages" aria-live="polite"></ol>
+          <div class="api-row">
+            <input class="api-msg" type="text" aria-label="Message to send over the WebSocket" placeholder="Connect first" autocomplete="off" autocapitalize="off" spellcheck="false" disabled>
+            <button class="api-ws-send" type="button" disabled>Send</button>
+          </div>
+        </div>
         <details class="api-more"><summary>Request headers</summary>
           <label class="api-field"><span>One per line, as <code>Name: value</code></span><textarea class="api-headers" rows="2" spellcheck="false" autocapitalize="off" placeholder="X-Token: secret"></textarea></label></details>
         <div class="api-resp" aria-live="polite"></div>
@@ -518,21 +561,71 @@
     const out = $(".runnable-out", el), figs = $(".runnable-figs", el), runBtn = $(".run", el), sendBtn = $(".api-send", el);
     const method = $(".api-method", el), path = $(".api-path", el), body = $(".api-body", el), hdrs = $(".api-headers", el);
     const resp = $(".api-resp", el), routesBox = $(".api-routes", el), bodyWrap = $(".api-body-wrap", el);
-    method.value = (opt("method") || "GET").toUpperCase();
+    const modesBox = $(".api-modes", el), formBox = $(".api-form", el), kv = $(".api-kv", el);
+    const fileRow = $(".api-file-row", el), fileName = $(".api-file-name", el), fileInput = $(".api-file", el);
+    const wsBox = $(".api-ws", el), wsLog = $(".api-log", el), msgIn = $(".api-msg", el), msgBtn = $(".api-ws-send", el);
+    const st = { running: false, sending: false, streaming: false, sock: null };   // sock: null | "connecting" | "open"
+    let lastRun = null, routes = [], autoBody = "", autoRows = "", session = 0;
+    const mode = () => ($(`input[name="${key}-mode"]:checked`, el) || {}).value || "json";
+    const setMode = (m) => { const r = $(`input[name="${key}-mode"][value="${m}"]`, el); if (r) r.checked = true; };
+
+    function sync() {
+      const m = method.value, ws = m === "WS", noBody = ws || m === "GET";
+      modesBox.hidden = noBody;
+      bodyWrap.hidden = noBody || mode() !== "json";
+      formBox.hidden = noBody || mode() === "json";
+      fileRow.hidden = mode() !== "file";
+      wsBox.hidden = !ws;
+      resp.hidden = ws;
+      path.setAttribute("aria-label", ws ? "WebSocket path" : "Path and query string");
+      runBtn.disabled = st.running || st.sending;
+      runBtn.textContent = st.running ? "Running…" : "▶ Run";
+      sendBtn.disabled = st.running || (st.sending && !st.streaming) || st.sock === "connecting";
+      sendBtn.textContent = ws ? (st.sock === "open" ? "Close" : st.sock ? "Connecting…" : "Connect")
+        : st.streaming ? "Stop" : st.sending ? "Sending…" : "Send";
+      msgIn.disabled = msgBtn.disabled = st.sock !== "open";
+      msgIn.placeholder = st.sock === "open" ? "Message to send" : "Connect first";
+    }
+    method.onchange = () => { if (method.value !== "WS" && st.sock) wsClose(); sync(); };
+    $$(`input[name="${key}-mode"]`, el).forEach((r) => { r.onchange = sync; });
+    setMode(["form", "file"].includes(opt("body")) ? opt("body") : "json");
+    method.value = (opt("method") || "GET").toUpperCase() === "WS" ? "WS" : (opt("method") || "GET").toUpperCase();
     path.value = opt("path") || "/";
-    let lastRun = null, routes = [], autoBody = "";
-    const syncBody = () => { bodyWrap.hidden = method.value === "GET"; };
-    method.onchange = syncBody; syncBody();
+
+    // form fields: simple name / value rows
+    function addRow(name = "", value = "") {
+      const row = h(`<div class="api-kv-row"><input class="api-k" type="text" placeholder="name" aria-label="Field name" autocomplete="off" autocapitalize="off" spellcheck="false"><input class="api-v" type="text" placeholder="value" aria-label="Field value" autocomplete="off" autocapitalize="off" spellcheck="false"><button type="button" class="api-x" aria-label="Remove this field">×</button></div>`);
+      $(".api-k", row).value = name; $(".api-v", row).value = value;
+      $(".api-x", row).onclick = () => { const next = row.nextElementSibling || row.previousElementSibling; row.remove(); ($(".api-k", next || el) || $(".api-add", el)).focus(); };
+      kv.appendChild(row);
+      return row;
+    }
+    const rows = () => $$(".api-kv-row", kv).map((r) => [$(".api-k", r).value.trim(), $(".api-v", r).value]).filter(([k]) => k);
+    $(".api-add", el).onclick = () => $(".api-k", addRow()).focus();
+
     const cm = makeEditor($(".cm", el), original, "python", { auto: true, keys: { "Ctrl-Enter": () => run(), "Cmd-Enter": () => run() } });
     $(".reset", el).onclick = () => cm.setValue(original);
-    const busy = (on, label) => {
-      runBtn.disabled = sendBtn.disabled = on;
-      runBtn.textContent = on && label === "run" ? "Running…" : "▶ Run";
-      sendBtn.textContent = on && label === "send" ? "Sending…" : "Send";
-    };
-    const pick = (r, focus) => {
-      method.value = r.method; path.value = r.path; syncBody();
+
+    // fill the body (JSON or form rows) from a route's OpenAPI schema, unless the learner typed their own
+    function fill(r, switchMode) {
       if (r.body && (!body.value.trim() || body.value === autoBody)) body.value = autoBody = r.body;
+      if (r.form) {
+        if (switchMode) setMode(r.form.mode);
+        const file = r.form.fields.find((f) => f.file);
+        if (file) { fileName.value = file.name; fileInput.multiple = !!file.many; }
+        const text = r.form.fields.filter((f) => !f.file);
+        if (!rows().length || JSON.stringify(rows()) === autoRows) {
+          kv.innerHTML = "";
+          text.forEach((f) => addRow(f.name, f.value));
+          autoRows = JSON.stringify(rows());
+        }
+      } else if (switchMode && r.body) setMode("json");
+      sync();
+    }
+    const pick = (r, focus) => {
+      if (st.sock && r.method !== "WS") wsClose();
+      method.value = r.method; path.value = r.path;
+      fill(r, true);
       if (!focus) return;
       path.focus();
       const m = r.path.match(/\{[^}]+\}/);   // select the first {param} so it can be typed over
@@ -544,7 +637,7 @@
     function showRoutes() {
       routesBox.innerHTML = "";
       routes.filter((r) => !/^\/(docs|redoc|openapi\.json)/.test(r.path)).forEach((r) => {
-        const b = h(`<button type="button" class="api-route"><b>${esc(r.method)}</b> ${esc(r.path)}</button>`);
+        const b = h(`<button type="button" class="api-route"><b>${r.method === "WS" ? "WS" : esc(r.method)}</b> ${esc(r.path)}</button>`);
         if (r.summary) b.title = r.summary;
         b.onclick = () => pick(r, true);
         routesBox.appendChild(b);
@@ -552,7 +645,7 @@
       routesBox.hidden = !routesBox.childElementCount;
     }
     async function run() {
-      busy(true, "run");
+      st.running = true; sync();
       const src = cm.getValue(), o = pyOutput(out, figs);
       let ok = false;
       try {
@@ -560,46 +653,170 @@
         if (r.repr && r.repr !== "None") o.write(r.repr + "\n");
         routes = r.routes || []; showRoutes(); lastRun = src; ok = true;
         if (!opt("path") && path.value === "/" && routes.length && !routes.some((x) => x.path === "/")) pick(routes[0]);
-        else if (!body.value.trim()) { const r0 = routeFor(method.value, path.value); if (r0 && r0.body) body.value = autoBody = r0.body; }
+        else { const r0 = routeFor(method.value, path.value); if (r0) fill(r0, !opt("body")); }
       } catch (e) { o.write((e.tle ? "⏱ Stopped after 30 s.\n" : "") + e.message, "err"); lastRun = null; }
       o.end();
       if (ok && out.textContent === "(no output)") out.textContent = "";
-      busy(false);
+      st.running = false; sync();
       return ok;
     }
-    function render(req, r) {
-      const cls = r.status >= 500 ? "s5" : r.status >= 400 ? "s4" : r.status >= 300 ? "s3" : "s2";
-      resp.innerHTML = `<div class="api-line"><span class="api-req">${esc(req.method)} ${esc(req.path)}</span>
-        <span class="api-status ${cls}">${r.status} ${esc(r.reason || "")}</span><span class="api-ms">${r.ms} ms</span></div>
-        <details class="api-hdrs"><summary>Response headers (${r.headers.length})</summary><pre>${esc(r.headers.map(([k, v]) => `${k}: ${v}`).join("\n"))}</pre></details>
-        <pre class="api-json">${r.body === "" ? '<span class="muted">(empty body)</span>' : esc(r.body)}</pre>
-        ${r.error ? `<div class="api-err">${esc(r.error)}</div>` : ""}`;
+    const ensureRun = async () => cm.getValue() === lastRun || run();
+    const log = (d) => {
+      if (d.type !== "stdout" && d.type !== "stderr") return false;
+      const sp = document.createElement("span");
+      if (d.type === "stderr") sp.className = "err";
+      sp.textContent = d.data; out.appendChild(sp);
+      return true;
+    };
+    const target = () => { let p = path.value.trim() || "/"; if (!p.startsWith("/")) p = "/" + p; return p; };
+    const headers = () => {
+      const o = {};
+      hdrs.value.split("\n").forEach((line) => { const i = line.indexOf(":"); if (i > 0) o[line.slice(0, i).trim()] = line.slice(i + 1).trim(); });
+      return o;
+    };
+
+    // ---- HTTP
+    const statusCls = (s) => (s >= 500 ? "s5" : s >= 400 ? "s4" : s >= 300 ? "s3" : "s2");
+    const secs = (ms) => `+${(ms / 1000).toFixed(2)} s`;
+    function headHTML(req, status, reason, meta, headers) {
+      return `<div class="api-line"><span class="api-req">${esc(req.method)} ${esc(req.path)}</span>
+        <span class="api-status ${statusCls(status)}">${status} ${esc(reason || "")}</span><span class="api-ms">${meta}</span></div>
+        <details class="api-hdrs"><summary>Response headers (${headers.length})</summary><pre>${esc(headers.map(([k, v]) => `${k}: ${v}`).join("\n"))}</pre></details>`;
     }
-    async function send(ev) {
-      if (ev) ev.preventDefault();
-      if (cm.getValue() !== lastRun && !(await run())) { resp.innerHTML = `<div class="api-err">Fix the error in the code above, then send again.</div>`; return; }
-      let p = path.value.trim() || "/";
-      if (!p.startsWith("/")) p = "/" + p;
-      const headers = {};
-      hdrs.value.split("\n").forEach((line) => { const i = line.indexOf(":"); if (i > 0) headers[line.slice(0, i).trim()] = line.slice(i + 1).trim(); });
-      const req = { method: method.value, path: p, body: method.value === "GET" ? "" : body.value.trim(), headers };
-      busy(true, "send");
+    // live view of a streamed body: one row per chunk, stamped with when the app sent it
+    function liveView(req) {
+      let list = null, meta = null, head = null;
+      return {
+        event(d) {
+          if (d.type === "head") {
+            head = d;
+            resp.innerHTML = headHTML(req, d.status, "", "waiting for the body…", d.headers);
+            meta = $(".api-ms", resp);
+          } else if (d.type === "chunk" && head) {
+            if (!list) {
+              list = h(`<ol class="api-chunks" aria-label="Body chunks in the order the app sent them"></ol>`);
+              resp.appendChild(list);
+              st.streaming = true; sync(); Py.track(key, el);
+            }
+            const stick = list.scrollTop + list.clientHeight >= list.scrollHeight - 4;
+            const li = h(`<li><span class="api-t">${secs(d.ms)}</span><pre></pre></li>`);
+            $("pre", li).textContent = d.text == null ? `(${d.n} bytes)` : d.text.replace(/\n+$/, "") || "(newlines only)";
+            list.appendChild(li);
+            if (stick) list.scrollTop = list.scrollHeight;
+            meta.textContent = `streaming… ${list.childElementCount} chunk${list.childElementCount > 1 ? "s" : ""}`;
+          }
+          if (!el.isConnected) Py.appStop(key);
+        },
+        list: () => list,
+      };
+    }
+    function render(req, r, view) {
+      const why = r.stopped === "user" ? " · stopped by you" : r.stopped === "limit" ? " · stopped at the 2,000-chunk / 2 MB limit" : "";
+      const meta = r.streamed ? `${r.chunks} chunks in ${r.ms} ms${why}` : `${r.ms} ms${why}`;
+      resp.innerHTML = headHTML(req, r.status, r.reason, meta, r.headers);
+      if (r.streamed && view.list()) resp.appendChild(view.list());
+      else if (r.image) {
+        const img = h(`<img class="api-img" alt="Image returned by ${esc(req.method)} ${esc(req.path)}">`);
+        img.src = r.image; resp.appendChild(img);
+      } else resp.appendChild(h(`<pre class="api-json">${r.body === "" ? '<span class="muted">(empty body)</span>' : esc(r.body)}</pre>`));
+      if (r.error) resp.appendChild(h(`<div class="api-err">${esc(r.error)}</div>`));
+    }
+    async function readFiles() {
+      const chosen = [...fileInput.files];
+      const size = chosen.reduce((n, f) => n + f.size, 0);
+      if (size > MAX_UPLOAD) throw new Error(`The chosen file${chosen.length > 1 ? "s are" : " is"} ${(size / 1048576).toFixed(1)} MB; the in-browser demo takes up to 5 MB.`);
+      const field = fileName.value.trim() || "file";
+      return Promise.all(chosen.map(async (f) => ({ field, name: f.name, type: f.type, data: new Uint8Array(await f.arrayBuffer()) })));
+    }
+    async function sendHttp() {
+      if (st.streaming) { Py.appStop(key); return; }
+      if (!(await ensureRun())) { resp.innerHTML = `<div class="api-err">Fix the error in the code above, then send again.</div>`; return; }
+      const req = { method: method.value, path: target(), mode: mode(), body: method.value === "GET" ? "" : body.value.trim(), fields: rows(), headers: headers() };
+      let files = [];
+      try { if (req.mode === "file" && req.method !== "GET") files = await readFiles(); }
+      catch (e) { resp.innerHTML = `<div class="api-err">${esc(e.message)}</div>`; return; }
+      st.sending = true; sync();
       resp.innerHTML = `<div class="meta">Sending…</div>`;
+      const view = liveView(req);
+      const onEvent = (d) => { if (!log(d) && d.type === "live") view.event(d.data); };
       try {
         let r;
-        const log = (d) => { if (d.type === "stdout" || d.type === "stderr") { const sp = document.createElement("span"); if (d.type === "stderr") sp.className = "err"; sp.textContent = d.data; out.appendChild(sp); } };
-        try { r = await Py.appRequest(key, req, log); }
+        try { r = await Py.appRequest(key, req, files, onEvent); }
         catch (e) {
           if (e.message !== "NOAPP") throw e;
-          busy(false); if (!(await run())) return; busy(true, "send");   // Python restarted since the last run
-          r = await Py.appRequest(key, req, log);
+          st.sending = false; if (!(await run())) return; st.sending = true; sync();   // Python restarted since the last run
+          r = await Py.appRequest(key, req, files, onEvent);
         }
-        render(req, r);
-      } catch (e) { resp.innerHTML = `<div class="api-err">${esc(e.tle ? "⏱ The request took longer than 15 s." : e.message)}</div>`; }
-      busy(false);
+        if (r.bad) resp.innerHTML = `<div class="api-err">Could not build the request: ${esc(r.bad)}</div>`;
+        else render(req, r, view);
+      } catch (e) { resp.innerHTML = `<div class="api-err">${esc(e.tle ? "⏱ The request took longer than 15 s (or a stream went 15 s without a chunk)." : e.message)}</div>`; }
+      finally { st.sending = st.streaming = false; Py.untrack(key); sync(); }
     }
-    $("form.api", el).onsubmit = send;
+
+    // ---- WebSocket
+    function note(kind, text) {
+      const dir = { out: ["→", "you sent"], in: ["←", "server sent"], sys: ["•", ""], err: ["!", "error"] }[kind];
+      const li = h(`<li class="api-log-${kind}"><span class="api-dir" aria-hidden="true">${dir[0]}</span><span class="sr-only">${dir[1]}</span><span class="api-msgtext"></span></li>`);
+      $(".api-msgtext", li).textContent = text;
+      wsLog.appendChild(li);
+      wsLog.scrollTop = wsLog.scrollHeight;
+    }
+    function onSocket(d) {
+      if (d.type === "open") {
+        st.sock = "open"; sync();
+        note("sys", `Connected${d.subprotocol ? ` (subprotocol ${d.subprotocol})` : ""}. Type a message below.`);
+        msgIn.focus();
+      } else if (d.type === "recv") note("in", d.text == null ? `(${d.bytes} bytes) ${d.preview}` : d.text);
+      else if (d.type === "close") { st.sock = null; sync(); note("sys", `The server closed the connection (code ${d.code}${d.reason ? `: ${d.reason}` : ""}).`); }
+      else if (d.type === "denied") note("err", `Handshake refused with HTTP ${d.status}: the handler ${d.status === 403 ? "closed or returned before accept()" : "raised an exception before accept()"}.`);
+      if (!el.isConnected) Py.appStop(key);
+    }
+    async function wsConnect() {
+      if (!(await ensureRun())) { wsLog.innerHTML = ""; note("err", "Fix the error in the code above, then connect again."); return; }
+      const p = target(), mine = ++session;   // events of an older socket are ignored
+      wsLog.innerHTML = "";
+      note("sys", `Connecting to ws://testserver${p}…`);
+      st.sock = "connecting"; sync(); Py.track(key, el);
+      const onEvent = (d) => { if (!log(d) && d.type === "ws" && mine === session) onSocket(d.data); };
+      try {
+        let r;
+        try { r = await Py.wsOpen(key, p, headers(), onEvent); }
+        catch (e) {
+          if (e.message !== "NOAPP") throw e;
+          st.sock = null; if (!(await run())) return; st.sock = "connecting"; sync();
+          r = await Py.wsOpen(key, p, headers(), onEvent);
+        }
+        if (r.error) note("err", r.error);
+      } catch (e) { if (mine === session) note("err", e.tle ? "⏱ The handler did not accept the connection within 15 s." : e.message); }
+      if (mine !== session) return;
+      if (st.sock === "open") note("sys", "The connection ended (the code was run again).");
+      st.sock = null; Py.untrack(key); sync();
+    }
+    function wsClose() {
+      if (st.sock !== "open") return;
+      note("sys", "You closed the connection (code 1000).");
+      st.sock = null; sync();
+      Py.wsClose(key).catch(() => {});
+    }
+    async function wsSend() {
+      const text = msgIn.value;
+      if (st.sock !== "open") return;
+      note("out", text);
+      msgIn.value = "";
+      msgIn.focus();
+      try { await Py.wsSend(key, text); } catch (e) { note("err", e.message); }
+    }
+    msgIn.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); wsSend(); } });
+    msgBtn.onclick = wsSend;
+
+    $("form.api", el).onsubmit = (ev) => {
+      ev.preventDefault();
+      if (method.value !== "WS") sendHttp();
+      else if (st.sock === "open") wsClose();
+      else if (!st.sock) wsConnect();
+    };
     runBtn.onclick = run;
+    sync();
   }
 
   function mountRunnable(el, code, lang, dataset) {
@@ -1110,7 +1327,8 @@
       if (on && next) location.hash = `#/lesson/${tid}/${next.id}`;
       else viewLesson(tid, lid);
     };
-    if (/```(python-run|py-run|fastapi-run)/.test(md)) setTimeout(() => Py.warm(), 1500);
+    if (/```fastapi-run|^(from|import) (fastapi|starlette)\b/m.test(md)) setTimeout(() => Py.preload("fastapi"), 1500);
+    else if (/```(python-run|py-run)/.test(md)) setTimeout(() => Py.warm(), 1500);
   }
 
   // ---------------------------------------------------------------- problem workspace

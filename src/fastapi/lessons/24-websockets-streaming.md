@@ -59,10 +59,11 @@ written with `async def`, so it may also `await` between values. A `StreamingRes
 kind and sends each yielded value to the client as soon as it is produced. Each piece is called a
 **chunk**.
 
-```python
+```fastapi-run path=/feed
 import asyncio, json
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
+from fastapi.testclient import TestClient
 
 app = FastAPI()
 
@@ -74,6 +75,9 @@ async def ndjson_feed():
 @app.get("/feed")
 async def feed():
     return StreamingResponse(ndjson_feed(), media_type="application/x-ndjson")
+
+r = TestClient(app).get("/feed")          # the test client waits for the whole body
+print(r.headers["content-type"], r.text.splitlines())
 ```
 
 Line by line:
@@ -89,7 +93,15 @@ Line by line:
   the generator; Starlette pulls values from it one by one and sends each to the client.
 
 A client calling `GET /feed` receives `{"seq": 0}` at once, `{"seq": 1}` half a second later, and so
-on for two and a half seconds.
+on for two and a half seconds. Press Send in the panel under the code to watch it happen: the
+response arrives as a list of chunks, each stamped with the moment the app sent it (`+0.00 s`,
+`+0.50 s`, … `+2.00 s`), and the summary line counts 5 chunks in about 2,500 ms, the last half
+second being the final `sleep`. Press Stop part-way and the stream ends early, as it does when a
+client disconnects.
+
+The `TestClient` line at the bottom prints the content type and the five lines together, because a
+test client reads the whole body before handing the response over:
+`application/x-ndjson ['{"seq": 0}', '{"seq": 1}', '{"seq": 2}', '{"seq": 3}', '{"seq": 4}']`.
 
 ### What goes over the wire
 
@@ -416,8 +428,9 @@ refuse the connection.
 
 In FastAPI a WebSocket endpoint uses the `@app.websocket` decorator:
 
-```python
+```fastapi-run method=WS path=/ws
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.testclient import TestClient
 
 app = FastAPI()
 
@@ -429,7 +442,12 @@ async def echo(websocket: WebSocket):
             text = await websocket.receive_text()        # also receive_json / receive_bytes
             await websocket.send_text(f"echo: {text}")   # also send_json / send_bytes
     except WebSocketDisconnect:
-        pass                                     # client went away: clean up here
+        print("client went away")                # clean up here
+
+client = TestClient(app)
+with client.websocket_connect("/ws") as ws:      # leaving the block closes it
+    ws.send_text("hello")
+    print(ws.receive_text())
 ```
 
 - `@app.websocket("/ws")` registers a WebSocket route instead of an HTTP one.
@@ -441,8 +459,16 @@ async def echo(websocket: WebSocket):
 - `await websocket.send_text(...)` sends a frame back. The server could also send frames without
   being asked, for example from a timer, which is impossible with plain HTTP.
 - When the client closes the connection, the next `receive_text()` raises `WebSocketDisconnect`.
-  Catching it ends the loop quietly; this is where you would remove the connection from any list
-  you keep.
+  Catching it ends the loop; this is where you would remove the connection from any list you keep.
+  Here it only prints a line.
+- The test at the bottom opens a connection with `client.websocket_connect("/ws")`, the test
+  client's WebSocket method. It prints `echo: hello`, and then `client went away` when the `with`
+  block ends and closes the connection.
+
+The panel under the code is in **WebSocket** mode. Press Connect: the log says "Connected" once the
+handler has called `accept()`. Type messages and send them; each reply appears in the log marked
+with a left arrow. Press Close and the handler's `client went away` appears in the output above the
+panel.
 
 WebSocket routes accept path and query parameters, headers, cookies and `Depends`, like HTTP routes.
 One difference: there is no HTTP response to put a status code in, so `HTTPException` does not apply.

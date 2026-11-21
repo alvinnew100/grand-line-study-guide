@@ -165,6 +165,81 @@ The design decisions in that code:
 6. **`max_tokens` is capped** by the schema. Output length is the main driver of both cost and
    latency.
 
+The same endpoint with its outside pieces replaced by stand-ins runs in your browser: `fake_llm`
+plays the model, a fixed `BUDGET` plays the token budget, and the user and model dependencies are
+left out.
+
+```fastapi-run method=POST path=/v1/chat
+import asyncio, json
+from typing import Literal
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
+from fastapi.testclient import TestClient
+from pydantic import BaseModel, Field
+
+app = FastAPI()
+BUDGET = 40                                  # tokens this user may still spend
+
+class ChatMessage(BaseModel):
+    role: Literal["system", "user", "assistant"]
+    content: str = Field(min_length=1, max_length=32_000)
+
+class ChatRequest(BaseModel):
+    messages: list[ChatMessage] = Field(min_length=1, max_length=100)
+    max_tokens: int = Field(16, ge=1, le=4096)
+
+async def fake_llm(messages, max_tokens):
+    words = ("Streaming lets people start reading while the model "
+             "is still writing the rest").split()
+    for word in words[:max_tokens]:
+        await asyncio.sleep(0.15)                    # one token every 150 ms
+        yield word + " "
+
+def sse(data, event=None):
+    return (f"event: {event}\n" if event else "") + f"data: {json.dumps(data)}\n\n"
+
+@app.post("/v1/chat")
+async def chat(req: ChatRequest):
+    if req.max_tokens > BUDGET:              # fail BEFORE streaming starts -> real 4xx
+        raise HTTPException(429, f"max_tokens is over your budget of {BUDGET}")
+
+    async def event_stream():
+        n = 0
+        try:
+            async for token in fake_llm(req.messages, req.max_tokens):
+                n += 1
+                yield sse({"text": token}, event="token")
+            yield sse({"completion_tokens": n, "finish_reason": "stop"}, event="done")
+        finally:
+            print(f"[server] stream closed after {n} tokens (usage recorded)")
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+client = TestClient(app)
+body = {"messages": [{"role": "user", "content": "Why stream?"}], "max_tokens": 5}
+with client.stream("POST", "/v1/chat", json=body) as r:
+    kinds = [line for line in r.iter_lines() if line.startswith("event:")]
+print(r.status_code, kinds)
+print(client.post("/v1/chat", json={**body, "max_tokens": 100}).status_code)
+```
+
+The test at the bottom asks for 5 tokens. The server's `finally` line comes first ("stream closed
+after 5 tokens"), then the status `200` and the event types in order: five `event: token` lines and
+one `event: done`. Asking for 100 tokens is over the budget, so that request is refused with `429`
+before a single byte of stream is sent.
+
+Now press Send in the panel. The request body was filled in from the `ChatRequest` schema, with
+`max_tokens` at its default of 16. Each event appears as the app yields it, 150 ms apart: 13 `token`
+events (the sentence has only 13 words) and a final `done` event reporting `"completion_tokens": 13`.
+Then:
+
+- Send again and press **Stop** after a few tokens. The panel hangs up, as a closed browser tab
+  would; Starlette cancels the generator, and the output above the panel shows the `finally` line
+  with the number of tokens actually produced. Nothing is generated for nobody.
+- Set `max_tokens` to 50 in the body and send: `429` with the reason in the JSON, and no stream at
+  all, because the check runs before the response starts.
+
 ### The upstream side
 
 Most model backends, hosted or self-run, offer an OpenAI-compatible HTTP API that itself streams SSE.
