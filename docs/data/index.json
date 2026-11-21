@@ -69,7 +69,7 @@
   "sources": [
    "Goodrich, Tamassia & Goldwasser, Data Structures and Algorithms in Python (Wiley, 2013), ch. 3-15"
   ],
-  "words": 100543,
+  "words": 100545,
   "modules": 13,
   "lessons": 38,
   "problems": 33
@@ -178,7 +178,7 @@
   "sources": [
    "McDowell, Cracking the Coding Interview, 6th ed."
   ],
-  "words": 34989,
+  "words": 84115,
   "modules": 23,
   "lessons": 32,
   "problems": 89
@@ -212,7 +212,7 @@
    "Apache Kafka documentation (kafka.apache.org/documentation)",
    "Malkov & Yashunin, Efficient and robust approximate nearest neighbor search using HNSW graphs (2016)"
   ],
-  "words": 111022,
+  "words": 111722,
   "modules": 13,
   "lessons": 33,
   "problems": 18
@@ -354,9 +354,9 @@
    "Casciaro & Mammino, Node.js Design Patterns (3rd ed.), ch. 1-13",
    "Node.js API documentation (nodejs.org/docs/latest/api)"
   ],
-  "words": 90483,
+  "words": 115522,
   "modules": 15,
-  "lessons": 27,
+  "lessons": 33,
   "problems": 33
  },
  {
@@ -423,7 +423,7 @@
   "words": 128536,
   "modules": 21,
   "lessons": 34,
-  "problems": 6
+  "problems": 25
  },
  {
   "id": "aws",
@@ -437,9 +437,9 @@
    "AWS Well-Architected Framework (docs.aws.amazon.com/wellarchitected)",
    "AWS Billing user guide: Free Tier (docs.aws.amazon.com/awsaccountbilling)"
   ],
-  "words": 97358,
+  "words": 129908,
   "modules": 15,
-  "lessons": 26,
+  "lessons": 34,
   "problems": 33
  },
  {
@@ -469,9 +469,9 @@
    "Official docs: nginx.org/en/docs (core, proxy, upstream, limit_req, limit_conn, cache, ssl, v2, v3, stream, njs, otel)",
    "Official docs: docs.nginx.com (NGINX Plus features), letsencrypt.org, kubernetes.io (Ingress)"
   ],
-  "words": 32209,
+  "words": 57954,
   "modules": 14,
-  "lessons": 10,
+  "lessons": 18,
   "problems": 0
  },
  {
@@ -519,7 +519,7 @@
    "martinfowler.com (MonolithFirst, StranglerFigApplication, CircuitBreaker, Consumer-Driven Contracts)",
    "microservices.io (Saga, Transactional Outbox)"
   ],
-  "words": 0,
+  "words": 33924,
   "modules": 18,
   "lessons": 36,
   "problems": 32
