@@ -10,7 +10,7 @@
    "Matthes, Python Crash Course (3rd ed.), Parts I-II (topic coverage; all wording and examples original)",
    "The Python Tutorial, Language Reference (Data Model) and Library Reference, docs.python.org/3"
   ],
-  "words": 153341,
+  "words": 168101,
   "modules": 15,
   "lessons": 43,
   "problems": 44
@@ -69,7 +69,7 @@
   "sources": [
    "Goodrich, Tamassia & Goldwasser, Data Structures and Algorithms in Python (Wiley, 2013), ch. 3-15"
   ],
-  "words": 139537,
+  "words": 150842,
   "modules": 13,
   "lessons": 38,
   "problems": 33
@@ -194,7 +194,7 @@
    "SQLite documentation (window functions, WITH clause, EXPLAIN QUERY PLAN)",
    "PostgreSQL and MySQL reference manuals (dialect notes)"
   ],
-  "words": 127405,
+  "words": 137933,
   "modules": 20,
   "lessons": 39,
   "problems": 93
@@ -309,7 +309,7 @@
    "FastAPI official documentation — https://fastapi.tiangolo.com/",
    "Pydantic v2 documentation — https://docs.pydantic.dev/"
   ],
-  "words": 97489,
+  "words": 110834,
   "modules": 12,
   "lessons": 29,
   "problems": 18
@@ -621,7 +621,7 @@
    "Chip Huyen, AI Engineering (O'Reilly) — background for deep learning and system design",
    "Goodfellow, Bengio & Courville, Deep Learning — background for the maths and optimisers"
   ],
-  "words": 80257,
+  "words": 94020,
   "modules": 10,
   "lessons": 26,
   "problems": 25
@@ -640,7 +640,7 @@
    "Sculley et al., Hidden Technical Debt in Machine Learning Systems (NeurIPS 2015)",
    "Official docs: MLflow, DVC, Docker, Kubernetes, KServe, GitHub Actions, Prometheus, Evidently, Feast, Airflow, Prefect, BentoML, Ray Serve, vLLM, Hugging Face"
   ],
-  "words": 108240,
+  "words": 120792,
   "modules": 13,
   "lessons": 37,
   "problems": 17
@@ -654,7 +654,7 @@
   "sources": [
    "Chip Huyen, AI Engineering: Building Applications with Foundation Models (O'Reilly, 2025), ch. 1-10"
   ],
-  "words": 69524,
+  "words": 80015,
   "modules": 10,
   "lessons": 27,
   "problems": 24
@@ -673,7 +673,7 @@
    "Chip Huyen, AI Engineering (O'Reilly, 2025), ch. 2, 5, 6, 7, 9, 10",
    "Vaswani et al. 2017; Su et al. 2021 (RoPE); Hu et al. 2021 (LoRA); Dettmers et al. 2023 (QLoRA); Rafailov et al. 2023 (DPO)"
   ],
-  "words": 59689,
+  "words": 68540,
   "modules": 10,
   "lessons": 26,
   "problems": 24
@@ -723,7 +723,7 @@
    "Vitest, Jest, node:test, Testing Library and Playwright documentation",
    "MDN Web Docs (developer.mozilla.org)"
   ],
-  "words": 118794,
+  "words": 118804,
   "modules": 12,
   "lessons": 27,
   "problems": 27
