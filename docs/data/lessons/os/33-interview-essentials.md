@@ -234,7 +234,7 @@ sequenceDiagram
     L->>K: trap instruction with the service number
     K->>K: save registers, validate the arguments
     K->>K: carry out the request (may wait for the device)
-    K-->>L: result or error code; back to user mode
+    K-->>L: result or error code, then back to user mode
     L-->>A: returns the number of bytes read
 ```
 

@@ -60,7 +60,7 @@ sequenceDiagram
     participant DC as Disk controller
     participant MEM as Main memory
     CPU->>DMA: 1. program it: memory address, byte count, direction
-    CPU->>DC: issue read command; CPU goes off to other work
+    CPU->>DC: issue read command, then the CPU goes off to other work
     DMA->>DC: 2. request transfer of the next word
     DC->>MEM: 3. write the word at the given address
     DC->>DMA: 4. acknowledge

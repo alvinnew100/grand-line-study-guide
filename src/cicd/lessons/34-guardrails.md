@@ -232,7 +232,7 @@ sequenceDiagram
   CI-->>Q: main + Ana: green
   Q->>M: merge Ana
   CI-->>Q: main + Ana + Ben: RED
-  Q-->>B: removed from queue; the combination with Ana failed
+  Q-->>B: removed from queue, because the combination with Ana failed
   Note over M: main stays green. Ben fixes his change and queues again
 ```
 

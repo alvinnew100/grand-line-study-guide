@@ -121,15 +121,15 @@ sequenceDiagram
   participant App as Application code
   participant Demux as Event demultiplexer
   participant Q as Event queue
-  participant Loop as Event loop
+  participant EL as Event loop
   App->>Demux: 1. start I/O, here is my handler
-  App-->>Loop: 2. returns at once, nothing left to run
+  App-->>EL: 2. returns at once, nothing left to run
   Note over Demux: 3. the operating system does the work
   Demux->>Q: 4. operation finished: push event + handler
-  Loop->>Q: 5. take the next event
-  Loop->>App: 6. run its handler
+  EL->>Q: 5. take the next event
+  EL->>App: 6. run its handler
   App->>Demux: 7. the handler may start more I/O
-  Note over Loop: 8. queue empty: wait in the demultiplexer again
+  Note over EL: 8. queue empty: wait in the demultiplexer again
 ```
 
 Follow the numbers. In step 2 control returns to the loop immediately, which is what "non-blocking" means for your code. In step 6 a handler runs **to completion**: nothing interrupts it, and no second handler starts until it returns. Step 7 is how programs keep going, since a handler usually starts the next operation. When there is nothing left to watch and nothing in the queue, the loop has no reason to exist and the Node process exits. That is why a script ends by itself and a listening server does not.

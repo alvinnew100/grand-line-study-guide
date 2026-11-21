@@ -272,7 +272,7 @@ sequenceDiagram
   participant C as Cloud provider
   J->>G: Please issue me an identity token
   G-->>J: Signed token: repo example/orders, branch main, environment production
-  J->>C: Here is my token; I would like to use role deploy-orders
+  J->>C: Here is my token, and I would like to use role deploy-orders
   C->>C: Check GitHub's signature, then check the role's rule: does repo, branch and environment match?
   C-->>J: Temporary credentials, valid for about one hour
   J->>C: Deploy using the temporary credentials

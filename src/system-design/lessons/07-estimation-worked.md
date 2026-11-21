@@ -50,9 +50,9 @@ The brackets mean "round up". **Target utilisation** is the fraction of a server
 flowchart LR
   A[DAU] --> B[x actions per user]
   B --> C[actions per day]
-  C --> D[/ 86,400 = average QPS]
+  C --> D["/ 86,400 = average QPS"]
   D --> E[x peak factor = peak QPS]
-  E --> F[/ per-server capacity = servers]
+  E --> F["/ per-server capacity = servers"]
   C --> G[x bytes per write = bytes per day]
   G --> H[x 365 x replicas = storage per year]
   D --> I[x bytes per request = bandwidth]

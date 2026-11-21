@@ -206,12 +206,12 @@ A **large language model** (LLM) generates text from what it learned in training
 
 ```mermaid
 graph TD
-  subgraph Ingestion, done in advance
+  subgraph ING["Ingestion, done in advance"]
     D["Documents"] --> CH["Split into chunks"]
     CH --> E1["Embedding model"]
     E1 --> ST["Store text + vector + metadata in MongoDB"]
   end
-  subgraph Query time
+  subgraph QT["Query time"]
     Q["User question"] --> E2["Same embedding model"]
     E2 --> VS["$vectorSearch: nearest chunks"]
     ST --> VS

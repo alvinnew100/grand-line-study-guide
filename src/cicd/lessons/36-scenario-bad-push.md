@@ -190,7 +190,7 @@ sequenceDiagram
   participant P as Pipeline
   participant S as Service
   M-->>Y: 0:00 alert: 5xx errors at 12 percent
-  Y->>M: 0:30 confirm it is real; was there a recent deploy? yes, 10 minutes ago
+  Y->>M: 0:30 confirm it is real. Was there a recent deploy? Yes, 10 minutes ago
   Y->>T: 1:00 "Incident: checkout errors after deploy 9f3c2e1. I am rolling back."
   Y->>P: 1:30 start rollback to the previous version
   P->>S: 2:00 traffic and instances return to the previous version
