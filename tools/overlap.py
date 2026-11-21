@@ -8,7 +8,8 @@ sentences were copied or only lightly edited and must be rewritten in original w
 Set BOOKS_DIR to the folder holding the extracted book .txt files.
 """
 import argparse, glob, os, re, sys
-BOOKS = os.environ.get("BOOKS_DIR", r"C:/Users/alvin/AppData/Local/Temp/claude/7d65cf0c6f393f19/1cd3cb5d-2c40-4be9-8a28-0057ed3488b6/scratchpad/books")
+# Book texts (pdftotext output) live beside the repo in Prepare/books-text (not committed).
+BOOKS = os.environ.get("BOOKS_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "books-text"))
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 N, LIMIT = 8, 0.02
 tok = lambda t: re.findall(r"[a-z0-9']+", t.lower())
