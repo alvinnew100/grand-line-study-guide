@@ -55,6 +55,9 @@ long passages (short quotes < 15 words, attributed, are fine). Cite the source c
 Special blocks:
 
 - **Math**: `$inline$` and `$$display$$` (KaTeX). Escape a literal dollar as `\$`.
+  Inside quiz JSON strings write it as `\\$` (JSON needs the backslash doubled), or put the code in
+  backticks: two bare dollars in one quiz string (`{$set: ...}`, `$uri $args`, `$5 and $10`) are
+  rendered as broken math. Quiz explanations only appear after answering, so check them by reading.
 - **Callouts**: blockquotes starting with `[!NOTE]`, `[!TIP]`, `[!WARNING]`, `[!INTERVIEW]`:
   ```
   > [!TIP]
