@@ -268,6 +268,9 @@ def execute(code, spec, args):
     ns = _base_namespace()
     buf = io.StringIO()
     old = sys.stdout
+    # Code may raise the recursion limit (sys.setrecursionlimit); restore it afterwards so it
+    # cannot leak into later tests or problems run in the same interpreter.
+    old_limit = sys.getrecursionlimit()
     sys.stdout = buf
     t0 = time.perf_counter()
     try:
@@ -286,6 +289,7 @@ def execute(code, spec, args):
         err = "\n".join(keep[-12:])
     finally:
         sys.stdout = old
+        sys.setrecursionlimit(old_limit)
     ms = (time.perf_counter() - t0) * 1000
     return got, buf.getvalue()[-4000:], err, ms
 
