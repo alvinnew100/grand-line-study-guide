@@ -846,7 +846,7 @@
       tracks: [["python", "Python Mastery"], ["linux-cli", "The Linux Command Line"], ["git", "Git"], ["vim", "Practical Vim"]] },
     { title: "Interview coding", why: "Every junior posting asks for data structures and algorithms, and the coding round tests them. Keep a few problems going every day from here on.",
       tracks: [["dsa-foundations", "DSA Foundations"], ["neet-arrays", "Arrays, Hashing & Two Pointers"], ["neet-window-stack", "Sliding Window, Stack & Binary Search"],
-        ["neet-linked-trees", "Linked Lists, Trees & Tries"], ["neet-heap-graphs", "Heaps, Backtracking & Graphs"], ["neet-dp", "Dynamic Programming"], ["neet-greedy-math", "Greedy, Intervals, Math & Bits"],
+        ["neet-linked-trees", "Linked Lists, Trees & Tries"], ["neet-heap-graphs", "Heaps, Backtracking & Graphs"], ["neet-dp", "Dynamic Programming"], ["neet-greedy-math", "Greedy, Intervals, Math & Bits"], ["dsa-js", "DSA in JavaScript"],
         ["interview-prep", "Cracking the Coding Interview"], ["behavioural", "Behavioural Interviews"]] },
     { title: "SQL and data stores", why: "SQL is the second most requested skill in Singapore postings and has its own interview round.",
       tracks: [["sql", "SQL"], ["databases", "Databases & Data-Intensive Systems"], ["redis", "Redis"], ["mongodb", "MongoDB"]] },
@@ -866,7 +866,7 @@
   ];
   const ROLES = [
     ["Backend engineer", ["python", "git", "behavioural", "linux-cli", "dsa-foundations", "neet-arrays", "sql", "java", "spring", "docker", "aws", "system-design", "jira"]],
-    ["Full-stack engineer", ["python", "git", "behavioural", "dsa-foundations", "neet-arrays", "sql", "javascript", "typescript", "react", "nodejs", "docker", "system-design", "jira"]],
+    ["Full-stack engineer", ["python", "git", "behavioural", "dsa-foundations", "neet-arrays", "dsa-js", "sql", "javascript", "typescript", "react", "nodejs", "docker", "system-design", "jira"]],
     ["AI / ML engineer", ["python", "git", "behavioural", "dsa-foundations", "neet-arrays", "sql", "statistics", "ml", "deep-learning", "ai-eng", "llm-practice", "fastapi", "docker", "mlops"]],
   ];
   function nextTrack() {
@@ -1541,7 +1541,7 @@
   const lessonCost = (l) => Math.max(5, Math.round(((l.words || 0) / 180) * 1.3));
   const dsaTracks = () => PATH[PL.dsaStage].tracks.map((x) => x[0]);
   const probMeta = (pid) => { const loc = DATA.problemTrack[pid]; return loc && DATA.tracks[loc.track] ? DATA.tracks[loc.track].problemIndex[pid] : null; };
-  const coreTracks = () => PL.core.flatMap((i) => PATH[i].tracks.map((x) => x[0])).filter((id) => DATA.tracks[id]);
+  const coreTracks = () => PL.core.flatMap((i) => PATH[i].tracks.map((x) => x[0])).filter((id) => DATA.tracks[id] && id !== "dsa-js"); // dsa-js repeats the pattern problems in JS: opt-in only
 
   // Depth "essentials" (default for new plans): neet-* lessons + Easy/Medium problems; python and
   // dsa-foundations lessons + the first problem of each module; every other track its interview,

@@ -170,6 +170,23 @@
   "problems": 60
  },
  {
+  "id": "dsa-js",
+  "title": "DSA in JavaScript",
+  "icon": "🎻",
+  "blurb": "Solve the core NeetCode interview problems in JavaScript: the language details that trip people up (sorting, numbers, Map vs object, shift), the data structures JavaScript lacks (heap, deque, linked nodes), and runnable JS versions of every major pattern.",
+  "color": "#d4a72c",
+  "sources": [
+   "NeetCode roadmap (NeetCode 150)",
+   "ECMAScript Language Specification (Array.prototype.sort, Number, BigInt, bitwise operators)",
+   "MDN Web Docs: Map, Set, Array, String, Number, BigInt, Math",
+   "Goodrich, Tamassia & Goldwasser, Data Structures and Algorithms in Python (heaps, graphs, chapters 9 and 14)"
+  ],
+  "words": 35232,
+  "modules": 6,
+  "lessons": 12,
+  "problems": 66
+ },
+ {
   "id": "interview-prep",
   "title": "Cracking the Coding Interview",
   "icon": "🎯",
