@@ -502,6 +502,25 @@
   "problems": 22
  },
  {
+  "id": "jira",
+  "title": "Jira & Agile Delivery",
+  "icon": "🗂️",
+  "blurb": "Agile, Scrum and Kanban from the official guides, then Jira the way engineering teams really use it: work items, workflows, boards, sprints, JQL, reports and their misuse, automation and smart commits - with interactive boards, a JQL playground and auto-graded metric and query problems.",
+  "color": "#2684ff",
+  "sources": [
+   "Schwaber & Sutherland, The Scrum Guide (2020), https://scrumguides.org/scrum-guide.html",
+   "The Kanban Guide (May 2025), https://kanbanguides.org/english/",
+   "Manifesto for Agile Software Development and its principles, https://agilemanifesto.org/",
+   "Atlassian Support, Jira Cloud documentation (JQL, workflows, boards, reports, smart commits, automation)",
+   "Atlassian Agile Coach, https://www.atlassian.com/agile",
+   "DORA metrics guide, https://dora.dev/guides/dora-metrics/"
+  ],
+  "words": 76502,
+  "modules": 10,
+  "lessons": 26,
+  "problems": 22
+ },
+ {
   "id": "nginx",
   "title": "NGINX: Web Server, Reverse Proxy & Load Balancer",
   "icon": "🚦",

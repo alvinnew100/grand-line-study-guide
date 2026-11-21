@@ -712,7 +712,7 @@
       tracks: [["java", "Java"], ["spring", "Spring Boot"], ["go", "Go"], ["fastapi", "FastAPI & Backend"], ["javascript", "JavaScript"], ["typescript", "TypeScript"],
         ["nodejs", "Node.js"], ["graphql", "GraphQL & API Design"], ["django", "Django"]] },
     { title: "Cloud and DevOps", why: "AWS, containers and automation show up in a large and rising share of postings.",
-      tracks: [["docker", "Docker & Containers"], ["kubernetes", "Kubernetes"], ["aws", "AWS"], ["terraform", "Terraform"], ["cicd", "CI/CD"], ["nginx", "NGINX"]] },
+      tracks: [["docker", "Docker & Containers"], ["kubernetes", "Kubernetes"], ["aws", "AWS"], ["terraform", "Terraform"], ["cicd", "CI/CD"], ["jira", "Jira & Agile Delivery"], ["nginx", "NGINX"]] },
     { title: "System design and architecture", why: "The design round, and the open-ended questions around it.",
       tracks: [["networking", "Computer Networking"], ["system-design", "System Design Interview"], ["microservices", "Microservices"], ["web-security", "Web Application Security"], ["thinking", "Open-Ended Engineering Questions"]] },
     { title: "How computers work", why: "The fundamentals behind 'what happens when' questions.",
@@ -723,8 +723,8 @@
       tracks: [["html-css", "HTML & CSS"], ["react", "React with Firebase"], ["js-testing", "JavaScript Testing"]] },
   ];
   const ROLES = [
-    ["Backend engineer", ["python", "git", "behavioural", "linux-cli", "dsa-foundations", "neet-arrays", "sql", "java", "spring", "docker", "aws", "system-design"]],
-    ["Full-stack engineer", ["python", "git", "behavioural", "dsa-foundations", "neet-arrays", "sql", "javascript", "typescript", "react", "nodejs", "docker", "system-design"]],
+    ["Backend engineer", ["python", "git", "behavioural", "linux-cli", "dsa-foundations", "neet-arrays", "sql", "java", "spring", "docker", "aws", "system-design", "jira"]],
+    ["Full-stack engineer", ["python", "git", "behavioural", "dsa-foundations", "neet-arrays", "sql", "javascript", "typescript", "react", "nodejs", "docker", "system-design", "jira"]],
     ["AI / ML engineer", ["python", "git", "behavioural", "dsa-foundations", "neet-arrays", "sql", "statistics", "ml", "deep-learning", "ai-eng", "llm-practice", "fastapi", "docker", "mlops"]],
   ];
   function nextTrack() {
