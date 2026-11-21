@@ -302,6 +302,110 @@ gh api repos/example/orders/deployments --jq '.[0] | {sha, environment, creator:
 
 Each command asks a system of record a question; none relies on anyone's memory. Compare that with reconstructing the history of a manual release from emails.
 
+## Part 4: the project lifecycle and where each practice fits
+
+The first three parts treated maturity, risk and compliance as if they were always the same. In reality they matter differently at different moments in a project's life. This part walks through a simple five-phase picture of a piece of software, from the first idea to years of running it, and shows what delivery practices belong in each phase. Use it as a checklist: if you join a project, ask which phase it is in and whether the practices of that phase are in place.
+
+A **lifecycle** is the sequence of stages something passes through from beginning to end, like a person moving from childhood to old age. A project has no fixed stage lengths, and real projects bend the model, but five phases are common enough to be useful.
+
+```mermaid
+flowchart LR
+  A["1 Identification: why do this"] --> B["2 Inception: scope and plan loosely"]
+  B --> C["3 Initiation: build the scaffolding"]
+  C --> D["4 Develop and release: small iterations"]
+  D --> E["5 Operation: run, learn, keep improving"]
+  E -.->|"new features and fixes use the same loop"| D
+```
+
+### Phase 1: identification
+
+Before anyone writes a requirement, the organisation decides *whether the work is worth doing at all*. Companies set strategic goals, turn them into programs of work, and break each program into projects. The key item here is the **business case**: a short argument saying what value the project should create (money earned or saved, risk removed, customers kept) and roughly what it will cost. Without one, nobody can say what success looks like, and nobody can fairly rank competing requests, because ranking needs a yardstick. The same is true of services built for internal users.
+
+Two more things should exist before requirements gathering starts:
+
+- A named **business sponsor**: the one person who owns the outcome and makes the final calls (called the product owner in Scrum, the *senior responsible owner* in a method named PRINCE2, and simply the customer in other agile approaches). One sponsor, not a committee, because a project with several people who each think they are in charge tends to stall in arguments.
+- A list of **stakeholders**: everyone affected by the project or able to affect it, such as operations staff, support, sales, security, the users and the development and test teams. A **steering committee** of senior stakeholders can advise the sponsor.
+
+*How delivery practices apply:* few engineering tools yet, but the thinking sets the direction. Ask early whether the idea can be released in small pieces, because the answer decides whether later phases can be iterative.
+
+### Phase 2: inception
+
+Inception is the phase **before any production code is written**. It can feel like a low-value delay to people who love to build, yet projects that skip it tend to pay for the omission later. The aim is to reach a *shared* understanding and then make a go or no-go decision.
+
+Typical outputs are:
+
+- the business case, with its estimated value;
+- a list of high-level functional requirements (what the software does) and non-functional requirements (how well it does it: capacity, availability, continuity, security), detailed just enough to estimate;
+- a release plan with a rough schedule and cost;
+- a **testing strategy** (which kinds of automated and manual tests, where they run);
+- a **release strategy** (how and how often software will reach users, including how releases will be rolled back);
+- an architectural evaluation that picks the platform and main frameworks;
+- a **risk and issue log** (a risk is something that may go wrong, an issue is something that already has);
+- a description of the development process and a plan to carry out all of the above.
+
+The authors argue the most valuable result is not any document but the conversation: getting developers, customers, operations people and management in the same room (physically or on a call) so that misunderstandings surface on day one. Write the results down and keep them in **version control**, so everyone sees the current version and can see how it changed.
+
+A warning worth remembering: inception is when you know the *least* you will ever know about the project. Every estimate and design made now is a guess. Spend effort on broad decisions (which platform, which risks) and avoid detailed plans or designs, which will be thrown away. A reasonable horizon is to have something delivered within three to six months, preferably sooner.
+
+*How delivery practices apply:* decide the test and release strategies now, and put deployment, environments and data migration on the plan. If you only discover in month ten that production needs a three-week approval process, you have learned it too late. The first entries in the **risk register** (Part 2) are made at the end of this phase.
+
+### Phase 3: initiation
+
+Initiation is a short phase, typically one or two weeks, in which the team builds the **scaffolding** it will need: the equivalent of setting up the workshop before building the furniture. Typical tasks:
+
+- Make sure people have working computers, tools, accounts and permissions. A team handed slow machines and no access starts demoralised.
+- Create the version-control repository.
+- Set up a basic **continuous integration** server that builds and tests every commit.
+- Create a simple test environment and some test data.
+- Agree on roles, meeting times and the first week's work (targets rather than deadlines).
+- Start a backlog (the ordered list of things to build).
+- Run **spikes**: small throwaway experiments that answer a technical question, such as "can this library handle our data volume?"
+- Choose the simplest real requirement and implement it end to end, the architectural "hello world": one thin slice that goes from a commit, through the build and automated tests, to a deployed test environment where someone can see it.
+
+That last item is the most important and the easiest to skip. Setting up a pipeline with nothing to push through it, or a test environment with nothing to test, teaches little. A tiny but real feature forces every piece of plumbing to work together. The thin slice is the seed of the **deployment pipeline** from earlier lessons, and it is far cheaper to grow than to retrofit.
+
+*How delivery practices apply:* this is where the pipeline, version control and the first environments are born. It is also the phase to introduce **traceability** (Part 3): if every change flows through the pipeline from the beginning, audit evidence accumulates for free, rather than being reconstructed later.
+
+### Phase 4: develop and release
+
+Now the team builds the product in **iterations**: short, fixed-length periods (two weeks at most, in the authors' view) in which a slice of working software is produced. The authors list three basic conditions for calling a process iterative:
+
+1. The software is *always working*, shown by an automated suite (unit, component and end-to-end acceptance tests) that runs on every check-in.
+2. Working software is deployed at the end of every iteration into a production-like environment where users can see it. That is what makes the process *incremental* as well as iterative.
+3. Iterations are short.
+
+Why bother? Value arrives early, because the most valuable features come first. Feedback from the sponsor and users is regular (nobody knows exactly what they want at the beginning). Work is only "done" when the customer agrees. The team stays disciplined, because broken software cannot be shown. And progress becomes *objective*: instead of charts built on guesses about time remaining, you can count features that work and that users accept.
+
+"Production-ready" also covers non-functional requirements. Capacity, availability and security should be tested automatically on a production-like environment with realistic data volumes and load, against every build that passes acceptance tests, not saved for a "hardening phase" at the end.
+
+The book names three common reasons the popular process Scrum fails: lack of commitment (people avoid the transparency it brings), ignoring good engineering (no process fixes a code base without tests and refactoring), and "adapting" the process until it is no longer agile. Nokia once used a short test to check whether teams were doing Scrum: iterations under four weeks, features tested and working at the end of each, and an iteration that starts before the specification is complete.
+
+*How delivery practices apply:* this phase is where almost everything in this track lives: the commit stage, acceptance and capacity tests, automated deployment and the release strategy from inception. The **risk register** is revisited regularly here, and the compliance controls (separation of duties, signed artifacts, approvals recorded by the pipeline) run on every change.
+
+### Phase 5: operation
+
+The first release is rarely the last. After going live, the team may shrink, stay the same or grow, but the interesting point is that in a genuinely iterative project **operation is not very different from development**. New features and fixes are still identified, prioritised, built, tested and released using the same pipeline. Collapsing the old divide between "project" and "maintenance" is one of the best ways to reduce risk, and is the heart of continuous delivery.
+
+The authors advise releasing to real users as early as makes sense, since their feedback is the best you can get. After the first public release, though, some things get harder: you now have **live data** that must survive every change, and public interfaces that other people depend on. Database changes and interface changes need care (see the data lessons in this track), and monitoring becomes a first-class activity.
+
+*How delivery practices apply:* the same pipeline ships the fixes, with the same checks. Add monitoring, alerting and a practised rollback. Compliance continues: retained pipeline logs are the audit trail for years of changes.
+
+### The lifecycle at a glance
+
+| Phase | Typical length | Main question | Delivery practices to establish |
+|---|---|---|---|
+| Identification | Weeks | Is this worth doing? | Business case, one sponsor, stakeholder list |
+| Inception | Weeks | What is it roughly, and what could go wrong? | Test and release strategies, non-functional requirements, first risk log, go or no-go |
+| Initiation | One to two weeks | Can we build and ship a thin slice? | Version control, continuous integration, test environment, hello-world slice |
+| Develop and release | Months | Is it always working and always showable? | Pipeline, automated acceptance and capacity tests, short iterations, regular showcases |
+| Operation | Years | Are users well served, and can we keep changing it safely? | Same pipeline for fixes, monitoring, data and interface care, audit trail |
+
+> [!TIP]
+> Notice that risk management follows the phases. Start the risk log at the end of inception, review it at the end of initiation and then revisit it regularly during development and operation. A risk list written once and filed away protects nobody.
+
+> [!INTERVIEW]
+> **"At what point in a project should you start thinking about deployment?"** "At inception. The release strategy and the environments are part of the plan, and in initiation I would push a thin end-to-end feature through a real pipeline to a test environment, before building anything large. Late discovery that deployment is hard is among the costliest surprises in a project." Follow-up: **"How is operation different from development?"** "In an iterative project it mostly is not: the same loop of prioritise, build, test and release continues. What changes is that live data and public interfaces make changes less forgiving."
+
 ## Pitfalls
 
 - **Using the maturity model as a league table.**
@@ -344,6 +448,14 @@ Each command asks a system of record a question; none relies on anyone's memory.
 - **Change freeze (freeze window)** — a period in which production changes are not allowed.
 - **Policy as code** — rules written as files or programs so that they are applied automatically and versioned.
 - **Service-level agreement (SLA)** — a contractual promise about the reliability of a service.
+- **Lifecycle** — the sequence of phases a project passes through from idea to retirement.
+- **Business case** — the argument for a project: expected value against expected cost.
+- **Business sponsor** — the single person who owns the project's outcome (product owner in Scrum).
+- **Stakeholder** — anyone affected by a project or able to influence it.
+- **Inception** — the phase before production code is written: loose scope, plan, strategies, go or no-go.
+- **Initiation** — the short phase that sets up version control, continuous integration, environments and a first thin slice.
+- **Spike** — a throwaway experiment that answers a technical question.
+- **Iteration** — a short, fixed-length period that ends with working, showable software.
 
 ## Check yourself
 
@@ -377,6 +489,30 @@ Each command asks a system of record a question; none relies on anyone's memory.
    "options": ["It is prettier", "It covers every change, is produced by the systems that performed the work, and is hard to alter afterwards", "Auditors cannot read forms", "It is shorter"],
    "answer": 1,
    "explain": "Complete, system-recorded, tamper-evident records beat sampled, hand-written ones."},
+  {"q": "What is the most important deliverable of inception, according to the lifecycle model?",
+   "options": ["A 200-page design document", "The shared understanding created when all stakeholders discuss the problem, with the documents as structure", "Production code for the first feature", "A fixed delivery date"],
+   "answer": 1,
+   "explain": "The documents are written down to structure the conversations. Detailed designs made when you know least are mostly wasted."},
+  {"q": "Which activity belongs to initiation rather than inception?",
+   "options": ["Writing the business case", "Setting up version control and a basic continuous integration server", "The go or no-go decision", "Naming the business sponsor"],
+   "answer": 1,
+   "explain": "Initiation builds the scaffolding: repository, CI, test environment and a thin end-to-end slice."},
+  {"q": "Why implement a tiny but real feature end to end during initiation?",
+   "options": ["To impress the sponsor", "So that build, tests, deployment and environments are proven to work together before large work begins", "To avoid writing tests", "To skip inception"],
+   "answer": 1,
+   "explain": "A pipeline with nothing flowing through it hides problems. A thin real slice exercises every piece of plumbing."},
+  {"q": "In an iterative project, how does the operation phase differ from development?",
+   "options": ["It uses a different team and process", "Very little: new work is still prioritised, built, tested and released through the same pipeline", "Testing stops", "Releases become yearly"],
+   "answer": 1,
+   "explain": "Merging project and maintenance into one continuous loop is a core idea of continuous delivery. Live data and public interfaces just raise the cost of mistakes."},
+  {"q": "When should the risk register be started and reviewed?",
+   "options": ["Only at release", "Started at the end of inception, revisited at the end of initiation and then regularly", "Once, at identification, then archived", "Only after an incident"],
+   "answer": 1,
+   "explain": "Risks change as the project learns more, so the register must be a living document."},
+  {"q": "Which is NOT one of the three basic conditions for calling a process iterative?",
+   "options": ["The software is always working, proven by automated tests", "Working software is deployed to a production-like environment each iteration", "Iterations are short", "The full specification is complete before the first iteration"],
+   "answer": 3,
+   "explain": "An iteration starts before the specification is complete. Feedback from working software is what refines it."},
   {"q": "What is a hidden danger of long change freezes?",
    "options": ["Servers overheat", "Changes pile up, so the first release after the freeze is large and risky", "Tests stop running", "Git stops accepting commits"],
    "answer": 1,
