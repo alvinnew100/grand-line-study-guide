@@ -1,37 +1,37 @@
 # Dimensionality reduction: PCA, NMF and t-SNE
 
-Transforming data with unsupervised learning has three common motivations: **visualisation**,
-**compression**, and **finding a representation that is more informative** for later processing. This
-lesson covers the three algorithms Müller & Guido present: principal component analysis (the workhorse),
-non-negative matrix factorisation (for parts-based features) and t-SNE (for 2-D visualisation).
+> **Before this lesson:** you need scaling and the `fit`/`transform` pattern from [Preprocessing and scaling](#/lesson/ml/preprocessing-scaling). The maths sections use variance, the covariance matrix, eigenvectors and the singular value decomposition from [Linear algebra for ML](#/lesson/ml/linear-algebra) (sections 5 and 6); each is recalled in a sentence where it appears.
+
+## In plain words
+
+The number of features a dataset has is called its **dimensionality**: a table with 30 columns is 30-dimensional. **Dimensionality reduction** means describing each sample with fewer numbers while losing as little information as possible.
+
+Think of photographing a sculpture. The sculpture is three-dimensional and the photo is flat, so something is lost, but the angle matters enormously. A shot from the front shows the shape; a shot from directly above shows a blob. Dimensionality reduction is the search for the most revealing angle.
+
+There are three reasons to do it: **visualisation** (people can look at two dimensions, not thirty), **compression** (less memory, faster models) and finding a description of the data that is **more useful** to a later model than the raw features. This lesson covers three methods: principal component analysis (the workhorse), non-negative matrix factorisation (which finds additive "parts") and t-SNE (for two-dimensional pictures).
+
+Why this matters for a job: PCA is everywhere, in exploratory analysis, in preprocessing, and in interview questions ("explain PCA", "how do PCA and SVD relate?", "why can't you trust distances in a t-SNE plot?").
 
 ## 1. Principal component analysis (PCA)
 
-PCA **rotates** the dataset so that the rotated features are statistically uncorrelated. The rotation is
-often followed by keeping only a subset of the new features, chosen by how important they are for
-explaining the data.
+Suppose a cloud of data points has the shape of a cigar lying diagonally. Describing each point by its horizontal and vertical position is wasteful: the two numbers rise and fall together, so each partly repeats the other. It would be better to describe each point by "how far along the cigar" and "how far off its centre line". The first number alone captures most of what distinguishes one point from another.
 
-The algorithm, in words:
+**Principal component analysis** finds those new axes automatically. It **rotates** the coordinate system to line up with the directions in which the data is most spread out. The algorithm in words:
 
-1. Find the direction of **maximum variance**. This direction holds the most information, and it is
-   *component 1*.
-2. Find the direction with the most variance among those **orthogonal** to the first. This is *component 2*.
-3. Continue until you have as many components as features.
+1. Find the direction along which the data has the largest **variance** (spread). A direction with a lot of spread carries a lot of information about how samples differ. This is *component 1*.
+2. Among all directions at right angles (**orthogonal**) to the first, find the one with the largest variance. This is *component 2*.
+3. Continue until there are as many components as original features.
 
-The directions are the **principal components**. To transform, subtract the mean (so the data is centred
-at zero) and rotate so that the components line up with the axes. In the rotated data the features are
-uncorrelated. To reduce dimension, keep only the first $k$ components.
+These directions are the **principal components**. To transform the data, subtract each feature's mean (so the cloud is centred on zero) and express every point in the new axes. Two things are true of the result. The new features are **uncorrelated**: none can be predicted from another by a straight-line rule. And they are sorted by importance, so to reduce the dimensionality you keep the first $k$ and drop the rest.
 
 ### The maths
 
-With centred data $X_c$ and the SVD $X_c = USV^\top$:
+Let $X_c$ be the data matrix with each column's mean subtracted (the **centred** data), with $n$ rows and $p$ columns. The singular value decomposition (SVD) splits it into three matrices, $X_c = USV^\top$, where $S$ holds the singular values $s_1 \ge s_2 \ge \dots$ on its diagonal. Everything PCA produces can be read off:
 
-- the principal directions are the rows of $V^\top$ (`pca.components_`, shape `(k, p)`);
-- the projected data are $Z = X_cV_k = U_kS_k$ (`pca.transform(X)`);
-- the variance of component $j$ is $s_j^2/(n-1)$ (`explained_variance_`), and
-  `explained_variance_ratio_` is $s_j^2/\sum_i s_i^2$;
-- the reconstruction is $\hat X = ZV_k^\top + \bar x$ (`inverse_transform`). Among all rank-$k$ linear
-  projections, this one has the smallest squared reconstruction error.
+- the principal directions are the rows of $V^\top$. scikit-learn stores them in `pca.components_`, with shape `(k, p)`: one row per component, one column per original feature;
+- the new coordinates of the samples are $Z = X_cV_k = U_kS_k$, where the subscript $k$ means "keep the first $k$ columns". This is what `pca.transform(X)` returns;
+- the variance along component $j$ is $s_j^2/(n-1)$ (`explained_variance_`). Its share of the total, $s_j^2/\sum_i s_i^2$, is the **explained variance ratio** (`explained_variance_ratio_`): the fraction of the data's total spread that this one component accounts for;
+- going back is $\hat X = ZV_k^\top + \bar x$ (`inverse_transform`): rotate back and add the mean $\bar x$. If components were dropped, $\hat X$ is an approximation of the original data, called the **reconstruction**. Of all the ways to describe the data with $k$ numbers per sample using straight-line combinations of the features, PCA's has the smallest squared reconstruction error.
 
 ```python-run
 import numpy as np
@@ -53,11 +53,18 @@ Z = pca.transform(X)
 print("covariance of transformed data (off-diagonals ~ 0):\n", np.cov(Z.T).round(3))
 ```
 
+**Reading this code line by line**
+
+- The long line builds the diagonal cigar: 300 random points, stretched (by 2 along one axis and 0.4 along the other), rotated so the long axis points along the direction (0.8, 0.6), and moved so the centre is at (5, −3).
+- `PCA(n_components=2).fit(X)` learns the mean and the two components. `pca.mean_` prints about (5, −3), the centre we chose.
+- `pca.components_` prints the two directions as rows. The first is about (0.80, 0.60): PCA has recovered the cigar's long axis without being told it.
+- `explained_variance_ratio_` is (0.962, 0.038): 96% of the spread lies along the first component.
+- The next block repeats the calculation by hand: centre, take the SVD, read the directions from `Vt` and the ratios from the squared singular values. The numbers match, except that the signs of a direction may be flipped (section 5 explains why that is harmless).
+- The last lines transform the data and print its covariance matrix (`np.cov`). The entries off the diagonal are 0: the new features are uncorrelated.
+
 ### PCA for visualisation
 
-The breast-cancer dataset has 30 features, which makes 435 possible pairwise scatter plots. PCA lets you
-look at one 2-D picture that captures the main interactions. **Scale first**, because PCA finds directions
-of maximum variance and a feature with large units would dominate.
+The tumour dataset has 30 features. Looking at them two at a time would take 435 charts. PCA gives one two-dimensional view that captures the main variation. **Scale the features first**: PCA looks for the largest variance, and a feature recorded in large units would win for that reason alone.
 
 ```python-run
 import numpy as np
@@ -77,15 +84,13 @@ top = np.argsort(np.abs(pca.components_[0]))[::-1][:4]
 print("largest loadings on PC1:", [str(cancer.feature_names[i]) for i in top])
 ```
 
-PCA never saw the labels, yet the two classes separate well along the first component. Even a linear
-classifier in this 2-D space would do reasonably well. The downside the book notes: **the axes are hard to
-interpret**. Each component is a combination of all 30 original features, and the coefficients in
-`components_` (the *loadings*) mix them together.
+After standardising, PCA reduces the table from 30 columns to 2, and those two components hold 63% of the total variance. `Z[cancer.target == c, 0]` selects the first component's values for the tumours of one class; the malignant tumours average 3.71 on it and the benign ones −2.21. PCA never saw the labels, yet the two classes fall on opposite sides of the first component. A chart of the two components would show two fairly distinct clouds.
+
+The drawback is that **the new axes are hard to interpret**. Each component is a weighted mix of all 30 original features. The weights, the entries of `components_`, are called **loadings**. The last two lines list the four features with the largest loadings on the first component, which gives a hint of what it measures (here, how indented the tumour's outline is), but "0.26 times this plus 0.26 times that, and so on for 30 terms" is not a quantity a doctor can reason about.
 
 ### How many components?
 
-Look at the cumulative explained variance, or let scikit-learn choose: `PCA(n_components=0.95)` keeps
-enough components to explain 95% of the variance.
+Add up the explained variance ratios in order to get the **cumulative explained variance**, and keep enough components to reach a target such as 95%. scikit-learn will do it for you: `PCA(n_components=0.95)` keeps as many components as are needed to explain 95% of the variance.
 
 ```python-run
 import numpy as np
@@ -99,17 +104,15 @@ for k in [2, 5, 10, 20, 40]:
 print("components needed for 95%:", PCA(n_components=0.95).fit(X).n_components_)
 ```
 
+`load_digits` is a set of 1,797 small images of handwritten digits. Each image is 8 × 8 pixels, flattened into a row of 64 brightness values. `PCA()` with no argument keeps every component, and `np.cumsum` gives the running total of the ratios. Two components hold 28.5% of the variance, ten hold 73.8%, and 29 are enough for 95%: more than half the columns can be dropped at the cost of 5% of the variance.
+
 ### PCA for feature extraction: eigenfaces
 
-The book's second application uses face images (Labeled Faces in the Wild). Pixels are a poor
-representation: comparing two images pixel by pixel breaks down if a face shifts by one pixel. With
-`PCA(n_components=100, whiten=True)`, each face is expressed as a weighted sum of 100 "eigenfaces".
-**Whitening** rescales the components to unit variance. A 1-nearest-neighbour classifier then improved
-from about 23% to about 31% accuracy on 62 people. The components capture things like lighting direction
-and contrast between face and background. They are not how a human perceives faces, but they give a more
-useful distance measure. The small digits dataset below is already centred and aligned, so raw pixels work
-well there and PCA does not improve accuracy. What it shows is **compression**: 16 numbers per image keep
-almost all of the accuracy of 64 pixels.
+A classic use of PCA is on photographs of faces. Raw pixels are a poor way to compare two pictures: shift a face one pixel sideways and almost every pixel value changes, though it is the same face. With PCA, each face is rewritten as a weighted sum of a hundred or so component images, nicknamed **eigenfaces**, which capture broad patterns such as the direction of the lighting or the contrast between face and background. Distances between those weights are more meaningful than distances between pixels, and a nearest-neighbour classifier on the faces becomes noticeably more accurate (in the source book's experiment on 62 people, about 31% correct instead of about 23%).
+
+The option `whiten=True` adds one step: after the rotation, each component is rescaled to variance 1, as if `StandardScaler` were applied to the new features. That stops the first few components from dominating distances.
+
+The face images need a download, so the demonstration below uses the digit images. They are already centred and aligned, so raw pixels work well and PCA does not raise the accuracy. What it shows instead is **compression**.
 
 ```python-run
 import numpy as np
@@ -128,32 +131,23 @@ for k in [2, 8, 16, 32]:
     print(f"k={k:2d}: 1-NN accuracy={acc:.3f}  reconstruction MSE={np.mean((X_te - rec) ** 2):.2f}")
 ```
 
+A 1-nearest-neighbour classifier on all 64 pixels scores 0.991. The loop then fits PCA on the training images only (the same rule as for scalers), transforms both sets, and classifies using only $k$ numbers per image. With 2 components the accuracy is 0.538; with 16 it is 0.982. Sixteen numbers per image, a quarter of the original, keep nearly all of the accuracy. The last column is the **reconstruction error**: transform the test images, transform them back with `inverse_transform`, and measure the mean squared difference from the originals. It falls steadily as components are added.
+
 > [!INTERVIEW]
-> **"Explain PCA and its limits."** It is a linear, unsupervised method that finds orthogonal directions of
-> maximum variance (the eigenvectors of the covariance matrix, computed by SVD of the centred data). It is
-> used for compression, de-correlation, noise reduction and visualisation. Limits: it is linear only; it
-> is sensitive to scaling and outliers; the directions of highest variance are not necessarily the most
-> *predictive* ones, because it ignores labels; and the components are hard to interpret.
+> **"Explain PCA and its limits."** It is a linear, unsupervised method that finds orthogonal directions of maximum variance: the eigenvectors of the covariance matrix, computed in practice by an SVD of the centred data. It is used for compression, for removing correlation between features, for reducing noise and for visualisation. Limits: it can only rotate, so it misses curved structure; it is sensitive to scaling and to outliers; the directions of greatest variance are not necessarily the most *predictive* ones, because it ignores the labels; and the components are hard to interpret.
 
 ## 2. Non-negative matrix factorisation (NMF)
 
-NMF also writes each data point as a weighted sum of components, $X \approx WH$. But it requires both the
-**components and the coefficients to be non-negative**. It therefore applies only to data where every
-feature is non-negative, such as pixel intensities, word counts or audio spectrograms.
+Like PCA, **non-negative matrix factorisation** writes each sample as a weighted sum of a few components. In matrix form the data $X$ is approximated by a product $X \approx WH$, where one matrix holds the components and the other holds each sample's weights. The difference is one rule: **every component and every weight must be zero or positive**. NMF therefore applies only to data in which no feature is negative, such as pixel brightness, word counts, or the loudness of each pitch in a sound recording.
 
-Why this helps: with no negative weights, components cannot cancel each other out. The result is an
-**additive, parts-based** decomposition that is often **more interpretable** than PCA. This is especially
-true for data made by overlaying independent sources, such as several people talking or music with many
-instruments. On the faces data, NMF components look like face *parts* and prototypes (faces turned left,
-faces turned right) instead of PCA's global light/dark patterns.
+Why the rule helps: with no negative weights, components cannot cancel one another out. Each one can only *add* something. The result is a description in terms of **parts**, which people often find much easier to interpret than PCA's components. This suits data that really is a sum of separate sources, such as a recording of several people talking at once, or music with several instruments. On images of faces, NMF's components look like recognisable pieces and typical poses, where PCA's look like ghostly overall patterns of light and dark.
 
-Differences from PCA that the book points out:
+Other differences from PCA:
 
-- There is no ordering of components. All play an equal part, and none is "first".
-- **Changing the number of components changes all of them.** NMF with 15 components is not a subset of NMF
-  with 20, unlike PCA.
-- NMF uses random initialisation, so results depend on the seed.
-- It is used mostly for finding patterns, less for reconstruction or encoding.
+- The components have no order. None is "first"; all play an equal part.
+- **Changing the number of components changes all of them.** With PCA, the first 15 components are the same whether you ask for 15 or 20. With NMF they are not.
+- NMF starts from random numbers and improves them step by step, so the result can depend on the random seed.
+- It is used mostly for discovering patterns, and less for compressing data.
 
 ```python-run
 import numpy as np
@@ -176,33 +170,30 @@ print("correlation of each true source with its best PCA component:", best_match
 print("NMF outputs all non-negative:", (H_nmf >= 0).all(), "| PCA outputs non-negative:", (H_pca >= 0).all())
 ```
 
-Other decomposition methods the book points to: independent component analysis (ICA), factor analysis
-(FA) and sparse coding (dictionary learning).
+**Reading this code line by line**
+
+- `S` holds three hidden signals over 400 time steps: a series of humps, a sawtooth and an on/off square wave. None is ever negative. These are the "sources" we pretend not to know.
+- `A` is a 20 × 3 table of random positive mixing weights, and `X = S @ A.T` is what 20 measuring devices would record: each records a different positive blend of the three sources. The task is to recover the sources from `X` alone.
+- `NMF(...).fit_transform(X)` and `PCA(...).fit_transform(X)` each produce three components per time step.
+- `best_match` computes the correlation between every true source and every recovered component (`np.corrcoef`), and reports, for each source, the strongest match. A value of 1.00 means a perfect recovery.
+
+NMF recovers the sources almost exactly (correlations of 1.00, 0.95 and 0.97). PCA's components match them less well (0.83, 0.71, 0.77), because PCA's goal is to capture variance, and it is free to blend the sources and to use negative values to do so.
+
+Related methods you may see named: independent component analysis (ICA), factor analysis (FA) and sparse coding, also called dictionary learning.
 
 ## 3. Manifold learning with t-SNE
 
-PCA is often a good first step for visualisation, but being a rotation, it is limited. **Manifold
-learning** algorithms allow far more complex mappings and often give better pictures. The best known is
-**t-SNE** (t-distributed stochastic neighbour embedding).
+PCA is a good first look at a dataset, but a rotation is a limited tool. If the samples lie on a curved surface inside the high-dimensional space (such a surface is called a **manifold**), no rotation can flatten it. **Manifold learning** methods allow much more flexible mappings and often give far better pictures. The best known is **t-SNE** (t-distributed stochastic neighbour embedding). The output of such a method, a position in two dimensions for every sample, is called an **embedding**.
 
-How it works: t-SNE starts with a random 2-D position for each point, then moves the points so that points
-**close in the original space stay close** and points far apart stay far apart. It puts much more weight on
-preserving *neighbours* than on preserving large distances. Technically, it turns distances into
-neighbour probabilities in both spaces and minimises the KL divergence between them. It uses a
-heavy-tailed Student-t distribution in the low-dimensional space, which gives clusters room to spread out.
+How it works: t-SNE places every sample at a random position on a flat page, then repeatedly nudges the positions so that samples which were **close neighbours in the original space end up close on the page**. It cares much more about keeping neighbours together than about getting large distances right. Technically, it converts distances into probabilities of "being neighbours", once in the original space and once on the page, and adjusts the positions to make the two sets of probabilities agree, measured by the KL divergence (a measure of the gap between two probability distributions, from the probability lesson). On the page it uses a distribution with heavy tails, the Student t-distribution that gives the method its name, which leaves room for separate groups to spread apart.
 
 Properties to remember:
 
-- It only has `fit_transform`. There is **no `transform` for new data**, so it is for exploratory
-  visualisation, not for preprocessing a test set.
-- It is completely unsupervised, yet on the handwritten digits it separates the ten classes far more
-  cleanly than the first two principal components do.
-- Tuning parameters are `perplexity` (roughly the neighbourhood size; 5–50 is the typical range) and
-  `early_exaggeration`. The defaults usually work.
-- **Reading t-SNE plots**: cluster *sizes* and the *distances between clusters* mean little, and different
-  seeds give different layouts. Only the neighbourhood structure is trustworthy.
-- It is slow for large $n$. A common trick is to reduce to about 50 dimensions with PCA first. **UMAP** is
-  a popular faster alternative.
+- It has only `fit_transform`. There is **no `transform` for new data**: you cannot place a fresh sample into an existing picture. It is a tool for exploring a dataset, not a preprocessing step for a model.
+- It uses no labels, yet on the handwritten digits it separates the ten digits far more cleanly than the first two principal components.
+- Its main setting is `perplexity`, roughly the number of neighbours each point pays attention to (values from 5 to 50 are typical). The default usually works.
+- **Reading a t-SNE picture**: the *sizes* of the groups and the *distances between groups* mean very little, and a different random seed gives a different layout. Only which points are neighbours can be trusted.
+- It is slow on large datasets. A common trick is to reduce to about 50 dimensions with PCA first. **UMAP** is a popular, faster alternative with similar aims.
 
 ```python-run
 import numpy as np
@@ -222,48 +213,39 @@ for name, Z in [("PCA  ", Z_pca), ("t-SNE", Z_tsne)]:
     print(f"{name} 2-D embedding: neighbours share a digit label {acc:.1%} of the time")
 ```
 
+Both methods reduce 300 digit images from 64 dimensions to 2. Since charts are not available here, the quality of each picture is measured instead: a 5-nearest-neighbour classifier is run *inside* the two-dimensional picture, which asks how often a point's neighbours on the page show the same digit. In the PCA picture that happens 70% of the time; in the t-SNE picture, 97%. The labels are used only for this check, not by either method. This demo takes a few seconds, because t-SNE is the slowest method in the lesson.
+
 ## 4. Choosing a method
 
 | goal | method |
 |---|---|
-| compress or de-correlate features before a model | PCA (in a pipeline, fitted on training data) |
-| quick linear 2-D look at the data | PCA |
+| compress features, or remove correlation between them, before a model | PCA, fitted on the training data, inside a pipeline |
+| a quick two-dimensional look at the data | PCA |
 | interpretable additive parts from non-negative data | NMF |
-| the best 2-D picture of cluster structure | t-SNE or UMAP (exploration only) |
-| sparse high-dimensional text counts | `TruncatedSVD` (PCA without centring, keeps sparsity) |
+| the clearest two-dimensional picture of groups in the data | t-SNE or UMAP, for exploration only |
+| sparse data with very many features, such as word counts | `TruncatedSVD`, which is PCA without the centring step and so keeps the data sparse |
 
 ## 5. Worked example: PCA on four points by hand
 
-A calculation small enough to follow on paper shows every step. Take four 2-D points:
-$(2, 0)$, $(0, 2)$, $(4, 2)$, $(2, 4)$.
+A calculation small enough to follow on paper shows every step. Take four points with two features: $(2, 0)$, $(0, 2)$, $(4, 2)$, $(2, 4)$.
 
-**Step 1: centre.** The mean is $(2, 2)$. The centred points are $(0,-2)$, $(-2,0)$, $(2,0)$, $(0,2)$.
+**Step 1: centre.** The mean of each feature is 2, so subtract $(2, 2)$ from every point. The centred points are $(0,-2)$, $(-2,0)$, $(2,0)$, $(0,2)$.
 
-**Step 2: covariance matrix.** With $n-1 = 3$ in the denominator,
+**Step 2: covariance matrix.** Its diagonal holds each feature's variance (the sum of the squared centred values, divided by $n - 1 = 3$) and the other entries hold the covariance (the sum of the products of the two centred coordinates, divided by 3). In matrix form:
 
 $$C = \frac13 X_c^\top X_c = \frac13\begin{pmatrix}8 & 0\\ 0 & 8\end{pmatrix}.$$
 
-Both variances are equal and the covariance is zero. The data is spread equally in every direction, so
-*no direction is preferred*: any pair of orthogonal axes is a valid answer. PCA cannot compress this
-data. Reducing to one dimension loses exactly half of the variance, whichever direction you keep.
+Both variances are equal and the covariance is zero. The points are spread equally in every direction, so *no direction is preferred*: any pair of perpendicular axes is an equally good answer. PCA cannot compress this data. Keeping one dimension loses exactly half of the variance, whichever direction you keep.
 
-Now move the last two points to $(4, 4)$ and $(0, 0)$, so the data is $(2,0)$, $(0,2)$, $(4,4)$, $(0,0)$.
-The mean is $(1.5, 1.5)$ and
+Now change the last two points to $(4, 4)$ and $(0, 0)$, so the data is $(2,0)$, $(0,2)$, $(4,4)$, $(0,0)$. The mean is $(1.5, 1.5)$ and the centred points are $(0.5,-1.5)$, $(-1.5,0.5)$, $(2.5,2.5)$, $(-1.5,-1.5)$. The squares of the first coordinates add up to $0.25 + 2.25 + 6.25 + 2.25 = 11$, and the products of the two coordinates add up to $-0.75 - 0.75 + 6.25 + 2.25 = 7$, so
 
 $$C = \frac13\begin{pmatrix}11 & 7\\ 7 & 11\end{pmatrix}.$$
 
-(The centred points are $(0.5,-1.5)$, $(-1.5,0.5)$, $(2.5,2.5)$, $(-1.5,-1.5)$. The squares of the first
-coordinates sum to 11, and the products of the coordinates sum to 7.)
+**Step 3: eigenvectors.** An eigenvector of a matrix is a direction that the matrix only stretches, and the stretch factor is its eigenvalue; for a covariance matrix the eigenvectors are the principal directions and the eigenvalues are the variances along them. For a symmetric matrix of the form $\begin{pmatrix}a & b\\ b & a\end{pmatrix}$, the eigenvectors are $(1,1)/\sqrt2$ with eigenvalue $a+b$, and $(1,-1)/\sqrt2$ with eigenvalue $a-b$. (Check the first: multiplying the matrix by $(1, 1)$ gives $(a+b, a+b)$, the same direction scaled by $a+b$.) Here the eigenvalues are $18/3 = 6$ and $4/3 = 1.33$.
 
-**Step 3: eigenvectors.** For a symmetric matrix of the form $\begin{pmatrix}a & b\\ b & a\end{pmatrix}$
-the eigenvectors are $(1,1)/\sqrt2$ with eigenvalue $a+b$ and $(1,-1)/\sqrt2$ with eigenvalue $a-b$.
-Here the eigenvalues are $18/3 = 6$ and $4/3$.
+**Step 4: explained variance.** The first component accounts for $6/(6 + 1.33) = 81.8\%$ of the variance. Its direction, the diagonal $(1,1)$, is the line along which the points are most spread out.
 
-**Step 4: explained variance.** The first component explains $18/(18+4) = 81.8\%$ of the variance. Its
-direction, the diagonal $(1,1)$, is the line along which the points are most spread out.
-
-**Step 5: project.** The coordinate of a centred point on the first component is its dot product with
-$(1,1)/\sqrt2$. For $(4,4)$, centred to $(2.5, 2.5)$, that is $5/\sqrt2 = 3.54$.
+**Step 5: project.** A centred point's coordinate on the first component is its dot product with $(1,1)/\sqrt2$. For $(4,4)$, centred to $(2.5, 2.5)$, that is $5/\sqrt2 = 3.54$.
 
 ```python-run
 import numpy as np
@@ -279,18 +261,37 @@ print("sklearn component:", pca.components_[0].round(3), " ratio:", pca.explaine
 print("projections:", pca.transform(X).ravel().round(2))
 ```
 
-The sign of a component is arbitrary: $(1,1)/\sqrt2$ and $(-1,-1)/\sqrt2$ describe the same line. Two
-libraries, or two versions of one library, may return opposite signs. That is why problem *ml-pca-svd*
-fixes a sign convention.
+The code follows the five steps: centre, build the covariance matrix (it prints 3.667 and 2.333, which are $11/3$ and $7/3$), and get the eigenvalues with `np.linalg.eigh` (1.333 and 6, smallest first). scikit-learn's PCA then gives the same component, $(0.707, 0.707)$, which is $(1,1)/\sqrt2$, the same ratio of 0.818, and a projection of 3.54 for the third point.
+
+The sign of a component is arbitrary: $(1,1)/\sqrt2$ and $(-1,-1)/\sqrt2$ describe the same line. Two libraries, or two versions of one library, may return opposite signs. That is why the problem *ml-pca-svd* fixes a sign convention.
 
 ## Summary
 
-- PCA: centre, then rotate onto orthogonal directions of maximum variance (SVD). Keep the top $k$. Scale
-  first. The components are hard to interpret.
-- `explained_variance_ratio_` tells you how much information each component keeps.
-- NMF: non-negative, additive parts. Components are unordered and change with their number.
-- t-SNE: a nonlinear embedding that preserves neighbours. Excellent for visualisation, but it has no
-  `transform` and its global geometry cannot be trusted.
+- PCA: centre the data, then rotate onto perpendicular directions of greatest variance, found by the SVD. Keep the first $k$. Scale the features first. The components are hard to interpret.
+- `explained_variance_ratio_` says how much of the data's spread each component keeps.
+- NMF: non-negative, additive parts. Its components have no order and change when you ask for a different number.
+- t-SNE: a flexible mapping to two dimensions that keeps neighbours together. Excellent for pictures, but it has no `transform`, and the sizes of and distances between groups cannot be trusted.
+
+## Glossary
+
+- **Dimensionality**: the number of features of a dataset.
+- **Dimensionality reduction**: describing each sample with fewer numbers while keeping most of the information.
+- **Principal component analysis (PCA)**: rotating the data onto perpendicular directions of greatest variance.
+- **Principal component**: one of those directions.
+- **Centring**: subtracting each feature's mean.
+- **Uncorrelated**: having no straight-line relationship.
+- **Explained variance ratio**: the share of the data's total variance that one component accounts for.
+- **Loadings**: the weights of the original features in a component (`components_`).
+- **Reconstruction**: the approximation of the original data obtained by transforming back from the reduced form.
+- **Whitening**: rescaling the principal components to variance 1.
+- **Eigenfaces**: the principal components of a set of face images.
+- **Non-negative matrix factorisation (NMF)**: writing non-negative data as a sum of non-negative parts.
+- **Manifold**: a curved surface inside a high-dimensional space on which the data lies.
+- **Embedding**: a position in a low-dimensional space assigned to each sample.
+- **t-SNE**: a manifold-learning method for two-dimensional pictures that preserves neighbourhoods.
+- **Perplexity**: t-SNE's setting for roughly how many neighbours each point attends to.
+
+## Check yourself
 
 ```quiz
 [

@@ -1,20 +1,25 @@
 # Clustering: k-means, agglomerative clustering and DBSCAN
 
-**Clustering** partitions a dataset into groups, called clusters, so that points in one cluster are very
-similar and points in different clusters are different. Like a classifier, a clustering algorithm assigns
-a number to each point. Unlike a classifier, the numbers have no predefined meaning. This lesson covers
-the three algorithms from chapter 3 of Müller & Guido and how to evaluate their output.
+> **Before this lesson:** you need unsupervised learning and scaling from [Preprocessing and scaling](#/lesson/ml/preprocessing-scaling), and Euclidean (straight-line) distance from [The scikit-learn API and your first model](#/lesson/ml/sklearn-first-model), section 10. NumPy broadcasting, used in one demo, was introduced there too and is explained again here.
+
+## In plain words
+
+**Clustering** means sorting items into groups so that the items in a group resemble each other and items in different groups do not, *without anyone saying in advance what the groups are*. Each group is a **cluster**.
+
+Think of sorting a drawer of mixed buttons. Nobody gave you categories, yet you make piles: the small white ones, the big brown ones, the metal ones. You invented the groups by looking at what was similar. A second person might have sorted by number of holes instead, and neither sorting is wrong. That is the nature of clustering: it finds *a* structure, and you must judge whether it is the one you care about.
+
+A clustering algorithm, like a classifier, gives every sample a number. The difference is that the numbers have no meaning fixed beforehand: "cluster 0" is only a name for one of the piles.
+
+Why this matters for a job: clustering is used to segment customers, group similar documents or images, detect unusual records and compress data. In interviews, "how does k-means work and when does it fail?" is asked constantly. This lesson covers three algorithms that define a cluster in three different ways, and then the awkward question of how to tell whether a clustering is any good.
 
 ## 1. k-means
 
-k-means is one of the simplest and most widely used clustering algorithms. It looks for **cluster
-centres** that are representative of regions of the data, by alternating two steps:
+**k-means** is the most widely used clustering algorithm. It describes each cluster by a single point, its **centre** (also called the **centroid**), and puts every sample in the cluster whose centre is nearest. You choose the number of clusters, $k$, and the algorithm looks for good centres by repeating two steps:
 
-1. **Assign** each data point to the closest cluster centre.
-2. **Update** each centre to the mean of the points assigned to it.
+1. **Assign**: put each sample in the cluster of its nearest centre.
+2. **Update**: move each centre to the mean (the average position) of the samples now assigned to it.
 
-It stops when the assignments no longer change. The first centres are chosen from the data (randomly, or
-with the smarter k-means++ scheme below).
+It stops when a round changes no assignments. The starting centres are picked from among the data points.
 
 ```mermaid
 flowchart LR
@@ -25,12 +30,13 @@ flowchart LR
   C -->|no| D[Done]
 ```
 
-The objective being minimised is the **inertia**, the within-cluster sum of squares:
+A tiny example with one feature. The data is 1, 2, 9, 10 and the starting centres are 1 and 2. *Assign*: 1 goes to centre 1; 2, 9 and 10 are all nearer to centre 2. *Update*: the first centre stays at 1; the second moves to the mean of 2, 9, 10, which is 7. *Assign* again: 2 is now nearer to 1 than to 7, so the clusters become {1, 2} and {9, 10}. *Update*: the centres move to 1.5 and 9.5. Another round changes nothing, so the algorithm stops.
+
+What is being made small is the **inertia**: for every sample, take the squared distance to its own cluster's centre, and add them all up.
 
 $$J = \sum_{i=1}^n \lVert x_i - \mu_{c(i)}\rVert^2 .$$
 
-Each step can only lower $J$. The assignment step picks the nearest centre, and the mean is the point that
-minimises summed squared distance. So the algorithm always converges, but only to a **local** minimum.
+Here $x_i$ is sample $i$, $c(i)$ is the cluster it is assigned to, $\mu_{c(i)}$ (mu) is that cluster's centre, and $\lVert\cdot\rVert^2$ is the squared distance. In the example above the final inertia is $0.25 \times 4 = 1$. Each of the two steps can only lower $J$ or leave it unchanged: the assign step moves a sample only to a nearer centre, and the mean is the point with the smallest total squared distance to a group of points. So the algorithm always settles down. It may settle in a **local minimum**, though: an arrangement that no single step can improve but that is not the best one overall. Which one it reaches depends on the starting centres.
 
 ```python-run
 import numpy as np
@@ -51,7 +57,19 @@ for it in range(1, 20):
 print("final centres:\n", centres.round(2))
 ```
 
-With scikit-learn:
+**Reading this code line by line**
+
+- `make_blobs` generates artificial data: 150 points in two dimensions forming three round clumps. It also returns which clump each point came from; the underscore `_` discards that, since clustering must not use it.
+- `rng.choice(len(X), 3, replace=False)` picks three different row numbers at random, and those three data points become the starting centres.
+- `X[:, None, :] - centres[None, :, :]` subtracts every centre from every point. `None` inserts an axis of size 1, so the shapes are (150, 1, 2) and (1, 3, 2), and NumPy stretches both to (150, 3, 2): this is broadcasting. Squaring and summing over the last axis gives `d2`, a 150 × 3 table of squared distances from each point to each centre.
+- `d2.argmin(axis=1)` gives, for each point, the position of its smallest distance: the assign step.
+- `d2[np.arange(len(X)), labels].sum()` picks each point's distance to its own centre and adds them: the inertia.
+- The `new = ...` line is the update step: for each cluster `j`, the mean of the points labelled `j`.
+- The loop stops when the centres no longer move.
+
+The inertia falls quickly, from 1,392.7 to 472.7 to 196.2, then levels off at 170.3 after five rounds. This is the whole algorithm, and the problem *ml-kmeans-step* asks you to write one round of it.
+
+With scikit-learn the same thing is a few lines:
 
 ```python-run
 from sklearn.cluster import KMeans
@@ -66,20 +84,17 @@ print("inertia_:", round(km.inertia_, 1))
 print("predict for new points:", km.predict([[0, 0], [-10, -3]]))
 ```
 
-`labels_` holds the cluster of each training point, and `predict` assigns new points to the closest
-centre without changing the model. The labels themselves are arbitrary. Running again with another seed
-may number the same clusters differently.
+`KMeans(n_clusters=3, n_init=10)` asks for three clusters and runs the algorithm from ten different random starts, keeping the best. After `fit`, `labels_` holds the cluster number of every training point, `cluster_centers_` the centres, and `inertia_` the final inertia (170.3, the same as our hand-written version). `predict` assigns new points to the nearest existing centre without changing the model.
+
+Notice that the centres are the same three points as before but listed in a different order. The cluster numbers are arbitrary; a different seed may number the same clusters differently. Never attach meaning to "cluster 0".
 
 ### Failure cases
 
-Even if you know the "right" number of clusters, k-means may not recover them. Each cluster is defined
-only by its centre, so every cluster is a **convex** shape, and the boundary between two clusters lies
-exactly halfway between their centres. As a result:
+Even when you give it the right number of clusters, k-means may not find the groups you see by eye. Because a cluster is defined by its centre alone, the border between two clusters always runs exactly halfway between their centres, and every cluster is a **convex** region: a shape with no dents, in which the straight line between any two of its points stays inside it. Consequently:
 
-- it assumes all clusters have roughly the **same diameter**. A dense cluster next to a wide one is split
-  badly;
-- it assumes all **directions matter equally**, so stretched (non-spherical) clusters are cut up;
-- it cannot find complex shapes such as the `two_moons` crescents.
+- it assumes clusters are of similar **width**. A small tight cluster beside a wide loose one is divided badly, because the border is drawn halfway between the centres regardless of how wide each cluster is;
+- it assumes all **directions count equally**, so long, stretched clusters are chopped into pieces;
+- it cannot follow curved shapes, such as two interlocking crescents.
 
 ```python-run
 from sklearn.cluster import KMeans
@@ -90,26 +105,21 @@ labels = KMeans(n_clusters=2, n_init=10, random_state=0).fit_predict(X)
 print("k-means on two moons, ARI vs true halves:", round(adjusted_rand_score(y, labels), 2), "(1.0 would be perfect)")
 ```
 
+`make_moons` produces two interlocking crescents, and `fit_predict` fits the model and returns the cluster numbers in one call. `adjusted_rand_score` (explained in section 4) compares the clusters with the true crescents: 1.0 would be perfect agreement and about 0 is what random grouping gives. k-means scores 0.26. It cut the picture with a straight line, putting half of each crescent in each cluster.
+
 ### k-means as vector quantisation
 
-The book draws a parallel between k-means and decomposition methods such as PCA and NMF. Those express a
-point as a *sum* of components. k-means expresses each point with a *single* component, its cluster
-centre. This view is called **vector quantisation**. An interesting consequence is that you can use *more*
-clusters than input dimensions. With 10 clusters on the 2-D two-moons data, the distances to the 10
-centres (`kmeans.transform(X)`) form a 10-dimensional representation in which a linear model can separate
-the moons.
+There is another way to look at k-means. PCA and NMF, from the previous lesson, describe each sample as a *sum* of several components. k-means describes each sample by a *single* component: its cluster centre. Replacing every sample by the nearest of a small set of representative points is called **vector quantisation**.
+
+This view has a surprising consequence: it can be useful to ask for *more* clusters than there are features. With 10 clusters on the two-dimensional crescent data, each sample can be re-described by its distances to the 10 centres (`kmeans.transform(X)` returns exactly that). In this new 10-feature description, a plain linear model can separate the two crescents, which it could not do with the original two features.
 
 ### Practical notes
 
-- **Initialisation**: scikit-learn uses **k-means++**. It picks the first centre at random and each later
-  one with probability proportional to its squared distance from the nearest centre already chosen. It
-  also runs the algorithm `n_init` times and keeps the lowest inertia.
-- **Choosing $k$**: you must specify it. Useful heuristics are the "elbow" of inertia against $k$ and the
-  silhouette score (below). Domain knowledge beats both.
-- **Scale your features**, because distances drive everything.
-- It is fast and scales to large data. `MiniBatchKMeans` handles very large datasets.
-- Drawbacks: random initialisation, restrictive assumptions about cluster shape, and the need to specify
-  $k$.
+- **Starting centres.** scikit-learn uses a method called **k-means++**. It picks the first centre at random, and each later one at random but favouring points far from the centres already chosen, so the starting centres are well spread out. Combined with several restarts (`n_init`), this avoids most poor local minima.
+- **Choosing $k$.** You have to supply it. Two aids are the "elbow" in a table of inertia against $k$ and the silhouette score (both shown below). Knowledge of the subject matter beats both.
+- **Scale the features first**, because everything depends on distances.
+- It is fast and handles large datasets. `MiniBatchKMeans` handles very large ones by working on small random portions at a time.
+- Drawbacks: the result depends on a random start, the assumptions about cluster shape are restrictive, and $k$ must be chosen.
 
 ```python-run
 from sklearn.cluster import KMeans
@@ -122,35 +132,28 @@ for k in range(2, 8):
     print(f"{k:2d}  {km.inertia_:8.1f}   {silhouette_score(X, km.labels_):.3f}")
 ```
 
-Inertia always falls as $k$ grows, so you can't simply minimise it. Look for the elbow, where the drop
-flattens, or for the silhouette peak.
+The data has four true clumps, and the loop runs k-means for every $k$ from 2 to 7. Inertia *always* falls as $k$ grows (with one cluster per point it would be zero), so the smallest inertia is no guide. Look instead for the **elbow**: inertia drops steeply from 4,752 to 1,966 to 503 as $k$ goes from 2 to 4, and then hardly moves (449, 401, 357). The bend at $k = 4$ marks the point where extra clusters stop explaining much. The silhouette score agrees, peaking at 0.750 for $k = 4$.
 
 ## 2. Agglomerative clustering
 
-Agglomerative clustering is a family of algorithms built on one idea. Start with **each point as its own
-cluster**, then repeatedly **merge the two most similar clusters** until a stopping criterion is met. In
-scikit-learn the criterion is the number of clusters. The **linkage** defines "most similar":
+**Agglomerative clustering** works from the bottom up. Start with **every sample as its own cluster**. Then repeatedly **merge the two most similar clusters**, until a stopping rule is met; in scikit-learn the rule is a target number of clusters. ("Agglomerate" means "gather into a mass".)
 
-| linkage | merges the two clusters that… |
+What "most similar" means for two *groups* of points has to be defined, and the definition is called the **linkage**:
+
+| linkage | merges the two clusters that... |
 |---|---|
-| `ward` (default) | give the smallest increase in within-cluster variance; tends to give equally sized clusters |
-| `average` | have the smallest average distance between all their points |
-| `complete` | have the smallest *maximum* distance between their points |
-| `single` | have the smallest *minimum* distance; can follow chains and odd shapes, but is sensitive to noise |
+| `ward` (the default) | cause the smallest increase in the total spread inside clusters; tends to give clusters of similar size |
+| `average` | have the smallest average distance between their points |
+| `complete` | have the smallest *largest* distance between any two of their points |
+| `single` | have the smallest *smallest* distance; can follow chains and odd shapes, but one stray point can bridge two clusters |
 
-Ward works on most datasets. If clusters have very different sizes, `average` or `complete` may do better.
+Ward works on most datasets. If the clusters differ greatly in size, `average` or `complete` may do better.
 
-Because of how it works, agglomerative clustering **cannot predict for new points**. It has no `predict`,
-only `fit_predict`.
+Because of the way it is built, by merging the specific points it was given, agglomerative clustering **cannot assign new points**. It has no `predict` method, only `fit_predict`.
 
 ### Hierarchies and dendrograms
 
-The merging produces a **hierarchical clustering**. Every intermediate step gives a clustering with a
-different number of clusters, and looking at all of them together is informative. The tool for this is the
-**dendrogram**, a tree diagram in which each merge is a join and the *height* of the join shows how far
-apart the two merged clusters were. Long vertical branches mean you are merging things that are far apart.
-That is a hint about where to cut the tree. SciPy computes it (`scipy.cluster.hierarchy.linkage`,
-`dendrogram`).
+The sequence of merges contains more than one answer: stopping after any merge gives a clustering with a different number of clusters, each nested inside the next. This is a **hierarchical clustering**. The tool for viewing all the levels together is the **dendrogram**, a tree diagram with the samples along the bottom. Every merge is drawn as a join, and the *height* of the join shows how far apart the two merged clusters were. A tall join means two very different things were forced together, which suggests cutting the tree just below it. The SciPy library computes the merges (`scipy.cluster.hierarchy.linkage`) and draws the tree (`dendrogram`).
 
 ```python-run
 import numpy as np
@@ -166,24 +169,20 @@ for a, b, dist, size in Z[-5:]:
 print("labels with 3 clusters:", AgglomerativeClustering(n_clusters=3).fit_predict(X))
 ```
 
-The last two merges happen at much larger distances than the ones before. That is the dendrogram's way of
-saying "three clusters". Like k-means, agglomerative clustering with Ward linkage still fails on shapes
-such as two moons.
+With 12 points there are 11 merges, and `linkage` returns one row per merge: which two clusters were joined, the distance between them, and the size of the result. (Clusters created by merges are given new numbers starting at 12.) The printout shows the last five. The first three happen at distances of 1.07, 1.53 and 2.83; the last two at 5.81 and 7.41. That jump is the dendrogram's way of saying "three clusters": before it, merges joined nearby points; after it, they join separate clumps. `AgglomerativeClustering(n_clusters=3)` stops at exactly that point and returns the three groups.
+
+Like k-means, agglomerative clustering with Ward linkage still fails on shapes such as the two crescents.
 
 ## 3. DBSCAN
 
-DBSCAN stands for *density-based spatial clustering of applications with noise*. Its main benefits are
-that you **do not set the number of clusters** in advance, it can capture **complex shapes**, and it can
-identify points that belong to **no cluster**. It is slower than the other two methods but still scales to
-fairly large datasets.
+**DBSCAN** stands for "density-based spatial clustering of applications with noise". It has a different idea of what a cluster is: a crowded region, separated from other crowded regions by emptier space. Three benefits follow. You **do not choose the number of clusters**. It can find clusters of **any shape**. And it can declare that some points belong to **no cluster at all**. It is somewhat slower than the other two methods, but it still copes with fairly large datasets.
 
-The idea is that clusters are dense regions of the data, separated by regions that are relatively empty.
-There are two parameters, `eps` and `min_samples`:
+It has two settings, a distance `eps` (short for the Greek letter epsilon) and a count `min_samples`:
 
-- A point is a **core sample** if at least `min_samples` points (itself included) lie within distance `eps`.
-- Core samples closer than `eps` to each other go into the same cluster.
-- A non-core point within `eps` of a core sample is a **boundary point** and joins that cluster.
-- Everything else is **noise** and gets the label **`-1`**.
+- A point is a **core sample** if at least `min_samples` points, counting itself, lie within distance `eps` of it. Core samples sit in crowded places.
+- Core samples that are within `eps` of each other are put in the same cluster. A cluster therefore grows from core sample to core sample, like a rumour passing between people standing close together, and can take any shape.
+- A point that is not a core sample but lies within `eps` of one is a **boundary point** and joins that core sample's cluster.
+- Every other point is **noise** and receives the label **`-1`**.
 
 ```mermaid
 flowchart TD
@@ -196,8 +195,7 @@ flowchart TD
   F -->|no| B[Boundary point: add to cluster, do not expand]
 ```
 
-Core and noise points are the same on every run. Boundary points that are neighbours of core samples from
-two clusters depend on the visiting order, but that is rare and of little importance.
+"Noise for now" in the diagram means that a point first marked as noise can later be claimed as a boundary point when a nearby core sample is visited. Which points are core samples and which are noise is the same on every run. Only a boundary point that is close to core samples of two different clusters depends on the order of visiting, and that is rare.
 
 ```python-run
 import numpy as np
@@ -214,30 +212,25 @@ for eps in [0.1, 0.3, 0.5, 1.5]:
     print(f"eps={eps}: clusters={n_clusters}  noise points={np.sum(labels == -1):3d}  ARI={adjusted_rand_score(y, labels):.2f}")
 ```
 
-Setting the parameters:
+The crescents are standardised first, because `eps` is a distance and should mean the same thing along every feature. The loop then tries four values of `eps`. `set(labels)` is the collection of distinct labels; subtracting one if −1 is present gives the number of real clusters. With `eps=0.1`, too few points have five neighbours that close: 161 of the 200 points are called noise and the rest fall into 7 fragments. With `eps=0.3` or `0.5`, DBSCAN finds exactly two clusters with no noise, and they match the true crescents perfectly (a score of 1.00), which k-means could not do. With `eps=1.5` everything is within reach of everything else and there is one cluster.
 
-- **`eps`** matters most, because it defines what "close" means. If it is very small, no point is a core
-  sample and everything is noise. If it is very large, everything is one cluster. Scaling the data with
-  `StandardScaler` or `MinMaxScaler` first makes a good `eps` easier to find.
-- **`min_samples`** decides whether points in less dense regions become clusters or noise. It is also the
-  minimum cluster size.
-- You don't set the number of clusters directly, but `eps` controls it implicitly.
+Setting the two values:
+
+- **`eps`** matters most, because it defines what "close" means. Too small, and no point is a core sample, so everything is noise. Too large, and everything is one cluster. Scaling the data first makes a sensible `eps` easier to find.
+- **`min_samples`** decides whether thinly populated regions become clusters or noise. It is also the smallest size a cluster can have.
+- You do not set the number of clusters directly, but `eps` controls it indirectly.
 - Like agglomerative clustering, DBSCAN has no `predict`.
 
 > [!WARNING]
-> If you index another array with DBSCAN's labels, remember that noise is `-1`. In Python `-1` silently
-> indexes the *last* element.
+> If you use DBSCAN's labels to index another array, remember that noise is `-1`. In Python, index `-1` silently means the *last* element, so noise points would all be treated as belonging to whatever comes last.
 
 ## 4. Comparing and evaluating clusterings
 
-### With ground truth
+### When the true groups are known
 
-If you happen to have true labels (for benchmarking), use the **adjusted Rand index (ARI)** or
-**normalised mutual information (NMI)**. Both give 1 for a perfect match. NMI lies between 0 and 1, and
-ARI is about 0 for a random assignment and can go negative.
+Sometimes, when testing an algorithm, you do know the true grouping. Then use the **adjusted Rand index** (ARI) or **normalised mutual information** (NMI). Both measure how well two groupings of the same items agree, and both give 1 for perfect agreement. NMI lies between 0 and 1. ARI is about 0 for a random grouping and can be slightly negative.
 
-A common mistake is to use `accuracy_score`. Accuracy needs cluster labels that exactly match the truth,
-but **cluster labels are arbitrary**. Only *which points are grouped together* matters.
+A common mistake is to use accuracy. Accuracy checks whether each predicted number equals the true number, but **cluster numbers are arbitrary names**. What matters is only *which samples are grouped together*.
 
 ```python-run
 from sklearn.metrics import accuracy_score, adjusted_rand_score, normalized_mutual_info_score
@@ -247,55 +240,66 @@ print("accuracy:", accuracy_score(truth, clusters), "<- misleading")
 print("ARI:", adjusted_rand_score(truth, clusters), " NMI:", normalized_mutual_info_score(truth, clusters))
 ```
 
-### Without ground truth
+The clustering puts the first two samples together and the last two together, exactly as the truth does, but calls the groups 1 and 0 instead of 0 and 1. Accuracy reports 0.0, as if everything were wrong. ARI and NMI both report 1.0.
 
-In practice you usually have no labels. If you did, you would train a classifier. The **silhouette
-coefficient** measures compactness. For each point,
+### When they are not known
 
-$$s = \frac{b - a}{\max(a, b)}$$
+In real use you have no true grouping; if you did, you would train a classifier. One score that needs no labels is the **silhouette coefficient**, which measures how compact and well separated the clusters are. For each sample, let $a$ be its average distance to the other samples in its own cluster and $b$ its average distance to the samples of the nearest other cluster. Then
 
-where $a$ is the mean distance to the other points in its own cluster and $b$ the mean distance to the
-points of the nearest other cluster. The score lies in $[-1, 1]$, and higher is better. The book's warning:
-compactness does not allow for complex shapes. On two moons, k-means gets a *higher* silhouette score than
-DBSCAN, although DBSCAN's result is the one we would prefer.
+$$s = \frac{b - a}{\max(a, b)} .$$
 
-A somewhat better idea is **robustness-based** evaluation: perturb the data or the parameters and check
-that the clustering stays stable. Even a robust or compact clustering may not carry any meaning you care
-about, though. The only way to know is to **inspect the clusters manually**. On the faces dataset the
-authors show that k-means, DBSCAN and agglomerative clustering each group the images by quite different
-properties (pose, lighting, whether a hat is worn), and that looking at the actual images in each cluster
-is what reveals this.
+A sample that is close to its own cluster and far from the next has a small $a$ and a large $b$, so $s$ is near 1. A sample midway between two clusters has $s$ near 0, and one that seems to be in the wrong cluster has a negative $s$. Example: $a = 1$ and $b = 4$ give $s = 3/4 = 0.75$. The overall score is the average over all samples, between −1 and 1, higher being better.
 
-## 5. Summary of the three methods
+The silhouette has a blind spot: it rewards compact, round clusters, so it marks down clusters with complex shapes even when they are right. On the two crescents, k-means's wrong answer gets a *higher* silhouette score than DBSCAN's right one.
 
-From the book's summary: applying and evaluating clustering is a highly **qualitative** procedure, most
-useful in exploratory analysis.
+A somewhat better approach is to test **robustness**: change the data a little (add a bit of noise, or leave out some samples) or change the settings, and see whether the clustering stays the same. A grouping that changes with every small disturbance is not to be trusted.
+
+Even a compact and robust clustering may not mean anything useful to you. The only way to know is to **look at the members of each cluster yourself**. Run three algorithms on a collection of face photographs and they may group the images by quite different properties: the direction the head is turned, the lighting, whether the person wears a hat. Only by viewing the actual images in each cluster do you find out what a cluster stands for.
+
+## 5. The three methods side by side
+
+Applying and judging clustering is a largely **qualitative** activity, and it is most useful while exploring data.
 
 | | k-means | agglomerative | DBSCAN |
 |---|---|---|---|
-| you specify | number of clusters | number of clusters (+ linkage) | `eps`, `min_samples` |
-| cluster shapes | convex, similar size | depends on linkage | arbitrary |
-| noise handling | none | none | labels noise as −1 |
+| you specify | number of clusters | number of clusters, and a linkage | `eps` and `min_samples` |
+| cluster shapes | convex, of similar size | depends on the linkage | any shape |
+| handling of noise | none | none | labels noise as −1 |
 | `predict` on new data | yes | no | no |
-| special strength | cluster means characterise clusters; a decomposition view | full hierarchy / dendrogram | finds the number of clusters; complex shapes |
-| caveat | random init; restrictive shape assumptions | can't scale to very large $n$ easily | clusters of very different sizes; tuning `eps` |
+| special strength | each cluster is summarised by its centre | gives the whole hierarchy (dendrogram) | finds the number of clusters itself; complex shapes |
+| caveat | random start; restrictive assumptions about shape | does not scale easily to very large datasets | struggles when clusters differ greatly in density; `eps` needs tuning |
 
 > [!INTERVIEW]
-> **"How does k-means work, and when does it fail?"** Alternate between assigning points to the nearest
-> centroid and moving each centroid to the mean of its points. This minimises within-cluster squared
-> distance and converges to a local optimum, so use k-means++ and several restarts. It fails on non-convex
-> clusters and on clusters of unequal density or size, is sensitive to scale and outliers, and needs $k$.
-> For arbitrary shapes and noise, use DBSCAN. For soft assignments and elliptical clusters, use Gaussian
-> mixture models.
+> **"How does k-means work, and when does it fail?"** Alternate between assigning each point to its nearest centroid and moving each centroid to the mean of its points. This minimises the within-cluster sum of squared distances and converges to a local optimum, so use k-means++ and several restarts. It fails on clusters that are not convex and on clusters of unequal size or density, it is sensitive to feature scale and to outliers, and it needs $k$ supplied. For arbitrary shapes and noise, use DBSCAN. For clusters that are stretched ellipses, or when you want each point to belong partly to several clusters, use a Gaussian mixture model.
 
 ## Summary
 
-- k-means: assign and update until stable. Fast, with spherical clusters, and it needs $k$ and scaling.
-- Agglomerative: bottom-up merging. The linkage sets the notion of similarity, and the dendrogram shows
-  the whole hierarchy.
-- DBSCAN: density-based, finds arbitrary shapes and noise, and is controlled by `eps` and `min_samples`.
-- Evaluate with ARI or NMI when truth exists (never with accuracy). Use silhouette with care, and always
-  inspect the clusters.
+- k-means: assign and update until nothing changes. Fast; assumes round clusters of similar size; needs $k$ and scaled features.
+- Agglomerative: merge from the bottom up. The linkage defines similarity between clusters, and the dendrogram shows the whole hierarchy.
+- DBSCAN: clusters are dense regions. It finds any shape, marks noise, and is controlled by `eps` and `min_samples`.
+- Evaluate with ARI or NMI when the truth is known, never with accuracy. Use the silhouette with care, and always inspect the clusters yourself.
+
+## Glossary
+
+- **Clustering**: grouping similar samples without labels.
+- **Cluster**: one of the groups found.
+- **Centroid (cluster centre)**: the mean position of the samples in a cluster.
+- **k-means**: clustering by alternately assigning points to the nearest centre and moving centres to the mean of their points.
+- **Inertia**: the sum of squared distances from each sample to its cluster's centre.
+- **Local minimum**: a solution no small change can improve, though a better one may exist.
+- **Convex**: a shape without dents; the line between any two of its points stays inside.
+- **k-means++**: a way of choosing well-spread starting centres.
+- **Elbow**: the value of $k$ after which inertia stops falling steeply.
+- **Vector quantisation**: representing each sample by the nearest of a small set of reference points.
+- **Agglomerative clustering**: repeatedly merging the two most similar clusters.
+- **Linkage**: the rule that measures similarity between two clusters.
+- **Dendrogram**: a tree diagram of the merges and the distances at which they happened.
+- **DBSCAN**: density-based clustering that grows clusters from core samples.
+- **Core sample / boundary point / noise**: a point in a crowded region / a point next to one / a point in neither situation (label −1).
+- **Adjusted Rand index (ARI), normalised mutual information (NMI)**: scores comparing a clustering with a known grouping; 1 is perfect.
+- **Silhouette coefficient**: a label-free score of how compact and separated clusters are.
+
+## Check yourself
 
 ```quiz
 [

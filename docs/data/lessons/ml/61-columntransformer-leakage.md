@@ -1,16 +1,18 @@
 # ColumnTransformer and data leakage
 
-Real tables mix column types. Numeric columns need imputing and scaling, categorical columns need
-encoding, and text columns need vectorising. A single `Pipeline` applies the same steps to every column,
-which is not enough. **`ColumnTransformer`** routes different columns through different preprocessing and
-joins the results. It was added to scikit-learn after the first edition of Müller & Guido (the book
-handles mixed types with pandas `get_dummies`), and it is now the standard way to build leak-free
-preprocessing for tabular data. The second half of this lesson is a catalogue of **data leakage**, the
-most damaging mistake in applied ML.
+> **Before this lesson:** read [Pipelines and grid search](#/lesson/ml/pipelines) first: this lesson builds directly on `Pipeline`, `make_pipeline` and the `step__parameter` naming. One-hot encoding and target encoding come from [Categorical features, binning and polynomials](#/lesson/ml/feature-engineering), and `GroupKFold` and `TimeSeriesSplit` from [Cross-validation](#/lesson/ml/cross-validation).
+
+## In plain words
+
+Real tables mix different kinds of columns: numbers with gaps in them, categories stored as text, sometimes free text. Each kind needs its own preparation. A **ColumnTransformer** is a sorting office for columns: it sends each group of columns down its own conveyor belt (fill the gaps and scale the numbers; one-hot encode the categories) and then lays the results side by side, ready for one model. Put inside a pipeline, the whole preparation is learned from training data only.
+
+The second half of the lesson is about **data leakage**, the most damaging mistake in applied machine learning. An everyday picture: a student who has seen the answer sheet before the exam. Their mark is excellent and says nothing about what they know. A model that, during training or evaluation, gets information it will not have when it is used for real looks excellent in testing and disappoints in production. Leakage comes in several disguises, and pipelines only stop one of them.
+
+Why this matters for a job: almost every tabular model in industry needs mixed-type preprocessing, and `ColumnTransformer` is the standard tool for it. "Your model scored 99% offline and poorly in production; what went wrong?" is a classic interview question, and the answer is a tour of the leakage catalogue in section 4.
 
 ## 1. The problem with mixed column types
 
-Take a small dataset in the style of the adult census data from chapter 4:
+Here is a small generated dataset in the style of the adult census data from lesson 40: two numeric columns, two categorical ones, and a 0/1 target saying whether income is high.
 
 ```python-run
 import numpy as np
@@ -32,16 +34,24 @@ print("\nmissing values per column:\n", df.isna().sum().to_string())
 print("\ndtypes:", dict(df.dtypes.astype(str)))
 ```
 
-We want to:
+**Reading this code line by line**
 
-- impute missing numeric values with the median, then standardise them;
+- The `pd.DataFrame` call builds 400 rows. `rng.randint(18, 70, n)` draws ages; `rng.normal(40, 10, n).round()` draws working hours around 40; `rng.choice([...], n, p=[...])` picks a category for each row with the given probabilities (60% Private, and so on).
+- `score` combines age, hours and an education bonus (`.map` replaces each education string by a number from the dictionary). The target `income_high` is 1 when the score plus noise exceeds 5.
+- `df.loc[rows, "age"] = np.nan` blanks out the age of 30 random rows. `np.nan` ("not a number") is how missing values are stored.
+- `df.isna().sum()` counts missing values per column, and `df.dtypes` shows each column's **dtype** (data type): `float64` for decimals, `int64` for whole numbers, and `object` or `str` (depending on the pandas version) for text.
+
+The output shows the first five rows, 30 missing ages, and the mix of number and text columns. We want to:
+
+- fill in (**impute**) the missing numeric values with the **median** (the middle value when sorted), then standardise the numeric columns;
 - one-hot encode the categorical columns;
-- fit every one of these steps on the training data only.
+- fit every one of these steps on training data only.
+
+A plain `Pipeline` cannot do this, because it applies each step to *all* columns: a scaler would choke on the text columns, and a one-hot encoder would turn every distinct age into its own column.
 
 ## 2. ColumnTransformer
 
-A `ColumnTransformer` takes a list of `(name, transformer, columns)` triples. Each transformer is applied
-to its own subset of columns, and the outputs are concatenated side by side.
+A `ColumnTransformer` takes a list of **triples** `(name, transformer, columns)`. Each transformer is fitted on and applied to its own subset of columns, and the outputs are joined side by side (**concatenated**) into one table.
 
 ```mermaid
 flowchart LR
@@ -92,22 +102,32 @@ print("test accuracy:", round(model.score(X_test, y_test), 3))
 print("5-fold CV accuracy:", cross_val_score(model, X_train, y_train, cv=5).mean().round(3))
 ```
 
+**Reading this code line by line**
+
+- The data is rebuilt as before (each demo on this site runs on its own, so it cannot reuse the previous one's variables).
+- `numeric` and `categorical` are lists of column names.
+- `ColumnTransformer([...])` gets two triples. The one named `"num"` sends the numeric columns through a small pipeline: `SimpleImputer(strategy="median")`, which learns each column's median in `fit` and fills blanks with it in `transform`, then `StandardScaler`. The one named `"cat"` sends the categorical columns through a `OneHotEncoder`.
+- `Pipeline([("prep", preprocess), ("clf", LogisticRegression(...))])` puts the column transformer in front of a classifier, so the whole thing is one model.
+- `train_test_split(df, y, ...)` splits the raw DataFrame. Nothing has been fitted yet, so nothing can leak.
+- `model.fit(X_train, y_train)` fits the imputer, scaler and encoder on the training rows, then the classifier on their output.
+- `named_steps["prep"].transform(X_train).shape` shows the table the classifier sees, and `get_feature_names_out()` names its columns.
+
+The transformed training table is 300 rows by 10 columns: 2 numeric columns plus 4 workclass and 4 education indicator columns. The names say where each column came from: `num__age`, `cat__workclass_Private` and so on (transformer name, two underscores, column). The test accuracy is 0.77 and the 5-fold cross-validation accuracy 0.76. Inside `cross_val_score` the imputer's medians, the scaler's statistics and the encoder's categories are all relearned from each split's training folds.
+
 Points to notice:
 
-- A transformer can itself be a pipeline (`imputer → scaler`).
-- Columns are selected by **name** for DataFrames, or by integer index or boolean mask for arrays.
-- `remainder="drop"` is the default: columns you don't list are discarded. `remainder="passthrough"`
-  keeps them unchanged.
-- `make_column_selector(dtype_include="number")` selects columns by dtype, so you don't hard-code names.
-- `get_feature_names_out()` tells you what each output column means. You need this to interpret
-  coefficients.
-- `handle_unknown="ignore"` makes the encoder robust to categories that appear only at prediction time.
+- A transformer inside a `ColumnTransformer` can itself be a pipeline (`imputer → scaler` here).
+- Columns are chosen by **name** for DataFrames, or by integer position or boolean mask for arrays.
+- Columns you do not list are **dropped** by default (`remainder="drop"`). Use `remainder="passthrough"` to keep them unchanged.
+- `make_column_selector(dtype_include="number")` picks columns by dtype, so you need not hard-code names.
+- `get_feature_names_out()` tells you what each output column means, which you need in order to read a linear model's coefficients.
+- `handle_unknown="ignore"` keeps the encoder from failing on categories that appear only at prediction time.
+
+`ColumnTransformer` was added to scikit-learn after the first edition of Müller & Guido was published; the book handles mixed types with pandas `get_dummies` instead. It is now the standard way to build leak-free preprocessing for tables.
 
 ### Tuning through nested steps
 
-Parameter names are chained with double underscores through every level:
-`prep__num__simpleimputer__strategy` means *pipeline step* `prep` → *column transformer entry* `num` →
-*inner pipeline step* `simpleimputer` → *parameter* `strategy`.
+Hyperparameter names are chained with double underscores through every level of nesting. `prep__num__simpleimputer__strategy` means: pipeline step `prep`, then column-transformer entry `num`, then inner pipeline step `simpleimputer`, then its parameter `strategy`.
 
 ```python-run
 import numpy as np
@@ -135,14 +155,14 @@ print("best parameters:", grid.best_params_)
 print("best CV accuracy:", round(grid.best_score_, 3))
 ```
 
+This dataset has two numeric columns (one with 40 gaps) and a colour column. `make_column_selector(dtype_include="number")` finds `x1` and `x2` automatically. The grid tries 2 imputation strategies × 3 values of `C` = 6 combinations, each with 5 folds. The search picks mean imputation with `C=1`, at a cross-validation accuracy of 0.82. The imputation method has become a hyperparameter like any other, chosen honestly by cross-validation.
+
 ## 3. Writing your own transformer
 
-When no built-in transformer does what you need, there are two easy options.
+When no built-in transformer does what you need, there are two straightforward options.
 
-- `FunctionTransformer(np.log1p)` wraps a stateless function.
-- For a transformer that *learns* something, subclass `BaseEstimator` and `TransformerMixin`. Implement
-  `fit` (learn and store attributes ending in `_`, then return `self`) and `transform`. Chapter 8 of the
-  book points to this as the way to build your own estimators.
+- `FunctionTransformer(np.log1p)` wraps a **stateless** function, one that learns nothing from data and treats every row the same way.
+- For a transformer that *learns* something, write a class that **inherits** from `BaseEstimator` and `TransformerMixin`: it starts with all their methods and you add your own. Implement `fit`, which learns from the data, stores what it learned in attributes whose names end in an underscore, and returns `self`; and `transform`, which applies what was learned. `TransformerMixin` then provides `fit_transform` for free, and `BaseEstimator` provides the parameter handling that grid search needs. Chapter 8 of the book points to this as the way to build your own estimators.
 
 ```python-run
 import numpy as np
@@ -169,20 +189,30 @@ print("learned upper clip limits:", pipe.named_steps["clipper"].high_.round(2))
 print("new point after the pipeline:", pipe.transform(X_new).round(2), "<- the outlier 1000 was clipped using TRAINING quantiles")
 ```
 
+**Reading this code line by line**
+
+- `__init__` only stores the setting `q`. scikit-learn's convention is that `__init__` must not look at data.
+- `fit` computes, for each column (`axis=0`), the **quantiles** at `q` and `1 - q`: with `q=0.05`, the values below which 5% and 95% of the training data lie. They are stored as `low_` and `high_`.
+- `transform` uses `np.clip`, which replaces anything below `low_` by `low_` and anything above `high_` by `high_`.
+- `rng.standard_cauchy` draws from a **heavy-tailed** distribution, one that produces occasional enormous values; `np.abs` makes them positive. That imitates messy real data with outliers.
+- The pipeline clips, then applies `log1p`, then standardises. It is fitted on the training data only.
+
+The learned upper limits are about 11.5 and 14.3. The new point's second value, 1000, is clipped to 14.3 before the log and scaling, so it ends up at about 2.47 standard deviations instead of dominating everything. Because the limits were learned in `fit`, the new point had no say in them, which is exactly the leak-free behaviour we want.
+
 ## 4. Data leakage: the full catalogue
 
-**Leakage** is the use of information during model building that will not be available, in the same form,
-when the model makes real predictions. The symptom is always the same: excellent offline scores and
-disappointing production results. Pipelines prevent one kind. You must watch for the others yourself.
+**Leakage** is the use of information during model building or evaluation that will not be available, in the same form, when the model makes real predictions. The symptom is always the same: excellent offline scores and disappointing production results. Pipelines prevent one kind; you must watch for the others yourself.
 
 | type | what happens | example | prevention |
 |---|---|---|---|
-| **preprocessing leakage** | statistics computed on data that includes validation/test rows | scaling, imputing or selecting features before splitting | put every fitted step in a `Pipeline`; split first |
-| **target leakage** | a feature is a consequence of the target, or recorded after it | `account_closed_date` when predicting churn; a treatment code that implies the diagnosis | ask of every feature: "is this known at prediction time?" |
-| **temporal leakage** | training on the future | a random split on time-ordered data; rolling features that include the current row | split by time; build features from the past only |
-| **group leakage** | related rows on both sides of the split | several scans of one patient; near-duplicate images | `GroupKFold`; de-duplicate before splitting |
-| **test-set reuse** | repeated tuning against the test set | picking a threshold or model by test score | use validation data or CV to decide; touch the test set once |
-| **resampling leakage** | oversampling before splitting | SMOTE applied to all data puts copies of validation points into training | resample inside the training folds only |
+| **preprocessing leakage** | statistics computed on data that includes validation or test rows | scaling, imputing or selecting features before splitting | put every fitted step in a `Pipeline`; split first |
+| **target leakage** | a feature is a consequence of the target, or is recorded after it | `account_closed_date` when predicting churn; a treatment code that implies the diagnosis | ask of every feature: "is this known at the moment of prediction?" |
+| **temporal leakage** | training on the future | a random split of time-ordered data; rolling features that include the current row | split by time; build features from the past only |
+| **group leakage** | related rows on both sides of the split | several scans of one patient; near-duplicate images | `GroupKFold`; remove duplicates before splitting |
+| **test-set reuse** | repeated decisions based on the test set | picking a threshold or a model by its test score | decide with validation data or cross-validation; use the test set once |
+| **resampling leakage** | oversampling before splitting | SMOTE on all data puts synthetic copies of validation points into training | resample inside the training folds only |
+
+**Churn** in the table means customers leaving a service. SMOTE (Synthetic Minority Oversampling Technique) creates new rare-class rows by interpolating between existing ones, so a synthetic row is a near-copy of the real rows it came from.
 
 ### Target leakage in action
 
@@ -206,8 +236,13 @@ print("CV accuracy with features known at prediction time:", cross_val_score(rf,
 print("CV accuracy including the leaked feature:          ", cross_val_score(rf, X_leaky, churned, cv=5).mean().round(3))
 ```
 
-Cross-validation cannot save you here. The leaked column is in every fold, so the model looks perfect.
-In production the column is empty at the moment you need the prediction. Warning signs of target leakage:
+**Reading this code line by line**
+
+- Each of 1,000 customers has a usage level and a number of support calls. Customers who call a lot and use little are more likely to churn.
+- `retention_offers = churned * rng.randint(1, 4, n)` is 0 for customers who stayed and 1 to 3 for customers who left, because the company only sends offers *after* someone cancels. It is a consequence of the target.
+- The same random forest is cross-validated with and without that column.
+
+With honest features the accuracy is 0.688; with the leaked column it is a perfect 1.0. Cross-validation cannot save you here: the leaked column is present in every fold, training and validation alike, so the model looks perfect. In production the column is always 0 at the moment you need the prediction, because the customer has not left yet. Warning signs of target leakage:
 
 - a score that is too good to be true;
 - one feature with overwhelming importance;
@@ -229,33 +264,25 @@ print("shuffled K-fold R2:", cross_val_score(rf, X, y, cv=KFold(5, shuffle=True,
 print("time-series split R2:", cross_val_score(rf, X, y, cv=TimeSeriesSplit(5)).mean().round(2), "<- the honest answer")
 ```
 
-With a shuffled split, every test point has training neighbours a moment before and after it, so the
-model simply interpolates. Forecasting the future is a different and much harder task.
+`np.cumsum(rng.normal(size=600))` builds a **random walk**: each value is the previous one plus a random step, like a share price that drifts unpredictably. The only feature is the time index. With shuffled folds the score is a perfect 1.0; with `TimeSeriesSplit` it is about −2.3, far worse than predicting the average.
+
+The explanation: with a shuffled split, every test point has training neighbours a moment before and a moment after it, and their values are almost the same, so the model only has to fill in a gap. Forecasting means predicting beyond the last known point, a different and much harder task, and here an impossible one. The time-series split asks the honest question.
 
 ## 5. A leak-free workflow
 
-1. **Split first.** Set the test set aside before looking at anything. Split by time or by group if the
-   data has that structure.
-2. Do exploratory analysis on the training data.
-3. Put **all** preprocessing in a `Pipeline` / `ColumnTransformer`.
-4. Tune with cross-validation on the training set, with a splitter that matches the deployment situation.
+1. **Split first.** Set the test set aside before looking at anything. Split by time or by group if the data has that structure.
+2. Explore only the training data.
+3. Put **all** preprocessing in a `Pipeline` with a `ColumnTransformer`.
+4. Tune with cross-validation on the training set, using a splitter that imitates how the model will be used.
 5. Evaluate **once** on the test set.
-6. Persist the entire fitted pipeline and serve exactly that object.
+6. Save the entire fitted pipeline and serve exactly that object.
 
 > [!INTERVIEW]
-> **"Your model has 99% validation accuracy but performs poorly in production. What do you check?"**
-> (1) Leakage: target-derived features, preprocessing fitted on all the data, duplicates across splits,
-> random splits of temporal data. (2) Training/serving skew: features computed differently online and
-> offline. (3) Distribution shift between the training period and now. (4) Whether the validation metric
-> matches the business objective. Then explain the fix: time- or group-based splits, a single persisted
-> pipeline, and monitoring of the input distributions.
+> **"Your model has 99% validation accuracy but performs poorly in production. What do you check?"** (1) Leakage: target-derived features, preprocessing fitted on all the data, duplicates across splits, random splits of temporal data. (2) Training/serving skew: features computed differently online and offline. (3) **Distribution shift**: the data arriving now differs from the training period. (4) Whether the validation metric matches the business objective. Then describe the fix: time- or group-based splits, one saved pipeline used everywhere, and monitoring of the input distributions.
 
 ## 6. Measuring a preprocessing leak yourself
 
-It is worth seeing once how large a preprocessing leak is, and when it is small. The experiment below
-uses target encoding, a step that learns from the labels. Each of 60 categories is replaced by the mean
-target of its rows. The categories are random, so they carry **no information** about the target. An
-honest evaluation should score about 50%.
+It is worth seeing once how large a preprocessing leak can be, and why it varies. The experiment uses target encoding (lesson 40), a step that learns from the labels: each of 60 categories is replaced by the average target of its rows. The categories are assigned at random, so they carry **no information** about the target, and an honest evaluation should score about 50%.
 
 ```python-run
 import numpy as np
@@ -283,23 +310,45 @@ print(f"encoding fitted on all rows:      CV accuracy = {np.mean(leaky):.3f}   <
 print(f"encoding fitted inside each fold: CV accuracy = {np.mean(honest):.3f}   <- about chance, as it should be")
 ```
 
-The leaky version reports a clearly useful model on data that contains no signal at all. Each row's own
-label went into the mean for its category, so the encoded feature partly *is* the label.
+**Reading this code line by line**
 
-The size of a leak depends on how much the step learns from the labels and on how few samples support
-each statistic. A scaler learns two numbers per feature and never sees the labels, so its leak is small.
-Feature selection and target encoding learn from the labels, so their leaks can be large. The rule does
-not depend on the size: fit every step inside the fold.
+- 400 rows get a random category from 0 to 59 and a random 0/1 label.
+- `target_encode(cat_fit, y_fit, cat_apply)` learns the average label of each category from `cat_fit` and `y_fit` (a dictionary comprehension: for each category `c`, the mean of the labels of rows in that category), then encodes `cat_apply` with those averages. A category not seen while learning gets the overall average, via `means.get(c, default)`.
+- The wrong version encodes all 400 rows once, using all labels, and then cross-validates.
+- The right version, inside the loop, learns the averages from the training fold and applies them to both the training fold and the test fold.
+
+The leaky version reports 0.623, a seemingly useful model on data with no signal at all; the honest version reports 0.478, chance level. Each category has only about 7 rows, so each row's own label makes up about a seventh of its category's average. The encoded feature partly *is* the label, and the test rows' labels went into their own features.
+
+How big a leak is depends on how much the step learns from the labels and on how few rows support each learned number. A scaler learns two numbers per feature and never sees the labels, so its leak is small. Feature selection and target encoding learn from the labels, often from few rows, so their leaks can be large. The rule does not depend on the size: fit every step inside the fold.
 
 ## Summary
 
-- `ColumnTransformer` applies different preprocessing to different columns and concatenates the results.
-  Combine it with `Pipeline` for a single leak-free estimator.
-- Nested parameters are addressed with chained `__` names.
-- Custom transformers implement `fit` and `transform`. Learned state belongs in `fit`.
-- Leakage comes in many forms: preprocessing, target, temporal, group, test reuse and resampling.
-  Pipelines fix only the first.
-- For every feature ask: would I have this value, computed this way, at prediction time?
+- `ColumnTransformer` applies different preprocessing to different groups of columns and concatenates the results. Combined with `Pipeline` it gives one leak-free estimator.
+- Nested hyperparameters are addressed with chained `__` names.
+- Custom transformers learn in `fit` (attributes ending in `_`) and only apply in `transform`.
+- Leakage comes in many forms: preprocessing, target, temporal, group, test reuse and resampling. Pipelines fix only the first.
+- For every feature ask: would I have this value, computed this way, at the moment of prediction?
+
+## Glossary
+
+- **ColumnTransformer**: applies different transformers to different column subsets and joins the results.
+- **Impute / imputer**: fill in missing values / a transformer that does so.
+- **Median**: the middle value of a sorted list.
+- **dtype**: the data type of a column, such as float, integer or text.
+- **Concatenate**: join tables side by side.
+- **remainder**: what a ColumnTransformer does with unlisted columns (drop or pass through).
+- **Stateless transformer**: a transformer that learns nothing from data.
+- **Inherit**: create a class that starts with all the methods of another class.
+- **Quantile**: the value below which a given fraction of the data lies.
+- **Heavy-tailed**: a distribution that occasionally produces extreme values.
+- **Target leakage**: a feature that is a consequence of, or recorded after, the target.
+- **Temporal leakage**: training on information from the future.
+- **Group leakage**: related rows on both sides of a train/test split.
+- **Churn**: customers leaving a service.
+- **Random walk**: a series where each value is the previous one plus a random step.
+- **Distribution shift**: the data seen in production differing from the training data.
+
+## Check yourself
 
 ```quiz
 [
@@ -316,7 +365,9 @@ not depend on the size: fit every step inside the fold.
   {"q": "Applying SMOTE oversampling to the whole dataset before cross-validation is wrong because…", "options": ["synthetic points derived from validation samples end up in the training folds", "SMOTE only works on images", "oversampling changes the number of features", "it removes the minority class"], "answer": 0,
    "explain": "Resampling must be done within each training fold so validation data stays untouched."},
   {"q": "In a custom transformer, where should statistics learned from data be computed?", "options": ["In fit, stored as attributes ending in an underscore", "In __init__", "In transform", "In a global variable"], "answer": 0,
-   "explain": "fit learns from the training data; transform only applies what was learned, so nothing is learned from test data."}
+   "explain": "fit learns from the training data; transform only applies what was learned, so nothing is learned from test data."},
+  {"q": "A random forest predicting a random walk from the time index scores R² = 1.0 with shuffled K-fold. Why?", "options": ["Each test point has training neighbours just before and after it, so the model only interpolates", "Random forests can forecast random walks", "The data has no noise", "K-fold always gives R² = 1"], "answer": 0,
+   "explain": "Shuffling leaks the future into training; a time-series split gives the honest, strongly negative score."}
 ]
 ```
 

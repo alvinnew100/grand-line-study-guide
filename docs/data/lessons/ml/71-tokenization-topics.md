@@ -1,45 +1,38 @@
 # Tokenisation, normalisation and topic models
 
-The previous lesson treated tokenisation as a black box inside `CountVectorizer`. This lesson opens it up.
-It covers better tokenisation, **stemming** and **lemmatisation**, the subword tokenisers used by modern
-language models, and then **topic modelling** with latent Dirichlet allocation (LDA), the unsupervised
-technique from the end of chapter 7 of Müller & Guido. It closes with a look at what replaced bag of
-words in most NLP applications.
+> **Before this lesson:** read [Bag of words, tf-idf and n-grams](#/lesson/ml/bag-of-words) first: this lesson opens up the tokenisation step inside `CountVectorizer` and reuses its vocabulary, `min_df` and `max_df`. The topic-model half compares LDA with NMF and with clustering, from [PCA, NMF and t-SNE](#/lesson/ml/dimensionality-reduction) and [Clustering](#/lesson/ml/clustering); a sentence of reminder is given for each.
+
+## In plain words
+
+The previous lesson cut text into words with a fixed rule and counted them. This lesson asks two further questions. First, *what should count as a word?* "Replace", "replaced" and "replacing" are three columns to a plain bag of words, though they mean nearly the same thing; merging them is called **normalisation**. Second, *what is a large pile of documents about?* **Topic models** discover, without any labels, groups of words that tend to appear together, and describe each document as a blend of those groups.
+
+An everyday picture for each. Normalisation is like a librarian filing "Running", "ran" and "runs" under one index card for "run", so that anyone looking up the idea finds all of it. A topic model is like sorting a heap of newspaper clippings into piles by the vocabulary they use, without being told the sections: one pile keeps mentioning "goal", "match" and "league", another "election", "vote" and "minister". Nobody named the piles; the words did.
+
+Why this matters for a job: every language model you will use, from search to chatbots, starts by tokenising text, and its limits and prices are quoted in tokens, so you need to know what a token is. Topic models are a standard first look at a large collection of customer feedback or support tickets when nobody has labelled them. Interviewers ask about stemming versus lemmatisation, how byte-pair encoding works, and how to build a text classifier on a budget.
 
 ## 1. Why tokenisation matters
 
-`CountVectorizer` and `TfidfVectorizer` extract features in a fairly basic way, and far more
-sophisticated methods exist. The step that is most often improved is the first one: tokenisation, which
-decides *what counts as a word*.
+`CountVectorizer` and `TfidfVectorizer` extract features in a fairly basic way. The step most often worth improving is the first one, tokenisation, which decides *what counts as a word*.
 
-The IMDb vocabulary in the book contains singular and plural forms as separate entries ("drawback",
-"drawbacks"; "drawer", "drawers"), and different verb forms with related nouns ("replace", "replaced",
-"replacement", "replaces", "replacing"). For a bag-of-words model these have closely related meanings.
-Keeping them apart **increases overfitting** and stops the model from making full use of the training
-data. The model must learn separately, from separate examples, that each form is positive or negative.
+The book's IMDb vocabulary contains singular and plural forms as separate entries ("drawback" and "drawbacks", "drawer" and "drawers"), and verb forms next to related nouns ("replace", "replaced", "replacement", "replaces", "replacing"). For a bag-of-words model these carry almost the same meaning. Keeping them apart **increases overfitting**: the model must learn separately, from separate examples, that each form signals a positive or a negative review, and a form seen in only a few training reviews gets an unreliable weight.
 
 ## 2. Stemming and lemmatisation
 
-The fix is to represent each word by its **word stem**, and to merge all words with the same stem. This is
-a form of **normalisation**. There are two ways to do it.
+The fix is to represent each word by a base form, and to merge all words that share it. There are two ways to do this.
 
 | | **stemming** | **lemmatisation** |
 |---|---|---|
-| how | a rule-based heuristic that chops off common suffixes | a dictionary of known word forms, plus the grammatical role each word plays in its sentence |
-| result | a stem, which may not be a real word | the **lemma**, a real dictionary form |
-| example tool | the Porter stemmer (in `nltk`) | `spacy`, WordNet |
+| how | rules that chop off common word endings (suffixes) | a dictionary of known word forms, plus the grammatical role each word plays in its sentence |
+| result | a **stem**, which may not be a real word | the **lemma**, the form you would look up in a dictionary |
+| example tool | the Porter stemmer (in the `nltk` library) | the `spacy` library, WordNet |
 | quality | fast and crude | slower, and usually better |
 
-The book compares them on one example sentence about a meeting, in which "meeting" occurs once as a noun
-and once as a verb. (The code below reuses that sentence.)
+The book compares the two on one sentence about a meeting, in which "meeting" appears once as a noun and once as a verb (the code below uses a similar sentence):
 
-- **Stemming** turns "was" into "wa" and always reduces "meeting" to "meet", whether it is a noun or a
-  verb. It leaves "worse" as "wors".
-- **Lemmatisation** maps "was" to "be" and "worse" to "bad". It keeps the *noun* "meeting" as "meeting"
-  and reduces the *verb* "meeting" to "meet". "I'm" becomes "I" and "be".
+- **Stemming** turns "was" into "wa" and reduces both uses of "meeting" to "meet", whatever their role. It leaves "worse" as "wors".
+- **Lemmatisation** maps "was" to "be" and "worse" to "bad". It keeps the *noun* "meeting" as "meeting" and reduces the *verb* to "meet". It splits "I'm" into "I" and "be".
 
-Lemmatisation is the more involved process and usually gives better results when used to normalise tokens
-for machine learning.
+Lemmatisation is the more involved process and usually gives better features for machine learning. The demo below builds a deliberately tiny stemmer so you can see exactly what rules of this kind do.
 
 ```python-run
 import re
@@ -59,23 +52,20 @@ for group in [["replace", "replaced", "replaces", "replacing"], ["drawback", "dr
     print(group, "->", sorted({tiny_stem(w) for w in group}))
 ```
 
-The toy stemmer merges most regular forms. It leaves the irregular ones ("was", "worse", "better")
-untouched, which is exactly the case where a lemmatiser's dictionary is needed. It is also inconsistent
-("replace" stays, while the other forms become "replac") and it over-stems "scared" to "scar", a
-different word. Real stemmers have many more rules, but they make the same kinds of mistakes. A stem
-only has to be *consistent*, not readable.
+**Reading this code line by line**
+
+- `tiny_stem` tries six rules in order. Each rule is a pair (suffix, replacement): for example, "ies" becomes "i" and "ing" is removed. `word.endswith(suffix)` checks the ending, and the length test refuses to cut a word down to fewer than three letters (so "sing" keeps its "ing"). The first matching rule wins; if none matches, the word comes back unchanged.
+- `word[: len(word) - len(suffix)]` is a **slice**: the word with its last few characters removed.
+- `re.findall(r"\b\w\w+\b", sentence.lower())` uses Python's `re` (regular expression) module with the same pattern as `CountVectorizer`, so the tokens match the previous lesson's: words of two or more letters, lowercased.
+- The loop stems three groups of related words and prints the set of distinct stems each group produces (`{...}` builds a set, which drops duplicates).
+
+The output shows "meeting" → "meet" (both times) and "clients" → "client", which is what we want. The groups reveal the weaknesses. "replaced", "replaces" and "replacing" all become "replac", but "replace" itself stays "replace", so the group still yields two stems. "scared" is over-stemmed to "scar", a different word. And the irregular forms "was", "worse" and "better" are untouched, which is exactly where a lemmatiser's dictionary is needed. Real stemmers have many more rules and make the same kinds of mistakes, less often. A stem does not need to be readable, only *consistent*.
 
 ### Using a custom tokeniser
 
-`CountVectorizer` takes a `tokenizer` argument, a function from a document string to a list of tokens. The
-book plugs in spaCy's lemmatiser this way. With `min_df=5` on IMDb, lemmatisation reduces the features
-from 27,271 to 21,596. On a small training set (1% of the data) it raises cross-validation accuracy
-slightly, from about 71.9% to about 73.1%.
+`CountVectorizer` accepts a `tokenizer` argument: any function that takes a document string and returns a list of tokens. The book plugs in spaCy's lemmatiser this way. With `min_df=5` on IMDb, lemmatisation reduces the vocabulary from 27,271 to 21,596 features. Trained on a small sample (1% of the data), it raises cross-validation accuracy slightly, from about 71.9% to about 73.1%.
 
-The book's conclusion: lemmatisation can be seen as a kind of **regularisation**, since it merges certain
-features. It helps most on **small datasets**. As with many feature-extraction techniques, the result
-varies with the dataset. Both stemming and lemmatisation are worth trying when you want to squeeze out the
-last bits of performance on a task.
+The book's interpretation: lemmatisation acts as a kind of **regularisation** (anything that limits how freely a model can fit its training data), because it merges features and leaves fewer weights to learn. It helps most on **small datasets**, and as with many feature-extraction tricks the gain varies from dataset to dataset. Stemming and lemmatisation are worth trying when you want the last bit of performance.
 
 ```python-run
 import re
@@ -98,28 +88,25 @@ print("plain vocabulary  :", len(plain.vocabulary_), list(plain.get_feature_name
 print("stemmed vocabulary:", len(stemmed.vocabulary_), list(stemmed.get_feature_names_out()))
 ```
 
+`stem_tokenizer` finds the tokens as before and stems each one. Passing it as `tokenizer=` replaces `CountVectorizer`'s own tokenisation; `token_pattern=None` switches off the default pattern so scikit-learn does not warn that it is unused. The plain vocabulary has 17 words; the stemmed one has 13. "acted" and "acting" merged into "act", "directed" and "directs" into "direct", "films" into "film", and "badly" into "bad". "actor" and "actors" also merged into "actor". "boring" became "bor", which no human would write, but it is consistent, so the model does not mind.
+
 ## 3. Other normalisation choices
 
-- **Lowercasing** is on by default. It loses the difference between "US" and "us", or "Apple" and "apple".
-- **Spelling correction** merges misspelled variants.
-- **Character n-grams** (`analyzer="char_wb"`) are robust to typos and useful for languages with rich
-  morphology or for language identification.
-- **Hashing** (`HashingVectorizer`) maps tokens straight to column indices with a hash function. No
-  vocabulary is stored, which suits streaming data and very large corpora. The price is that you can't map
-  a column back to a word, and different words can collide.
+- **Lowercasing** is on by default. It loses the difference between "US" and "us", or "Apple" (the company) and "apple".
+- **Spelling correction** merges misspelled variants into the correct word.
+- **Character n-grams** (`analyzer="char_wb"`) count short sequences of letters instead of words, such as "act", "cti", "tin". They are robust to typos and useful for languages with many word forms, or for identifying which language a text is in.
+- **Hashing** (`HashingVectorizer`) sends each token straight to a column number using a **hash function**, a fixed formula that turns any string into a number. No vocabulary is stored, which suits streaming data and very large corpora. The price: you cannot map a column back to its word, and different words occasionally share a column (a **collision**).
 
 ## 4. Subword tokenisation: what modern models use
 
-Word-level vocabularies have two problems. They are huge, and any word not seen in training is **out of
-vocabulary**. Neural language models avoid both with **subword tokenisation**:
+Word-level vocabularies have two problems. They are huge, and any word not seen in training is **out of vocabulary** (OOV): the model has no column for it and ignores it. The neural language models behind modern chatbots avoid both problems with **subword tokenisation**, which splits rare words into smaller pieces.
 
-- **Byte-pair encoding (BPE)**, used by the GPT family: start from characters and repeatedly merge the
-  most frequent adjacent pair into a new token, until the vocabulary reaches a target size (often 30,000 to
-  100,000).
-- **WordPiece** (BERT) and **SentencePiece/Unigram** (T5, many multilingual models) are close relatives.
+- **Byte-pair encoding (BPE)**, used by the GPT family of models: start with individual characters as the vocabulary, then repeatedly find the most frequent pair of adjacent symbols in the training text and merge it into a new symbol. Stop when the vocabulary reaches a target size, often 30,000 to 100,000 tokens.
+- **WordPiece** (used by BERT) and **SentencePiece / Unigram** (used by T5 and many multilingual models) are close relatives with different rules for choosing what to merge or keep.
 
-Frequent words become single tokens. Rare words split into meaningful pieces (`token`, `isation`). Nothing
-is ever out of vocabulary, because in the worst case a word falls back to characters or bytes.
+The effect: frequent words become single tokens, while rare words split into meaningful pieces such as `token` + `isation`. Nothing is ever out of vocabulary, because in the worst case a word falls back to single characters or bytes.
+
+A worked example of the first BPE merge. Take a corpus with "low" 5 times, "lower" 2 times, "newest" 6 times and "widest" 3 times. Each word is written as characters followed by an end-of-word marker `</w>`, so that endings can be learned as tokens. Now count every adjacent pair, weighted by word frequency. The pair `t` `</w>` occurs at the end of "newest" (6) and "widest" (3), 9 times; so do `s` `t` and `e` `s`. The pair `w` `e` occurs 8 times (2 in "lower", 6 in "newest"), and `l` `o` 7 times. Three pairs tie on 9; the code below breaks ties by taking the alphabetically last pair, which is `t` `</w>`. That pair becomes the new symbol `t</w>`, and counting starts again.
 
 ```python-run
 from collections import Counter
@@ -155,39 +142,38 @@ for w, f in words.items():
     print(f"  {f} x {' | '.join(w)}")
 ```
 
-This is why LLM limits and prices are quoted in **tokens**, not words. One English word averages roughly
-1.3 tokens.
+**Reading this code line by line**
+
+- `Counter(...)` from Python's `collections` module counts how often each item occurs. Here each word becomes a tuple of characters plus `"</w>"`, so `words` maps, for example, `('l','o','w','</w>')` to 5.
+- Each pass of the outer loop counts every adjacent pair in every word, weighted by `freq`. `zip(w, w[1:])` pairs each symbol with the next one.
+- `max(pairs, key=lambda p: (pairs[p], p))` picks the most frequent pair, breaking ties by the pair itself (alphabetically last).
+- The inner `while` loop rewrites every word, replacing each occurrence of the winning pair by one joined symbol.
+- After 8 merges the function returns the list of merges and the words as they are now split.
+
+The merges come out in this order: `t+</w>`, `s+t</w>`, `e+st</w>`, `o+w`, `l+ow`, `w+est</w>`, `n+e`, `ne+west</w>`. After them, "newest" is a single token `newest</w>`, "low" is `low` + `</w>`, "lower" is `low` + `e` + `r` + `</w>`, and "widest" is `w` + `i` + `d` + `est</w>`. The ending `est</w>` became a reusable piece that would also help with words like "fastest" that were never seen.
+
+This is why the limits and prices of large language models are quoted in **tokens** rather than words. A common rule of thumb is that an English word averages roughly 1.3 tokens.
 
 ## 5. Topic modelling and document clustering
 
-One technique often applied to text is **topic modelling**, an umbrella term for assigning each document
-to one or more topics, usually **without supervision**. For news, the topics might be "politics",
-"sports", "finance". If every document gets a single topic, this is clustering (chapter 3). If a document
-can have several topics, it is closer to the decomposition methods (PCA, NMF): each learned component is
-a "topic", and a document's coefficients say how strongly each topic is present.
+**Topic modelling** is an umbrella term for assigning each document to one or more topics, usually **without supervision** (no labels). For news, the topics might be "politics", "sport" and "finance". If each document gets exactly one topic, the task is **clustering**, grouping similar items (module 3). If a document can mix several topics, it resembles the **decomposition** methods PCA and NMF from module 3, which describe each data point as a weighted combination of a few learned components: each component is a "topic", and a document's weights say how strongly each topic is present.
 
-When people say "topic modelling" they often mean one particular decomposition method: **latent Dirichlet
-allocation (LDA)**.
+When people say "topic modelling" they usually mean one particular decomposition method: **latent Dirichlet allocation (LDA)**. ("Latent" means hidden: the topics are never observed directly. Do not confuse it with linear discriminant analysis, a classifier that shares the abbreviation.)
 
 ### Latent Dirichlet allocation
 
-In plain terms, LDA looks for **sets of words that tend to occur in the same documents**. Those sets are
-the topics. It further assumes that every document blends only a few of them.
+In plain terms, LDA looks for **groups of words that tend to occur in the same documents**. Those groups are the topics. It also assumes that each document blends only a few of them.
 
-Be careful with the word "topic". What the model finds need not match what we would call a topic in
-everyday speech. It is more like a component extracted by PCA or NMF, and it may or may not have a
-semantic meaning. Two topics might be the vocabulary of sports reports and of political news. But another
-topic might gather the words one particular reviewer likes to use, and another the typical phrasing of
-very short reviews.
+Be careful with the word "topic". What LDA finds need not match what a person would call a topic. It is a component, like one from PCA or NMF, and may or may not have an obvious meaning. Two topics might be the vocabulary of sports reports and of political news, but another might gather the words one prolific reviewer likes to use, and another the typical phrasing of very short reviews.
 
-The generative story LDA assumes for each document:
+LDA is built on a **generative story**, an imagined process by which the documents could have been written. For each document:
 
-1. Draw the document's topic proportions $\theta_d$ from a Dirichlet distribution.
-2. For each word position, draw a topic $z$ from $\theta_d$, then draw the word from that topic's word
-   distribution $\beta_z$.
+1. Choose the document's **topic proportions** $\theta_d$: a list of shares, one per topic, that add up to 1. They are drawn from a **Dirichlet distribution**, a probability distribution over such lists of proportions that, with typical settings, favours lists where a few topics dominate.
+2. For each word position, first pick a topic $z$ at random according to $\theta_d$, then pick a word at random according to that topic's word distribution $\beta_z$ (its list of word probabilities).
 
-Fitting LDA means inferring the topic–word distributions (`components_`, shape `(n_topics, n_words)`) and
-the per-document topic mixtures (the output of `transform`, shape `(n_documents, n_topics)`).
+A worked example with two topics: war (words like soldier, army, battle) and music (song, band, dance). A document with proportions $\theta = (0.9, 0.1)$ is written word by word: for each of its 10 words, a 10-sided die with nine "war" faces and one "music" face picks the topic, then a word is drawn from that topic's list. On average 9 words come from the war list and 1 from the music list. Fitting LDA runs this story backwards: given only the documents, it infers the topics' word lists and each document's proportions.
+
+In scikit-learn the topics' word weights end up in `components_`, with shape (number of topics, number of words), and `transform` returns each document's topic mixture, with shape (number of documents, number of topics).
 
 ```mermaid
 graph LR
@@ -199,21 +185,14 @@ graph LR
 
 ### Practical recipe from the book
 
-- For unsupervised text models it is good to **remove very common words**, since they would otherwise
-  dominate the analysis. The book uses `CountVectorizer(max_features=10000, max_df=.15)`: drop words that
-  appear in more than 15% of documents, and keep the 10,000 most frequent of the rest.
-- LDA works on **raw counts**, not tf-idf.
+- Remove **very common words** before an unsupervised text model, or they dominate the analysis. The book uses `CountVectorizer(max_features=10000, max_df=.15)`: drop words found in more than 15% of documents, then keep the 10,000 most frequent of the rest.
+- LDA works on **raw counts**, not tf-idf, because its generative story is about counts of words.
 - Start with a small number of topics, such as 10, so they are easy to inspect.
-- Inspect each topic through its highest-weighted words. Then look at the documents with the highest
-  weight for a topic, to check that the interpretation holds.
-- The topics have **no inherent order**. Changing the number of topics changes all of them, as with NMF.
-- The result is **random**: a different `random_state` gives different topics. The `"batch"` learning
-  method is slower than the default `"online"` one but usually gives better results. Increasing `max_iter`
-  also helps.
+- Inspect each topic through its highest-weighted words, then read the documents with the highest weight for that topic to check that your interpretation holds.
+- The topics have **no inherent order**, and changing the number of topics changes all of them, as with NMF.
+- The result is **random**: a different `random_state` can give different topics. The `"batch"` learning method is slower than the default `"online"` one but usually gives better results, and raising `max_iter` (the number of fitting passes) also helps.
 
-With 10 topics on IMDb, the book finds topics that look like genres (historical and war films, bad
-comedies, TV series, children's films) and some that capture reviewing style. With 100 topics the topics
-become much more specific, and so harder to survey. Among them is a topic about music.
+With 10 topics on IMDb, the book finds topics that look like film genres (historical and war films, bad comedies, TV series, children's films) and some that capture reviewing style. With 100 topics they become much more specific and harder to survey; one of them is about music in films.
 
 ```python-run
 import numpy as np
@@ -250,57 +229,68 @@ new = lda.transform(vect.transform(["soldier army battle war singer song band da
 print("a new document, half war and half music:", new.round(2))
 ```
 
+**Reading this code line by line**
+
+- `themes` holds three word lists of eight words each. The loop writes 60 synthetic documents of 15 words: document $i$ gets main theme number $i \bmod 3$ (war, music, crime, war, ...), and each word comes from the main theme with probability 0.8 and from the other two themes otherwise. This imitates LDA's own generative story, with known answers.
+- `vect.fit_transform(docs)` makes the count matrix: 60 documents by 24 words.
+- `LatentDirichletAllocation(n_components=3, ...)` asks for three topics. `fit_transform` learns them and returns each document's mixture.
+- For each topic, `np.argsort(comp)[::-1][:6]` lists the positions of its six heaviest words, which are printed by name.
+- The last two lines describe a brand-new document with the fitted model.
+
+The three topics recover the three themes, without ever being told them: topic 0 is war (victory, soldier, war, enemy, tank, army), topic 1 crime (mystery, clue, alibi, suspect, detective, police) and topic 2 music (band, dance, guitar, concert, singer, melody). Note that the topic numbers are arbitrary: "crime" was the third theme but became topic 1. Document 0, mostly war, has the mixture `[0.72 0.19 0.09]`; document 1, mostly music, is 89% topic 2. The new sentence, half war words and half music words, comes out as about 47% war and 49% music.
+
 ### What topic models are good for
 
-The book's assessment: topic models such as LDA are interesting ways to **understand large text corpora
-without labels**, or even with labels. Because LDA is randomised, different seeds can give quite different
-outcomes. Identifying topics is helpful, but treat whatever an unsupervised model suggests with caution.
-Confirm your reading of a topic by opening the documents that score highest on it. The topic
-mixtures from `transform` can also be used as a compact representation for supervised learning, which is
-most useful when few labelled examples are available.
+Topic models such as LDA are useful for **understanding large text collections without labels**, and sometimes with them. Because LDA is randomised, different seeds can give quite different results, so treat its suggestions with caution: confirm what a topic means by reading the documents that score highest on it. The topic mixtures returned by `transform` can also serve as a compact set of features for a supervised model, which helps most when few labelled examples are available.
 
 ## 6. Beyond bag of words
 
-The book's closing section points to three developments, all of which have since become the mainstream:
+The book's closing section points to three developments, all of which have since become mainstream:
 
-- **Continuous vector representations**, also called **word embeddings** or distributed word
-  representations (`word2vec`, GloVe). Each word is a dense vector, and words used in similar contexts get
-  similar vectors. Unlike one-hot columns, "excellent" and "wonderful" end up close together.
-- **Recurrent neural networks**, which read text as a sequence and can produce text as output, for
-  example in translation and summarisation.
-- Today, **transformers** (BERT, the GPT family). They produce *contextual* embeddings, where the vector
-  for "bank" depends on the sentence around it. They are used through **fine-tuning** or prompting, and
-  module 8 introduces the mechanism behind them, attention.
+- **Word embeddings** (also called continuous or distributed word representations; `word2vec` and GloVe are well-known methods). Each word is a dense vector of, say, 300 numbers, learned so that words used in similar contexts get similar vectors. Unlike one-hot columns, where every pair of distinct words is equally unrelated, "excellent" and "wonderful" end up close together.
+- **Recurrent neural networks**, which read text as a sequence, one token at a time, and can also produce text, as in translation and summarisation (lesson 82).
+- Today, **transformers** (BERT, the GPT family). They produce *contextual* embeddings, in which the vector for "bank" depends on the sentence around it (river bank or savings bank). They are used through **fine-tuning** (further training a pretrained model on your own labelled data) or through prompting, and module 8 introduces their core mechanism, attention.
 
 | approach | word order? | meaning / synonyms? | data needed | cost |
 |---|---|---|---|---|
 | bag of words / tf-idf + linear model | no (a little with n-grams) | no | little | tiny |
 | averaged word embeddings + linear model | no | yes | little (pretrained vectors) | small |
-| fine-tuned transformer | yes | yes, contextual | moderate | high (GPU) |
-| LLM with a prompt | yes | yes | none or a few examples | per-token cost, latency |
+| fine-tuned transformer | yes | yes, contextual | moderate | high (needs a GPU) |
+| large language model with a prompt | yes | yes | none or a few examples | cost per token, slower responses |
 
-A tf-idf + logistic-regression pipeline is still the right **first baseline** for text classification. It
-trains in seconds, is interpretable, and is often within a few points of far heavier models.
+A tf-idf plus logistic-regression pipeline is still the right **first baseline** for text classification. It trains in seconds, is easy to interpret, and is often within a few points of far heavier models.
 
 > [!INTERVIEW]
-> **"How would you build a text classifier, and how would your approach change with more data or
-> budget?"** Start with cleaning and a tf-idf (uni- and bigram) + logistic regression pipeline, tuned by
-> cross-validation, and read the top coefficients as a sanity check. If accuracy is not enough, move to
-> sentence embeddings + a linear model, then to fine-tuning a pretrained transformer. Throughout: keep
-> preprocessing inside the pipeline, choose metrics that fit the class balance, look at the errors, and
-> mention the latency and cost trade-offs. Follow-up on stemming vs lemmatisation, and on why subword
-> tokenisers remove the out-of-vocabulary problem.
+> **"How would you build a text classifier, and how would your approach change with more data or budget?"** Start with cleaning and a tf-idf (unigrams and bigrams) plus logistic regression pipeline, tuned by cross-validation, and read the top coefficients as a sanity check. If accuracy is not enough, move to sentence embeddings plus a linear model, then to fine-tuning a pretrained transformer. Throughout: keep preprocessing inside the pipeline, choose metrics that fit the class balance, read the errors, and mention latency and cost trade-offs. Expect follow-ups on stemming versus lemmatisation, and on why subword tokenisers remove the out-of-vocabulary problem.
 
 ## Summary
 
-- Tokenisation decides what the features are. Stemming (rules) and lemmatisation (dictionary and
-  grammatical role) merge word forms and act as regularisation, which helps most on small data.
-- Modern models use subword tokenisers (BPE, WordPiece), so no word is out of vocabulary.
-- LDA finds groups of co-occurring words and describes each document as a mixture of them. It is
-  unsupervised and random, and its topics need human inspection.
-- Use counts with `max_df` for LDA. Read topics through their top words and top documents.
-- Embeddings and transformers capture meaning and order. tf-idf + a linear model is still the baseline to
-  beat.
+- Tokenisation decides what the features are. Stemming (rules) and lemmatisation (dictionary plus grammatical role) merge word forms and act as regularisation, which helps most on small data.
+- Modern models use subword tokenisers (BPE, WordPiece), so no word is ever out of vocabulary; their limits and prices are counted in tokens.
+- LDA finds groups of co-occurring words and describes each document as a mixture of them. It is unsupervised and random, and its topics need human inspection.
+- For LDA use raw counts with very common words removed (`max_df`). Read topics through their top words and their top documents.
+- Embeddings and transformers capture meaning and order; tf-idf plus a linear model is still the baseline to beat.
+
+## Glossary
+
+- **Normalisation (text)**: mapping different forms of a word to one representative.
+- **Stemming / stem**: chopping word endings by rule / the result, not always a real word.
+- **Lemmatisation / lemma**: finding the dictionary form using a dictionary and the word's role / that dictionary form.
+- **Suffix**: an ending added to a word, such as "-ing" or "-ed".
+- **Regularisation**: anything that limits how freely a model can fit its training data.
+- **Character n-gram**: a short sequence of adjacent letters used as a feature.
+- **Hash function / collision**: a formula mapping any string to a number / two strings getting the same number.
+- **Out of vocabulary (OOV)**: a word with no entry in the model's vocabulary.
+- **Subword tokenisation**: splitting rare words into frequent pieces.
+- **Byte-pair encoding (BPE)**: building a vocabulary by repeatedly merging the most frequent adjacent pair of symbols.
+- **Topic model**: an unsupervised model that describes documents as mixtures of word groups.
+- **Latent Dirichlet allocation (LDA)**: the standard probabilistic topic model.
+- **Generative story**: an imagined random process that could have produced the data.
+- **Dirichlet distribution**: a probability distribution over lists of proportions that add up to 1.
+- **Word embedding**: a dense vector representing a word, with similar words close together.
+- **Fine-tuning**: further training a pretrained model on your own task's data.
+
+## Check yourself
 
 ```quiz
 [

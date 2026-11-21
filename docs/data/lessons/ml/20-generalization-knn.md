@@ -1,26 +1,28 @@
 # Generalisation, overfitting and k-nearest neighbours
 
-Supervised learning has one goal: **make accurate predictions on new, unseen data**. This lesson covers
-the central concepts of chapter 2 of Müller & Guido (generalisation, overfitting, underfitting and how
-model complexity relates to dataset size) and then studies the first algorithm in depth: k-nearest
-neighbours for classification and regression.
+> **Before this lesson:** you should have built the iris classifier in [The scikit-learn API and your first model](#/lesson/ml/sklearn-first-model), so that `fit`, `predict`, `score`, `train_test_split` and the idea of k-nearest neighbours are familiar. The terms *bias* and *variance* come from [Probability, statistics and MLE](#/lesson/ml/probability-statistics), section 6, and are explained again here.
+
+## In plain words
+
+A model is only useful if it works on cases it has never seen. Doing well on new data is called **generalising**. This lesson is about the two ways a model can fail to generalise, and about one algorithm, k-nearest neighbours, that lets you watch both failures happen by turning a single dial.
+
+Picture two students preparing for an exam from a book of past papers. The first memorises every answer word for word. Given the same questions she scores 100%, but a new question defeats her: she learned the papers, not the subject. The second skims and concludes "the answer is usually C". He does poorly on the past papers and on the exam alike. The first student is **overfitting**; the second is **underfitting**. A good student sits between the two, learning the patterns that will hold for questions not yet written.
+
+Why this matters for a job: "my model scores 99% in training and 70% in production, what is wrong?" is the most common practical problem in machine learning and a guaranteed interview topic. The cure depends on diagnosing which of the two failures you have.
 
 ## 1. Generalisation
 
-If a model makes accurate predictions on unseen data, we say it **generalises** from the training set to the
-test set. A model that is right on every training point but wrong on new points has learned nothing useful.
+In supervised learning we train on examples whose answers are known and then predict for new ones. If the predictions on unseen data are accurate, we say the model **generalises** from the training set to the test set. A model that is right on every training example and wrong on new ones has learned nothing useful.
 
-The book's example: a boat-sales company wants to predict which customers will buy a boat. A data scientist
-finds the rule "*customers older than 45 who have fewer than 3 children or are not divorced want a boat*".
-It is 100% correct on the existing customers. But with enough conditions, you can *always* find a rule that
-fits a finite dataset perfectly. The rule probably reflects quirks of these particular customers, not a real
-pattern. The question to ask is whether it will hold for **new** customers.
+An example. A company that sells boats wants to predict which customers will buy one. It has records for its existing customers: age, number of children, marital status, whether they own a house, and whether they bought a boat. An analyst searches the records and finds a rule: "customers over 45 who either have fewer than three children or have never divorced buy a boat". The rule is correct for every customer in the file.
 
-- **Overfitting**: building a model that is too complex for the amount of information available. It fits the
-  training set's noise and peculiarities and generalises poorly.
-- **Underfitting**: a model too simple to capture the structure ("everybody who owns a house buys a boat")
-  does badly on training *and* test data.
-- The sweet spot lies between them and gives the best generalisation.
+Should the company trust it? With enough conditions joined by "and" and "or", you can *always* build a rule that fits a finite list of customers perfectly, in the extreme by listing each buyer's exact age. Such a rule describes accidents of this particular list. The only question that matters is whether it holds for **new** customers.
+
+- **Overfitting**: the model is too complicated for the amount of information in the data. It fits the accidents of the training set (its **noise**) as if they were patterns, so it does very well on training data and badly on new data.
+- **Underfitting**: the model is too crude to capture the pattern at all, as in "everyone who owns a house buys a boat". It does badly on training data *and* on new data.
+- Between them lies a sweet spot that gives the best performance on new data.
+
+How flexible a model is, meaning how complicated a rule it is able to represent, is called its **model complexity**.
 
 ```mermaid
 graph LR
@@ -28,15 +30,15 @@ graph LR
   S --> O["Overfitting: complex model, train great, test poor"]
 ```
 
-As complexity grows, **training accuracy keeps rising** while **test accuracy rises and then falls**. The
-gap between them signals overfitting.
+Moving from left to right in the diagram means increasing complexity. As you do so, **training accuracy keeps rising**, because a more flexible model can always fit the training data better. **Test accuracy rises and then falls.** The gap between the two is the signal of overfitting.
+
+This is the same trade-off as bias and variance in the probability lesson. **Bias** is the error of a model that is too rigid (underfitting). **Variance** is how much the model would change if it were trained on a different sample of data, which is large for a very flexible model (overfitting).
 
 ## 2. Model complexity vs dataset size
 
-The right complexity depends on how much (and how varied) data you have. With more data, a more complex
-model can be supported without overfitting. Müller & Guido remark that collecting more data is often a
-better investment than tweaking a model, as long as the data is genuinely new, not duplicates or near
-duplicates. Larger datasets let you use more expressive models. This is the story of deep learning.
+How much complexity is "too much" depends on how much data you have, and how varied it is. With more data, there are fewer accidents that hold across all of it, so a more flexible model can be supported before it starts fitting noise. Collecting more data is therefore often a better investment than fiddling with a model, provided the new data is really new and not copies or near-copies of what you already have. This is also the story of deep learning: very large datasets are what make very flexible models workable.
+
+The demonstration below uses a **decision tree** (lesson 22), a model that asks a sequence of yes/no questions about the features. Its `max_depth` setting limits how many questions it may ask in a row, so depth is its complexity dial. `None` means no limit.
 
 ```python-run
 import numpy as np
@@ -54,30 +56,38 @@ for n in [50, 200, 1000, 4000]:
     print(f"n={n:5d} test acc: " + " | ".join(row))
 ```
 
-With 50 samples, the shallow tree is about as good as anything. With thousands, deeper trees win.
+**Reading this code line by line**
 
-## 3. Sample datasets used throughout the book
+- `make_moons(n_samples=n, noise=0.3, random_state=0)` generates an artificial two-class dataset with two features: the points of each class form a crescent, and the two crescents interlock. `noise` blurs them so that they overlap. Artificial data is useful because we can make as much as we like.
+- `train_test_split` holds a quarter back for testing, as in the previous lesson.
+- The inner loop fits a tree at four depths and records the test accuracy of each. The outer loop repeats everything for four dataset sizes.
 
-| dataset | type | size | notes |
+In the output, with 50 samples the depth-3 tree is best (0.92) and the deep trees are much worse (0.69): they have overfitted the tiny training set. With 4,000 samples the depth-6 tree is the best (0.91). More data supports a more complex model. Notice also that the unlimited tree is never the winner: with noisy data, unlimited flexibility always ends up fitting noise.
+
+## 3. Sample datasets used in this module
+
+A few small datasets come up again and again, because they ship with scikit-learn and run in the browser.
+
+| dataset | kind | size (rows × features) | notes |
 |---|---|---|---|
-| `forge` (mglearn) | synthetic binary classification | 26 × 2 | toy 2-D plots |
-| `wave` (mglearn) | synthetic regression | n × 1 | toy 1-D regression |
-| `load_breast_cancer` | real binary classification | 569 × 30 | benign vs malignant |
-| `load_iris` | real 3-class | 150 × 4 | first application |
-| Boston housing (`load_extended_boston`) | regression | 506 × 104 | *removed from scikit-learn 1.2* over an ethically problematic feature; use `fetch_california_housing` or `load_diabetes` instead |
-| `make_moons`, `make_blobs` | synthetic | any | nonlinear / clustered data |
+| `load_iris` | real, 3 classes | 150 × 4 | flower species; the first application |
+| `load_breast_cancer` | real, 2 classes | 569 × 30 | harmless vs cancerous tumours |
+| `load_diabetes` | real, regression | 442 × 10 | disease progression after one year |
+| `make_moons` | artificial, 2 classes | any | two interlocking crescents; cannot be separated by a straight line |
+| `make_blobs` | artificial, any number of classes | any | separate round clumps of points |
+| `fetch_california_housing` | real, regression | 20,640 × 8 | needs a download, so it is not used in the runnable examples |
 
-We use `make_moons`, `load_breast_cancer`, `load_diabetes` and friends below, because they ship with
-scikit-learn and run in your browser.
+The source book also uses a housing dataset from Boston. scikit-learn removed it in version 1.2 because one of its features was built on a racist assumption; the California and diabetes datasets are the usual replacements. The book's own toy datasets (`forge` and `wave`, from its helper package `mglearn`) are replaced here by generated data of the same shape.
 
 ## 4. k-nearest neighbours classification
 
-**Fit**: store the training set. **Predict**: for a new point, find the $k$ nearest training points by
-Euclidean distance and take the majority vote.
+Recall the algorithm from the previous lesson. **Fit**: store the training set. **Predict**: for a new point, find the $k$ training points nearest to it by straight-line (Euclidean) distance and take a majority vote of their labels. In symbols,
 
 $$\hat y(x) = \operatorname{mode}\{y_i : x_i \in N_k(x)\}$$
 
-For **multiclass** problems you count how many neighbours belong to each class and pick the most common.
+where $N_k(x)$ is the set of the $k$ nearest neighbours of $x$, the **mode** is the most common value in a collection, and $\hat y$ is the prediction. With more than two classes the rule is unchanged: count the neighbours in each class and pick the largest count.
+
+The number of neighbours $k$ is this model's complexity dial. Watch what it does on the breast-cancer data:
 
 ```python-run
 import numpy as np
@@ -93,16 +103,19 @@ for k in [1, 3, 5, 10, 20, 50, 100]:
     print(f"{k:3d}  {clf.score(X_tr, y_tr):.3f}  {clf.score(X_te, y_te):.3f}")
 ```
 
-This is the book's model-complexity curve in numbers. **Small $k$ means a complex model**: the decision
-boundary follows every training point, giving perfect training accuracy and lower test accuracy. **Large
-$k$ means a simple model** with a smooth boundary. At the extreme, $k = n$, it predicts the majority class
-everywhere. The best test accuracy lies in between, around $k\approx 6$ in the book's run.
+The loop fits one model per value of $k$ and prints its accuracy on the training set and on the test set. This table is the diagram from section 1 in numbers, read from bottom to top:
+
+- **Small $k$ is a complex model.** With $k=1$ training accuracy is a perfect 1.000 (each point is its own nearest neighbour) while test accuracy is 0.902. The model follows every single training point, including the odd ones.
+- **Large $k$ is a simple model.** With $k=100$ training accuracy has dropped to 0.913. At the extreme, $k$ equal to the number of training points, every prediction would be the overall majority class.
+- The best test accuracy (0.923) is found in between.
+
+It surprises people that *small* $k$ is the *complex* setting. The reason: a model that consults one neighbour can change its answer every time you move a little, so the border between classes can be as wiggly as the data. A model that averages over 100 neighbours changes its mind slowly.
 
 ### Decision boundaries
 
-On a 2-D dataset you can picture this. $k=1$ draws a jagged boundary that wraps around every point, while
-$k=9$ draws a smooth one. We can't plot here, but we can measure the boundary's length by counting neighbouring grid cells that
-receive different predictions:
+A classifier divides the space of possible inputs into regions, one per class. The border between regions is the **decision boundary**. With two features you can picture it as a line drawn on a map of points. For $k=1$ the line is jagged and wraps little islands around individual points; for larger $k$ it is smooth.
+
+Charts are not available here, so we measure the boundary instead: lay a fine grid over the plane, predict a class for every cell, and count the pairs of side-by-side cells that got different predictions. A longer boundary is a more wiggly one.
 
 ```python-run
 import numpy as np
@@ -118,13 +131,17 @@ for k in [1, 5, 25, 100]:
     print(f"k={k:3d}: {edges:4d} grid cells sit on the decision boundary (longer = more wiggly)")
 ```
 
+`np.linspace(a, b, 120)` gives 120 evenly spaced numbers from `a` to `b`, and `np.meshgrid` combines two such lists into the coordinates of a 120 × 120 grid. `.ravel()` flattens a grid into one long list, so `grid` is a table of 14,400 points to classify. After predicting, `.reshape(xx.shape)` folds the answers back into grid form. `p[:, 1:] != p[:, :-1]` compares each cell with its left-hand neighbour, and `p[1:] != p[:-1]` with the cell above; `.sum()` counts the disagreements. The count falls from 579 at $k=1$ to 236 at $k=100$: the boundary gets shorter and smoother as $k$ grows.
+
 ## 5. k-nearest neighbours regression
 
-For regression, predict the **mean** of the neighbours' targets (`KNeighborsRegressor`). With
-`weights="distance"`, closer neighbours count more. `.score` returns $R^2$, the coefficient of
-determination: 1 is perfect, 0 is no better than predicting the mean, and it can be negative.
+The same idea predicts numbers. For **regression**, `KNeighborsRegressor` finds the $k$ nearest training points and returns the **average** of their target values. If the three nearest houses sold for 200, 220 and 240 thousand, the prediction is 220 thousand. With the option `weights="distance"`, closer neighbours count for more in the average.
+
+For regression models, `.score` returns $R^2$ ("R squared"), the **coefficient of determination**. It compares the model's squared errors with those of the laziest possible predictor, one that always answers with the average target $\bar y$:
 
 $$R^2 = 1 - \frac{\sum_i (y_i - \hat y_i)^2}{\sum_i (y_i - \bar y)^2}$$
+
+The top of the fraction is the model's total squared error; the bottom is the lazy predictor's. So $R^2 = 1$ means perfect predictions, $R^2 = 0$ means no better than always guessing the average, and a negative value means worse than that. Worked example: true values 1, 2, 3 (average 2) and predictions 1, 2, 4. The model's squared error is $0 + 0 + 1 = 1$, the lazy predictor's is $1 + 0 + 1 = 2$, so $R^2 = 1 - 1/2 = 0.5$.
 
 ```python-run
 import numpy as np
@@ -140,26 +157,19 @@ for k in [1, 3, 9, 30]:
     print(f"k={k:2d}: train R2={reg.score(X_tr, y_tr):.2f}  test R2={reg.score(X_te, y_te):.2f}")
 ```
 
+The data has a single feature drawn at random between −3 and 3, and a target that follows a rising wave plus random noise. Note the shape `(80, 1)`: even one feature must be a table with one column. The pattern in the output matches classification. $k=1$ reproduces the training data exactly (training $R^2$ of 1.00), $k=3$ gives the best test score (0.94), and $k=30$ averages over so many points that the wave is flattened out (0.79): underfitting.
+
 ## 6. Strengths, weaknesses and parameters
 
-Paraphrasing the book's assessment:
-
-- **Two important parameters**: the number of neighbours, where a small number such as 3 or 5 often works
-  well but should be tuned, and the **distance metric**, Euclidean by default.
-- **Strengths**: very easy to understand; often reasonable performance without much tuning; a good
-  **baseline**; fitting is essentially instant.
+- **Two settings matter**: the number of neighbours (a small number such as 3 or 5 is a reasonable start, but tune it) and the **distance metric**, the rule for measuring how far apart two points are (Euclidean by default).
+- **Strengths**: easy to understand and explain; often gives reasonable results with little tuning; a good **baseline** to compare better models against; training takes almost no time.
 - **Weaknesses**:
-  - **prediction is slow** for large training sets, because every query compares against all stored
-    points (KD-trees and ball trees help in low dimensions);
-  - it **needs preprocessing**: features must be on comparable scales, or the largest-scale feature
-    dominates the distance (lesson 3.1);
-  - it performs poorly with **many features** (hundreds or more), because of the distance concentration
-    seen in the linear-algebra lesson;
-  - it does particularly badly on **sparse** data where most features are 0, such as text.
+  - **Prediction is slow** when the training set is large, because each new point is compared with every stored point. Index structures called KD-trees and ball trees speed this up when there are few features.
+  - **It needs preprocessing.** Features must be on comparable scales, or the feature with the biggest numbers decides the distance on its own (demonstrated below; lesson 30 covers scaling).
+  - **It copes poorly with many features** (hundreds or more), because in high dimensions all points are about equally far apart, the "curse of dimensionality" from the linear-algebra lesson.
+  - **It does badly on sparse data**, where most feature values are 0, as with word counts for text.
 
-So k-NN is easy to understand but rarely used in production for tabular data. However, *nearest-neighbour
-search over learned embeddings* is at the heart of modern retrieval systems (semantic search, RAG,
-recommendations), done with approximate algorithms like HNSW.
+So k-NN is rarely the final model for ordinary tables of data. The underlying idea is very much alive, though: modern search and recommendation systems turn items into lists of numbers called **embeddings** and then look up the nearest neighbours of a query, using approximate methods (HNSW is a popular one) that trade a little accuracy for a great deal of speed.
 
 ```python-run
 import numpy as np
@@ -177,23 +187,22 @@ scaled = KNeighborsClassifier().fit(sc.transform(X_tr), y_tr).score(sc.transform
 print(f"k-NN accuracy raw: {raw:.3f}   after standard scaling: {scaled:.3f}")
 ```
 
+`X.std(0)` is the standard deviation (the typical spread) of each column. The first line of output shows that one feature varies by about 0.003 and another by about 569, a factor of two hundred thousand. In a distance calculation the second drowns out the first entirely. `StandardScaler` rescales every feature to have mean 0 and spread 1; it learns the rescaling from the training data with `fit` and applies it to both sets with `transform`. Accuracy rises from 0.937 to 0.951 with no other change.
+
 > [!INTERVIEW]
-> **"How do you choose k, and what happens at the extremes?"** Choose by cross-validation. $k=1$ has zero
-> training error and high variance; $k=n$ predicts the majority class (high bias). Odd $k$ avoids ties in
-> binary problems. Also mention scaling, the curse of dimensionality, and that prediction costs $O(n\cdot p)$
-> per query without an index.
+> **"How do you choose k, and what happens at the extremes?"** Choose it by cross-validation. $k=1$ has zero training error and high variance; $k=n$ predicts the majority class everywhere (high bias). An odd $k$ avoids tied votes when there are two classes. Also mention that features must be scaled, that many features hurt (the curse of dimensionality), and that without an index each prediction costs work proportional to the number of training points times the number of features.
 
 ## 7. Diagnosing over- and underfitting in practice
 
+Compare the score on the training data with the score on held-out data (called **validation** data when it is used for making decisions about the model).
+
 | symptom | diagnosis | remedies |
 |---|---|---|
-| train high, validation much lower | overfitting / high variance | more data, regularise, simpler model, fewer features, ensembles (bagging), early stopping |
-| train and validation both low | underfitting / high bias | more expressive model, better features, less regularisation, train longer |
-| train and validation close and high | good fit | ship it (after a final test-set check) |
+| training score high, validation score much lower | overfitting (high variance) | more data, a simpler model, stronger regularisation (lesson 21), fewer features, averaging many models (lesson 22) |
+| training and validation scores both low | underfitting (high bias) | a more flexible model, better features, weaker regularisation |
+| training and validation scores close and high | a good fit | finish with one check on the test set |
 
-**Learning curves**, which plot score against training-set size, tell the two apart. If the validation
-curve is still rising as data grows, more data will help. If both curves have plateaued at a low value,
-you need a better model or features.
+A **learning curve** tells the two problems apart. Train the model on a small part of the data, then a larger part, then all of it, recording both scores each time. If the validation score is still climbing as data is added, more data will help. If both scores have levelled off at a low value, more data will not help, and you need a better model or better features.
 
 ```python-run
 import numpy as np
@@ -210,10 +219,11 @@ for s, a, b in zip(sizes, tr.mean(1), va.mean(1)):
     print(f"n_train={s:3d}  train={a:.3f}  validation={b:.3f}")
 ```
 
+`make_pipeline` chains the scaler and a 1-nearest-neighbour model into one object (lesson 60). `learning_curve` trains it on 10%, 30%, 60% and 100% of the available training data, each time repeating the measurement on five different held-out slices (`cv=5`), and returns the sizes and the two tables of scores; `.mean(1)` averages over the five repeats. The training score is 1.000 throughout, as always for $k=1$. The validation score climbs from 0.750 with 45 samples to 0.954 with 455, and it is still creeping upward at the end: a sign that this model would benefit from more data.
+
 ## 8. Worked example: classifying one point by hand
 
-Doing one prediction on paper fixes the algorithm in memory, and it is a common warm-up question. Six
-training points have two features and a class:
+Doing one prediction on paper fixes the algorithm in memory, and it is a common warm-up question. Six training points have two features and a class:
 
 | point | $x_1$ | $x_2$ | class |
 |---|---|---|---|
@@ -224,8 +234,7 @@ training points have two features and a class:
 | P5 | 6 | 5 | B |
 | P6 | 3 | 3 | B |
 
-Classify the query $q = (3, 2)$. Squared Euclidean distances are enough, since the square root does not
-change the ordering:
+Classify the new point $q = (3, 2)$. For each training point, subtract the coordinates, square and add. We can skip the square root, because it does not change which distances are smaller. Sorted from nearest to farthest:
 
 | point | $(x_1 - 3)^2 + (x_2 - 2)^2$ | class |
 |---|---|---|
@@ -237,16 +246,12 @@ change the ordering:
 | P5 | $9 + 9 = 18$ | B |
 
 - With $k=1$ the nearest point is P6, so the prediction is **B**.
-- With $k=3$ the neighbours are P6 (B), P2 (A) and one of P1/P3 (A). The vote is 2 to 1 for **A**.
-- With $k=5$ the neighbours are P6, P2, P1, P3, P4: three A and two B, so **A**.
+- With $k=3$ the neighbours are P6 (B), P2 (A) and one of P1 or P3 (both A). The vote is 2 to 1 for **A**.
+- With $k=5$ the neighbours are P6, P2, P1, P3 and P4: three A and two B, so **A**.
 
-The answer changes with $k$. With $k=1$ a single nearby point decides everything, which makes the model
-sensitive to noise: if P6 were a labelling mistake, the prediction would be wrong. Larger $k$ averages
-over more evidence.
+The answer changes with $k$. With $k=1$ a single nearby point decides everything, which makes the model sensitive to noise: if P6 had been labelled wrongly, the prediction would be wrong. A larger $k$ weighs more evidence.
 
-Note the tie between P1 and P3 at distance 5. Here it does not matter, because both are class A. In
-general an implementation needs a rule. scikit-learn keeps whichever comes first in the training data.
-Problem *ml-knn-predict* specifies the rule exactly.
+Note the tie between P1 and P3, both at squared distance 5. Here it does not matter, because both are class A. In general an implementation needs a rule; scikit-learn keeps whichever comes first in the training data. The problem *ml-knn-predict* states its rule exactly.
 
 ```python-run
 import numpy as np
@@ -263,22 +268,15 @@ weighted = KNeighborsClassifier(n_neighbors=5, weights="distance").fit(X, y)
 print("k=5, distance-weighted:", weighted.predict(q)[0], {str(c): round(float(v), 2) for c, v in zip(weighted.classes_, weighted.predict_proba(q)[0])})
 ```
 
-`predict_proba` for k-NN is the fraction of neighbours in each class. With `weights="distance"`, each
-neighbour's vote is weighted by $1/d$, so the very close P6 counts for more.
+The code repeats the hand calculation. `((X - q) ** 2).sum(axis=1)` computes the six squared distances in one expression (`axis=1` adds across each row). `predict_proba` returns, for each class, the model's estimated probability; for k-NN that is the fraction of the $k$ neighbours in the class, so $k=3$ prints 0.67 for A and 0.33 for B. With `weights="distance"` each neighbour's vote is multiplied by one over its distance, so the very close P6 counts for more and the probability of A falls from 0.60 to 0.54, though A still wins.
 
 ## 9. Design choices and pitfalls
 
-**Choosing the distance.** Euclidean distance is the default. Manhattan distance (`metric="manhattan"`,
-the sum of absolute differences) is less dominated by one large difference. Cosine distance suits text
-and embeddings, where direction matters and length does not. The right metric is part of the model. It
-encodes what "similar" means in your problem.
+**Choosing the distance.** Euclidean distance is the default. Manhattan distance (`metric="manhattan"`, the sum of the absolute differences) is less dominated by one large difference. Cosine distance compares direction and ignores length, which suits text and embeddings. The metric is part of the model: it encodes what "similar" means in your problem.
 
-**Choosing $k$.** Use cross-validation on the training data (module 5). A common starting range is 1 to
-about $\sqrt{n}$. For two classes, an odd $k$ avoids tied votes.
+**Choosing $k$.** Use cross-validation on the training data (lesson 50). A common search range is from 1 up to about the square root of the number of training samples. For two classes, an odd $k$ avoids tied votes.
 
-**Why many features hurt.** Every feature contributes to the distance, including irrelevant ones. With a
-few informative features and many noisy ones, the noise swamps the signal. The demonstration below adds
-random features to iris.
+**Why many features hurt.** Every feature contributes to the distance, including irrelevant ones. With a few informative features and many noisy ones, the noise swamps the signal. The demonstration below adds columns of pure random numbers to iris.
 
 ```python-run
 import numpy as np
@@ -296,25 +294,42 @@ for n_noise in [0, 5, 20, 100, 500]:
     print(f"4 real features + {n_noise:3d} noise features: CV accuracy = {acc:.3f}")
 ```
 
+`np.hstack` glues extra columns onto the right of the table, and `rng.randn(len(X), n_noise)` creates that many columns of random numbers that have nothing to do with the species. Accuracy falls from 0.960 with no noise columns to 0.847 with five, and to 0.467 with five hundred, which is close to the 0.333 you would get by guessing among three species. The four useful measurements are still in the table; the model can no longer hear them over the noise.
+
 **Other pitfalls.**
 
-- *Duplicates.* If the same row appears in both training and test data, $k=1$ gets it right by lookup.
-  The score then says nothing about generalisation.
-- *Imbalanced classes.* With large $k$ the majority class wins most votes. Use distance weighting or a
-  smaller $k$.
-- *Memory.* The model **is** the training set. A million rows of 100 features must be kept in memory and
-  shipped with the model.
-- *Categorical features.* A distance between category codes is meaningless. One-hot encode them and think
-  about how they should be weighted against numeric features.
+- *Duplicates.* If the same row appears in both the training and the test data, $k=1$ gets it right by looking it up. The score then says nothing about generalisation.
+- *Imbalanced classes.* When one class is much more common than another, a large $k$ lets the common class win most votes. Use distance weighting or a smaller $k$.
+- *Memory.* The model **is** the training set. A million rows of 100 features must be kept in memory and shipped along with the model.
+- *Categorical features.* Features that are categories (such as a colour stored as 0, 1, 2) have no meaningful distance between their codes. They must be encoded differently (lesson 40), and you must decide how they weigh against numeric features.
 
 ## Summary
 
-- Generalisation, meaning performance on unseen data, is the goal. The training score alone is meaningless.
-- Overfitting = too complex for the data; underfitting = too simple. Complexity should grow with data.
-- k-NN: store the data, vote among the $k$ closest points (or average them for regression). Small $k$ is
-  complex, large $k$ is simple.
-- k-NN needs scaled features, struggles with many or sparse features, and predicts slowly on big data. It
-  is a great baseline.
+- Generalisation, meaning performance on unseen data, is the goal. A training score on its own says nothing.
+- Overfitting is a model too complex for the data; underfitting is one too crude. The complexity you can afford grows with the amount of data.
+- k-NN stores the data and lets the $k$ closest points vote (or averages them, for regression). Small $k$ is complex, large $k$ is simple.
+- k-NN needs scaled features, struggles with many or sparse features, and predicts slowly on large data. It is a good baseline.
+- A learning curve tells you whether more data or a better model is the cure.
+
+## Glossary
+
+- **Generalisation**: accuracy on data the model was not trained on.
+- **Overfitting**: fitting the accidents of the training data; high training score, low test score.
+- **Underfitting**: a model too crude to capture the pattern; low scores everywhere.
+- **Model complexity**: how flexible a model is; how complicated a rule it can represent.
+- **Noise**: random variation in the data that carries no pattern.
+- **Bias / variance**: error from rigidity / error from sensitivity to the particular training sample.
+- **Decision boundary**: the border between the regions a classifier assigns to different classes.
+- **Mode**: the most frequent value in a collection.
+- **$R^2$ (coefficient of determination)**: regression score; 1 is perfect, 0 is no better than predicting the average.
+- **Distance metric**: the rule used to measure how far apart two samples are.
+- **Baseline**: a basic model used as a point of comparison.
+- **Sparse data**: data in which most values are zero.
+- **Embedding**: a list of numbers representing an item so that similar items are close together.
+- **Validation data**: held-out data used to make choices about the model.
+- **Learning curve**: scores plotted against the amount of training data.
+
+## Check yourself
 
 ```quiz
 [
