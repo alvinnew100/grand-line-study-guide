@@ -1,9 +1,28 @@
 # The transformer block: multi-head, norms, residuals, FFN and MoE
 
-One attention operation is a single "view" of the sequence. A transformer block wraps attention with
-the machinery that lets dozens or hundreds of these layers stack and still train: multiple heads,
-residual connections, normalisation and a position-wise feed-forward network. This lesson assembles a
-complete modern (Llama-style) decoder block in numpy.
+> **Before this lesson:** you should know what a token, an embedding, softmax and scaled dot-product
+> attention are, and how to read an array shape such as $(T, d)$. All of that is taught in the
+> previous lesson, [From embeddings to scaled dot-product attention](#/lesson/llm-practice/attention-from-scratch).
+
+## In plain words
+
+The previous lesson built one attention operation: every token looks back over the earlier tokens
+and blends in what is relevant. One such look is not enough to understand a sentence. A real model
+repeats the operation dozens of times, and each repetition is packaged in a unit called a
+**transformer block**. A model is a tall stack of identical blocks, like floors of an office tower.
+
+Think of a document passing down a row of editors. Each editor reads the current draft, pencils a
+few corrections in the margin and passes the same sheet on. No editor rewrites the page from
+scratch; each one adds a little. A transformer block works the same way: it reads the current vector
+for every token, works out a small improvement and *adds* it. The extra machinery in a block (several
+attention "heads", a rescaling step called normalisation, the add-on connections and a small
+per-token calculator) exists so that a hundred editors in a row still produce something sensible.
+
+Why it matters for a job: the block is the unit you count when you estimate a model's size, memory
+use and speed. Interviewers ask "why pre-norm?", "what is the difference between total and active
+parameters?" and "split this array into heads" precisely because the answers show whether you can
+read a model description and predict what it will cost to run. This lesson assembles a complete
+modern block (the design used by the Llama family of open models) in numpy.
 
 ## 1. The block at a glance
 
@@ -20,32 +39,57 @@ flowchart TB
   ADD2 --> Y[output of shape T by d]
 ```
 
-In equations (pre-norm form):
+Read the diagram from top to bottom. The input `x` is a matrix with one row per token ($T$ rows) and
+$d$ numbers per row. It goes through a normalisation step (RMSNorm, section 4), then attention with
+several heads (section 2), and the result is **added** to the original `x`. The sum goes through a
+second normalisation and a small network called the FFN (section 5), and that result is added again.
+The two circles marked "add" are the editors' pencil marks.
+
+In equations:
 
 $$
 h = x + \text{Attn}(\text{Norm}(x)), \qquad y = h + \text{FFN}(\text{Norm}(h))
 $$
 
-Every sub-layer reads from and writes back to the **residual stream** $x$; nothing replaces it. That
-picture, a shared bus that layers add small updates to, is the most useful mental model for both
-training dynamics and interpretability.
+Each of the two calculations inside a block (attention, and the FFN) is called a **sub-layer**. Each
+sub-layer reads the running vector and writes a small update back onto it; nothing ever replaces it.
+That running vector is called the **residual stream**. Picturing it as a shared notice board that
+every layer reads and pins small notes to is the most useful mental model, both for understanding
+training and for the research field that studies what models do internally.
 
 ## 2. Multi-head attention
 
-Instead of one attention with $d_k = d$, we run $h$ heads in parallel, each with head width
-$d_h = d / h$, then concatenate and project:
+A single attention operation gives each token one set of weights over the other tokens, so it can
+focus on one kind of relationship at a time. Language has several at once: which noun a pronoun
+refers to, which word came immediately before, which verb goes with which subject. **Multi-head
+attention** (MHA) runs several independent attention operations side by side, each called a **head**,
+and joins their results.
+
+If the model width is $d$ and there are $h$ heads, each head works with shorter vectors of length
+$d_h = d / h$ (the **head width**). With $d = 512$ and $h = 8$, each head uses vectors of length 64.
+The outputs of all heads are placed end to end (**concatenated**) to make a vector of length $d$
+again, and one more learned matrix $W_O$ mixes them:
 
 $$
 \text{head}_i = \text{Attention}(XW_Q^{(i)}, XW_K^{(i)}, XW_V^{(i)}),\qquad
 \text{MHA}(X) = [\text{head}_1; \dots; \text{head}_h]\,W_O
 $$
 
-Different heads can specialise (syntax, coreference, previous token, induction...). Total compute is
-about the same as one big head because each head is $h$ times narrower.
+The superscript $(i)$ says that head number $i$ has its own query, key and value matrices. Different
+heads end up specialising in different relationships. The total amount of arithmetic is about the
+same as one big head, because each head is $h$ times narrower.
 
-In practice nobody stores $h$ separate matrices. We use one $d \times d$ projection per Q/K/V and then
-**reshape**: $(T, d) \to (T, h, d_h) \to (h, T, d_h)$. Merging is the inverse. Getting this reshape
-right is a classic interview and debugging question (and one of this module's problems).
+Real code does not store $h$ separate small matrices. It uses one $d \times d$ matrix each for
+queries, keys and values, and then cuts every token's vector of length $d$ into $h$ consecutive
+slices. In numpy that cutting is done with two operations:
+
+- **reshape** changes how the same numbers are grouped without moving them: $(T, d) \to (T, h, d_h)$
+  says "for each token, treat its $d$ numbers as $h$ groups of $d_h$";
+- **transpose** reorders the directions of an array: $(T, h, d_h) \to (h, T, d_h)$ puts the head
+  direction first, so that each head is a complete $(T, d_h)$ matrix ready for attention.
+
+Merging is the same two steps in reverse. Getting this pair right is a classic interview and
+debugging question, and one of this module's practice problems.
 
 ```python-run
 import numpy as np
@@ -69,10 +113,29 @@ wrong = x.reshape(4, 2, 2)
 print("wrong head 0:\n", wrong[0], "  <- token 0's features masquerading as 2 tokens")
 ```
 
+**Reading this code line by line**
+
+- `T, d = x.shape` unpacks the two sizes of the input.
+- `x.reshape(T, h, d // h)` groups each token's numbers into `h` slices; `//` is whole-number
+  division. `.transpose(1, 0, 2)` reorders the three directions so the old direction 1 (heads) comes
+  first.
+- `merge_heads` undoes it: transpose back to `(T, h, dh)`, then reshape to `(T, h * dh)`.
+- `np.arange(2 * 8).reshape(2, 8)` creates the numbers 0 to 15 arranged as 2 tokens of 8 numbers, so
+  you can see where each number goes.
+- Output: `split shape (4, 2, 2)`; head 0 holds `[[0 1] [8 9]]`, the first two numbers of token 0
+  and the first two of token 1; and `round trip ok: True`.
+- The last two lines show the classic bug. Reshaping straight to `(4, 2, 2)` without the transpose
+  gives head 0 the values `[[0 1] [2 3]]`: four numbers that all belong to token 0, wrongly treated
+  as if they were two tokens. The shapes look right, the program runs, and the model learns nothing
+  useful.
+
 ### MQA and GQA: shrinking the KV cache
 
-During generation we cache $K$ and $V$ for every past token (the **KV cache**, next lesson). Its size
-is $2 \times L \times T \times h_{kv} \times d_h$ values per sequence. To cut it:
+When a model generates text it stores the keys and values of every earlier token so that it does not
+have to recompute them for each new token. This store is the **KV cache** (the next lesson explains
+it fully). Its size per sequence is $2 \times L \times T \times h_{kv} \times d_h$ numbers: 2 for
+keys and values, $L$ layers, $T$ tokens, $h_{kv}$ heads that have their own keys and values, and
+$d_h$ numbers per head. For long texts this is many gigabytes, so designers shrink $h_{kv}$:
 
 - **Multi-query attention (MQA)**: all query heads share one K/V head ($h_{kv} = 1$).
 - **Grouped-query attention (GQA)**: query heads are split into $g$ groups, each sharing a K/V head
@@ -81,39 +144,75 @@ is $2 \times L \times T \times h_{kv} \times d_h$ values per sequence. To cut it
 - **Multi-head latent attention (MLA)**, used by DeepSeek-V2/V3, compresses K/V into a low-rank latent
   vector and reconstructs per-head keys/values on the fly.
 
+("Low-rank" means the information is squeezed through a much shorter vector; lesson 13 on LoRA
+explains the idea in detail.)
+
 ## 3. Residual connections
 
-Without residuals, a 100-layer network must learn to pass the identity through every layer, and
-gradients must flow through 100 Jacobians. With $y = x + f(x)$, the gradient has a direct path
-$\partial y / \partial x = I + \partial f / \partial x$, so deep stacks remain trainable. Residuals
-also mean each layer only needs to learn a *correction*.
+A **residual connection** is the "add" in the diagram: instead of outputting $f(x)$, a sub-layer
+outputs $x + f(x)$. The word residual means "what is left over": the sub-layer only has to learn the
+difference between its input and the desired output.
+
+To see why this matters, imagine a network of 100 layers without it. During training, the error
+signal (the gradient from the previous lesson) has to travel backwards from the output through all
+100 layers to reach the first one. Each layer multiplies the signal by some factor. Multiply 100
+factors that are each a little below 1 and the result is practically zero; a little above 1 and it
+explodes. Either way the early layers cannot learn. The plain network also has to work hard to pass
+information through unchanged, since every layer transforms whatever it receives.
+
+With $y = x + f(x)$, the rate at which $y$ changes when $x$ changes is
+
+$$
+\partial y / \partial x = I + \partial f / \partial x
+$$
+
+where $\partial$ ("partial derivative") denotes that rate of change and $I$ is the identity, the
+"multiply by 1" matrix. The $I$ term is a direct path: the signal can flow straight down the stack
+through the additions, however badly behaved $f$ is. (The grid of rates of change
+$\partial f / \partial x$ is called a **Jacobian** in the interview callout below.) This is why
+stacks of a hundred blocks train at all.
 
 ## 4. Normalisation: LayerNorm and RMSNorm
 
-**LayerNorm** normalises each token vector across its features, then applies a learned scale and
-shift:
+As vectors pass through many layers their numbers can drift to be very large or very small, which
+makes training unstable. **Normalisation** rescales each vector to a standard size before it enters a
+sub-layer.
+
+**LayerNorm** (layer normalisation) treats each token's vector on its own. It computes the average
+$\mu$ of the vector's $d$ numbers and their spread $\sigma^2$ (the variance), subtracts the average,
+divides by the standard deviation, and then applies a learned scale $\gamma$ and learned shift
+$\beta$ (two vectors of length $d$ that training adjusts):
 
 $$
 \text{LN}(x) = \gamma \odot \frac{x - \mu}{\sqrt{\sigma^2 + \epsilon}} + \beta,\quad
 \mu = \frac{1}{d}\sum_i x_i,\; \sigma^2 = \frac{1}{d}\sum_i (x_i - \mu)^2
 $$
 
-Note it uses the **population** variance (divide by $d$, not $d-1$) and normalises per token, not per
-batch (unlike BatchNorm), so it behaves identically at train and inference time and for batch size 1.
+The symbol $\odot$ means "multiply slot by slot", and $\epsilon$ is a tiny constant such as
+$10^{-5}$ that prevents division by zero. Two details are often asked about. First, the variance
+divides by $d$, not by $d - 1$; this is called the **population** variance. Second, the statistics
+come from one token's vector, not from the whole batch. An older technique, BatchNorm, averages over
+all the examples being processed together, which makes it behave differently in training and in use,
+and badly when there is only one example. LayerNorm behaves identically in both situations.
 
-**RMSNorm** (Llama, Mistral, Qwen, Gemma...) drops the mean-centering and the bias:
+**RMSNorm** (root-mean-square normalisation), used by Llama, Mistral, Qwen, Gemma and most recent
+open models, removes the subtraction of the average and the shift $\beta$:
 
 $$
 \text{RMSNorm}(x) = \gamma \odot \frac{x}{\sqrt{\frac{1}{d}\sum_i x_i^2 + \epsilon}}
 $$
 
-It is cheaper and empirically just as good.
+It divides the vector by the square root of the average of its squared entries. That is fewer
+operations per token, and measured quality is the same.
 
-**Pre-norm vs post-norm.** The original transformer normalised *after* the residual add
-(post-norm), which needs careful learning-rate warm-up. GPT-2 onwards normalise the *input* of each
-sub-layer (pre-norm) and add a final norm before the LM head. Pre-norm keeps the residual stream
-un-normalised and trains much more stably at depth. Some recent models (Gemma 2/3, OLMo 2) add extra
-norms after sub-layers or on Q/K ("QK-norm") to tame logit growth.
+**Pre-norm versus post-norm.** The 2017 transformer normalised *after* each addition (post-norm).
+That arrangement trains only with a careful schedule that starts with a very small **learning rate**
+(the size of each training nudge) and raises it gradually, a procedure called **warm-up**. From GPT-2
+onwards, models normalise the *input* of each sub-layer instead (pre-norm, as in the diagram above)
+and add one final norm before the LM head. Pre-norm leaves the residual stream itself untouched, so
+the direct path from section 3 stays clean, and deep stacks train much more stably. Some recent models
+(Gemma 2 and 3, OLMo 2) add further norms after sub-layers or on the queries and keys ("QK-norm") to
+stop the attention scores growing too large.
 
 ```python-run
 import numpy as np
@@ -133,34 +232,56 @@ print("LayerNorm:\n", layer_norm(x, g, b))      # constant row -> zeros (eps pre
 print("RMSNorm:\n", rms_norm(x, g))             # constant row -> ones
 ```
 
+`x.mean(axis=-1, keepdims=True)` is the average of each row and `x.var(...)` its population
+variance. The test input has two rows: `[1, 2, 3, 4]` and a constant row of 10s. LayerNorm turns the
+first into about `[-1.34, -0.45, 0.45, 1.34]` (average 0, spread 1) and the constant row into all
+zeros, since subtracting the average leaves nothing; `eps` keeps `0 / 0` from happening. RMSNorm
+turns the first row into about `[0.37, 0.73, 1.10, 1.46]` and the constant row into all ones,
+because it only rescales and does not centre.
+
 ## 5. The feed-forward network (FFN / MLP)
 
-After attention mixes positions, the FFN processes each position independently with a two-layer MLP,
-typically expanding to about $4d$:
+Attention moves information *between* tokens. The second sub-layer, the **feed-forward network**
+(FFN), then works on each token's vector separately, with no communication between positions. It is
+a small **multi-layer perceptron** (MLP), the classic neural network made of matrix multiplications
+with a simple curve applied in between:
 
 $$
 \text{FFN}(x) = W_2\,\sigma(W_1 x)
 $$
 
-Modern LLMs use a **gated** variant, **SwiGLU**:
+$W_1$ stretches the vector from length $d$ to a larger **hidden size**, typically about $4d$; $\sigma$
+is an **activation function**, a fixed curve applied to every number (without it, two matrix
+multiplications in a row would collapse into one and add no power); $W_2$ brings the vector back to
+length $d$.
+
+Modern LLMs use a variant called **SwiGLU** that adds a **gate**: a second projection of the input
+that multiplies the first one slot by slot, letting the network turn individual numbers up or down:
 
 $$
 \text{SwiGLU}(x) = W_2\big(\text{SiLU}(W_1 x) \odot W_3 x\big),\qquad \text{SiLU}(z) = z\,\sigma(z)
 $$
 
-Because there are three matrices instead of two, the hidden size is usually reduced to about
-$\tfrac{8}{3}d$ to keep the parameter count comparable. FFNs hold roughly two-thirds of a dense
-model's parameters, and interpretability work suggests they act like key-value memories that store
-much of the model's factual knowledge.
+Here $\sigma(z) = 1/(1+e^{-z})$ is the sigmoid curve, which squashes any number into the range 0 to
+1, and SiLU is the smooth activation built from it. Because SwiGLU has three matrices where the plain
+FFN has two, its hidden size is usually reduced to about $\tfrac{8}{3}d$ so that the parameter count
+stays comparable. FFNs hold roughly two-thirds of the parameters of a **dense** model (one in which
+every parameter is used for every token), and interpretability research suggests they act like
+key-value memories that store much of the model's factual knowledge.
 
 ## 6. Mixture of Experts (MoE)
 
-An MoE layer replaces the single FFN with $E$ expert FFNs and a small **router** that picks the top-$k$
-experts for each token:
+A **mixture of experts** layer replaces the single FFN with several FFNs, called **experts**, plus a
+small **router**: one matrix $W_r$ that scores, for each token, how suitable each expert is. Only
+the best $k$ experts (the "top-$k$") run for that token, and their outputs are averaged using the
+router's scores as weights:
 
 $$
 g = \text{softmax}(\text{TopK}(W_r x)),\qquad \text{MoE}(x) = \sum_{e \in \text{TopK}} g_e\,\text{FFN}_e(x)
 $$
+
+Picture a hospital front desk that sends each patient to two of eight specialists. The hospital
+needs all eight on staff, but each patient costs only two consultations.
 
 - **Total vs active parameters.** Mixtral 8x7B has about 47B total parameters but uses about 13B per
   token (top-2 of 8). DeepSeek-V3 has 671B total and 37B active, with 256 routed experts plus a shared
@@ -190,7 +311,17 @@ print("experts chosen per token:\n", top)
 print("tokens per expert:", np.bincount(top.ravel(), minlength=E))
 ```
 
+`logits = x @ Wr` is the router's score for every token and expert, a $(6, 4)$ grid.
+`np.argsort(-logits, axis=1)[:, :k]` sorts each row from highest to lowest score and keeps the first
+`k` positions, which are the ids of the chosen experts. The loop then applies softmax to the two
+chosen scores and adds up the two experts' outputs with those weights. The first print lists two
+expert ids per token; the second counts how many tokens each expert received. With random weights
+the counts are uneven, which is the load-balancing problem in miniature.
+
 ## 7. Putting a block together
+
+The next demo is the whole block in about 25 lines. Every piece has appeared above; the comments on
+the right mark the stages.
 
 ```python-run
 import numpy as np
@@ -223,24 +354,40 @@ def block(x):
 
 x = rng.standard_normal((T, d))
 y = x
-for layer in range(4):        # weights shared here just to keep the demo short
+for layer in range(4):        # the same weights are reused in each layer to keep the demo short
     y = block(y)
 print("in ", x.shape, "out", y.shape, " norm of update:", round(float(np.linalg.norm(y - x)), 3))
 ```
 
-Real models also add positional information (next lesson), use separate weights per layer, and apply
-a final norm plus the LM head.
+**Reading the block function**
+
+- `P` is a dictionary of weight matrices filled with small random numbers. `W1` and `W3` map to a
+  hidden size of 43, which is about $\tfrac{8}{3} \times 16$.
+- `a = rms_norm(x)` is the pre-norm. The next line computes queries, keys and values, and `split`
+  cuts them into 4 heads exactly as in section 2.
+- `scores` is $QK^\top/\sqrt{d_h}$ for all heads at once; `np.where` with `np.tril` applies the causal
+  mask from the previous lesson.
+- `x = x + ...` appears twice. Those are the two residual additions: the first adds the merged
+  attention output, the second adds the SwiGLU FFN output.
+- The loop runs the block four times. The printed shapes are both `(5, 16)`: a block never changes
+  the shape of the residual stream, which is what allows blocks to be stacked.
+
+Real models also add information about word order (next lesson), use separate weights in every
+layer, and apply a final norm and the LM head at the top.
 
 ## 8. Counting parameters
 
-For a dense decoder with width $d$, $L$ layers, vocabulary $V$, standard MHA and a 4x GELU MLP:
+Being able to estimate a model's parameter count from its description is a useful check. Take a
+dense decoder with width $d$, $L$ layers, vocabulary size $V$, standard multi-head attention and a
+plain FFN that expands to $4d$ with the GELU activation:
 
 - attention: $4d^2$ per layer ($W_Q, W_K, W_V, W_O$),
 - MLP: $8d^2$ per layer ($d \to 4d \to d$),
 - total: about $12 L d^2 + V d$ (plus $Vd$ again if the LM head is untied).
 
-GPT-3 175B: $d = 12288$, $L = 96$ gives $12 \times 96 \times 12288^2 \approx 174$B. Being able to do
-this in your head is a great sanity check when reading model cards.
+GPT-3: $d = 12288$ and $L = 96$ give $12 \times 96 \times 12288^2 \approx 174$ billion, which matches
+its published size of 175 billion. Doing this in your head is a good sanity check when reading a
+**model card** (the description page published with a model).
 
 > [!INTERVIEW]
 > **"Why pre-norm? Why RMSNorm? Why SwiGLU?"** Pre-norm leaves an identity path through the residual
@@ -257,6 +404,30 @@ this in your head is a great sanity check when reading model cards.
 - FFNs (usually SwiGLU) hold most dense parameters; MoE swaps them for routed experts, decoupling
   total from active parameters.
 - Parameter count of a dense model is roughly $12Ld^2 + Vd$.
+
+## Glossary
+
+- **Transformer block**: the repeated unit of a model: attention plus a feed-forward network, each
+  wrapped in normalisation and a residual connection.
+- **Sub-layer**: one of the two calculations inside a block.
+- **Residual connection**: adding a sub-layer's output to its input instead of replacing it.
+- **Residual stream**: the running per-token vector that every block reads and adds to.
+- **Head**: one of several attention operations run side by side on slices of the vectors.
+- **Reshape / transpose**: regroup the numbers of an array / reorder its directions.
+- **KV cache**: stored keys and values of earlier tokens, kept so they are not recomputed.
+- **MQA / GQA**: multi-query and grouped-query attention, in which query heads share keys and values.
+- **Normalisation**: rescaling a vector to a standard size.
+- **LayerNorm / RMSNorm**: normalise by subtracting the mean and dividing by the standard
+  deviation / divide by the root mean square only.
+- **Pre-norm / post-norm**: normalise the input of each sub-layer / normalise after the addition.
+- **Learning rate, warm-up**: the size of each training step, and starting it small.
+- **FFN (MLP)**: the per-token network of two or three matrices with an activation between them.
+- **Activation function**: a fixed curve applied to every number, such as SiLU or GELU.
+- **SwiGLU**: the gated FFN used in most current LLMs.
+- **Mixture of experts (MoE)**: several FFNs with a router that runs only a few per token.
+- **Total / active parameters**: all the parameters stored / those used for one token.
+
+## Check yourself
 
 ```quiz
 [

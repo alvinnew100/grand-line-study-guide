@@ -1,24 +1,64 @@
 # Hybrid retrieval, fusion, reranking and grounded generation
 
+> **Before this lesson:** you should know how embeddings and cosine similarity find related text, and
+> what recall@k and precision mean
+> ([Embeddings and similarity](#/lesson/llm-practice/embeddings-similarity)), and how documents are
+> parsed, chunked and stored with metadata in the offline half of a RAG system
+> ([Ingestion, parsing and chunking strategies](#/lesson/llm-practice/ingestion-chunking)).
+
+## In plain words
+
+The previous lesson filled the library. This one is the librarian at the desk when a question
+arrives. The job has three steps: quickly pull a generous pile of possibly useful passages, look at
+each one carefully to put the best few on top, and hand those few to the language model with the
+instruction "answer only from these, and say which one you used".
+
+Picture a lawyer preparing for a hearing. A paralegal first runs two quick searches through the
+archive, one by exact case numbers and keywords, one by topic, and brings back fifty files. The
+lawyer then reads each file properly and keeps the six that matter. Finally the lawyer writes the
+argument with a footnote on every claim, and a careful colleague checks that each footnote really
+says what the argument claims it says. Those are hybrid retrieval, reranking, grounded generation
+and citation checking.
+
+Why it matters for a job: this is the part of a RAG system that decides whether users get right
+answers with sources or confident nonsense. "Design retrieval for a support assistant" is one of the
+most common AI-engineering system-design questions, and the expected answer uses every stage in this
+lesson.
+
+## The three jobs of the online pipeline
+
 With a clean, well-chunked index in hand, the online pipeline has three jobs: find candidates with
-high **recall** (cheap retrievers), order them with high **precision** (an expensive reranker), and make
-the LLM answer **only from them, with citations**. This lesson builds each stage.
+high **recall** (most of the relevant passages are somewhere in the pile; done by cheap
+**retrievers**, the fast search components), order them with high **precision** (the few passages at
+the top are really relevant; done by an expensive **reranker**), and make the LLM answer **only from
+them, with citations** (references saying which passage supports each claim). This lesson builds
+each stage.
 
 ## 1. Why dense retrieval alone is not enough
 
-Dense embeddings excel at paraphrase ("how do I cancel" matches "terminating your subscription") but
-are weak at:
+**Dense retrieval** is search with embedding vectors (lesson 8). Dense embeddings excel at paraphrase
+("how do I cancel" matches "terminating your subscription") but are weak at:
 
-- exact identifiers: error codes `E-4021`, SKUs, function names, ticket numbers,
+- exact identifiers: error codes `E-4021`, **SKUs** (stock-keeping units, product codes), function
+  names, ticket numbers,
 - rare proper nouns and fresh jargon the embedder never saw,
-- negation and exact numbers.
+- negation ("not covered" and "covered" have very similar vectors) and exact numbers.
 
-**Lexical retrieval** (BM25) is the opposite: precise on exact terms, blind to synonyms. Combining them,
-**hybrid search**, is the most reliable default in production RAG and consistently beats either alone.
+**Lexical retrieval** (matching the actual words; BM25 is the standard method) is the opposite:
+precise on exact terms, blind to **synonyms** (different words with the same meaning). Combining
+them, **hybrid search**, is the most reliable default in production RAG and consistently beats
+either alone.
 
 ## 2. BM25 in one formula
 
-For query terms $t$ and document $D$ of length $|D|$ in a corpus with average length $\text{avgdl}$:
+BM25 ("Best Matching 25", the 25th formula in a line of research) scores a document by the query
+words it contains. Three ideas hide in the formula. A word that appears more often in the document
+counts more, but with diminishing returns. A word that is rare across the whole collection counts
+much more than a common one ("E-4021" is far more telling than "the"). And a long document gets a
+slight penalty, because it contains many words by sheer size.
+
+For query terms $t$ and document $D$ of length $|D|$ (its number of words) in a corpus of $N$
+documents with average length $\text{avgdl}$:
 
 $$
 \text{BM25}(D, Q) = \sum_{t \in Q} \text{IDF}(t)\cdot
@@ -26,10 +66,15 @@ $$
 \text{IDF}(t) = \ln\!\left(1 + \frac{N - n_t + 0.5}{n_t + 0.5}\right)
 $$
 
-- $f(t, D)$: term frequency, saturating (the 10th mention adds much less than the 1st) via $k_1$
-  (about 1.2 to 2.0).
-- $b$ (about 0.75): length normalisation, so long documents do not win just by being long.
-- IDF rewards rare terms.
+- $f(t, D)$: **term frequency**, how many times term $t$ occurs in $D$. The fraction **saturates**
+  (the 10th mention adds much less than the 1st), controlled by $k_1$ (about 1.2 to 2.0).
+- $b$ (about 0.75): length normalisation, so long documents do not win merely by being long. The
+  factor $|D| / \text{avgdl}$ is above 1 for longer-than-average documents, which shrinks their score.
+- $n_t$ is the **document frequency** of $t$, the number of documents containing it. **IDF**
+  (inverse document frequency) is large when $n_t$ is small, so it rewards rare terms. $\ln$ is the
+  natural logarithm.
+
+The demo implements the formula on four tiny support articles:
 
 ```python-run
 import math, re
@@ -61,6 +106,19 @@ print(bm25("what does E-4021 mean"))
 print(bm25("how do I stop my membership"))   # lexical miss: no shared terms with d2
 ```
 
+**Reading this code line by line**
+
+- `tok` lowercases and keeps runs of letters, digits and hyphens, so `E-4021` stays one term.
+- `D` holds each document's term list, `N` the document count and `avgdl` the average length.
+- `df` counts, for every term, how many documents contain it; `set(ws)` makes sure a document counts
+  once however often it repeats the term.
+- Inside `bm25`, `Counter(ws)` gives the term frequencies of one document, and the loop adds the
+  formula's contribution for each query term found in it. Terms the document lacks contribute 0.
+- The first query prints `d1` with a score of about 1.12 and every other document at 0: only `d1`
+  contains `e-4021`. Notice that "mean" did not match "means"; plain BM25 sees different words.
+  Real systems add **stemming** (reducing words to a common root, so "means" and "mean" match).
+- The second query prints four zeros.
+
 The second query shows BM25's blind spot: "stop my membership" shares no words with the cancellation
 document. A dense retriever would catch it.
 
@@ -69,18 +127,27 @@ search, and **learned sparse** models such as SPLADE that expand documents with 
 
 ## 3. Fusing ranked lists: Reciprocal Rank Fusion
 
-Dense scores (cosine around 0.3 to 0.9) and BM25 scores (unbounded) are not comparable, so averaging
-raw scores is fragile. **Reciprocal Rank Fusion (RRF)** ignores scores and uses only ranks:
+Hybrid search runs both retrievers and gets two ranked lists. **Fusion** merges them into one list.
+Dense scores (cosine around 0.3 to 0.9) and BM25 scores (unbounded: any positive number) are not
+comparable, so averaging raw scores is fragile. **Reciprocal Rank Fusion (RRF)** ignores scores and
+uses only ranks. "Reciprocal" means "one divided by", so each list gives a document one over (a
+constant plus its rank):
 
 $$
 \text{RRF}(d) = \sum_{r \in \text{rankers}} \frac{1}{k + \text{rank}_r(d)}
 $$
 
 with ranks starting at 1 and $k = 60$ by convention (it damps the dominance of top positions).
-Documents missing from a list simply contribute nothing from that list. RRF is simple, robust and
+A document missing from a list receives nothing from that list. RRF is simple, robust and
 needs no tuning, which is why Elasticsearch, OpenSearch, Qdrant, Weaviate and others offer it built in.
-(Alternatives: min-max or z-score normalise each list then take a weighted sum; tune the weight on
-labelled data.)
+(Alternatives: normalise each list's scores, either **min-max** (rescale so the lowest is 0 and the
+highest 1) or **z-score** (subtract the mean and divide by the standard deviation), then take a
+weighted sum; tune the weight on labelled data.)
+
+Why $k = 60$ matters: without it, rank 1 would score 1 and rank 2 only 0.5, so a single list's top
+pick would swamp everything. With $k = 60$, rank 1 scores $1/61 \approx 0.0164$ and rank 2
+$1/62 \approx 0.0161$: nearly the same, so appearing in *several* lists counts for more than being
+first in one.
 
 ```python-run
 from collections import defaultdict
@@ -98,15 +165,24 @@ for doc, s in rrf([dense, bm25_]):
     print(doc, round(s, 5))
 ```
 
+The code: `defaultdict(float)` is a dictionary whose missing entries start at 0.0, so scores can be
+added without checking. `enumerate(lst, start=1)` numbers each list from rank 1. The final sort
+orders by score, highest first, and breaks exact ties alphabetically by document id so the output
+is the same every run. The printed scores are `d1 0.03202`, `d3 0.032`, `d4 0.032`, `d2 0.01639`:
+`d1` gets $1/64 + 1/61$, `d3` gets $1/63 + 1/62$, `d4` gets $1/62 + 1/63$, and `d2` only $1/61$.
+
 `d1` (first in BM25, last in dense) edges ahead; `d3` and `d4`, found by both retrievers, beat `d2`, which only the dense retriever liked. Agreement between retrievers is rewarded. This
 module's `llm-rrf` problem asks you to implement RRF exactly, including duplicate handling and ties.
 
 ## 4. Query transformations
 
-Before retrieval, it often pays to rewrite the query:
+What the user types is often a poor search query: too short, full of pronouns, or phrased as a
+question when the documents are phrased as statements. Before retrieval, it often pays to rewrite the
+query, usually with a small, cheap LLM call:
 
 - **Conversational rewriting**: "what about the annual one?" becomes "What is the price of the annual
-  subscription plan?" using chat history. Essential for multi-turn assistants.
+  subscription plan?" using chat history. Essential for **multi-turn** assistants (ones that hold a
+  conversation over several messages), because the follow-up question alone retrieves nothing.
 - **Multi-query / decomposition**: generate several phrasings or sub-questions, retrieve for each,
   fuse with RRF.
 - **HyDE** (hypothetical document embeddings): ask the LLM to write a plausible answer and embed
@@ -144,9 +220,20 @@ scores = reranker.predict(pairs, batch_size=32)
 reranked = [c for _, c in sorted(zip(scores, candidates), key=lambda x: -x[0])][:6]
 ```
 
+Line by line: `CrossEncoder(name)` loads a reranking model. `pairs` builds one (query, passage) tuple
+per candidate. `reranker.predict(pairs, batch_size=32)` runs the model on every pair, 32 at a time,
+and returns one relevance score per pair. The last line sorts the candidates by score, highest first,
+and keeps six. (`zip(scores, candidates)` pairs each score with its candidate so they move together
+during the sort.)
+
 Hosted rerankers (Cohere Rerank, Voyage rerank, Jina) and **LLM-as-reranker** (ask a small LLM to
 score or order passages) are alternatives. A typical stack: retrieve 50 to 100 with hybrid search,
 rerank to 5 to 10, send those to the LLM.
+
+The simulation below shows why the two-stage design works. For each of 200 queries, three of 1,000
+documents are relevant. The first stage gives relevant documents a modest boost hidden in a lot of
+noise; the reranker gives them a big boost with little noise, but is only allowed to look at the
+first stage's top 50:
 
 ```python-run
 import numpy as np
@@ -166,10 +253,18 @@ print("recall@5 first stage only :", round(np.mean(hits_cheap), 3))
 print("recall@5 after reranking  :", round(np.mean(hits_rerank), 3))
 ```
 
+The output: taking the first stage's own top 5 finds about 24 percent of the relevant documents;
+reranking its top 50 and keeping 5 finds about 57 percent. The relevant documents were usually
+*somewhere* in the top 50 (good recall) but rarely in its top 5 (poor precision); the reranker fixes
+the order. It can never rescue a document the first stage missed, which is why the first stage is
+tuned for recall.
+
 ## 6. Grounded generation and citations
 
-Assemble the prompt so the model can (a) tell sources apart, (b) cite them, and (c) refuse when the
-answer is absent:
+**Grounded generation** means the model writes its answer from supplied source text rather than from
+memory. Assemble the prompt so the model can (a) tell sources apart, (b) cite them, and (c) refuse
+when the answer is absent. Wrapping each passage in XML-style tags with a number and a source, as
+below, does all three:
 
 ```text
 <documents>
@@ -188,13 +283,17 @@ Question: How long is parental leave?
 
 Practical guidance:
 
-- **Order matters.** Models attend best to the start and end of long contexts ("lost in the middle").
+- **Order matters.** Models attend best to the start and end of long contexts. A 2023 study named the
+  effect **"lost in the middle"**: facts placed in the middle of a long prompt are used less reliably.
   Put the best passages first (or first and last), and keep the count modest.
 - **Quote-then-answer**: for long documents, ask the model to first extract relevant quotes into a
-  tag, then answer from the quotes. It improves faithfulness and makes citations verifiable.
+  tag, then answer from the quotes. It improves **faithfulness** (every claim in the answer is
+  supported by the sources) and makes citations verifiable.
 - **Verify citations** in code: check that each cited index exists and, ideally, that the cited
-  passage actually contains supporting text (string overlap or an NLI/LLM judge). Character offsets
-  from tokenizers or the API let you highlight spans in the UI.
+  passage actually contains supporting text (string overlap, or a judge: an **NLI** model, short for
+  natural language inference, which decides whether one sentence follows from another, or an LLM
+  asked the same question). Character offsets from tokenizers or the API let you highlight spans in
+  the UI.
 - Some APIs offer native citations: Anthropic's Messages API accepts `document` content blocks with
   `citations: {"enabled": true}` and returns answer text blocks annotated with the exact cited spans;
   Cohere and others have similar features.
@@ -215,7 +314,28 @@ for sent in re.split(r"(?<=\.)\s+", answer):
     print(f"{sent!r:70}  numbers supported: {ok}")
 ```
 
+**Reading this code line by line**
+
+- `re.findall(r"\[(\d+)\]", answer)` finds every `[number]` in the answer; the brackets in the
+  pattern are escaped because they are special in regular expressions, and `(\d+)` captures the
+  digits. The result is `[2, 1, 3]`.
+- `bad` keeps cited numbers that are not keys of `docs`. Only two documents exist, so `[3]` is
+  invalid: the model cited a source it was never given, a strong sign of an invented claim.
+- The loop splits the answer into sentences (`(?<=\.)\s+` means "whitespace that follows a full
+  stop") and, for each, checks that every "N weeks" figure appears in at least one of the documents
+  that sentence cites.
+- The first sentence passes: "20 weeks" is in document 2 and "16 weeks" in document 1. The second
+  sentence also prints `True`, but only because it contains no numbers, and `all()` of an empty list
+  is `True`. That is a useful warning: a check that finds nothing to check passes silently. This is
+  why the invalid-citation test exists separately, and why real systems combine several checks.
+
 ## 7. Putting it together (static)
+
+The function below strings every stage of this lesson together. Read it top to bottom: rewrite the
+question using the conversation, build an access-control filter from the user's groups, run dense and
+BM25 search with that filter, fuse with RRF, fetch the chunk texts, rerank and keep six, build the
+numbered prompt, call the LLM at temperature 0 (for steady, repeatable answers), and validate the
+citations before returning.
 
 ```python
 def answer(question, history, user):
@@ -247,6 +367,28 @@ def answer(question, history, user):
 - Cross-encoders rerank a shortlist with much higher precision than bi-encoders.
 - Ground the generation: numbered sources, citation instructions, refusals, ordering, and programmatic
   citation checks.
+
+## Glossary
+
+- **Retriever**: a fast component that returns candidate passages for a query.
+- **Dense / lexical retrieval**: search by embedding similarity / by matching the actual words.
+- **Hybrid search**: running dense and lexical retrieval together and merging the results.
+- **BM25**: the standard keyword-scoring formula, combining term frequency, rarity and length.
+- **Term frequency / document frequency / IDF**: how often a word occurs in one document / how many
+  documents contain it / a weight that is high for rare words.
+- **Stemming**: reducing words to a shared root so "means" matches "mean".
+- **Fusion / RRF**: merging ranked lists / summing $1/(k + \text{rank})$ across lists.
+- **Query rewriting / multi-query / HyDE**: improving the query before search / searching with several
+  phrasings / searching with a hypothetical answer.
+- **Reranker / cross-encoder**: a slower, more accurate scorer / a model that reads query and passage
+  together.
+- **Grounded generation**: answering from supplied sources rather than from memory.
+- **Citation**: a reference showing which source supports a claim.
+- **Faithfulness**: every claim in the answer is supported by the sources.
+- **Lost in the middle**: models use facts in the middle of a long prompt less reliably.
+- **NLI**: natural language inference, deciding whether one text follows from another.
+
+## Check yourself
 
 ```quiz
 [

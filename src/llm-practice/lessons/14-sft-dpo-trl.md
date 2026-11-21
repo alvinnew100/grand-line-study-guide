@@ -1,15 +1,51 @@
 # SFT and DPO with TRL: data, training loop, evaluation
 
-Post-training turns a base model into an assistant in (at least) two stages: **supervised fine-tuning
-(SFT)** on demonstrations, then **preference optimisation** (RLHF, DPO and relatives, or RL with
-verifiable rewards). Hugging Face's **TRL** library implements all of them on top of `Trainer`. This
-lesson walks through data formats, the losses, working training scripts, and how to evaluate the
-result. The AI Engineering track covers the strategy (when to fine-tune, data quantity and quality);
-here we write the code and derive the losses.
+> **Before this lesson:** you should know how chat templates render conversations and how training
+> labels use `-100` to skip prompt tokens
+> ([Special tokens, chat templates and tokenizer pitfalls](#/lesson/llm-practice/special-tokens-chat-templates)),
+> how `Trainer` runs a training loop
+> ([Datasets, Trainer, Accelerate and serving](#/lesson/llm-practice/datasets-trainer-serving)), and
+> what a LoRA adapter is ([PEFT: LoRA, QLoRA and friends](#/lesson/llm-practice/lora-qlora)).
+> Softmax, logits and cross-entropy come from
+> [lesson 1](#/lesson/llm-practice/attention-from-scratch).
+
+## In plain words
+
+A freshly pretrained model can continue any text but does not know how to be a helpful assistant.
+Two kinds of training fix that. **Supervised fine-tuning (SFT)** shows the model thousands of example
+conversations and trains it to imitate the assistant's side. **Preference tuning** then shows it pairs
+of answers to the same question, one better and one worse, and trains it to prefer the better kind.
+**DPO** (direct preference optimisation) is the most popular way to do the second step because it is
+as simple to run as SFT.
+
+An analogy: training a new call-centre agent. First they read transcripts of model calls and copy
+how good agents speak (SFT). Then a supervisor plays back pairs of their own calls and says "this one
+was better than that one", and they adjust (preference tuning). Copying teaches the format; the
+comparisons teach judgement about tone, helpfulness and what to avoid.
+
+Why it matters for a job: these two steps are how open models are customised in practice, and the
+libraries make them a few dozen lines of code, which means the real skill is in the data and the
+evaluation. Interviewers ask candidates to explain or derive the DPO loss, to say why SFT masks the
+prompt, and to debug a fine-tune that never stops talking.
+
+## Post-training in two stages
+
+**Post-training** turns a base model into an assistant in (at least) two stages: **supervised
+fine-tuning (SFT)** on **demonstrations** (example conversations showing the desired behaviour), then
+**preference optimisation**. The second stage has several flavours: **RLHF** (reinforcement learning
+from human feedback), DPO and relatives, or RL with **verifiable rewards** (rewards computed by a
+program, such as "did the code pass its tests?"). **Reinforcement learning (RL)** in general means
+improving behaviour by trial and error guided by a numerical reward. Hugging Face's **TRL** library
+implements all of them on top of `Trainer`. This lesson walks through data formats, the losses,
+working training scripts, and how to evaluate the result. The AI Engineering track covers the
+strategy (when to fine-tune, data quantity and quality); here we write the code and derive the losses.
 
 ## 1. Data formats TRL understands
 
-TRL accepts four shapes for SFT (current TRL v1 docs):
+TRL accepts four shapes for SFT (current TRL v1 docs). Each row of the dataset is one dictionary.
+"Standard" rows hold plain text; "conversational" rows hold lists of chat messages, which TRL renders
+with the model's chat template. "Language modelling" rows train on the whole text; "prompt-completion"
+rows separate the input from the part to be learned:
 
 ```python
 # 1. Standard language modelling
@@ -24,7 +60,8 @@ TRL accepts four shapes for SFT (current TRL v1 docs):
  "completion": [{"role": "assistant", "content": "It is blue."}]}
 ```
 
-And for preference methods (DPO, ORPO, KTO-paired, reward modelling):
+And for preference methods (DPO, ORPO, KTO-paired, reward modelling), each row holds one prompt and
+two answers, the **chosen** (preferred) one and the **rejected** one:
 
 ```python
 {"prompt": [{"role": "user", "content": "Explain RoPE in one line."}],
@@ -35,8 +72,13 @@ And for preference methods (DPO, ORPO, KTO-paired, reward modelling):
 Tool-calling SFT adds a `tools` column (JSON schemas) and `tool_calls` / `tool` role messages.
 
 **Data work dominates outcomes**: dedupe, filter low quality (LLM-judge scoring, heuristics), balance
-task types, remove eval-set contamination, and look at samples. A few thousand excellent, diverse
-examples routinely beat hundreds of thousands of mediocre ones for style and format adaptation.
+task types, remove eval-set **contamination** (test questions, or near-copies of them, that slipped
+into the training data and would inflate your scores), and look at samples. A few thousand excellent,
+diverse examples routinely beat hundreds of thousands of mediocre ones for style and format
+adaptation.
+
+The demo turns raw support tickets into prompt-completion rows, applying a quality filter and exact
+deduplication on the way:
 
 ```python-run
 import json
@@ -60,9 +102,19 @@ print(len(rows), "rows kept")
 print(json.dumps(rows[0], indent=1)[:400])
 ```
 
+Line by line: `seen` remembers the normalised questions already kept (`strip().lower()` ignores
+spacing and capital letters). The `if` skips rows with a quality score below 3 and repeats. Each
+surviving ticket becomes a row whose `prompt` is a system message plus the user's question and whose
+`completion` is the assistant's answer. Out of four tickets, the gibberish one and the duplicate are
+dropped, so the output reports `2 rows kept` and prints the first row as indented JSON.
+
 ## 2. SFT: the loss
 
-SFT is ordinary next-token cross-entropy, but usually **only on the completion / assistant tokens**:
+SFT is ordinary next-token cross-entropy (lesson 1: minus the log of the probability the model gave
+the correct next token), but usually **only on the completion / assistant tokens**. In the formula,
+$\theta$ (theta) stands for all the model's parameters, $p_\theta(y_t \mid y_{<t})$ is the probability
+the model assigns to the true token $y_t$ given everything before it, and the sum is averaged over the
+completion positions:
 
 $$
 \mathcal{L}_{SFT}(\theta) = -\frac{1}{|C|}\sum_{t \in C} \log p_\theta(y_t \mid y_{<t})
@@ -86,6 +138,13 @@ loss_masked = -lp[np.arange(T)[mask], labels[mask]].mean()
 loss_all = -lp[np.arange(T), targets].mean()
 print("loss on completion only:", round(float(loss_masked), 3), " loss on everything:", round(float(loss_all), 3))
 ```
+
+What the demo does: `logits` are random scores for 8 positions over a 12-token vocabulary, and
+`targets` are random correct tokens. Setting the first five labels to `-100` marks them as prompt. The
+line computing `lp` is a stable log-softmax, `mask` is `True` where the label is real, and
+`lp[np.arange(T)[mask], labels[mask]]` picks out the log-probability of the correct token at each
+unmasked position. The two printed numbers (about 3.50 and 3.32) differ because one averages over 3
+positions and the other over all 8: masking changes which positions the model is graded on.
 
 ## 3. SFT with TRL (static)
 
@@ -120,12 +179,21 @@ trainer.train()
 trainer.save_model()
 ```
 
+Most settings in `SFTConfig` are `TrainingArguments` you met in lesson 7: epochs, batch size and
+accumulation (4 x 8 = 32 examples per update), learning rate and schedule, bf16, gradient
+checkpointing, and evaluation every 200 steps. Three are specific to SFT: `max_length=2048` truncates
+longer examples, `packing=True` fills each sequence with several short examples (section 7), and
+`assistant_only_loss` chooses which tokens are trained. `report_to="trackio"` sends the training
+curves to Trackio, Hugging Face's lightweight experiment tracker. `SFTTrainer` receives the model name,
+the config, the two splits and a `LoraConfig`, so it trains a LoRA adapter rather than the full model.
+
 Notes:
 
 - Passing a model id string lets TRL load it (with `model_init_kwargs` for dtype etc.).
 - **Packing** concatenates examples to fill `max_length`, avoiding padding waste; modern TRL uses
   position-id resets / padding-free attention so packed examples do not attend to each other.
-- Watch `mean_token_accuracy`, train/eval loss and, above all, **sampled generations** at checkpoints.
+- Watch `mean_token_accuracy` (how often the model's top guess equals the true next token), train/eval
+  loss and, above all, **sampled generations** at checkpoints: read what the model actually writes.
 - **Overfitting signs**: eval loss rising while train loss falls; outputs copying training phrases;
   degraded general ability. 1 to 3 epochs is typical for SFT.
 - Fine-tuning a base model? Set the chat template (`chat_template_path`) and EOS token correctly
@@ -133,20 +201,34 @@ Notes:
 
 ## 4. Preference optimisation: from RLHF to DPO
 
-Classic **RLHF** (InstructGPT): train a reward model $r_\phi(x, y)$ on human comparisons with a
-Bradley-Terry loss, then optimise the policy with PPO to maximise reward minus a KL penalty to a
-reference model $\pi_{ref}$ (the SFT model):
+Some vocabulary first. In RL language the model being trained is the **policy**, written $\pi_\theta$
+(pi): given a prompt $x$, it produces a response $y$ with probability $\pi_\theta(y|x)$. A **reward
+model** is a separate network trained to output a score saying how good a response is. The
+**Bradley-Terry** model is a classic way to turn scores into comparison probabilities: the chance that
+$y_w$ (the winner) beats $y_l$ (the loser) is $\sigma(r(y_w) - r(y_l))$, where $\sigma$ is the
+**sigmoid** function $\sigma(z) = 1/(1 + e^{-z})$, which squashes any number into the range 0 to 1.
+**KL divergence** measures how different two probability distributions are; it is 0 when they are
+identical.
+
+Classic **RLHF** (as used for InstructGPT, the model behind the first ChatGPT): train a reward model
+$r_\phi(x, y)$ on human comparisons with a Bradley-Terry loss, then optimise the policy with **PPO**
+(proximal policy optimisation, a standard RL algorithm) to maximise reward minus a KL penalty to a
+**reference model** $\pi_{ref}$ (the SFT model, kept frozen). The penalty stops the policy drifting
+into strange text that happens to fool the reward model:
 
 $$
 \max_\theta\; \mathbb{E}_{y \sim \pi_\theta}\left[r_\phi(x, y)\right] - \beta\,\mathrm{KL}\left(\pi_\theta(\cdot|x)\,\|\,\pi_{ref}(\cdot|x)\right)
 $$
 
-PPO needs four models in memory (policy, reference, reward, value) and is finicky.
+Read it as: "make the expected reward of the model's own answers ($\mathbb{E}$ means average over
+answers drawn from the policy) as high as possible, minus $\beta$ times how far the policy has moved
+from the reference". PPO needs four models in memory (policy, reference, reward, and a **value model**
+that predicts future reward to reduce noise) and is finicky to tune.
 
-**DPO** (Rafailov et al. 2023) shows that this objective has a closed-form optimal policy, so the
-reward can be expressed through the policy itself: $r(x, y) = \beta \log \frac{\pi_\theta(y|x)}{\pi_{ref}(y|x)} + \text{const}$.
-Plugging into Bradley-Terry gives a simple classification-style loss on preference pairs
-$(x, y_w, y_l)$:
+**DPO** (Rafailov et al. 2023) shows that this objective has a **closed-form** optimal policy (an exact
+formula rather than something found by search), so the reward can be expressed through the policy
+itself: $r(x, y) = \beta \log \frac{\pi_\theta(y|x)}{\pi_{ref}(y|x)} + \text{const}$. Plugging into
+Bradley-Terry gives a simple classification-style loss on preference pairs $(x, y_w, y_l)$:
 
 $$
 \mathcal{L}_{DPO} = -\log \sigma\!\left(\beta\left[\log\frac{\pi_\theta(y_w|x)}{\pi_{ref}(y_w|x)} - \log\frac{\pi_\theta(y_l|x)}{\pi_{ref}(y_l|x)}\right]\right)
@@ -157,8 +239,13 @@ $$
   chosen and rejected responses. TRL logs them as `rewards/chosen`, `rewards/rejected`,
   `rewards/margins` and `rewards/accuracies` (fraction of pairs where chosen beats rejected).
 - $\beta$ (0.1 typical) controls how far the policy may drift from the reference.
-- Only two models (policy and frozen reference); with LoRA the reference is just the base with adapters
+- Only two models (policy and frozen reference); with LoRA the reference is the base with adapters
   disabled, so one copy of weights suffices.
+
+In plain words: the loss is small when the policy has raised the chosen answer's probability (relative
+to the reference) by more than it raised the rejected answer's. The demo computes it for two pairs.
+`np.logaddexp(0, -m)` equals $\log(1 + e^{-m})$, which is exactly $-\log\sigma(m)$, written in a form
+that cannot overflow:
 
 ```python-run
 import numpy as np
@@ -179,6 +266,14 @@ print("trained loss:", round(loss, 4), " reward accuracy:", acc)
 print("implicit rewards chosen:", r_c, " rejected:", r_r)
 ```
 
+The inputs are summed log-probabilities of whole responses (negative numbers; closer to zero means
+more likely). In the first call the policy equals the reference, so every log-ratio is 0, the margin
+is 0, and the loss is $\log 2 \approx 0.6931$: the model has no preference yet. In the second call the
+policy has made both chosen answers more likely (-12 to -10, -30 to -27) and both rejected answers
+less likely. The implicit rewards are $0.1 \times 2 = 0.2$ and $0.1 \times 3 = 0.3$ for the chosen
+answers and $-0.3$ and $-0.5$ for the rejected ones, so the margins are 0.5 and 0.8, the loss falls to
+about 0.42, and the reward accuracy is 1.0 (the chosen answer wins in both pairs).
+
 ## 5. DPO with TRL (static)
 
 ```python
@@ -196,12 +291,22 @@ trainer = DPOTrainer(model="qwen3-support-sft",          # start from the SFT ch
 trainer.train()
 ```
 
+The script loads a public preference dataset (UltraFeedback, already split into chosen and rejected
+pairs), sets `beta=0.1` and a small learning rate, and starts from the SFT checkpoint saved in the
+previous section. When the model is given with a LoRA config, TRL uses the base with adapters switched
+off as the reference, so no second copy is loaded.
+
 Use a much lower learning rate than SFT (5e-7 to 5e-6 for full fine-tuning; somewhat higher with LoRA).
-Where do preference pairs come from? Human raters, LLM-as-judge ranking of several samples (RLAIF),
-"on-policy" pairs sampled from your own SFT model (better than off-policy pairs from other models), or
-implicit product feedback (thumbs, edits, regenerations).
+Where do preference pairs come from? Human raters, LLM-as-judge ranking of several samples (**RLAIF**,
+reinforcement learning from AI feedback), **on-policy** pairs sampled from your own SFT model (better
+than **off-policy** pairs written by other models, because they show your model's own typical
+mistakes), or implicit product feedback (thumbs, edits, regenerations).
 
 ### The preference-method zoo
+
+Many DPO relatives exist. Two terms in the table: **prospect theory** is a model from behavioural
+economics of how people weigh gains and losses, which KTO borrows; an **advantage** is how much better
+one answer scored than the average answer for the same prompt.
 
 | method | idea |
 |---|---|
@@ -217,15 +322,22 @@ helpfulness preferences.
 
 ## 6. Evaluating a fine-tune
 
-1. **Task evals on a held-out set** built *before* training: exact match / F1 for extraction, unit
-   tests for code, schema validity for JSON, LLM-judge with a rubric for open-ended answers, pairwise
-   win rate versus the base model or the previous version.
-2. **Regression evals** for general ability and safety: a few standard benchmarks (e.g. via
-   `lighteval` or `lm-evaluation-harness`: IFEval for instruction following, MMLU-Pro, GSM8K), plus
-   your refusal and safety prompts. Fine-tunes often quietly lose safety behaviour.
-3. **Vibe checks** on real prompts, side by side.
-4. **Compare to strong baselines**: the base model with a good prompt and few-shot examples, and RAG.
-   If the fine-tune does not beat them clearly, do not ship it.
+1. **Task evals on a held-out set** (examples never used in training) built *before* training: exact
+   match / F1 for extraction, unit tests for code, schema validity for JSON, LLM-judge with a rubric
+   for open-ended answers, pairwise **win rate** (how often judges prefer the new model's answer)
+   versus the base model or the previous version.
+2. **Regression evals** for general ability and safety: a few standard **benchmarks** (public test
+   sets, e.g. via `lighteval` or `lm-evaluation-harness`: IFEval for instruction following, MMLU-Pro
+   for broad knowledge, GSM8K for grade-school maths), plus your refusal and safety prompts. Fine-tunes
+   often quietly lose safety behaviour.
+3. **Vibe checks** on real prompts, side by side: informal reading by people, which catches problems
+   numbers miss.
+4. **Compare to strong baselines**: the base model with a good prompt and **few-shot** examples (a
+   handful of worked examples in the prompt), and RAG. If the fine-tune does not beat them clearly, do
+   not ship it.
+
+The command below runs the IFEval benchmark on the fine-tuned model with zero few-shot examples
+(`|0`) and writes the results to `evals/`:
 
 ```bash
 lighteval accelerate "model_name=./qwen3-support-sft" "leaderboard|ifeval|0" --output-dir evals/
@@ -263,10 +375,17 @@ print(f"padded batches of {B}: {padded:,} token slots  ({100 * real / padded:.0f
 print(f"packed sequences  : {len(bins)} x {MAX_LEN} = {len(bins) * MAX_LEN:,} token slots  ({100 * real / (len(bins) * MAX_LEN):.0f}% useful)")
 ```
 
+How the code works: `bins` holds the free space left in each packed sequence. Examples are taken
+longest first; each goes into the bin with the *least* free space that still fits it (the "best
+fit"), and a new bin is opened only when none fits. The padded baseline groups examples in eights and
+pads each group to its longest member. The output: 2,000 examples with about 394,000 real tokens need
+about 962,000 token slots when padded (41 percent useful) but only 385 packed sequences of 1,024 slots
+(nearly 100 percent useful).
+
 Roughly doubling the useful fraction of every forward pass is typical on chat datasets with many short
 turns. The subtlety is isolation: examples packed into one sequence must not attend to each other, and
 position ids must restart for each example. TRL's `bfd` strategy handles this with padding-free
-attention; the older `wrapped` strategy simply concatenates and cuts, letting examples bleed into one
+attention; the older `wrapped` strategy concatenates and cuts, letting examples bleed into one
 another, which is acceptable for raw-text pretraining but not for instruction data.
 
 ## 8. A debugging table for SFT and DPO
@@ -303,9 +422,9 @@ near-duplicates. Hold out the evaluation set **before** generating synthetic dat
 paraphrases of test items cannot leak into training, and include examples of what the model should
 *decline* or escalate, or it will learn that every input deserves a confident answer.
 
-**Distillation** is the common way to get such data: have a strong teacher model answer real inputs
+**Distillation** is the common way to get such data: have a strong **teacher** model answer real inputs
 (optionally with reasoning), filter the outputs with automatic checks or a judge, and fine-tune the small
-student on the survivors. Check the teacher's licence terms; some providers restrict using outputs to
+**student** model on the survivors. Check the teacher's licence terms; some providers restrict using outputs to
 train competing models.
 
 > [!INTERVIEW]
@@ -323,6 +442,35 @@ train competing models.
 - DPO turns preference pairs into a logistic loss on implicit rewards relative to a frozen reference.
 - KTO, ORPO, SimPO and GRPO cover unpaired feedback, single-stage training and verifiable-reward RL.
 - Evaluate task performance, regressions and safety against strong prompt/RAG baselines.
+
+## Glossary
+
+- **Post-training**: training after pretraining that turns a base model into an assistant.
+- **SFT (supervised fine-tuning)**: training on demonstration conversations with next-token loss.
+- **Demonstration**: an example conversation showing the desired behaviour.
+- **Prompt-completion format**: rows that separate the input from the part to be learned.
+- **Completion-only / assistant-only loss**: training only on the answer tokens.
+- **Contamination**: test items leaking into training data.
+- **Packing (best-fit decreasing)**: filling each sequence with several short examples.
+- **Preference pair (chosen / rejected)**: two answers to one prompt, one preferred.
+- **Policy / reference model**: the model being trained / a frozen copy it is kept close to.
+- **Reward model / Bradley-Terry**: a network that scores answers / the sigmoid-of-difference model of
+  comparisons.
+- **Sigmoid**: $\sigma(z) = 1/(1 + e^{-z})$, squashing any number into 0 to 1.
+- **KL divergence**: a measure of how different two probability distributions are.
+- **RLHF / PPO**: reinforcement learning from human feedback / the RL algorithm classically used for it.
+- **DPO**: a logistic loss on preference pairs using implicit rewards; no reward model or sampling.
+- **Implicit reward**: $\beta \log(\pi_\theta / \pi_{ref})$ for a response.
+- **$\beta$ (beta)**: how strongly the policy is held close to the reference.
+- **On-policy / off-policy data**: answers written by your own model / by other models.
+- **KTO / ORPO / SimPO / GRPO**: preference or RL methods for unpaired feedback, single-stage training,
+  reference-free rewards, and group-relative RL.
+- **Verifiable reward**: a reward computed by a program, such as passing unit tests.
+- **Held-out set / benchmark / win rate**: data never trained on / a public test set / how often
+  judges prefer one model's answers.
+- **Distillation (teacher / student)**: training a small model on a strong model's filtered outputs.
+
+## Check yourself
 
 ```quiz
 [

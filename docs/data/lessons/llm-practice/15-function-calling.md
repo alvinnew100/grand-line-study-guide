@@ -1,15 +1,48 @@
 # Function calling: schemas, the tool loop and parsing
 
+> **Before this lesson:** you should know how a chat model receives a list of messages with roles and
+> how the chat template renders them, including tool definitions
+> ([Special tokens, chat templates and tokenizer pitfalls](#/lesson/llm-practice/special-tokens-chat-templates)).
+> Basic Python dictionaries, lists, `try`/`except` and regular expressions are used in the code. No
+> earlier agent lesson is needed: this is the first lesson of the agents module.
+
+## In plain words
+
+A language model can only write text. It cannot look up today's order status, read your calendar or
+send an email. **Function calling** (also called **tool use**) bridges that gap: you tell the model
+which functions exist, and when it needs one it writes a short, structured request such as "call
+`get_order_status` with order id ORD-1". Your program runs the function and passes the result back,
+and the model continues with real data in hand.
+
+Think of a manager who never leaves the office and an assistant who runs errands. The manager writes
+a note, "check the warehouse for order 1", the assistant goes, comes back with the answer, and the
+manager writes the reply to the customer. The manager never touches the warehouse; the assistant
+never decides what to tell the customer. The model is the manager, your code is the assistant, and
+the note follows a strict form so nothing is misread.
+
+Why it matters for a job: every AI agent, coding assistant and "chat with your data" product is built
+on this loop, and so is the Model Context Protocol of module 8. Interviewers ask candidates to walk
+through the loop, explain what happens with parallel calls and errors, and say how to stop a tool
+from being abused by malicious text.
+
+## How tool use works in one paragraph
+
 An LLM on its own can only emit text. **Tool use** (function calling) lets it act: query a database,
-call an API, run code, read a file. The model does not execute anything; it emits a structured
-**request** to call a named tool with JSON arguments, your code executes it, and you feed the result
-back. Everything in agents (this module), MCP (module 8) and context engineering (module 9) rests on
-this loop, so we build it carefully.
+call an **API** (application programming interface: a set of functions another program offers over a
+network), run code, read a file. The model does not execute anything; it emits a structured
+**request** to call a named tool with **JSON** arguments (JSON is the plain-text data format of
+`{"key": "value"}` objects and `[...]` lists), your code executes it, and you feed the result back.
+Everything in agents (this module), MCP (module 8) and context engineering (module 9) rests on this
+loop, so we build it carefully.
 
 ## 1. The contract: a tool definition
 
 Every major API describes a tool the same way: a **name**, a natural-language **description**, and a
-**JSON Schema** for its input.
+**JSON Schema** for its input. JSON Schema is a standard way of describing what a valid JSON object
+looks like, written itself in JSON. Its main keywords: `type` (object, string, integer, number,
+boolean, array), `properties` (the allowed fields and the schema of each), `required` (fields that
+must be present), `enum` (a fixed list of allowed values), `minimum`/`maximum` for numbers, and
+`additionalProperties: false` (no fields other than those listed).
 
 ```json
 {
@@ -30,12 +63,22 @@ Every major API describes a tool the same way: a **name**, a natural-language **
 (Anthropic's Messages API calls the field `input_schema`; OpenAI's uses `parameters` inside a
 `function` object; MCP uses `inputSchema`. The schema itself is the same JSON Schema.)
 
-The description is **prompt engineering**: the model decides *whether* and *how* to call the tool
-mostly from it. Good descriptions say what the tool does, when to use it (and when not), what each
+Reading the example: the tool takes an object with a required string `order_id` and an optional
+boolean `include_items` that defaults to `false`; no other fields are allowed. The description says
+what the tool does, when to use it, what it returns and what it cannot do.
+
+The description is **prompt engineering** (writing the text a model reads so that it behaves as you
+want): the model decides *whether* and *how* to call the tool mostly from it. Good descriptions say what the tool does, when to use it (and when not), what each
 parameter means with examples and formats, and what comes back. Anthropic's guidance is to write them
 as you would for a new colleague, often three or four sentences or more for non-trivial tools.
 
 ## 2. The loop
+
+The conversation between your app, the model and the tool goes round in a loop. Your app sends the
+messages and tool definitions; the model replies with a **tool call** (in Anthropic's format a
+`tool_use` block holding the tool name, the arguments and a unique **id**); your app runs the tool
+and sends back a **tool result** that quotes the same id; the model either calls another tool or
+writes its final answer. The sequence diagram shows one round:
 
 ```mermaid
 sequenceDiagram
@@ -50,7 +93,8 @@ sequenceDiagram
   LLM-->>App: final answer text, stop_reason end_turn
 ```
 
-With the Anthropic Python SDK (static code):
+With the Anthropic Python **SDK** (software development kit: the official library for calling the
+API; static code, since it needs an API key):
 
 ```python
 import anthropic, json
@@ -86,12 +130,31 @@ print(resp.content[-1].text)
 (Model ids change; check your provider's current model list. Anthropic's SDK also offers a tool
 runner helper that runs this loop for you.)
 
+**Reading this code line by line**
+
+- `tools` is the list of tool definitions, and `HANDLERS` maps each tool name to the Python function
+  that really does the work (here a fake that always says "shipped").
+- `messages` starts with the user's question. The `while True` loop keeps calling the model until it
+  stops asking for tools.
+- `client.messages.create(...)` sends the conversation and the tool list. The reply's `content` is a
+  list of **blocks**: text blocks and `tool_use` blocks.
+- The whole reply is appended to `messages` as an assistant turn, tool calls included. The API needs
+  to see the call before it sees the result.
+- `resp.stop_reason` says why the model stopped writing. `"tool_use"` means "I am waiting for tool
+  results"; anything else (normally `"end_turn"`) means the answer is finished, so the loop breaks.
+- For each `tool_use` block, `HANDLERS[block.name](**block.input)` calls the matching function with
+  the model's arguments unpacked as keyword arguments. The result goes into a `tool_result` block
+  carrying the same `tool_use_id`. If the function raises an exception, the error text is sent back
+  instead, flagged with `is_error`.
+- All results go back together as one user message, and the loop repeats. When it ends,
+  `resp.content[-1].text` is the final answer.
+
 Key details that trip people up:
 
 - **Append the assistant message containing the tool calls** before the results; results reference
   the call by id (`tool_use_id`, or `tool_call_id` in OpenAI's format).
-- A single model turn can contain **several parallel tool calls**. Execute them (concurrently if
-  independent) and return all results in the next message.
+- A single model turn can contain **several parallel tool calls**. Execute them (**concurrently**,
+  at the same time, if they do not depend on each other) and return all results in the next message.
 - **Return errors as results** (with `is_error: true`) so the model can recover, e.g. retry with a
   corrected argument. Raising an exception and killing the loop wastes the model's ability to adapt.
 - **Cap iterations** (e.g. 10 to 25 steps) and total tokens; log every call.
@@ -100,9 +163,10 @@ Key details that trip people up:
 
 ## 3. Validate before you execute
 
-The model's arguments are **untrusted input**. Even with schema-constrained decoding, validate types,
-ranges, enums, and business rules (does this user own this order?) before executing. JSON Schema
-validation in Python is one call with the `jsonschema` package; this module's
+The model's arguments are **untrusted input**: data you did not produce and cannot assume is correct
+or harmless. Even with schema-constrained decoding, validate types, ranges, enums, and **business
+rules** (the application's own requirements, such as "does this user own this order?") before
+executing. JSON Schema validation in Python is one call with the `jsonschema` package; this module's
 `llm-json-schema-validate` problem has you implement the core subset yourself:
 
 ```python-run
@@ -148,6 +212,23 @@ print(validate({"city": "Oslo", "days": 30, "units": "kelvin", "debug": True}, s
 print(validate({"days": "3"}, schema))
 ```
 
+**Reading this code line by line**
+
+- `path` tracks where in the object we are, written like `$.days` (`$` is the root). Every error
+  message starts with it, so the model knows exactly which field is wrong.
+- The first block checks the type. `integer` and `number` need care because in Python `True` is also
+  an `int`, so booleans are explicitly excluded. The other types map to Python classes through
+  `checks`. A wrong type returns immediately: there is no point checking the range of a string.
+- `enum` is checked next, then, for objects, every `required` field, then every supplied field: known
+  fields are validated **recursively** with their own sub-schema, and unknown fields are reported
+  when `additionalProperties` is `False`.
+- Numbers are checked against `minimum` and `maximum`; arrays have every item validated against
+  `items`.
+- Output, one line per test: the valid call gives `[]` (no errors). The second gives three errors:
+  `days` is 30 (above 14), `units` is not one of the allowed values, and `debug` is not a known field.
+  The third reports the missing `city` and that `days` is the string `"3"` rather than an integer, a
+  very common model mistake.
+
 Feed these messages back to the model as a tool error: it will usually fix the call on the next turn.
 
 ## 4. How function calling works inside the model
@@ -189,12 +270,22 @@ for c in calls:
     print(c)
 ```
 
+How the parser works: `re.findall(r"<tool_call>(.*?)</tool_call>", text, re.S)` returns the text
+between every pair of tags. `.*?` is a **non-greedy** match (it stops at the first closing tag, so two
+calls are not swallowed as one) and `re.S` lets `.` match newlines. Each piece is parsed with
+`json.loads`; if parsing fails or the `name` key is missing, an error entry keeps the raw text so it
+can be shown to the model. `re.sub(...)` removes the tool-call blocks to leave the ordinary text. The
+output: the content `'Let me check both.'`, one good call for Oslo, and one `malformed` entry for
+Bergen.
+
 The second call is missing a closing brace: a malformed call should be reported back to the model, not
 silently dropped.
 
 **Constrained decoding** (grammar-guided generation with tools like Outlines, XGrammar or
 llguidance, and "strict" modes in hosted APIs) masks invalid tokens at each step so the arguments are
-guaranteed to parse and match the schema. It removes syntax errors, not semantic ones.
+guaranteed to parse and match the schema. Masking means setting a token's probability to zero, as the
+top-k filter of lesson 6 does, but here the rule is "would this token break the JSON?". It removes
+syntax errors, not **semantic** ones (errors of meaning, such as a valid-looking but wrong order id).
 
 ## 5. Tool design principles (preview of module 9)
 
@@ -204,22 +295,29 @@ guaranteed to parse and match the schema. It removes syntax errors, not semantic
   than three primitive calls the model must chain.
 - **Namespacing**: prefix related tools (`github_create_issue`, `jira_create_issue`) when many sources
   coexist.
-- **Return meaningful, compact results**: names rather than opaque UUIDs, only the fields the model
-  needs, paginated or truncated with a note on how to get more.
+- **Return meaningful, compact results**: names rather than opaque UUIDs (random identifiers that mean
+  nothing to a reader), only the fields the model needs, **paginated** (returned one page at a time) or
+  truncated with a note on how to get more.
 - **Actionable errors**: "date must be in the future; today is 2026-11-20" beats "400 Bad Request".
-- **Poka-yoke the interface**: make mistakes hard (absolute paths instead of relative ones, enums
-  instead of free text, ids validated server-side).
+- **Poka-yoke the interface** (a Japanese manufacturing term for "mistake-proofing"): make mistakes
+  hard (absolute paths instead of relative ones, enums instead of free text, ids validated
+  server-side).
 
 ## 6. Security: tools are where prompt injection bites
 
-A tool call executes with *your* credentials, triggered by a model that may have just read
-attacker-controlled text (a web page, an email, a document). Treat it accordingly:
+A tool call executes with *your* **credentials** (the keys and passwords that grant access), triggered
+by a model that may, moments earlier, have read attacker-controlled text (a web page, an email, a document). Text
+that tries to steer the model this way is **prompt injection** (lesson 5 showed one form). Treat
+every tool accordingly:
 
-- least privilege per tool (read-only tokens, scoped API keys, row-level authorisation in the tool),
+- **least privilege** per tool, meaning each tool gets only the access it needs (read-only tokens,
+  scoped API keys, row-level authorisation in the tool),
 - human confirmation for consequential actions (send, pay, delete, deploy),
-- never let model output flow unescaped into shells, SQL or HTML,
-- sandbox code execution (containers, no network by default),
-- log every call with arguments and results for audit.
+- never let model output flow **unescaped** (inserted without neutralising special characters) into
+  shells, SQL or HTML, where it could run as a command,
+- **sandbox** code execution (run it in an isolated environment such as a container, with no network
+  by default),
+- log every call with arguments and results for **audit** (later review of who did what).
 
 Module 10 develops these defences.
 
@@ -277,6 +375,14 @@ def run(user_text, max_steps=5):
 print("FINAL:", run("Where is order 12345, and what's the weather in Oslo?"))
 ```
 
+How the pieces fit: `TOOLS` lists each tool's required arguments and its function. The odd-looking
+`(_ for _ in ()).throw(ValueError(...))` is a trick for raising an exception inside a `lambda`, which
+cannot contain a `raise` statement; the real tool would raise in the same way. `SCRIPT` is an iterator
+of pre-written model turns, and `model()` returns the next one, standing in for the API call.
+`execute` turns *every* problem (unknown tool, missing arguments, an exception inside the tool) into an
+error result rather than a crash, and keeps the call id on every result. `run` is the loop of section
+2 with a `for` loop that stops after `max_steps`.
+
 Trace it: in step 1 the model makes two calls in one turn; `c1` fails validation inside the tool and
 comes back as an error result while `c2` succeeds, and **both** results are returned together. In step 2
 the model reads the error message, fixes the argument and retries. In step 3 it has what it needs and
@@ -284,6 +390,9 @@ answers. Notice how much the quality of the error text matters: "order_id must l
 tells the model exactly how to recover, where "invalid input" would have produced a guess.
 
 ## 8. tool_choice and other controls
+
+`tool_choice` is a request setting that tells the model how free it is to use tools. The names differ
+slightly between providers (`any` in Anthropic's API, `required` in OpenAI's):
 
 | setting | behaviour | typical use |
 |---|---|---|
@@ -331,6 +440,31 @@ answer; almost every tool-use bug is visible there within a minute.
   guarantees syntax.
 - Design few, clear, consolidated tools with compact results and actionable errors; secure them with
   least privilege and confirmations.
+
+## Glossary
+
+- **Function calling (tool use)**: the model asks your code to run a named function with JSON
+  arguments.
+- **Tool**: a function exposed to the model through a name, a description and an input schema.
+- **API / SDK**: a set of functions a service offers over the network / the official library for
+  calling it.
+- **JSON / JSON Schema**: a plain-text data format / a standard for describing valid JSON.
+- **`tool_use` block / tool result**: the model's structured call with an id / your reply quoting
+  that id.
+- **`stop_reason`**: why the model stopped writing; `tool_use` means it is waiting for results.
+- **Parallel tool calls**: several calls in one model turn, answered together.
+- **`tool_choice`**: the setting that allows, forces, or forbids tool calls.
+- **Untrusted input**: data you did not produce, such as model-written arguments.
+- **Business rules**: application-specific checks, such as whether a user owns a record.
+- **Tool-call parser**: server code that extracts calls from an open model's generated text.
+- **Non-greedy match**: a regular-expression match that stops at the first possible end.
+- **Constrained decoding**: masking tokens that would break a required format.
+- **Prompt injection**: text from an untrusted source that tries to steer the model.
+- **Least privilege**: giving each tool only the access it needs.
+- **Sandbox**: an isolated environment for running untrusted code.
+- **Poka-yoke**: designing an interface so mistakes are hard to make.
+
+## Check yourself
 
 ```quiz
 [

@@ -1,5 +1,34 @@
 # Long-horizon agents: compaction, notes, memory and sub-agents
 
+> **Before this lesson:** you should know why the context window is a limited budget and how fast an
+> agent fills it ([The context window as a budget](#/lesson/llm-practice/context-budget)), how tool
+> calls and tool results enter the conversation
+> ([Function calling](#/lesson/llm-practice/function-calling)), and what sub-agents are
+> ([ReAct, planning, multi-agent systems and frameworks](#/lesson/llm-practice/agent-frameworks)).
+> The code uses Python lists, dictionaries and a small class.
+
+## In plain words
+
+Some tasks take an agent hours: moving a large codebase to a new library, writing a deep research
+report, playing a long game. Such a task produces far more text than any context window can hold. A
+**long-horizon** agent is one built to keep working coherently across that much activity. This lesson
+covers the four tools for it: throw away stale tool output, summarise the conversation and start
+fresh (**compaction**), keep written notes outside the window (**memory**), and hand pieces of work to
+helpers with their own clean windows (**sub-agents**).
+
+An analogy: a detective on a case that lasts months. They cannot carry every page of every interview
+in their head. They file old transcripts away (clearing), write a one-page case summary at the end of
+each week (compaction), keep a notebook of leads, decisions and open questions (notes), and send
+junior officers to check alibis, receiving short reports back (sub-agents). Any morning they can
+open the notebook and pick up exactly where they left off.
+
+Why it matters for a job: coding agents, research agents and customer-service agents all hit the
+context limit in real use, and the quality of a product often comes down to how gracefully it handles
+that moment. "An agent must work for six hours on one task: how do you manage its context?" is a
+standard interview question.
+
+## The scale of the problem
+
 A task that takes an agent hours (migrating a codebase, a deep research report) produces far more
 tokens than any context window holds. The previous lesson showed that a busy agent fills 200k tokens in
 a couple of dozen steps. Three families of techniques let agents keep working coherently past that
@@ -10,8 +39,8 @@ architectures**. This lesson implements the first two and analyses the third.
 
 Most of a long transcript is **tool output** that mattered once: a file read thirty steps ago, a test
 log, a search result. Once the agent has acted on it, the raw output is dead weight. **Tool-result
-clearing** replaces old results with a short placeholder while keeping the record that the call
-happened:
+clearing** replaces old results with a short **placeholder** (a stand-in line that records what used to
+be there) while keeping the record that the call happened:
 
 ```text
 [tool result cleared to save context: read_file("src/api.py"), 6,104 tokens. Re-read if needed.]
@@ -22,6 +51,10 @@ automatic **context editing** (clear tool uses beyond a threshold, keep the most
 thumb: keep the last few results intact, never clear a result the model has not yet responded to, keep
 tool *calls* (so the model knows what it already did), and clear in **batches** rather than one per
 turn, because every edit to earlier history invalidates the prompt cache from that point (lesson 23).
+(**Invalidating** the cache means the provider can no longer reuse its stored work for the changed part
+of the prompt, so that part is processed, and billed, at full price again.)
+
+The demo applies clearing to a short history. Each message records its role and its size in tokens:
 
 ```python-run
 def clear_old_tool_results(messages, keep_last=2, min_tokens=200):
@@ -49,6 +82,19 @@ for m in new:
 print("tokens saved:", saved)
 ```
 
+**Reading this code line by line**
+
+- `idx` lists the positions of tool results large enough to be worth clearing (at least 200 tokens).
+  Small results such as `ok` are left alone.
+- `[dict(m) for m in messages]` copies every message so the original history is untouched.
+- `idx[:-keep_last]` drops the last two positions from the list, so the two most recent large results
+  survive.
+- Each remaining result has its content replaced by a placeholder naming the tool and its old size;
+  its token count becomes 12, and `saved` adds up the difference.
+- The output: the first `read_file` and `run_tests` results (4,200 and 1,800 tokens) become 12-token
+  placeholders, while the newer file read and test run stay intact. The `edit_file` result, only 5
+  tokens, is untouched. Total saved: 5,976 tokens, with the record of every call still visible.
+
 ## 2. Compaction
 
 **Compaction** takes a conversation nearing the limit, **summarises** it, and starts a fresh context
@@ -68,7 +114,12 @@ What it discards: redundant tool outputs, superseded drafts, pleasantries.
 
 **Tuning advice**: the art is choosing what to keep. Over-aggressive compaction loses subtle context
 whose importance only shows later. Start by maximising **recall** (capture everything relevant from
-real long traces), then iterate to improve **precision** by cutting superfluous content.
+real long **traces**, the recorded transcripts of actual agent runs), then iterate to improve
+**precision** by cutting superfluous content. These are the same recall and precision as in retrieval
+(lesson 8): first make sure nothing important is missing, then remove what is not needed.
+
+The flowchart shows a typical policy: at 80 percent full, clear stale tool results first; only if that
+is not enough, write a summary and rebuild the context around it.
 
 ```mermaid
 flowchart LR
@@ -115,18 +166,34 @@ for m in out:
     print(f"  {m['role']:9} {m['content'][:95]}")
 ```
 
+**Reading this code line by line**
+
+- `count` adds up the token sizes of a list of messages.
+- `summarise` stands in for an LLM call. It keeps the messages marked `important` (in a real system
+  the model decides what matters) and joins them into one summary message whose size grows with the
+  number of facts kept.
+- `compact` does nothing while the history is at or below 80 percent of the limit. Otherwise it keeps
+  the system prompt, summarises everything except the last `keep_recent` messages, and returns system
+  prompt + summary + recent messages, plus `True` to say compaction happened.
+- The history totals 16,583 tokens against a limit of 20,000; 80 percent is 16,000, so compaction
+  fires. The output shows the result shrinking to 3,497 tokens: the system prompt, one summary that
+  still carries the goal, the design decision and the open bug, and the last four messages.
+
 Sharp edges:
 
 - **Tool-call pairing**: never cut between an assistant tool call and its result; APIs reject
-  orphaned tool results. Cut on turn boundaries.
-- **Repeated compaction** is lossy on lossy; instructions drift. Keeping the user's original request
-  verbatim and re-injecting persistent files helps.
+  **orphaned** tool results (results whose matching call has been removed). Cut on **turn boundaries**
+  (between complete exchanges). The toy above keeps the last four messages without checking this; a
+  real implementation must move the cut point if it would split a pair.
+- **Repeated compaction** is lossy on lossy (**lossy** means some information is lost each time, like
+  re-photocopying a photocopy); instructions drift. Keeping the user's original request verbatim and
+  re-injecting persistent files helps.
 - **Cache**: compaction resets the cached prefix; do it rarely and deliberately.
 
 ## 3. Structured note-taking: memory outside the window
 
 Instead of trying to keep everything in context, let the agent **write notes to persistent storage**
-and read them back later. Examples:
+(files or a database that survive after the conversation ends) and read them back later. Examples:
 
 - **To-do lists**: Claude Code maintains a task list; ticking items off keeps a long task on track and
   survives compaction.
@@ -139,11 +206,13 @@ and read them back later. Examples:
 - **Memory tools**: the Claude API's memory tool gives the model file operations on a client-side
   memory directory that persists across conversations; frameworks offer similar stores.
 
-Memory taxonomies you will see (CoALA and others): **working memory** (the context window),
-**episodic** (what happened: past interactions and outcomes), **semantic** (facts about the user and
-world), **procedural** (how to do things: skills, instructions). Implementation options range from
-plain files (inspectable, versionable, surprisingly strong) to vector stores and knowledge graphs
-(Mem0, Zep, Letta/MemGPT's self-editing memory blocks).
+Memory **taxonomies** (classification schemes) you will see, borrowed from psychology by the CoALA
+paper and others: **working memory** (the context window), **episodic** (what happened: past
+interactions and outcomes), **semantic** (facts about the user and world), **procedural** (how to do
+things: skills, instructions). Implementation options range from plain files (inspectable,
+**versionable** (trackable with git), surprisingly strong) to vector stores (lesson 9) and knowledge
+graphs (lesson 12), offered by memory products such as Mem0, Zep and Letta (the successor of the
+MemGPT research project, whose agent edits its own memory blocks).
 
 Design questions for any memory system:
 
@@ -177,6 +246,12 @@ print(fresh_context)
 print("\ncontext after reset:", len(fresh_context.split()), "words instead of the full transcript")
 ```
 
+How it works: `Notes` keeps a dictionary of named sections. `write` stores or replaces a section, and
+`render` turns all sections into Markdown, printing strings as they are and lists or dictionaries as
+indented JSON. The agent records its goal, its to-do list with done flags, its decisions and a known
+bug. The printed "fresh context" is what a new context window would start with after a reset: 71
+words that hold everything needed to continue, instead of a transcript of tens of thousands of tokens.
+
 For work spanning **multiple context windows**, Anthropic's guidance for recent models is to treat the
 first window differently (set up a framework: tests, setup scripts, a to-do file), have the model track
 state in **structured files** (e.g. `tests.json` for test status) plus free-form progress notes, use
@@ -200,7 +275,13 @@ print(f"lead agent context with sub-agents          : {lead_context:,} tokens")
 print(f"total tokens billed with sub-agents          : {single_agent + lead_context:,} (more spend, cleaner contexts)")
 ```
 
-This is separation of concerns: detailed search context stays isolated in sub-agents while the lead
+The arithmetic: three explorations of 37,000 to 61,000 tokens each would put 146,000 tokens into a
+single agent's window. With sub-agents, the lead receives three 1,500-token summaries, 4,500 tokens in
+all. The bill goes *up* slightly (150,500 tokens in total, because the summaries are extra), but the
+lead's window stays almost empty and focused.
+
+This is **separation of concerns** (each part of a system handles one job and hides its details from
+the others): detailed search context stays isolated in sub-agents while the lead
 focuses on synthesis. Benefits: clean contexts, parallelism, specialisation. Costs: more total tokens,
 coordination overhead, and information loss at the hand-off (the sub-agent's summary is all the lead
 knows). Good delegation briefs specify the objective, the expected output format, which tools and
@@ -218,7 +299,8 @@ return references.
 
 They combine: a lead agent with a to-do file, sub-agents for exploration, tool-result clearing
 throughout and compaction as the last resort. And keep the meta-advice in mind: as models improve they
-need less scaffolding, so "do the simplest thing that works".
+need less **scaffolding** (the supporting code and structure built around a model), so "do the simplest
+thing that works".
 
 > [!INTERVIEW]
 > **"An agent must work for six hours on one task. How do you manage its context?"** Measure usage by
@@ -236,6 +318,31 @@ need less scaffolding, so "do the simplest thing that works".
 - Sub-agents explore in isolated contexts and return condensed summaries; more tokens overall, cleaner
   lead context.
 - Combine techniques according to task shape, and prefer the simplest working design.
+
+## Glossary
+
+- **Long-horizon agent**: an agent built to work coherently over many more tokens than its window
+  holds.
+- **Tool-result clearing**: replacing old tool output with short placeholders while keeping the calls.
+- **Placeholder**: a stand-in line recording what used to be in the context.
+- **Context editing**: the API feature that clears old tool results automatically.
+- **Cache invalidation**: an edit to earlier history that stops the provider reusing cached work.
+- **Compaction**: summarising a long conversation and restarting from the summary.
+- **Trace**: the recorded transcript of a real agent run.
+- **Turn boundary / orphaned tool result**: a point between complete exchanges / a result whose call
+  was removed.
+- **Lossy**: losing some information each time it is applied.
+- **Structured note-taking**: the agent writes notes, to-do lists and progress files to persistent
+  storage.
+- **Persistent storage**: files or databases that outlive the conversation.
+- **Project memory file**: a file such as `CLAUDE.md` loaded at the start of every session.
+- **Memory tool**: an API tool giving the model file operations on a memory directory.
+- **Working / episodic / semantic / procedural memory**: the context / past events / facts / skills.
+- **Sub-agent**: a helper agent with its own clean context that returns a condensed summary.
+- **Separation of concerns**: each part handles one job and hides its details from the others.
+- **Scaffolding**: the supporting code and structure built around a model.
+
+## Check yourself
 
 ```quiz
 [

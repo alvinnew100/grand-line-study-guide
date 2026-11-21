@@ -1,17 +1,53 @@
 # The wire protocol: JSON-RPC, lifecycle, transports
 
+> **Before this lesson:** you should know MCP's roles (host, client, server), its primitives (tools,
+> resources, prompts), and the difference between a protocol error and a tool result with `isError`,
+> all from [Why MCP: architecture and primitives](#/lesson/llm-practice/mcp-architecture). JSON and
+> JSON Schema were introduced in
+> [Function calling](#/lesson/llm-practice/function-calling). The code uses Python's `json` module and
+> dictionaries.
+
+## In plain words
+
+The previous lesson described MCP from above: who talks to whom and about what. This lesson zooms in
+on the actual messages, what engineers call "the **wire**" (whatever is literally sent between two
+programs). Each MCP message is a small JSON object, and there are only four kinds. Around them sit two
+sets of rules: how a conversation between client and server starts and proceeds (the **lifecycle**),
+and how the messages physically travel (the **transport**: through a pipe on your own machine, or
+over the web).
+
+An analogy: sending registered letters. Every letter has a reference number; a reply quotes the
+number of the letter it answers; some letters are announcements that expect no reply. Older practice
+began every exchange with a formal introduction letter and kept a shared file of past letters
+(a "session"); the newer practice makes every letter carry everything needed to understand it, so any
+clerk at any branch can answer it.
+
+Why it matters for a job: when an MCP integration breaks, you debug it by reading these messages.
+Knowing the four message shapes, the standard error codes, and the classic transport bugs (a stray
+`print` corrupting the stream, a local server open to web pages) turns an afternoon of confusion into
+five minutes. Interviewers ask "what goes over the wire when a host calls an MCP tool?".
+
+## Two eras of the protocol
+
 MCP looks mysterious until you watch the bytes. It is JSON objects, one per message, with four shapes.
 This lesson goes through the message types, the lifecycle in both eras of the protocol (the
-`initialize` handshake used through revision 2025-11-25, and the stateless per-request model of
-2026-07-28), the two transports, and then builds a miniature server dispatcher in Python.
+`initialize` **handshake**, an opening exchange of messages that sets up a connection, used through
+revision 2025-11-25, and the stateless per-request model of 2026-07-28), the two transports, and then
+builds a miniature server **dispatcher** (the code that looks at each incoming message and sends it to
+the right handler) in Python.
 
 ## 1. JSON-RPC 2.0 in four shapes
+
+JSON-RPC is the message standard MCP is built on: "RPC" means **remote procedure call**, asking another
+program to run a function and send back the result. Every message carries `"jsonrpc": "2.0"`. The four
+shapes follow.
 
 ```json
 {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}
 ```
-**Request**: has `id` (string or integer, never `null` in MCP, unique among in-flight requests) and
-`method`; expects exactly one response.
+**Request**: has `id` (string or integer, never `null` in MCP, unique among **in-flight** requests,
+those sent but not yet answered) and `method`; expects exactly one response. The `id` is how the
+sender matches a reply to its question when several are outstanding at once.
 
 ```json
 {"jsonrpc": "2.0", "id": 1, "result": {"tools": []}}
@@ -29,7 +65,8 @@ has `result` **or** `error`, never both.
 ```
 **Notification**: no `id`; the receiver must not reply.
 
-Standard error codes you must know:
+Standard error codes you must know. The first five come from the JSON-RPC standard itself; the range
+-32000 to -32099 is left for applications such as MCP to define:
 
 | code | name | typical MCP use |
 |---|---|---|
@@ -42,6 +79,9 @@ Standard error codes you must know:
 
 (Older revisions used -32002 for "resource not found"; clients should still accept it from old
 servers.)
+
+The demo classifies six raw messages by shape, the first thing any MCP implementation must do with an
+incoming line:
 
 ```python-run
 import json
@@ -64,10 +104,23 @@ for raw in ['{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"add
     print(f"{classify(json.loads(raw)):16} {raw[:70]}")
 ```
 
+**Reading this code line by line**
+
+- Anything that is not a dictionary with `"jsonrpc": "2.0"` is invalid at once.
+- A message with a `method` is a request if it also has an `id`, otherwise a notification.
+- A message without `method` must be a response: it needs an `id` and exactly one of `result` and
+  `error`. The expression `("result" in msg) != ("error" in msg)` is true only when one is present and
+  the other absent (`!=` between two booleans means "exclusive or").
+- The output labels the six messages: a `tools/call` request, a cancellation notification, a result,
+  an error, and two invalid messages: the fifth lacks `"jsonrpc": "2.0"` and the sixth has both
+  `result` and `error`.
+
 ## 2. Lifecycle, legacy era: the initialize handshake
 
 Through revision **2025-11-25** (and still what a large share of deployed servers and clients speak), a
-connection is a **stateful session** opened by a three-message handshake:
+connection is a **stateful session** opened by a three-message handshake. In the sequence diagram, a
+solid arrow is a request, a dashed arrow its response, and an arrow with an open head a one-way
+notification:
 
 ```mermaid
 sequenceDiagram
@@ -103,19 +156,29 @@ sequenceDiagram
 {"jsonrpc": "2.0", "method": "notifications/initialized"}
 ```
 
+Reading the three messages: the client's `initialize` request states the protocol version it would
+like, the optional client features it supports (here roots, sampling and elicitation) and its name.
+The server's result answers with the version it will use, its own features (tools that can announce
+changes, resources that can be subscribed to, prompts), its name, and optional `instructions` the host
+may show the model. The client's notification says "ready"; normal work begins.
+
 - **Version negotiation**: the client proposes its latest version; the server echoes it if supported,
   otherwise replies with another version it supports; if the client cannot speak that, it disconnects.
 - **Capability negotiation**: each side declares optional features. A server that did not declare
   `tools` must not be sent `tools/list`; a client that did not declare `sampling` must not receive
   `sampling/createMessage`.
-- Before `initialized`, only pings (and server logging) are allowed.
+- Before `initialized`, only pings (a **ping** is a trivial "are you there?" request) and server logging
+  are allowed.
 - In this era servers could also *send requests to the client* (`sampling/createMessage`,
-  `roots/list`, `elicitation/create`), which is why the transport had to be bidirectional.
+  `roots/list`, `elicitation/create`), which is why the transport had to be **bidirectional** (able to
+  carry messages started by either side).
 
 ## 3. Lifecycle, modern era: stateless requests (2026-07-28)
 
 The 2026-07-28 revision removed the handshake and protocol-level sessions. **Every request is
-self-contained**, carrying its protocol version and client capabilities in `params._meta`:
+self-contained**, carrying its protocol version and client capabilities in `params._meta`. (`_meta` is
+a reserved field for information about the request rather than its content; its keys are prefixed with
+`io.modelcontextprotocol/` so they cannot clash with anyone else's.)
 
 ```json
 {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
@@ -153,8 +216,12 @@ What changed and why it matters:
   and `resources/subscribe`.
 - `ping` and `logging/setLevel` were removed; sampling, roots and logging are deprecated.
 
-The payoff is operational: stateless servers sit behind ordinary load balancers, scale horizontally,
-and run on serverless platforms without sticky sessions.
+The payoff is operational: stateless servers sit behind ordinary **load balancers** (machines that
+spread incoming requests over many server copies), **scale horizontally** (handle more traffic by
+adding copies rather than buying a bigger machine), and run on serverless platforms without **sticky
+sessions** (the requirement that every request from one client reach the same server copy, because
+only that copy remembers the session). The diagram shows a modern exchange, including one multi
+round-trip:
 
 ```mermaid
 sequenceDiagram
@@ -176,38 +243,54 @@ handle this; you need to know it exists when debugging "method not found: initia
 
 ## 4. Transports
 
+A **transport** is the mechanism that carries the bytes. MCP defines two.
+
 ### stdio
 
-The host launches the server as a **subprocess**. Messages are **newline-delimited JSON** on
-`stdin`/`stdout`: one message per line, no embedded newlines. `stderr` is free for logs.
+The host launches the server as a **subprocess**. Every program has three standard streams: `stdin`
+(input), `stdout` (output) and `stderr` (a second output stream meant for errors and logs). Messages are
+**newline-delimited JSON** on `stdin`/`stdout`: one message per line, no embedded newlines, so the
+reader can split the stream at each newline character. `stderr` is free for logs.
 
 > [!WARNING]
 > The classic stdio bug: a stray `print("debug")` in a Python server writes to stdout and corrupts the
 > protocol stream. Log to **stderr** (`logging` does by default; `print(..., file=sys.stderr)`).
 
-stdio servers are single-client, need no network or auth (they inherit the user's OS permissions and
-get credentials from environment variables), and are ideal for local tools: files, git, local
-databases. Shutdown: the client closes stdin and waits, then escalates to SIGTERM/SIGKILL.
+stdio servers are single-client, need no network or **auth** (authentication, proving who is calling;
+they inherit the user's operating-system permissions and get credentials from environment variables),
+and are ideal for local tools: files, git, local databases. Shutdown: the client closes stdin and
+waits, then escalates to SIGTERM/SIGKILL (the operating system's "please stop" and "stop now"
+signals).
 
 ### Streamable HTTP
 
-For remote, multi-client servers. The server exposes a **single MCP endpoint** (e.g.
-`https://example.com/mcp`):
+For remote, multi-client servers. Some web vocabulary first: an HTTP request has a **method** such as
+GET (fetch) or POST (send data), a set of **headers** (name-value lines of extra information, such as
+`Accept`, which lists the reply formats the client can handle), and a body. The reply carries a
+**status code**: 200 means OK, 400 "bad request", 403 "forbidden". **SSE** (server-sent events) is a
+simple format for streaming several messages back over one HTTP reply. The server exposes a **single
+MCP endpoint** (e.g. `https://example.com/mcp`):
 
 - Every client message is an HTTP **POST** with `Accept: application/json, text/event-stream`.
 - The server answers a request either with one JSON body, or with an **SSE stream scoped to that
   request** carrying progress notifications and then the final response.
 - 2026-07-28 additionally requires `MCP-Protocol-Version`, **`Mcp-Method`** and (for `tools/call`,
-  `resources/read`, `prompts/get`) **`Mcp-Name`** headers mirroring the body so gateways can route and
-  rate-limit without parsing JSON; a mismatch is rejected with 400 and `HeaderMismatch` (-32020).
-  Cancellation is simply closing the response stream.
+  `resources/read`, `prompts/get`) **`Mcp-Name`** headers mirroring the body so **gateways** (proxies
+  that sit in front of servers) can route and **rate-limit** (cap requests per client) without parsing
+  JSON; a mismatch is rejected with 400 and `HeaderMismatch` (-32020). Cancellation is closing the
+  response stream.
 - Earlier revisions (2025-03-26 to 2025-11-25) also had an optional GET stream for server-initiated
   messages, `Mcp-Session-Id` sessions and resumable streams; all removed in 2026-07-28.
 - The older **HTTP+SSE** transport (2024-11-05, two endpoints) is deprecated.
 
 **Security requirements for HTTP servers**: validate the `Origin` header (403 if invalid) to block
 **DNS rebinding** attacks from web pages against local servers; bind local servers to `127.0.0.1`,
-not `0.0.0.0`; authenticate every connection (OAuth 2.1, next lesson).
+not `0.0.0.0`; authenticate every connection (OAuth 2.1, next lesson). In plain terms: browsers send an
+`Origin` header naming the website that started a request. In a DNS rebinding attack, a malicious
+website tricks your browser into sending requests to a server running on your own machine; checking
+`Origin` lets the server refuse them. `127.0.0.1` is the address that only programs on the same
+computer can reach, whereas `0.0.0.0` means "every network interface", which exposes the server to
+the whole network.
 
 ## 5. A miniature server
 
@@ -272,6 +355,23 @@ for line in ['{"jsonrpc":"2.0","id":1,"method":"tools/list"}',
     print(json.dumps(out)[:150] if out else "(no response: notification)")
 ```
 
+**Reading this code line by line**
+
+- `TOOLS` is the server's registry: each tool's description, input schema and the Python function that
+  runs it.
+- `handle(line)` processes one line of input. If it is not valid JSON, the answer is a -32700 error
+  with `id` `null` (the id could not be read). If it is JSON but not a proper request, -32600.
+- A message without an `id` is a notification, and the function returns `None`: no reply at all.
+- `tools/list` returns every tool sorted by name, the deterministic order that keeps clients' caches
+  stable.
+- `tools/call` looks up the tool (unknown name: -32602), checks the required arguments (missing:
+  -32602), then runs the function. If the function raises, the exception becomes a *result* with
+  `isError: true`, not a protocol error.
+- Any other method gets -32601.
+- The output, line by line: the tool list; `42` for `add(2, 40)`; division by zero as an `isError`
+  result; `mul` as an unknown-tool error; `resources/list` as method not found (this server offers no
+  resources); no response to the notification; and a parse error for `{oops`.
+
 Look at ids 3 and 4: division by zero is a **tool execution error** (`isError: true` inside a result,
 so the model can react), while an unknown tool is a **protocol error** (-32602).
 
@@ -293,6 +393,36 @@ so the model can react), while an unknown tool is a **protocol error** (-32602).
 - stdio: newline-delimited JSON, never write logs to stdout. Streamable HTTP: single POST endpoint, JSON
   or SSE, Origin validation, localhost binding, auth.
 - Unknown method -32601, bad params or unknown tool -32602, tool failure = `isError` result.
+
+## Glossary
+
+- **Wire**: the actual bytes sent between two programs.
+- **JSON-RPC / RPC**: the JSON message standard MCP uses / a remote procedure call.
+- **Request / result / error / notification**: the four message shapes; only requests get responses,
+  and notifications have no `id`.
+- **In-flight request**: a request sent but not yet answered.
+- **Error code**: the integer in a JSON-RPC error, such as -32601 Method not found.
+- **Lifecycle**: the rules for starting, running and ending a connection.
+- **Handshake (`initialize` / `initialized`)**: the legacy opening exchange that negotiates version and
+  capabilities.
+- **Version / capability negotiation**: agreeing which protocol version and optional features to use.
+- **`_meta`**: the reserved field carrying information about a request, such as its protocol version.
+- **`server/discover`**: the modern, optional way to learn a server's versions and capabilities.
+- **`resultType` / MRTR**: `complete` or `input_required` / multi round-trip requests, where the client
+  retries with the missing input.
+- **Explicit handle**: an id returned by one tool and passed to the next to carry state.
+- **Transport**: how messages travel: stdio or Streamable HTTP.
+- **stdin / stdout / stderr**: a program's input stream, output stream and log stream.
+- **Newline-delimited JSON**: one JSON message per line.
+- **HTTP method / header / status code**: GET or POST / an extra name-value line / the numeric outcome
+  of a request.
+- **SSE (server-sent events)**: a format for streaming several messages in one HTTP reply.
+- **Load balancer / horizontal scaling / sticky session**: spreads requests over copies / adding
+  copies / pinning a client to one copy.
+- **DNS rebinding / Origin header**: a web-page attack on local servers / the header that reveals which
+  site started a request.
+
+## Check yourself
 
 ```quiz
 [

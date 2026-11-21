@@ -1,29 +1,68 @@
 # Structured outputs and streaming
 
-Two mechanics separate a demo from an application. Programs need **data they can parse**, not prose;
-users need **tokens as they are generated**, not a spinner for twenty seconds. This lesson covers the
-ladder of structured-output techniques, how constrained decoding works inside the sampler, and how to
-consume streaming events correctly, including streamed tool calls.
+> **Before this lesson:** you should know that a model produces one token at a time by turning
+> **logits** (a raw score for every token in the vocabulary) into probabilities and sampling
+> ([Hub, pipelines, Auto classes and generate()](#/lesson/llm-practice/hub-pipelines-generate)), and
+> how a model asks your code to run a tool
+> ([Function calling](#/lesson/llm-practice/function-calling)). Prompt caching from
+> [Designing tools for agents and prompt caching](#/lesson/llm-practice/tools-and-caching) appears
+> briefly in the latency section. The code uses Python dictionaries, `json`, `try`/`except` and a little
+> numpy.
+
+## In plain words
+
+A language model writes free text. That is perfect for a chat window and awkward for a program. If your
+code needs to know "which category is this support ticket, and how urgent?", it wants a tidy record such
+as `{"category": "billing", "urgency": 4}`, not a friendly paragraph that happens to mention billing
+somewhere. Getting the model to produce data your code can read reliably is called **structured
+output**.
+
+The second topic is **streaming**: showing the answer word by word as the model writes it, instead of
+making the user stare at a spinner for twenty seconds and then dumping the whole reply at once. The
+answer does not arrive any sooner in total, but it *feels* far faster, and the user can start reading
+immediately.
+
+An analogy: a structured output is a paper form with labelled boxes rather than a blank sheet. A clerk
+can process a hundred forms an hour because every answer is in the same place. Streaming is a
+newsreader speaking as they read the script, rather than reading silently for a minute and then
+speaking.
+
+Why it matters for a job: almost every production LLM feature either feeds a program (extraction,
+classification, routing, tool calls) or faces a user (chat, writing help). The first needs structured
+output; the second needs streaming. "How do you get reliable JSON from an LLM?" is one of the most
+common practical interview questions.
 
 ## 1. The structured-output ladder
 
-From weakest to strongest guarantee:
+Before the ladder, two definitions. **JSON** (JavaScript Object Notation) is the standard text format
+for data: curly braces hold named fields, square brackets hold lists. A **JSON Schema** is a JSON
+document that describes what valid data must look like: which fields exist, their types, which are
+required, and which values are allowed.
 
-1. **Ask nicely.** "Respond with JSON matching this schema" plus an example. Works most of the time
-   with strong models; fails with trailing prose, Markdown fences, missing fields, truncated output.
-2. **Prefill / stop sequences.** Start the assistant's reply with `{` (prefill) so the model continues
-   JSON; stop on a closing tag. Cheap and effective where supported.
-3. **JSON mode.** The provider guarantees *syntactically valid JSON*, but not your schema.
-4. **Tool calling as a schema carrier.** Define a tool whose input schema is your desired output and
-   force it with `tool_choice`. The arguments are your structured result.
-5. **Structured outputs with constrained decoding** (strict mode). You supply a JSON Schema; the
-   provider compiles it to a grammar and masks invalid tokens at every step, so the output **always
-   parses and validates**. Available from OpenAI (`response_format` with `json_schema`, `strict`),
-   Anthropic (structured outputs via an output format/schema and strict tools), Gemini
-   (`response_schema`), and for open models through vLLM/TGI/llama.cpp guided decoding with Outlines,
-   XGrammar or llguidance.
+There are five ways to get JSON out of a model, from the weakest guarantee to the strongest:
 
-Whatever rung you use, **validate in code** (Pydantic) and have a repair path.
+1. **Ask nicely.** "Respond with JSON matching this schema" plus an example. With strong models this
+   works most of the time. It fails occasionally with chatty text before or after the JSON, Markdown
+   code fences around it, missing fields, or output cut off part-way.
+2. **Prefill and stop sequences.** **Prefilling** means writing the first characters of the assistant's
+   reply yourself, for example `{`, so the model can only continue as JSON. A **stop sequence** is a
+   string that makes generation end when it appears, such as a closing tag. Cheap and effective where
+   the API supports it; some recent models no longer accept prefilled replies, so check the docs.
+3. **JSON mode.** The provider guarantees *syntactically valid JSON* (it will parse), but not that it
+   matches *your* schema. Fields can still be missing or misnamed.
+4. **Tool calling as a schema carrier.** Define a tool whose input schema is the output you want and
+   force the model to call it (with the `tool_choice` setting). The tool's arguments *are* your
+   structured result; you never run any tool.
+5. **Structured outputs with constrained decoding** (often called strict mode). You supply a JSON
+   Schema; the provider turns it into a grammar and blocks invalid tokens at every step, so the output
+   **always parses and matches the schema**. OpenAI offers this through `response_format` with a
+   `json_schema` and `strict: true`; Anthropic through a JSON-schema output format and strict tool use;
+   Gemini through `response_schema`. For open models, serving engines such as vLLM, TGI and llama.cpp
+   offer **guided decoding** using libraries like Outlines, XGrammar or llguidance.
+
+Whatever rung you use, **validate in code** and keep a repair path. The standard Python tool for
+validation is **Pydantic**, a library where you describe the shape of your data as a Python class and it
+checks incoming data against it:
 
 ```python
 from pydantic import BaseModel, Field
@@ -42,18 +81,44 @@ schema = Ticket.model_json_schema()            # hand this to the API
 ticket = Ticket.model_validate_json(raw_model_output)
 ```
 
-(Exact method names vary by SDK version; check the current reference. Libraries such as Instructor and
-Pydantic AI wrap this pattern, including automatic retries on validation errors.)
+**Reading this code line by line**
+
+- `class Ticket(BaseModel)` declares the data shape. Each line inside is one field with its type.
+- `Literal[...]` restricts `category` to exactly four allowed strings; the generated schema turns this
+  into an **enum** (a fixed list of allowed values).
+- `Field(ge=1, le=5, ...)` says urgency must be greater than or equal to 1 and less than or equal to 5;
+  the `description` is copied into the schema, where the model reads it as an instruction.
+- `order_ids: list[str] = []` is a list of strings that defaults to empty.
+- `model_json_schema()` produces the JSON Schema to send to the provider.
+- The comments show the SDK helpers that accept the class directly (method names change between SDK
+  versions, so check the current reference). The last line parses and checks the model's raw text,
+  raising a `ValidationError` with a precise message if anything is wrong.
+
+Libraries such as Instructor and Pydantic AI wrap this whole pattern, including automatic retries on
+validation errors.
 
 ## 2. How constrained decoding works
 
-At each step the model produces logits over the whole vocabulary. A **grammar engine** tracks which
-strings are still legal given the output so far (as a state machine for regular structure or a
-pushdown automaton for nested JSON) and sets the logits of every token that would violate the schema to
-$-\infty$ before sampling. Subtleties: tokens span multiple characters, so the engine precomputes, for
-each grammar state, the set of allowed tokens; and schemas are restricted to a supported subset
-(for instance no arbitrary regex look-arounds, bounded recursion, `additionalProperties: false`
-required in strict modes).
+Recall how generation proceeds. At each step the model outputs logits over its entire vocabulary, the
+sampler picks one token, the token is appended, and the loop repeats. Constrained decoding inserts one
+extra step before sampling.
+
+A **grammar engine** keeps track of which continuations are still legal given what has been written so
+far. For simple, flat structure it can use a **finite-state machine** (a small set of states with rules
+for which input moves you from one state to the next). Nested JSON, where braces can contain braces,
+needs a **pushdown automaton** (a state machine with a stack that remembers how many brackets are open).
+At each step the engine sets the logit of every token that would break the grammar to $-\infty$
+(negative infinity). After softmax, those tokens have probability exactly zero, so the sampler cannot
+pick them.
+
+Two subtleties. First, tokens are multi-character pieces such as `{"sent` or `ive"`, not single
+characters, so for each grammar state the engine precomputes the set of tokens that keep the output
+legal; that precomputation is what libraries such as Outlines and XGrammar make fast. Second, providers
+support only a subset of JSON Schema in strict mode: for instance no arbitrary regular-expression
+look-arounds, limited recursion, and `additionalProperties: false` (no extra fields) required on
+objects.
+
+The demo uses a ten-token vocabulary and a three-state grammar for `{"sentiment": "<label>"}`:
 
 ```python-run
 import numpy as np
@@ -84,20 +149,41 @@ print("unconstrained:", repr(generate(False)))
 print("constrained  :", repr(generate(True)))
 ```
 
+**Reading this code line by line**
+
+- `vocab` is the toy vocabulary. Token 0 is the whole opening `{"sentiment": "`, tokens 1 to 3 are the
+  labels, token 4 closes the object, and tokens 5 to 9 are chatty filler.
+- `GRAMMAR` maps each state to the tokens allowed in it and the state each one leads to. In state 0
+  only the opening is legal; in state 1 any of the three labels; in state 2 only the closing `"}`;
+  reaching state 3 means the object is complete.
+- Each step draws random logits (a stand-in for the model) and then biases them: `'Sure'` gets +3 so
+  the "model" strongly prefers to start chatting, and `'negative'` gets +1.
+- In constrained mode, `mask` is negative infinity everywhere except the allowed tokens, which get 0.
+  Adding the mask to the logits leaves legal tokens unchanged and makes illegal ones impossible.
+  `np.argmax` picks the best remaining token (greedy decoding), and the state advances.
+- The output: the unconstrained run prints `'Sure'` six times in a row and never forms JSON. The constrained run produces a complete object such as `{"sentiment": "negative"}` in exactly
+  three steps, even though the model "wanted" to chat.
+
 What constrained decoding does **not** do:
 
-- **Semantics**: a valid `"urgency": 5` can still be wrong. Evaluate content, not just shape.
-- **Truncation**: if `max_tokens` is hit mid-object the JSON is incomplete. Check the stop reason.
-- **Refusals**: a model may refuse; handle that path.
-- **Quality for free**: forcing a format can degrade reasoning if the schema leaves no room to think.
-  Put a `reasoning` field **first** in the schema (fields are generated in order), or let the model
-  think in a separate step/thinking block and then emit the structure.
+- **Semantics**: a perfectly valid `"urgency": 5` can still be the wrong urgency. Evaluate the content,
+  not only the shape.
+- **Truncation**: if the `max_tokens` limit is hit in the middle of an object, the JSON is incomplete.
+  Always check the stop reason (section 3).
+- **Refusals**: the model may decline a request; your code needs a path for that.
+- **Quality for free**: forcing a strict format can hurt reasoning if the schema leaves no room to
+  think. Put a `reasoning` field **first** in the schema (fields are generated in order, so the model
+  writes its thinking before committing to an answer), or let the model think in a separate step or
+  thinking block and only then emit the structure.
 
-Schema design tips: descriptive field names and descriptions (they are prompt text), enums instead of
-free strings, flat over deeply nested, required fields with explicit null options rather than optional
-ambiguity, and keep schemas small.
+Schema design tips: descriptive field names and descriptions (they are prompt text the model reads);
+enums instead of free strings; flat structures rather than deep nesting; required fields that allow an
+explicit `null` rather than optional fields with ambiguous meaning; and small schemas overall.
 
 ### A repair loop
+
+On the lower rungs of the ladder you need a way to recover from bad output. The pattern: extract the
+JSON tolerantly, validate it, and if it fails, send the specific errors back to the model and ask again.
 
 ```python-run
 import json, re
@@ -134,17 +220,43 @@ for attempt in range(3):
     prompt += f"\nYour previous output was invalid: {'; '.join(errs)}. Return only corrected JSON."
 ```
 
-Feeding the validation errors back usually fixes the output in one retry. Cap retries, and log failures
-as eval cases.
+**Reading this code line by line**
+
+- `FENCE` is three backtick characters built by repeating one backtick, so a literal fence never
+  appears in the demo source, where it would end this lesson's own code block.
+- `extract_json` removes code fences, finds the first `{` and the last `}`, and parses what lies between,
+  which strips chatty text such as "Sure! Here is the JSON:".
+- `validate` returns a list of human-readable problems; an empty list means valid.
+- `attempts` is a fake model that returns a bad answer first and a good one second; `next(attempts)`
+  hands out the next answer on each call.
+- The loop tries up to three times. A parse failure and a validation failure are both turned into
+  error messages, which are appended to the prompt for the next try.
+- The output: attempt 1 parses (the extraction worked) but fails validation with both errors, because
+  "payment" is not an allowed category and "high" is not an integer. Attempt 2 is valid.
+
+Feeding the specific errors back usually fixes the output in one retry. Cap the number of retries, and
+log every failure: each one is a ready-made test case for your evaluation set.
 
 ## 3. Streaming
 
-LLM APIs stream over **Server-Sent Events (SSE)**: a long-lived HTTP response of `event:` / `data:`
-lines. Streaming does not make generation faster, but it slashes *perceived* latency:
-**time to first token (TTFT)** becomes the number users feel, followed by a steady tokens-per-second
-rate.
+### How the bytes arrive
 
-Anthropic's Messages stream has this event grammar:
+LLM APIs stream using **Server-Sent Events (SSE)**: the server keeps one HTTP response open and writes
+a series of short text records, each made of `event:` and `data:` lines, as soon as each piece is ready.
+The browser or SDK reads them one by one.
+
+Streaming does not make the model generate faster. It changes what the user *perceives*. Two numbers
+matter:
+
+- **Time to first token (TTFT)**: how long until the first piece of the answer appears.
+- **Tokens per second**: how fast the rest flows once it starts.
+
+A user who sees words after 400 milliseconds feels the system is responsive even if the full answer
+takes fifteen seconds.
+
+### The event grammar
+
+Anthropic's Messages API streams events in this order:
 
 ```text
 message_start                    (message metadata, input token usage)
@@ -157,9 +269,19 @@ message_stop
 ping / error                     (may appear at any time)
 ```
 
-OpenAI's Chat Completions stream sends `chat.completion.chunk` objects with `choices[0].delta`
-(content fragments, or `tool_calls` fragments keyed by `index`), ending with `data: [DONE]`; the newer
-Responses API uses typed semantic events (`response.output_text.delta`, ...).
+In words: a reply is a **message** made of numbered **content blocks** (a block of text, a tool call, or
+a block of model thinking). Each block opens with `content_block_start`, receives many small
+**deltas** (increments: a few characters of text, or a fragment of tool arguments), and closes with
+`content_block_stop`. Near the end, `message_delta` carries the **stop reason** (why generation ended)
+and the output token count; `message_stop` ends the stream. `ping` events keep the connection alive and
+an `error` event can arrive at any point.
+
+OpenAI's Chat Completions API streams `chat.completion.chunk` objects with a `choices[0].delta` field
+holding text fragments or `tool_calls` fragments keyed by an `index`, and ends with `data: [DONE]`. The
+newer Responses API uses named event types such as `response.output_text.delta`. The ideas are the same:
+fragments tagged with which part of the answer they belong to.
+
+SDKs hide most of this. With Anthropic's Python SDK (static code; it needs a network and an API key):
 
 ```python
 with client.messages.stream(model="claude-sonnet-4-5", max_tokens=1024, messages=msgs) as stream:
@@ -168,11 +290,18 @@ with client.messages.stream(model="claude-sonnet-4-5", max_tokens=1024, messages
     final = stream.get_final_message()          # fully assembled message with usage and stop_reason
 ```
 
+`with ... as stream` opens the stream and guarantees it is closed afterwards. `stream.text_stream`
+yields only the text fragments, which are printed without a newline (`end=""`) and pushed to the screen
+at once (`flush=True`). `get_final_message()` returns the complete message, assembled from all the
+events, with its token usage and stop reason.
+
 ### Accumulating a stream by hand
 
-Tool-call arguments arrive as **partial JSON strings** (`input_json_delta.partial_json`) that are only
-parseable once the block stops. You concatenate fragments per content-block index and parse at
-`content_block_stop`. This module's `llm-stream-accumulate` problem is exactly this routine.
+When the model calls a tool while streaming, the tool's arguments arrive as **partial JSON strings**
+(`input_json_delta.partial_json`), such as `{"city": "Os` followed later by `lo", "days": 3}`. Neither
+piece is valid JSON on its own. You concatenate the fragments for each block index and parse only at
+`content_block_stop`. This module's `llm-stream-accumulate` problem asks you to write exactly this
+routine; the demo shows a reference version.
 
 ```python-run
 import json
@@ -205,30 +334,86 @@ for e in events:
 print([blocks[i] for i in sorted(blocks)], stop)
 ```
 
+**Reading this code line by line**
+
+- `events` is a recorded stream: one text block, one tool-use block, then the closing events.
+- `blocks` holds each block's metadata by index; `buf` holds the text collected so far for each index.
+- On `content_block_start`, the block's metadata is copied and an empty buffer is opened.
+- On `content_block_delta`, the fragment is appended to that index's buffer. Text deltas carry `text`
+  and tool deltas carry `partial_json`; using `.get(..., "")` for both handles either kind.
+- On `content_block_stop`, a text block receives its finished text and a tool block's buffer is parsed
+  as JSON (an empty buffer means a tool with no arguments, hence `or "{}"`).
+- On `message_delta`, the stop reason is recorded.
+- The output is two finished blocks, the text "Let me check the weather." and a `get_weather` call with
+  input `{'city': 'Oslo', 'days': 3}`, plus the stop reason `tool_use`, which tells your loop to run
+  the tool and send back its result.
+
+The sequence diagram shows the full round trip for a streamed answer:
+
+```mermaid
+sequenceDiagram
+  participant User
+  participant App
+  participant API
+  User->>App: asks a question
+  App->>API: request with stream enabled
+  API-->>App: message_start
+  API-->>App: text deltas
+  App-->>User: words appear as they arrive
+  API-->>App: message_delta with stop reason
+  API-->>App: message_stop
+  App->>App: check stop reason and log usage
+```
+
 ### Streaming engineering checklist
 
-- **Always read the stop reason**: `end_turn`, `max_tokens` (truncated: continue or raise the limit),
-  `tool_use`, `stop_sequence`, `refusal`, or a pause that expects you to continue the turn.
-- **Errors can arrive mid-stream** after a 200 status (e.g. overload). Decide whether to show partial
-  text, retry from scratch, or resume by prefilling what you have.
-- **Timeouts**: use streaming for long generations so idle-connection timeouts do not kill a request;
-  set a first-byte timeout and an inter-chunk timeout.
-- **Backpressure and cancellation**: if the user navigates away, abort the request to stop paying for
-  tokens.
-- **Proxies** buffer SSE unless told not to (`X-Accel-Buffering: no`, disable gzip buffering).
-- **Rendering**: partial Markdown and partial JSON need tolerant renderers; for structured streaming
-  use a partial-JSON parser (or stream a list of objects, one per line).
-- **Guardrails and streaming conflict**: you cannot un-send a token. Options: buffer a sentence or
-  chunk and scan before release, run a parallel checker that can abort the stream, or post-hoc retract
-  in the UI (next lesson).
-- **Unicode**: byte-level tokens can split a multi-byte character across chunks; decode incrementally.
+- **Always read the stop reason.** Common values: `end_turn` (finished naturally), `max_tokens`
+  (truncated: continue or raise the limit), `tool_use` (run the tool), `stop_sequence` (a stop string
+  appeared), `refusal`, and a pause value that asks you to send the turn back so the model can continue.
+- **Errors can arrive mid-stream** after a successful HTTP 200 status, for example when the service is
+  overloaded. Decide in advance whether to show partial text, retry from scratch, or resume.
+- **Timeouts**: stream long generations so that idle-connection timeouts do not kill the request, and
+  set two timers: one for the first byte and one for the gap between chunks.
+- **Cancellation**: if the user closes the page or presses stop, abort the request so you stop paying
+  for tokens nobody will read.
+- **Proxies**: web servers and proxies such as nginx may **buffer** SSE (hold it back and send it in
+  one lump), which defeats streaming. Turn buffering off (for nginx, the `X-Accel-Buffering: no`
+  header) and avoid compression buffering on that route.
+- **Rendering**: half-finished Markdown (an unclosed table or code fence) and half-finished JSON need
+  tolerant renderers. For structured data, use a partial-JSON parser, or stream a list of small
+  objects, one per line, so each line is complete when it arrives.
+- **Guardrails conflict with streaming**: you cannot un-send a token. Either buffer a sentence or chunk
+  and check it before release, run a checker in parallel that can abort the stream, or retract the text
+  in the interface afterwards (next lesson).
+- **Unicode**: tokenizers that work on bytes can split one multi-byte character (an emoji or a Chinese
+  character) across two chunks. Decode incrementally rather than chunk by chunk.
 
 ## 4. Latency vocabulary
 
-- **TTFT**: queueing + prefill of the prompt (grows with input length; prompt caching cuts it).
-- **TPOT / tokens per second**: decode speed.
-- **Total latency** $\approx$ TTFT + output tokens $\times$ TPOT: for long answers, **output length
-  dominates**, so asking for concise output is a latency optimisation.
+**Latency** is the time a user waits. Three terms describe it for LLMs:
+
+- **TTFT** (time to first token) = time waiting in the provider's queue + **prefill** (processing the
+  whole prompt in one pass). It grows with input length; prompt caching cuts it because cached prefix
+  tokens skip most of that work.
+- **TPOT** (time per output token), or its inverse, tokens per second: the speed of the **decode** phase,
+  in which output tokens are produced one at a time.
+- **Total latency** $\approx$ TTFT + (number of output tokens) $\times$ TPOT.
+
+A worked example: TTFT of 0.5 seconds and TPOT of 20 milliseconds. A 100-token answer takes about
+0.5 + 100 x 0.02 = 2.5 seconds; a 1,000-token answer takes about 20.5 seconds. For long answers **output
+length dominates**, so asking for concise output is one of the most effective latency optimisations.
+
+```python-run
+def latency(ttft, tpot_ms, out_tokens):
+    return ttft + out_tokens * tpot_ms / 1000
+
+for n in [50, 200, 1000, 3000]:
+    print(f"{n:5d} output tokens: {latency(0.5, 20, n):6.1f} s total, of which first token 0.5 s")
+```
+
+The function adds TTFT to output tokens times TPOT (converted from milliseconds to seconds). The table
+shows total time rising from 1.5 seconds at 50 tokens to 60.5 seconds at 3,000 tokens, while the time to
+first token, the part streaming makes visible, stays at half a second.
 
 > [!INTERVIEW]
 > **"How do you get reliable JSON from an LLM?"** Use schema-constrained structured outputs or a forced
@@ -242,9 +427,31 @@ print([blocks[i] for i in sorted(blocks)], stop)
 - Structured output options range from prompting to schema-constrained decoding; always validate and
   keep a repair loop.
 - Constrained decoding masks illegal tokens per grammar state: guaranteed shape, not guaranteed truth.
-- Streaming is SSE events; assemble text and partial-JSON tool arguments per block index.
-- Handle stop reasons, mid-stream errors, cancellation and guardrail timing.
-- TTFT depends on input and queueing; total latency is dominated by output length.
+- Streaming is a sequence of SSE events; assemble text and partial-JSON tool arguments per block index.
+- Handle stop reasons, mid-stream errors, cancellation, proxy buffering and guardrail timing.
+- TTFT depends on queueing and prompt length; total latency is dominated by output length.
+
+## Glossary
+
+- **Structured output**: model output in a fixed, machine-readable shape such as JSON.
+- **JSON / JSON Schema**: a text format for data / a document describing what valid data looks like.
+- **Prefill**: writing the start of the assistant's reply yourself so the model continues from it.
+- **Stop sequence**: a string that ends generation when it appears.
+- **JSON mode**: a guarantee of valid JSON syntax, without a schema guarantee.
+- **Constrained (guided) decoding**: masking tokens that would break a grammar so output always matches.
+- **Enum**: a fixed list of allowed values.
+- **Pydantic**: a Python library that validates data against a class definition.
+- **Finite-state machine / pushdown automaton**: rule-based state trackers, the second with a stack for
+  nesting.
+- **Repair loop**: validating output and re-asking the model with the specific errors.
+- **SSE (Server-Sent Events)**: one long HTTP response carrying a series of small event records.
+- **Content block / delta**: one part of a reply (text, tool call, thinking) / a small increment of it.
+- **Stop reason**: why generation ended, such as `end_turn`, `max_tokens` or `tool_use`.
+- **Buffering**: holding streamed data back and sending it in a lump.
+- **Latency / TTFT / TPOT**: waiting time / time to first token / time per output token.
+- **Prefill vs decode phase**: processing the prompt in one pass vs producing output tokens one by one.
+
+## Check yourself
 
 ```quiz
 [
@@ -254,6 +461,9 @@ print([blocks[i] for i in sorted(blocks)], stop)
   {"q": "How does constrained decoding enforce a grammar?",
    "options": ["It sets logits of tokens that would violate the grammar to -infinity before sampling", "It retries until valid", "It post-edits the text", "It fine-tunes the model on the schema"], "answer": 0,
    "explain": "A state machine tracks legal continuations and masks the rest at each step."},
+  {"q": "What does JSON mode guarantee that plain prompting does not?",
+   "options": ["Syntactically valid JSON, but not that it matches your schema", "That every field in your schema is present", "That values are correct", "That the reply is streamed"], "answer": 0,
+   "explain": "JSON mode guarantees the text parses; only strict schema mode guarantees the shape you asked for."},
   {"q": "Why put a reasoning field before the answer field in a schema?",
    "options": ["Fields are generated in order, so the model can think before committing", "It reduces tokens", "JSON requires alphabetical order", "It disables streaming"], "answer": 0,
    "explain": "Autoregressive generation means earlier fields condition later ones."},

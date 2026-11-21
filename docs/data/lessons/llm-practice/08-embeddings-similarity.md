@@ -1,32 +1,79 @@
 # Embeddings and similarity: from sentence-transformers to Matryoshka
 
-Retrieval-augmented generation, semantic search, clustering, deduplication, recommendation and
+> **Before this lesson:** you should know what a vector, a dot product, an embedding, softmax and
+> temperature are; all are taught in
+> [From embeddings to scaled dot-product attention](#/lesson/llm-practice/attention-from-scratch).
+> The hidden states a model outputs, mean pooling and the attention mask are shown in code in
+> [Hub, pipelines, Auto classes and generate()](#/lesson/llm-practice/hub-pipelines-generate).
+> The demos use numpy only.
+
+## In plain words
+
+An **embedding model** reads a piece of text and returns a list of numbers (a vector) that captures
+its meaning. Texts that mean similar things get vectors that point in similar directions, even when
+they share no words: "How do I reset my password?" and "I forgot my login" land close together.
+Once text is turned into vectors, "find documents about this question" becomes "find the nearest
+points", which a computer does very quickly.
+
+Think of a huge library where books are shelved by topic instead of by title. Walk to the spot for
+"gardening in dry climates" and every useful book is within arm's reach, whatever words its title
+uses. An embedding model is the librarian who decides where each book goes; similarity search is
+walking to the right spot and looking around.
+
+Why it matters for a job: this is the engine under **RAG** (retrieval-augmented generation, where a
+model looks up documents before answering; module 5), semantic search, recommendation, clustering,
+duplicate detection and "memory" for agents. Interviewers routinely ask about cosine versus dot
+product, how embedders are trained, and how to cut the storage bill for a hundred million vectors.
+
+## Why vectors?
+
+Retrieval-augmented generation, **semantic search** (search by meaning rather than exact words),
+**clustering** (grouping similar items), **deduplication** (finding near-copies), recommendation and
 "memory" for agents all rest on one primitive: map a piece of text to a vector such that **similar
-meaning means nearby vectors**, then find neighbours fast. This lesson covers the first half (the
-vectors and the metrics); the next covers fast neighbour search.
+meaning means nearby vectors**, then find the **nearest neighbours** (the stored vectors closest to a
+query vector) fast. This lesson covers the first half (the vectors and the ways of measuring
+closeness); the next covers fast neighbour search.
 
 ## 1. From token states to a sentence vector
 
-A transformer produces one hidden vector per token. A **sentence embedding** needs one vector per
-text. Options:
+A transformer produces one hidden vector per token (lesson 1 calls these contextual embeddings or
+hidden states). A **sentence embedding** needs one vector per text, so the token vectors must be
+combined, a step called **pooling**. Options:
 
-- **CLS pooling**: take the hidden state of a special first token (BERT-style).
+- **CLS pooling**: take the hidden state of a special first token (BERT-style). BERT puts a `[CLS]`
+  token at the start of every input and is trained so that this position summarises the text.
 - **Mean pooling**: average the token states, excluding padding (the default in many
   sentence-transformers models).
 - **Last-token pooling**: for decoder-based embedders (e.g. Qwen3-Embedding, E5-Mistral), the last
-  token has seen the whole text through causal attention.
+  token has seen the whole text through causal attention, so its state already summarises
+  everything before it.
 
-But a raw pretrained model's pooled states are poor embeddings. Good embedders are **fine-tuned with
-contrastive learning**: pull an anchor towards a positive (a paraphrase, the answer to a query) and
-away from negatives. The standard loss is InfoNCE with **in-batch negatives**:
+But a raw pretrained model's pooled states are poor embeddings: the model was trained to predict
+words, not to place similar meanings close together. Good embedders are **fine-tuned with
+contrastive learning**, which trains by comparison. Each training example has an **anchor** (for
+example a search query), a **positive** (a text that should be close to it: a paraphrase, or the
+passage that answers the query) and one or more **negatives** (texts that should be far away). The
+loss rewards the model for pulling the anchor towards its positive and pushing it away from the
+negatives.
+
+The standard loss is called **InfoNCE** (from "noise-contrastive estimation"), used with **in-batch
+negatives**: in a batch of $B$ query-positive pairs, each query's negatives are the other $B - 1$
+queries' positives, so no extra negatives need to be collected. In symbols, with $q$ the query,
+$d^+$ its positive, $d_j$ every document in the batch and $\tau$ a temperature:
 
 $$
 \mathcal{L} = -\log \frac{\exp(\text{sim}(q, d^+)/\tau)}{\sum_{j} \exp(\text{sim}(q, d_j)/\tau)}
 $$
 
-where the sum runs over the positive and every other document in the batch. Larger batches mean more
-negatives and better embeddings; **hard negatives** (similar-looking but wrong documents) help most.
-In sentence-transformers this is `MultipleNegativesRankingLoss`.
+where the sum runs over the positive and every other document in the batch. Read it as a
+classification problem: "out of all $B$ documents in the batch, which one belongs to this query?" The
+fraction is the softmax probability given to the right answer, and the loss is small when that
+probability is close to 1. Larger batches mean more negatives and better embeddings; **hard
+negatives** (similar-looking but wrong documents) help most. In sentence-transformers this is
+`MultipleNegativesRankingLoss`.
+
+The demo below builds four queries and four positives, computes the loss and checks that each query's
+best match is its own positive:
 
 ```python-run
 import numpy as np
@@ -41,7 +88,24 @@ print("InfoNCE loss:", round(float(-np.diag(logp).mean()), 4))
 print("argmax per row (should be 0..3):", S.argmax(1))
 ```
 
+**Reading this code line by line**
+
+- `q` holds four random query vectors of length 8. `q /= np.linalg.norm(q, axis=1, keepdims=True)`
+  divides each row by its length, so every vector has length 1 (this is called normalising; section
+  3 explains why).
+- `docs = q + 0.3 * ...` makes each positive a slightly noisy copy of its query, then normalises it.
+- `S = q @ docs.T / tau` is the 4 x 4 grid of dot products divided by the temperature 0.05. Row $i$
+  compares query $i$ with every document, and the diagonal holds the query-positive pairs.
+- The next line is a numerically stable **log-softmax** of each row (the max-subtraction trick from
+  lesson 1, then subtracting the log of the row total).
+- `-np.diag(logp).mean()` averages minus the log-probability of the right document, which is exactly
+  the InfoNCE formula. The printed loss is tiny (about `0.0015`) because each positive is very close
+  to its query, and `argmax per row` prints `[0 1 2 3]`: every query ranks its own positive first.
+
 ## 2. Using sentence-transformers
+
+**sentence-transformers** is the standard Python library for embedding models. It handles
+tokenization, pooling and normalisation for you:
 
 ```python
 from sentence_transformers import SentenceTransformer
@@ -54,15 +118,25 @@ scores = model.similarity(q, D)                              # cosine by default
 print(scores)
 ```
 
+Line by line: `SentenceTransformer(name)` downloads an embedding model. `model.encode(docs, ...)`
+turns the three sentences into a matrix with one row per sentence; `normalize_embeddings=True` makes
+every row length 1, and `batch_size=64` controls how many texts go through the model at once. The
+query is encoded the same way. `model.similarity(q, D)` returns a 1 x 3 grid of cosine scores, and
+the LoRA sentence should score highest because it is about adapters, even though the query never uses
+the word "LoRA".
+
 Things that matter in practice:
 
-- **Query/document prefixes.** Many models are trained asymmetrically and expect instructions such as
-  `"query: "` / `"passage: "` (E5) or `"Represent this sentence for searching relevant passages: "`
-  (BGE), or `prompt_name="query"` in sentence-transformers. Forgetting them costs several points of
-  recall.
+- **Query/document prefixes.** Many models are trained **asymmetrically**: queries (short questions)
+  and documents (long passages) are marked differently during training, so the model expects
+  instructions such as `"query: "` / `"passage: "` (E5) or
+  `"Represent this sentence for searching relevant passages: "` (BGE), or `prompt_name="query"` in
+  sentence-transformers. Forgetting them costs several points of **recall** (the share of the truly
+  relevant documents that the search actually returns).
 - **Max sequence length.** Many small embedders truncate at 256 or 512 tokens; text beyond that is
   silently ignored. This interacts with chunk size (module 5).
-- **Choosing a model.** Start from the MTEB leaderboard filtered to your language and task (retrieval
+- **Choosing a model.** Start from the **MTEB** leaderboard (Massive Text Embedding Benchmark, a
+  public scoreboard of embedders on dozens of tasks) filtered to your language and task (retrieval
   vs classification vs clustering), then evaluate on *your* queries. Consider dimension (storage),
   latency, license, multilingual support and context length. API embedders (OpenAI
   `text-embedding-3`, Voyage, Cohere) trade control for convenience.
@@ -71,7 +145,13 @@ Things that matter in practice:
 
 ## 3. Similarity metrics
 
-For vectors $a, b \in \mathbb{R}^d$:
+A **similarity metric** is the formula that turns two vectors into one closeness score. Three are
+common. The **norm** (or length) of a vector, written $\|a\|$, is the square root of the sum of its
+squared entries, the ordinary straight-line length. **Cosine similarity** divides the dot product by
+both lengths, so it measures only the angle between the vectors: 1 for the same direction, 0 for
+unrelated, -1 for opposite. The **dot product** keeps the lengths in. **Euclidean (L2) distance** is
+the straight-line distance between the two points; here it is written squared. For vectors
+$a, b \in \mathbb{R}^d$:
 
 $$
 \text{cos}(a, b) = \frac{a \cdot b}{\|a\|\,\|b\|},\qquad
@@ -79,13 +159,19 @@ $$
 \|a - b\|_2^2 = \|a\|^2 + \|b\|^2 - 2\,a \cdot b
 $$
 
-If all vectors are **L2-normalised**, the three are equivalent for ranking:
-$\|a - b\|^2 = 2 - 2\cos(a, b)$. That is why most systems normalise once at ingestion and then use the
-fastest operation, the dot product (inner product, "IP" in FAISS).
+If all vectors are **L2-normalised** (divided by their norm so each has length 1), the three are
+equivalent for ranking: $\|a - b\|^2 = 2 - 2\cos(a, b)$. To see why, put $\|a\| = \|b\| = 1$ into the
+third formula: it becomes $1 + 1 - 2\,a \cdot b$, and for unit vectors $a \cdot b$ *is* the cosine.
+A bigger cosine therefore always means a smaller distance. That is why most systems normalise once at
+**ingestion** (when documents are added) and then use the fastest operation, the dot product (also
+called the **inner product**, "IP" in **FAISS**, Meta's widely used library for vector search).
 
 When they differ: a model trained with an unnormalised dot product (some retrieval models) encodes
 useful information such as "how generic is this document" in the vector's norm; normalising throws it
 away. Use the metric the model card specifies.
+
+The demo gives eight document vectors wildly different lengths and ranks them against one query with
+each metric:
 
 ```python-run
 import numpy as np
@@ -104,10 +190,20 @@ print("after normalising, dot == cos ranking:", np.array_equal(np.argsort(-(Dn @
 print("and L2 agrees too:", np.array_equal(np.argsort(np.linalg.norm(Dn - qn, axis=1)), np.argsort(-cos)))
 ```
 
+The multiplication by `np.array([[0.2], [5], ...])` stretches each row by a different factor, so some
+vectors are 50 times longer than others. `np.argsort(-cos)` lists document numbers from most to least
+similar (the minus sign turns ascending order into descending). The three printed rankings disagree:
+cosine puts document 2 first, dot product puts document 1 (one of the long vectors) first, and L2
+also differs. After normalising every vector to length 1, the last two lines print `True`: dot
+product, cosine and L2 now give the same order.
+
 ### Exact top-k search
 
-Exact search (also "brute force" or "flat") is one matrix-vector product plus a partial sort. With
-`np.argpartition` the selection is $O(N)$ rather than $O(N \log N)$:
+**Top-k search** returns the $k$ stored vectors most similar to a query. **Exact** search (also
+"brute force" or "flat") compares the query with every stored vector: one matrix-vector product plus
+a partial sort. The notation $O(N)$ ("order N") means the work grows in proportion to the number of
+vectors $N$; a full sort costs $O(N \log N)$, a little more. With `np.argpartition` the selection is
+$O(N)$:
 
 ```python-run
 import numpy as np
@@ -123,11 +219,25 @@ idx = idx[np.argsort(-scores[idx])]                 # order just those k
 print("top-k ids:", idx, " scores:", np.round(scores[idx], 3))
 ```
 
+The demo stores 100,000 random unit vectors as `float32` (4 bytes per number), then builds a query
+that is a slightly noisy copy of vector 123. `D @ q` scores all 100,000 vectors in one operation.
+`np.argpartition(-scores, k)[:k]` moves the five best scores to the front without sorting the rest,
+and the next line sorts only those five. The output lists vector 123 first with a score of about
+0.92, followed by four unrelated vectors at about 0.48.
+
 Exact search over 100k vectors takes milliseconds. Brute force is a legitimate production choice up to
-around a million vectors (and is what FAISS `IndexFlatIP` does, highly optimised). ANN indexes matter
-when $N$ is tens of millions or latency budgets are tight.
+around a million vectors (and is what FAISS `IndexFlatIP` does, highly optimised). **ANN**
+(approximate nearest neighbour) indexes, the subject of the next lesson, matter when $N$ is tens of
+millions or latency budgets are tight.
 
 ## 4. Dense, sparse and late interaction
+
+Embeddings come in three families. A **dense** vector has a few hundred to a few thousand entries,
+almost all non-zero, and each entry has no meaning on its own. A **sparse** vector has one entry per
+vocabulary word, almost all zero, with weights on the words that appear (or, for learned sparse
+models, on related words too). A **bi-encoder** encodes the query and the document separately, which
+is what allows documents to be embedded once in advance. **BM25** is the classic keyword-scoring
+formula used by search engines (lesson 11 builds it).
 
 | type | representation | strengths | examples |
 |---|---|---|---|
@@ -136,19 +246,30 @@ when $N$ is tens of millions or latency budgets are tight.
 | late interaction | one vector **per token**, MaxSim scoring | fine-grained matching, robust out of domain | ColBERT, ColPali (images of pages) |
 
 Late interaction scores a query-document pair as $\sum_{i \in q} \max_{j \in d} q_i \cdot d_j$: each
-query token finds its best-matching document token. It is more accurate than single-vector retrieval
-but stores far more vectors. Module 5 combines dense and sparse retrieval with rank fusion.
+query token finds its best-matching document token (the "max", hence the name **MaxSim**), and those
+best matches are added up. It is more accurate than single-vector retrieval but stores far more
+vectors, one per token instead of one per document. Module 5 combines dense and sparse retrieval with
+rank fusion.
 
 ## 5. Shrinking embeddings: Matryoshka and quantisation
 
-Storage is $N \times d \times$ bytes. 100M documents at 1024 float32 dims is about 400 GB.
+Storage is $N \times d \times$ bytes. 100M documents at 1024 float32 dims is
+$10^8 \times 1024 \times 4$ bytes, about 400 GB. Three techniques shrink it:
 
-- **Matryoshka Representation Learning (MRL)** trains the model so that the *first* $m$ dimensions
-  are themselves a good embedding. You can truncate 1024 to 256 dims (re-normalise!) and lose only a
-  little quality. OpenAI's `dimensions` parameter and many open models support this.
-- **Scalar quantisation** (float32 to int8): 4x smaller, tiny quality loss.
-- **Binary quantisation** (sign bit per dimension): 32x smaller, search with Hamming distance, then
-  **rescore** the top candidates with full-precision vectors to recover most of the quality.
+- **Matryoshka Representation Learning (MRL)**, named after Russian nesting dolls, trains the model
+  so that the *first* $m$ dimensions are themselves a good embedding. You can truncate 1024 to 256
+  dims (re-normalise!) and lose only a little quality. OpenAI's `dimensions` parameter and many open
+  models support this.
+- **Scalar quantisation** (float32 to **int8**, whole numbers from -128 to 127 stored in one byte):
+  4x smaller, tiny quality loss.
+- **Binary quantisation** (keep only the sign of each dimension as one bit): 32x smaller. Search
+  uses **Hamming distance**, the number of bit positions where two codes differ, which computers
+  count extremely fast. Then **rescore**: re-rank the best candidates with the full-precision vectors
+  to recover most of the quality.
+
+The demo builds 20,000 clustered vectors, finds each query's true top 10 by exact search, and
+measures how many of them binary search recovers on its own and with rescoring. **recall@10** is the
+fraction of the true top 10 that appear in the returned 10:
 
 ```python-run
 import numpy as np
@@ -171,6 +292,14 @@ for q in queries:
 print("binary-only recall@10:", round(recall(ham), 3))
 print("binary + rescore recall@10:", round(recall(resc), 3))
 ```
+
+How it works: `bits = D > 0` turns each vector into a row of `True`/`False` signs.
+`(bits != (q > 0)).sum(1)` counts, for every document, how many signs differ from the query's: the
+Hamming distance. The `ham` line keeps the 10 documents with the fewest differences. The rescoring
+loop first keeps 100 candidates by Hamming distance (10 times more than needed, called
+**oversampling**), then re-sorts those 100 by the real dot product and keeps 10. The output shows
+binary search alone recovering only about 47 percent of the true top 10, while binary plus rescoring
+recovers 100 percent here, for the cost of 100 full-precision dot products per query.
 
 ## 6. Pitfalls
 
@@ -206,6 +335,13 @@ print("check                  :", h[1, :2].mean(axis=0))
 print("last real token        :", last[1], "== h[1, 1]:", np.allclose(last[1], h[1, 1]))
 ```
 
+What the code does: `h` holds random token states of shape (2 sentences, 4 tokens, 3 numbers), and
+the second sentence's padded positions are filled with 9.0 to make the bug visible. `mask[:, :, None]`
+adds a third axis so the mask lines up with `h` for multiplication. `right` sums only real tokens and
+divides by their count. `last` uses `mask.sum(1) - 1` (the index of each sentence's final real token)
+to pick one vector per sentence. The output shows the naive mean at about `[3.7 4.3 4.1]`, pulled
+towards 9, while the masked mean `[-1.529 -0.382 -0.781]` equals the hand check on the next line.
+
 The naive mean is dominated by the junk at padded positions. Worse, with real models the bug is
 *silent*: embeddings still look plausible, but a sentence's vector changes depending on what else was in
 its batch, so retrieval quality degrades in a way that is hard to trace. A good regression test: embed a
@@ -218,7 +354,11 @@ left padding the last position is always a real token, with right padding the la
 
 Leaderboard rank is a starting point, not a decision. The experiment that matters takes an afternoon:
 collect 50 to 200 real queries, label the passage(s) that answer each, and compute recall@k for every
-candidate model. The demo simulates two embedders of different quality to show the harness.
+candidate model. Here recall@k means "the share of queries whose correct passage appears in the top
+$k$ results". A second useful number is **MRR** (mean reciprocal rank): for each query take 1 divided
+by the rank of the correct passage (1 if first, 1/2 if second, 1/10 if tenth) and average. It rewards
+putting the answer near the very top. The demo simulates two embedders of different quality to show
+the **harness** (the reusable test program).
 
 ```python-run
 import numpy as np
@@ -242,6 +382,13 @@ for name, noise in [("model A (strong)", 0.8), ("model B (weak)  ", 1.15)]:
     print(name, evaluate(*embedder(noise)))
 ```
 
+In the code, `truth` stands for the real meaning of each document and `embedder(noise)` imitates a
+model that sees that meaning through a blur: more noise, worse model. `evaluate` ranks all documents
+for every query, finds the position of the gold document (`pos`, counted from 1), and computes
+recall@1, 5 and 20 and MRR. The strong model finds the right document first for about 79 percent of
+queries (MRR 0.86); the weak one for only 19 percent (MRR 0.28), and still misses it in the top 20
+for 40 percent of queries.
+
 Things to vary in the real version of this harness, one at a time: the model, the query prefix, the
 chunk size, Matryoshka truncation, and quantisation. Report recall at the depth you actually pass to the
 reranker, and keep the per-query results so you can read the failures.
@@ -251,7 +398,9 @@ reranker, and keep the per-query results so you can read the failures.
 "Return results with cosine above 0.8" is a frequent requirement and a frequent mistake. Different models
 squeeze scores into very different ranges: for some, unrelated texts already score 0.6 and near
 duplicates 0.9; for others the same pairs score 0.1 and 0.7. A threshold must be **calibrated per model**
-on labelled pairs, choosing the operating point from a precision-recall trade-off:
+on labelled pairs, choosing the operating point from a precision-recall trade-off. **Precision** is
+the share of returned pairs that are truly relevant; recall is the share of truly relevant pairs that
+are returned. Raising the threshold raises precision and lowers recall:
 
 ```python-run
 import numpy as np
@@ -264,9 +413,16 @@ for th in [0.60, 0.70, 0.75, 0.80, 0.85]:
     print(f"  {th:.2f}      {tp / max(tp + fp, 1):.3f}     {tp / len(pos):.3f}")
 ```
 
+The demo invents cosine scores for 500 relevant pairs (centred on 0.78) and 5,000 irrelevant pairs
+(centred on 0.62, a high baseline that is realistic for many models). For each threshold, `tp` (true
+positives) counts relevant pairs at or above it and `fp` (false positives) counts irrelevant ones.
+The table shows the trade-off: at 0.60 recall is 0.996 but precision only 0.136; at 0.80 precision is
+0.974 but recall falls to 0.370.
+
 With this model, 0.80 keeps under half of the relevant pairs, while 0.70 lets in a flood of irrelevant
 ones because negatives are ten times more common. In retrieval pipelines it is usually better to take a
-fixed top-k and let a reranker (whose scores are designed to be thresholded) decide what is relevant.
+fixed top-k and let a **reranker** (a slower, more accurate model that scores each query-document pair
+together, lesson 11, and whose scores are designed to be thresholded) decide what is relevant.
 
 ## 10. Hard negatives in one paragraph
 
@@ -294,6 +450,37 @@ triples usually give a larger gain than switching to a bigger general-purpose mo
 - Normalise and use dot product: cosine, dot and L2 rankings then coincide.
 - Exact search is fine to about a million vectors; beyond that use ANN (next lesson).
 - MRL truncation and int8/binary quantisation (with rescoring) shrink storage dramatically.
+
+## Glossary
+
+- **Embedding model (embedder)**: a model that turns text into a vector capturing its meaning.
+- **Sentence embedding**: one vector for a whole text.
+- **Pooling (CLS, mean, last-token)**: combining per-token vectors into one vector.
+- **Contrastive learning**: training by pulling matching pairs together and pushing others apart.
+- **Anchor / positive / negative**: the item being trained on / one that should be close / one that
+  should be far.
+- **InfoNCE**: the softmax-based contrastive loss; **in-batch negatives** reuse other pairs' positives.
+- **Hard negative**: a wrong document that looks right; the most useful kind to train on.
+- **Norm / L2-normalised**: a vector's length / scaled to length 1.
+- **Cosine similarity / dot product / Euclidean distance**: angle-only closeness / closeness that
+  includes length / straight-line distance.
+- **Nearest neighbours / top-k**: the stored vectors closest to a query / the best $k$ of them.
+- **Exact (brute-force) search / ANN**: comparing with every vector / approximate nearest-neighbour
+  search with an index.
+- **Dense / sparse vector**: a short vector of non-zero numbers / a vocabulary-sized vector of mostly
+  zeros.
+- **Bi-encoder / late interaction (MaxSim)**: query and document embedded separately / one vector
+  per token, matched token by token.
+- **Matryoshka (MRL)**: embeddings whose leading dimensions are usable on their own.
+- **Scalar / binary quantisation**: storing each number as int8 / as one sign bit.
+- **Hamming distance**: the number of differing bits between two codes.
+- **Rescoring / oversampling**: re-ranking candidates with full vectors / fetching more candidates
+  than needed first.
+- **Recall@k / precision / MRR**: share of relevant items found in the top $k$ / share of returned
+  items that are relevant / average of 1 over the rank of the right answer.
+- **MTEB**: the Massive Text Embedding Benchmark leaderboard.
+
+## Check yourself
 
 ```quiz
 [

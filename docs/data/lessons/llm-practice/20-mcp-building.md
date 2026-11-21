@@ -1,16 +1,51 @@
 # Building, connecting and securing MCP servers
 
+> **Before this lesson:** you should know MCP's architecture and primitives
+> ([Why MCP: architecture and primitives](#/lesson/llm-practice/mcp-architecture)) and its messages
+> and transports, including why a stdio server must never print to stdout
+> ([The wire protocol: JSON-RPC, lifecycle, transports](#/lesson/llm-practice/mcp-protocol)). Tool
+> design and prompt injection were introduced in
+> [Function calling](#/lesson/llm-practice/function-calling). Python functions, type hints and
+> docstrings are used throughout.
+
+## In plain words
+
+This is the practical MCP lesson: write a working server in about a hundred lines of Python, try it
+out in a testing tool, plug it into real AI applications, and then think hard about safety. That last
+part deserves the most attention, because an MCP server is code that a language model can trigger
+with your passwords and permissions, and the model can be fooled by text it reads.
+
+An analogy: you are hiring out a skilled assistant (the server) to many offices (the hosts). You
+write a clear job description for each task the assistant can do (the tool descriptions), test the
+assistant before the first placement, and give each office instructions for calling them in. Then
+you think like a security guard: which doors should this assistant have keys to, what if someone
+slips them a forged note, and what if an office tries to use the assistant's keys for its own
+purposes?
+
+Why it matters for a job: companies are exposing their internal systems to AI assistants through MCP
+servers right now, and the engineers who build them are expected to get both the design and the
+security right. "Build me an MCP server, then tell me how you would secure it" is a realistic
+interview prompt.
+
+## What we will build
+
 Time to build. We write a complete MCP server in Python with the official SDK, test it with the
 Inspector, connect it to Claude Code, Claude Desktop and an IDE, write a client, and then spend real
 time on security, because an MCP server is code that an LLM can drive with your credentials.
 
 ## 1. The Python SDK
 
-The official SDK (`mcp` on PyPI, github.com/modelcontextprotocol/python-sdk) has a high-level,
-decorator-based server API. It was created as **FastMCP**, merged into the SDK as
+The official SDK (`mcp` on **PyPI**, the Python Package Index from which `pip` installs packages;
+source at github.com/modelcontextprotocol/python-sdk) has a high-level, **decorator**-based server API:
+you write ordinary functions and mark them with a line such as `@mcp.tool()`, and the decorator
+registers them with the server. It was created as **FastMCP**, merged into the SDK as
 `mcp.server.fastmcp.FastMCP` (SDK v1), and in SDK v2 is exposed as **`mcp.server.MCPServer`**. The
 decorators are the same; if a tutorial says `FastMCP("name")`, read it as the same thing. (A separate
 standalone project also named FastMCP continues with extra features.)
+
+The two shell commands below create a project and install the SDK. `uv` is a fast Python package and
+project manager; `uv init` makes a new project folder and `uv add` installs a dependency into it.
+The `[cli]` part also installs the `mcp` command-line tool used for testing later.
 
 ```bash
 uv init kb-server && cd kb-server
@@ -20,7 +55,8 @@ uv add "mcp[cli]"            # or: pip install "mcp[cli]"
 ## 2. A complete server
 
 `server.py`: a small knowledge-base server exposing two tools, a resource, a resource template and a
-prompt.
+prompt. It is static code (it needs the SDK and a folder of documents), but every part is explained
+after the listing.
 
 ```python
 """Knowledge-base MCP server."""
@@ -107,6 +143,28 @@ if __name__ == "__main__":
     # mcp.run(transport="streamable-http")   # remote: serves http://127.0.0.1:8000/mcp
 ```
 
+**Reading this code piece by piece**
+
+- `logging.basicConfig(stream=sys.stderr, ...)` sends all log lines to stderr, so they can never
+  corrupt the JSON stream on stdout (the classic bug of the previous lesson).
+- `MCPServer("kb", instructions=...)` creates the server with a name and guidance that hosts may pass
+  to the model.
+- `_safe(name)` is the security guard for file access. `(DOCS / name).resolve()` builds the full path
+  and resolves any `..` parts. **Path traversal** is the attack of passing a name like
+  `../../secrets.txt` to escape the intended folder; `is_relative_to(DOCS.resolve())` refuses any path
+  that ends up outside the documents folder, and the other checks insist on an existing `.md` file.
+  The error message tells the model what to do instead.
+- `@mcp.tool()` on `search_docs` makes it a tool. It clamps `limit` to between 1 and 20, scores each
+  document by how often the query words occur, keeps a snippet around the first match, logs a line, and
+  returns the best matches as a list of small dictionaries.
+- `read_doc` returns a document's text, truncated to `max_chars` with a note explaining how to get the
+  rest: a bounded output, so one call cannot flood the model's context.
+- `@mcp.resource("kb://index")` publishes a fixed resource (the list of documents), and
+  `@mcp.resource("kb://docs/{name}")` a resource template: the `{name}` part of the URI becomes the
+  function's argument.
+- `@mcp.prompt()` publishes a reusable prompt that a user might trigger as a slash command.
+- `mcp.run()` starts serving over stdio; the commented line shows the switch to Streamable HTTP.
+
 What the SDK does for you:
 
 - **Schemas from type hints.** `query: str, limit: int = 5` becomes the tool's `inputSchema`; the
@@ -122,6 +180,57 @@ What the SDK does for you:
 For progress reporting, logging to the client, or elicitation, declare a `ctx: Context` parameter in
 the tool; the SDK injects it (and hides it from the schema).
 
+The path check deserves a runnable look, because it is the line between a helpful tool and one that
+reads any file on the machine. The demo reproduces the confinement logic with plain strings (so it
+runs without a real folder), then adds a second safety check from section 7, the "lethal trifecta",
+applied to combinations of connected servers:
+
+```python-run
+import posixpath
+
+ROOT = "/srv/kb/docs"
+
+def safe(name):
+    """Confine a model-supplied file name to ROOT, like _safe in the server above."""
+    p = posixpath.normpath(posixpath.join(ROOT, name))      # collapses "..", "." and double slashes
+    if not (p == ROOT or p.startswith(ROOT + "/")) or not p.endswith(".md"):
+        raise ValueError(f"Unknown document: {name!r}. Call search_docs to find valid names.")
+    return p
+
+for name in ["leave-policy.md", "team/onboarding.md", "../../../etc/passwd", "/etc/shadow.md", "notes.txt"]:
+    try:
+        print(f"{name!r:24} -> allowed: {safe(name)}")
+    except ValueError as e:
+        print(f"{name!r:24} -> refused: {e}")
+
+# The lethal trifecta across connected servers: flag a session that combines all three legs.
+SERVERS = {"kb": {"private_data"}, "web_fetch": {"untrusted_content", "external_comms"},
+           "email": {"private_data", "untrusted_content", "external_comms"}, "calculator": set()}
+
+def trifecta(connected):
+    legs = set().union(*(SERVERS[s] for s in connected))
+    return legs >= {"private_data", "untrusted_content", "external_comms"}, sorted(legs)
+
+for combo in [["kb", "calculator"], ["kb", "web_fetch"], ["email"]]:
+    risky, legs = trifecta(combo)
+    print(f"{'+'.join(combo):16} legs={legs}  {'LETHAL TRIFECTA' if risky else 'ok'}")
+```
+
+**Reading this code line by line**
+
+- `posixpath.join(ROOT, name)` glues the folder and the requested name; `normpath` then resolves `..`
+  and `.` purely as text. Note that joining with an absolute name such as `/etc/shadow.md` discards
+  `ROOT` entirely, a surprise worth knowing.
+- The check `p.startswith(ROOT + "/")` (with the trailing slash) matters: a bare
+  `startswith(ROOT)` would wrongly accept a sibling folder named `/srv/kb/docs-secret`.
+- The first loop prints two allowed names and three refusals: the traversal attempt resolves to
+  `/etc/passwd`, the absolute path escapes the folder, and `notes.txt` is not a Markdown file.
+- `SERVERS` records which "legs" each server contributes. `set().union(...)` combines the legs of all
+  connected servers, and `legs >= {...}` asks whether the combination contains all three.
+- The second loop prints `ok` for the knowledge base with a calculator, but `LETHAL TRIFECTA` for the
+  knowledge base plus a web fetcher (a fetch tool can leak data by putting it in a URL) and for an
+  email server on its own, which supplies all three legs at once.
+
 ## 3. Test before you connect
 
 ```bash
@@ -135,7 +244,10 @@ with good and bad inputs, and read the notifications pane. Then write automated 
 client against the server, and, more importantly, **evaluate with a real model**: give an agent
 realistic tasks and read the transcripts to see where it picks the wrong tool or misreads results.
 
-A programmatic client (SDK v2 style):
+A programmatic client (SDK v2 style). It uses Python's `async`/`await` syntax: functions marked
+`async` can pause while waiting for the network without blocking the program, `await` marks each
+waiting point, and `asyncio.run(main())` starts the whole thing. `async with Client(...)` opens the
+connection and closes it automatically at the end of the block:
 
 ```python
 import asyncio
@@ -164,8 +276,14 @@ claude mcp add --transport http tracker https://mcp.example.com/mcp       # remo
 claude mcp list
 ```
 
-Scopes: `local` (you, this project), `project` (shared via a checked-in `.mcp.json`), `user` (all your
-projects). A project file looks like:
+The first command registers a local server named `kb`; everything after `--` is the command Claude
+Code will run to start it. The second registers a remote server over HTTP. `claude mcp list` shows
+what is configured.
+
+Scopes (who a configuration applies to): `local` (you, this project), `project` (shared via a
+**checked-in** `.mcp.json`, meaning committed to the project's git repository so teammates get it
+too), `user` (all your projects). A project file looks like this; `${KB_API_KEY}` is replaced by the
+value of that environment variable on each person's machine, so the secret itself is never committed:
 
 ```json
 {
@@ -207,8 +325,15 @@ Everything from module 7 applies, plus MCP-specific points:
 
 ## 6. Authorization for remote servers
 
-stdio servers take credentials from the environment. HTTP servers use **OAuth 2.1**, with the MCP
-server acting as an OAuth **resource server**:
+**Authorization** decides what a caller is allowed to do (authentication, its partner, establishes who
+the caller is). stdio servers take credentials from the environment. HTTP servers use **OAuth 2.1**,
+the current version of the standard "grant this app limited access to my account" framework. Its
+cast: the **authorization server** signs users in and issues **access tokens** (short-lived secret
+strings proving what the bearer may do); the **resource server** holds the protected data and accepts
+those tokens; the **client** is the application asking for access. Here the MCP server acts as an
+OAuth **resource server**. A **bearer token** is one that grants access to whoever presents it, sent in
+an `Authorization: Bearer ...` header. HTTP status **401** means "you need to authenticate". The
+diagram shows how a client with no token finds its way to one:
 
 ```mermaid
 sequenceDiagram
@@ -226,20 +351,31 @@ sequenceDiagram
   S-->>C: validates audience and scopes, responds
 ```
 
-The pieces to know: Protected Resource Metadata (RFC 9728) for discovery; **PKCE** is mandatory;
-**Resource Indicators (RFC 8707)** bind the token to one MCP server (audience); client identity via
-Client ID Metadata Documents (preferred in recent revisions), pre-registration, or Dynamic Client
-Registration (deprecated in 2026-07-28); least-privilege **scopes** with step-up when a tool needs more.
+The pieces to know (an **RFC**, "request for comments", is a numbered internet standard document):
+Protected Resource Metadata (RFC 9728) for discovery, a small JSON document in which the server says
+which authorization server to use; **PKCE** (proof key for code exchange) is mandatory, a step that
+stops an intercepted sign-in code from being redeemed by an attacker; **Resource Indicators (RFC
+8707)** bind the token to one MCP server, its **audience**; client identity via Client ID Metadata
+Documents (preferred in recent revisions), pre-registration, or Dynamic Client Registration
+(deprecated in 2026-07-28); least-privilege **scopes** (named permissions such as `issues:read`) with
+**step-up** (asking the user for more permission only when a tool needs it).
 
 Two rules servers must follow:
 
 - **Validate that the token was issued for you** (audience). Accepting any valid-looking token enables
   token reuse across services.
-- **No token passthrough.** Never forward the client's token to an upstream API; obtain a separate
-  upstream token. Otherwise your server becomes a **confused deputy** that lets clients bypass upstream
-  controls and breaks audit trails.
+- **No token passthrough.** Never forward the client's token to an upstream API (the further service
+  your server calls on the client's behalf); obtain a separate upstream token. Otherwise your server
+  becomes a **confused deputy** (a program with legitimate authority that is tricked into using it for
+  someone who should not have it) that lets clients bypass upstream controls and breaks audit trails.
 
 ## 7. Threat model
+
+A **threat model** is a structured list of who might attack a system, how, and what defends against
+each attack. Two terms in the table: to **exfiltrate** data is to smuggle it out to an attacker, and
+the **supply chain** is all the third-party code you install and run. An **allow-list** names exactly
+what is permitted and refuses everything else; `shell=True` in Python's `subprocess` runs a command
+through the system shell, where crafted arguments can inject extra commands.
 
 | threat | what happens | defence |
 |---|---|---|
@@ -280,6 +416,37 @@ as untrusted.
 - Remote servers are OAuth 2.1 resource servers: PKCE, audience-bound tokens, no passthrough.
 - Threats: injection through results, poisoned or changing descriptions, confused deputies, command
   injection, DNS rebinding, supply chain; apply least privilege, consent and isolation.
+
+## Glossary
+
+- **SDK / PyPI**: the official library for building MCP servers and clients / the Python package index.
+- **Decorator**: a line such as `@mcp.tool()` that registers the function below it.
+- **FastMCP / MCPServer**: the high-level server class (older and newer names).
+- **Type hints / docstring**: argument types that become the input schema / the description the model
+  reads.
+- **Path traversal**: escaping a folder with names like `../../file`; prevented by resolving and
+  confining paths.
+- **MCP Inspector**: an interactive tool for listing and calling a server's tools.
+- **`async` / `await`**: Python syntax for code that waits on the network without blocking.
+- **Configuration scope (local, project, user)**: who a server configuration applies to.
+- **Authentication / authorization**: proving who you are / deciding what you may do.
+- **OAuth 2.1**: the standard framework for granting apps limited access with tokens.
+- **Authorization server / resource server**: issues tokens / accepts them and holds the data.
+- **Access token / bearer token**: a short-lived proof of permission / one that works for whoever holds
+  it.
+- **PKCE**: the step that stops an intercepted sign-in code from being redeemed.
+- **Audience / scope / step-up**: which server a token is for / a named permission / asking for more
+  permission only when needed.
+- **Token passthrough / confused deputy**: forwarding a client's token upstream / a trusted program
+  misused on someone else's behalf.
+- **Threat model**: a list of attackers, attacks and defences.
+- **Tool poisoning / rug pull / tool shadowing**: hostile instructions in descriptions / descriptions
+  changed after approval / one server's text steering another's tools.
+- **Exfiltration**: smuggling data out to an attacker.
+- **Lethal trifecta**: private data plus untrusted content plus an outbound channel.
+- **Supply chain**: the third-party code you install and run.
+
+## Check yourself
 
 ```quiz
 [

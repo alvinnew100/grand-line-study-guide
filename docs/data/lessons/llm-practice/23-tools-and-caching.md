@@ -1,21 +1,67 @@
 # Designing tools for agents and prompt caching
 
-Two levers decide whether an agent is effective *and* affordable. **Tools** define what the agent can
-perceive and do, and every tool definition and tool result is context. **Prompt caching** decides
-whether you pay full price to re-read that context on every one of the hundreds of requests in an
-agent loop. Both reward the same discipline: stable, compact, well-structured context.
+> **Before this lesson:** you should know how a model calls a tool and how the tool's result is sent
+> back to it ([Function calling](#/lesson/llm-practice/function-calling)), why every token in the
+> context window costs attention and money
+> ([The context window as a budget](#/lesson/llm-practice/context-budget)), and what tool-result
+> clearing and compaction are ([Long-horizon agents](#/lesson/llm-practice/long-horizon)). The idea of
+> the KV cache from [Positional encodings, RoPE, KV cache and architecture families](#/lesson/llm-practice/positions-and-architectures)
+> helps with section 2 but is not required. The code uses Python dictionaries, lists, `json` and
+> f-strings.
 
-## 1. Tools are a contract with a non-deterministic caller
+## In plain words
 
-A traditional API is a contract between deterministic programs. A tool is a contract between a
-deterministic system and an agent that may call it in unexpected ways, misunderstand it, or never call
-it. Anthropic's post *Writing effective tools for agents* recommends a loop: prototype, **evaluate with
-real agents on realistic tasks**, read the transcripts, and refine (even letting an agent help rewrite
-the tools from those transcripts). Its principles:
+An **agent** is a program in which a language model repeatedly decides what to do next, calls a
+**tool** (a function your code exposes to the model, such as "search the database" or "send an
+email"), reads the result, and decides again. This lesson is about two things that decide whether such
+an agent is good *and* cheap.
 
-### Choose the right tools (fewer, higher-level)
+The first is **tool design**. The tools are the agent's hands and eyes: they set what it can see and
+what it can change. Every tool's name, description and parameter list is text placed in the model's
+context, and every result the tool returns is more text. Badly designed tools flood the context with
+noise, confuse the model about which tool to use, and return cryptic errors it cannot recover from.
 
-More tools do not mean better outcomes. Do not wrap each API endpoint; build tools around **tasks**:
+The second is **prompt caching**. An agent sends the model almost the same long prompt again and again,
+once per step, with only a little new text added at the end. Prompt caching lets the model provider
+remember the work it did on the unchanged beginning of that prompt, so you pay a small fraction of the
+normal price to have it re-read.
+
+An analogy: a restaurant kitchen. Good tools are like well-labelled stations: "grill", "salad",
+"desserts", each with a clear job, rather than a hundred unlabelled drawers the chef must search. Prompt
+caching is the **mise en place** (French for "everything in its place"), the chopped onions and
+measured spices prepared once before service, so each order only needs the final few steps. Move the
+station layout around mid-service and all that preparation is wasted, which is exactly what happens to
+a cache when the start of a prompt changes.
+
+Why it matters for a job: tool design is now a core skill for anyone building agents or MCP servers,
+and caching is usually the single biggest cost lever in an agent product. "How would you cut the cost of
+a 100-turn agent session?" is a common interview question, and the answer starts here.
+
+## 1. Tools are a contract with an unpredictable caller
+
+A traditional **API** (application programming interface, the set of functions one program offers to
+another) is a contract between **deterministic** programs: given the same input, the caller always does
+the same thing. A tool is different. It is a contract between your deterministic code and a
+**non-deterministic** caller, the model, which may call it in unexpected ways, misunderstand what it is
+for, pass a malformed argument, or never call it at all.
+
+So tools are designed the way you design for people, by watching them use the thing. Anthropic's
+engineering post *Writing effective tools for agents* recommends a loop:
+
+1. **Prototype** a few tools quickly.
+2. **Evaluate** them with real agents on realistic tasks (an **evaluation**, or eval, is a set of test
+   tasks with a way to score the outcome).
+3. **Read the transcripts**: where did the agent pick the wrong tool, pass a wrong id, or loop?
+4. **Refine** the tools, and repeat. The post even suggests pasting the transcripts into an agent and
+   letting it propose better tool descriptions.
+
+The principles below come from that loop.
+
+### Choose the right tools: fewer and higher-level
+
+More tools do not produce better outcomes. A common mistake is to wrap every **endpoint** (each single
+operation an existing API offers) as its own tool. Instead, build tools around **tasks**, the units of
+work a person would describe in a sentence:
 
 | instead of | build |
 |---|---|
@@ -23,33 +69,49 @@ More tools do not mean better outcomes. Do not wrap each API endpoint; build too
 | `read_logs` (returns everything) | `search_logs` (returns relevant lines with context) |
 | `get_customer_by_id`, `list_transactions`, `list_notes` | `get_customer_context` (compiles the relevant recent info) |
 
-An agent that must page through `list_contacts` wastes context reading token by token what a
-`search_contacts` tool would have filtered in code. Each tool should have a clear, distinct purpose; if
-a human engineer cannot say which tool applies, the agent cannot either.
+Why this matters: an agent that must page through `list_contacts` reads every contact into its context,
+token by token, to find one person. A `search_contacts` tool does that filtering in ordinary code, which
+is fast, free and exact, and returns only the match. Each tool should have one clear, distinct purpose.
+A useful test: if a human engineer looking at the tool list cannot say which tool applies to a request,
+the model cannot either.
 
-### Namespace
+### Namespace the names
 
-With many servers and tools, group by prefix (`asana_search`, `jira_search`; or by resource:
-`asana_projects_search`, `asana_users_search`). Prefix versus suffix naming measurably affects tool
-selection, so test it.
+**Namespacing** means giving related names a shared prefix so they group together, like surnames. With
+many servers and many tools, group by service (`asana_search`, `jira_search`) or by service and resource
+(`asana_projects_search`, `asana_users_search`). Two different servers that both offer a plain `search`
+tool would otherwise be indistinguishable. Anthropic reports that prefix versus suffix naming has a
+measurable effect on which tool the model picks, so treat naming as something to test, not a matter of
+taste.
 
 ### Return meaningful context
 
-- Prefer **natural-language names and semantic identifiers** over cryptic ones: `name`, `image_url`,
-  `file_type` are more useful to a model than `uuid`, `256px_image_url`, `mime_type`. Resolving opaque
-  UUIDs into meaningful labels reduces hallucinated ids.
-- Offer a **`response_format`** parameter (`"concise"` or `"detailed"`) so the agent can ask for ids
-  only when it needs them for follow-up calls; in Anthropic's Slack example the concise form used about
-  a third of the tokens.
-- Choose the output structure (JSON, XML, Markdown) by evaluation; it affects performance.
+- Prefer **natural-language names and meaningful identifiers** over cryptic ones. Fields like `name`,
+  `image_url` and `file_type` tell a model more than `uuid`, `256px_image_url` and `mime_type`. A
+  **UUID** (universally unique identifier, a long random string such as `c9f1-0042-...`) means nothing to
+  a model, and models copying long random strings between calls tend to get a character wrong. Where you
+  can, resolve such ids into readable labels, or at least return them only when needed.
+- Offer a **`response_format`** parameter with values such as `"concise"` and `"detailed"`. The agent
+  asks for the short form while browsing and the detailed form (with ids) only when it needs ids for a
+  follow-up call. In Anthropic's Slack example the concise form used about a third of the tokens.
+- Choose the output structure (JSON, XML or Markdown) by evaluation; it affects how well the model reads
+  the result, and the best choice varies by task.
 
 ### Optimise for token efficiency
 
-Implement **pagination, range selection, filtering and truncation** with sensible defaults (Claude
-Code caps tool responses at 25,000 tokens by default). When truncating, **say so and say how to get
-more** ("showing 50 of 1,240 matches; narrow the query or pass `page=2`"). Make **error messages
-actionable**: state what was wrong and what a valid call looks like, rather than an opaque code and
-traceback.
+A tool result can be enormous: a log file, a whole table. Build in **pagination** (returning results one
+page at a time), **range selection** (asking for lines 100 to 200), **filtering** and **truncation**
+(cutting output at a limit), all with sensible defaults. Claude Code, for example, caps a tool response
+at 25,000 tokens by default.
+
+When you truncate, **say so and say how to get more**: "showing 50 of 1,240 matches; narrow the query or
+pass `page=2`." A silent cut-off leaves the model believing it has seen everything.
+
+Make **error messages actionable**. "Error 400" or a fifty-line Python **traceback** (the printed chain
+of function calls that led to a crash) gives the model nothing to fix. "Unknown plan 'enterprise'. Valid
+plans: free, pro, team." tells it exactly what to change on the next attempt.
+
+The demo compares a naive endpoint wrapper with a task-level tool on 400 fake customer records:
 
 ```python-run
 import json
@@ -80,47 +142,104 @@ print(good[:230], "...")
 print(search_customers(plan="enterprise"))
 ```
 
+**Reading this code line by line**
+
+- `RECORDS` builds 400 fake customers with a list comprehension. Each has an opaque `uuid`, a `name`, a
+  `plan` that cycles through free, pro and team, an `mrr` (monthly recurring revenue, what the customer
+  pays each month) and a long `notes` field padded with filler text.
+- `search_customers` is the task-level tool. Its first two `if` statements validate the arguments and,
+  when something is wrong, return a message that names the problem *and* shows a valid call.
+- `hits` filters the records in plain Python: the name must contain the query (case-insensitively) and,
+  if a plan was given, the plan must match.
+- `shown = hits[:limit]` keeps at most `limit` results. In concise mode each result is cut down to three
+  readable fields; the uuid and the long notes are left out.
+- `note` reports how many results were shown out of how many matched and, if some were cut, tells the
+  model how to see more.
+- The comparison divides the length in characters by 4, a rough rule of thumb for English-like text,
+  to estimate tokens. The naive dump of every record comes to roughly 45,000 tokens; the search result
+  is under 100. The last line shows the actionable error for an invalid plan.
+
 ### Prompt-engineer the descriptions
 
-Tool descriptions are loaded into context and steer behaviour. Write them as for a new teammate: make
-implicit conventions explicit (query syntax, id formats, units, time zones), name parameters
-unambiguously (`user_id`, not `user`), define terms, and include a short example where formats are
-tricky. Small description edits can yield large gains; Anthropic credits precise description
-refinements for a big part of Claude's SWE-bench Verified improvements.
+Tool descriptions are loaded into the context on every request and they steer behaviour as strongly as
+the system prompt does. Write them the way you would brief a new teammate:
+
+- make implicit conventions explicit: query syntax, id formats, units, time zones;
+- name parameters unambiguously: `user_id`, not `user`;
+- define any term specific to your domain;
+- add a short example where a format is tricky.
+
+Small edits to descriptions can produce large gains. Anthropic credits precise refinements of tool
+descriptions with a large part of an improvement in Claude's score on **SWE-bench Verified** (a public
+benchmark of real software-engineering bug fixes).
+
+Here is the difference in practice:
+
+```text
+Weak:   search(q) - searches stuff.
+Strong: search_tickets(query, status="open", limit=10) - Full-text search over support tickets.
+        query uses plain words; quote exact phrases ("refund failed"). status is one of
+        open | pending | closed. Dates in results are UTC. Returns at most `limit` tickets
+        (max 50) with ticket_id, title and last_updated. Use get_ticket(ticket_id) for the body.
+```
+
+The strong version answers every question the model would otherwise guess at: what can be searched,
+what values are allowed, what comes back, and which tool to call next.
 
 ### When there are too many tools
 
-- **Deferred loading / tool search**: keep only names (or nothing) in context and let the agent search
-  a tool catalogue and load schemas on demand.
-- **Code execution over tool calls**: expose tools as code APIs in a sandbox so the agent writes a
-  script that chains them and returns only the final result; intermediate data never enters context.
-- **Skills**: instructions and scripts loaded progressively by relevance.
+Fifty tools with detailed descriptions can occupy tens of thousands of tokens before the agent has done
+anything. Three patterns help:
+
+- **Deferred loading, or tool search**: keep only tool names (or nothing at all) in the context and give
+  the agent a tool that searches a catalogue and loads full **schemas** (the formal description of a
+  tool's parameters) on demand.
+- **Code execution instead of direct tool calls**: expose tools as functions in a **sandbox** (an
+  isolated environment where code can run without harming anything else). The agent writes a short
+  script that chains several tools and prints only the final answer, so the bulky intermediate data
+  never enters the context.
+- **Skills**: folders of instructions and scripts that are loaded progressively, a one-line summary
+  first and the full content only when the task needs it.
 
 ## 2. Prompt caching: how it works
 
-Every request in an agent loop resends the same long prefix: system prompt, tool definitions, history.
-**Prompt caching** lets the provider reuse the computation for a prefix it has already processed
-(conceptually, the KV cache from module 1 persisted across requests), charging much less and
-responding faster.
+Look at what an agent actually sends. Every request in the loop resends the same long beginning: tool
+definitions, system prompt, and the conversation so far. Only the last message or two is new. That
+unchanged beginning is called the **prefix**.
 
-Mechanics (Anthropic's implementation; others are similar in spirit):
+Recall from module 1 that while a transformer reads a prompt it computes, for every token, internal
+vectors called keys and values, stored in the **KV cache**. Normally that cache is thrown away when the
+request ends. **Prompt caching** keeps it on the provider's servers for a short time. When the next
+request starts with exactly the same prefix, the provider loads the stored work instead of recomputing
+it. You are charged much less for those tokens, and the response starts sooner.
 
-- You mark **cache breakpoints** with `cache_control: {"type": "ephemeral"}` on content blocks (up to
-  four), or use automatic caching where offered. Everything **up to and including** the marked block,
-  in the order **tools, then system, then messages**, forms the cached prefix.
-- A later request gets a **cache hit** only if its prefix is **byte-for-byte identical** up to a
-  breakpoint. One changed character early in the prompt invalidates everything after it.
-- Cache entries have a short **TTL** (5 minutes by default, refreshed on each hit; a 1-hour option
-  costs more to write).
-- Pricing shape: **cache writes cost a premium** over normal input (about 1.25x for the 5-minute TTL),
-  **cache reads cost a small fraction** (about 0.1x). Prompts below a minimum length (on the order of a
-  thousand tokens, model dependent) are not cached. Check current pricing pages; the ratios are what
-  matter for design.
-- The response's `usage` reports `cache_creation_input_tokens`, `cache_read_input_tokens` and uncached
-  `input_tokens`: monitor them.
+Mechanics, using Anthropic's implementation (other providers are similar in spirit):
 
-OpenAI and Google Gemini apply caching automatically for sufficiently long prompts with matching
-prefixes (Gemini also offers explicit cache objects); the design rules below apply to all of them.
+- You mark **cache breakpoints** by adding `cache_control: {"type": "ephemeral"}` to a content block,
+  up to four per request, or you use automatic caching where it is offered. ("Ephemeral" means
+  short-lived.) Everything **up to and including** the marked block forms the cached prefix, read in
+  the fixed order **tools, then system, then messages**.
+- A later request gets a **cache hit** (the stored work is reused) only if its prefix is
+  **byte-for-byte identical** up to a breakpoint. Otherwise it is a **cache miss**. One changed
+  character early in the prompt invalidates everything after it, because every later token's keys and
+  values depend on all the tokens before it.
+- Cache entries have a short **TTL** (time to live, how long an entry is kept before it expires): 5
+  minutes by default, refreshed each time the entry is used. A 1-hour option exists and costs more to
+  write.
+- Pricing shape: **writing to the cache costs a premium** over normal input (about 1.25 times for the
+  5-minute TTL); **reading from the cache costs a small fraction** (about 0.1 times). Prompts shorter
+  than a model-dependent minimum (on the order of a thousand tokens or more) are not cached at all.
+  Prices change, so check the current pricing page; it is the ratios that drive design.
+- Every response includes a `usage` object reporting `cache_creation_input_tokens` (tokens written to
+  the cache), `cache_read_input_tokens` (tokens read from it) and `input_tokens` (tokens processed
+  normally). Log and monitor all three.
+
+OpenAI and Google Gemini apply caching automatically for prompts that are long enough and share a
+prefix; Gemini also offers explicit cache objects you create and reference. The design rules in
+section 4 apply to all of them.
+
+A sketch of a request with two breakpoints (static code, not runnable here, since the browser has no
+network access or API key):
 
 ```python
 resp = client.messages.create(
@@ -133,7 +252,28 @@ resp = client.messages.create(
 print(resp.usage.cache_read_input_tokens, resp.usage.cache_creation_input_tokens, resp.usage.input_tokens)
 ```
 
+What each part does: `tools` comes first in the cached order, so it must not change between requests.
+The system prompt is passed as a list of blocks so one block can carry `cache_control`; that breakpoint
+caches tools plus system together. The second breakpoint sits on the last block of the conversation and
+moves forward each turn, so each request reads the previous turn's prefix from the cache and writes only
+the newly added messages. The final line prints the three usage counters.
+
+The diagram shows two consecutive turns of an agent loop:
+
+```mermaid
+sequenceDiagram
+  participant App
+  participant API
+  App->>API: Turn 1 tools + system + messages 1 to 3
+  API-->>App: cache write for the whole prefix
+  App->>API: Turn 2 same prefix + messages 4 and 5
+  API-->>App: cache read for the old prefix and write for the new messages
+```
+
 ## 3. The economics
+
+How much does caching save? It depends on how long the loop runs. The demo models an agent whose prefix
+starts at 20,000 tokens and grows by 1,500 tokens every turn:
 
 ```python-run
 def cost(prefix, turns, new_per_turn, price_in=3.0, write_mult=1.25, read_mult=0.10, cached=True):
@@ -155,29 +295,53 @@ for turns in [1, 10, 50, 200]:
     print(f"{turns:4d} turns: uncached ${a:8.2f}   cached ${b:7.2f}   saving {100*(1-b/a):5.1f}%")
 ```
 
-A single request is slightly *more* expensive with caching (the write premium); break-even comes at the
-second request, and long loops save the large majority of input cost. Uncached, an agent loop's input
-cost grows **quadratically** with the number of turns (each turn re-reads everything); caching makes it
-close to linear.
+**Reading this code line by line**
+
+- `price_in=3.0` is an illustrative price of 3 dollars per million input tokens; `write_mult` and
+  `read_mult` are the cache premium and discount.
+- On each turn `t`, the context is the starting prefix plus all the messages added so far.
+- Without caching, every token of that context is paid at full price, every turn.
+- With caching, the part already cached (`cached_len`) is paid at a tenth of the price, the newly added
+  suffix is paid at the write premium, and then the cache covers the whole context.
+- Dividing by one million converts "tokens times dollars per million" into dollars.
+
+What the output shows: for a single turn caching is slightly *more* expensive (the 25 percent write
+premium with nothing to reuse). From the second request onward it saves money, and for long loops it
+removes the large majority of the input cost, around 85 percent or more at 50 and 200 turns.
+
+There is a deeper point. Uncached, the total input cost grows **quadratically** with the number of turns
+(roughly with the square of the number of turns), because turn 1 reads one chunk, turn 2 reads two
+chunks, turn 3 reads three, and so on; the sum of 1 + 2 + ... + n is about n squared over two. With
+caching, each turn pays full price (plus premium) only for its new chunk and a tenth for the rest, so the
+total grows much more slowly. This is why caching is the first thing to check in any expensive agent.
 
 ## 4. Designing for cache hits
 
-1. **Order by volatility**: static first (tool definitions, system prompt, reference documents,
-   few-shot examples), then slowly changing (project memory), then the conversation, with the newest
-   message last.
-2. **Never put volatile values in the prefix**: timestamps, request ids, random seeds, user-specific
-   strings in a shared system prompt. Put the current date in a later message or round it to the day.
-3. **Keep tool definitions byte-stable**: same set, same order, same serialisation (sort keys). This is
-   exactly why the MCP spec asks servers to return tools in deterministic order. Adding or removing a
-   tool mid-session invalidates the whole cache: prefer to keep tools constant and constrain behaviour
-   by other means.
-4. **Append-only history**: editing or deleting earlier messages invalidates everything after the edit.
-   So batch context edits (tool-result clearing, compaction) into infrequent events rather than
-   trimming a little every turn, and weigh each edit's context savings against the cache miss.
-5. **Mind the TTL**: keep requests flowing within the window (or use the longer TTL for bursty
-   workloads); a cold cache costs a write.
-6. **Share prefixes across users** where possible (common system prompt and tools first, per-user
-   context after) to raise hit rates.
+Caching only pays if requests actually hit. Six rules:
+
+1. **Order by volatility.** **Volatility** is how often something changes. Put static content first
+   (tool definitions, system prompt, reference documents, **few-shot examples**, which are sample
+   inputs and outputs that show the model what you want), then slowly changing content (project memory
+   files), then the conversation, with the newest message last.
+2. **Never put volatile values in the prefix.** Timestamps, request ids, random **seeds** (numbers that
+   initialise a random generator) and user-specific strings inside a shared system prompt all break the
+   prefix on every request. Put the current date in a later message, or round it to the day.
+3. **Keep tool definitions byte-stable**: the same set, the same order, the same **serialisation** (the
+   exact way objects are written out as text; for JSON, sort the keys). This is why the MCP
+   specification asks servers to list tools in a deterministic order. Adding or removing a tool
+   mid-session invalidates the entire cache, because tools come first; prefer a constant tool set and
+   restrict behaviour in other ways.
+4. **Keep history append-only.** Editing or deleting an earlier message invalidates everything after the
+   edit. So batch context edits (tool-result clearing, compaction) into occasional events rather than
+   trimming a little every turn, and weigh each edit's token savings against the cache miss it causes.
+5. **Mind the TTL.** Keep requests flowing within the expiry window, or use the longer TTL for bursty
+   workloads where gaps exceed five minutes. A cold cache costs a fresh write.
+6. **Share prefixes across users** where you can. Put the common system prompt and tools first and
+   per-user context after them, so many users hit the same cached prefix.
+
+Here is how a provider decides "same prefix or not", imitated with a **hash** (a function that turns any
+text into a short fingerprint; identical text always gives the identical fingerprint, and any change
+gives a different one):
 
 ```python-run
 import hashlib, json
@@ -194,16 +358,57 @@ print("timestamp in system prompt    :", prefix_key(tools, "You are a support ag
 print("date moved to a later message :", prefix_key(tools, "You are a support agent.") == base)
 ```
 
+How it works: `prefix_key` serialises the tools and system prompt to JSON with sorted keys, so the same
+content always produces the same text, then takes the first 12 characters of its SHA-256 hash.
+`tools[::-1]` is the same list reversed. The output is `True`, `False`, `False`, `True`: identical
+content matches; reordering the tools or adding a timestamp breaks the match; moving the date out of
+the prefix and into a later message restores it. Note that `sort_keys` only sorts keys *inside* each
+dictionary; it does not reorder the list of tools, which is why tool order must be fixed by you.
+
 ## 5. Caching beyond the provider
 
-- **Engine-level prefix caching** (vLLM `--enable-prefix-caching`, SGLang's radix cache, llama.cpp slot
-  cache) does the same for self-hosted models.
-- **Exact response caching**: memoise identical requests (deterministic settings) in Redis; great for
-  repeated classification or FAQ prompts.
-- **Semantic caching**: return a stored answer when a new query is embedding-similar to an old one.
-  Risky: similar questions can need different answers, and personalised or time-sensitive responses
-  must not be shared. Use conservative thresholds and scope keys by user/tenant.
-- **Batch APIs** are the other big discount lever for offline workloads, and combine with caching.
+Provider prompt caching is one layer. Others sit in your own stack:
+
+- **Engine-level prefix caching** does the same job for models you host yourself: vLLM's automatic
+  prefix caching, SGLang's radix cache (a tree that shares common prefixes between requests) and
+  llama.cpp's slot cache.
+- **Exact response caching** stores the full answer to a request and returns it when an identical request
+  arrives. It suits repeated classification or FAQ prompts run with deterministic settings, and a
+  key-value store such as Redis works well. Unlike prompt caching, this skips the model call entirely.
+- **Semantic caching** returns a stored answer when a new question is close in **embedding** space (the
+  vector representation from lesson 8) to an old one. It is risky: similar-looking questions can need
+  different answers ("cancel my order" and "cancel my subscription"), and personalised or time-sensitive
+  answers must never be shared between users. Use conservative similarity thresholds and include the
+  user or **tenant** (customer organisation) in the cache key.
+- **Batch APIs** let you submit many requests to be processed within hours at a discount. They are the
+  other big lever for offline work and can be combined with caching.
+
+The flow below shows where these layers sit in an application:
+
+```mermaid
+flowchart LR
+  Q[Request] --> E{Exact cache hit?}
+  E -- yes --> R[Return stored answer]
+  E -- no --> S{Semantic cache hit?}
+  S -- yes --> R
+  S -- no --> P[Call model with stable prefix]
+  P --> C[Provider prompt cache reuses prefix]
+  C --> A[Answer stored then returned]
+```
+
+## 6. Pitfalls a newcomer hits
+
+- **"I enabled caching but my bill did not drop."** Check the `usage` counters. Usually something in the
+  prefix changes on every request: a timestamp, a shuffled tool list, a user name in the system prompt,
+  or JSON written with unsorted keys.
+- **Caching a prompt below the minimum length.** Short prompts are silently not cached; the counters show
+  zero cache reads.
+- **Breakpoint in the wrong place.** A breakpoint placed before the part that grows each turn caches only
+  the static prefix and leaves the growing history uncached.
+- **Trimming history every turn** to save tokens can cost more than it saves, because each trim forces a
+  new cache write of everything after it.
+- **Too many overlapping tools** cause wrong-tool calls that no amount of caching fixes; merge them into
+  task-level tools first.
 
 > [!INTERVIEW]
 > **"How would you cut the cost of a 100-turn agent session?"** Prompt caching: stable prefix (tools
@@ -215,12 +420,41 @@ print("date moved to a later message :", prefix_key(tools, "You are a support ag
 
 ## Summary
 
+- Tools are a contract with an unpredictable caller: design them by evaluating real agents and reading
+  transcripts.
 - Build few, task-level, namespaced tools that return meaningful, bounded, optionally concise output
-  with actionable errors; treat descriptions as prompts and evaluate with real agents.
-- Prompt caching reuses identical prefixes: premium to write, about a tenth to read, short TTL.
+  with actionable errors; treat descriptions as prompts.
+- Prompt caching reuses identical prefixes: a premium to write, about a tenth to read, a short TTL.
 - Order context by volatility, keep tools and system prompt byte-stable, keep history append-only.
 - Context edits trade tokens for cache misses: batch them.
 - Add engine prefix caches, exact or semantic response caches and batch APIs where they fit.
+
+## Glossary
+
+- **Agent**: a program in which a model repeatedly chooses and calls tools until a task is done.
+- **Tool**: a function your code exposes to the model, described by a name, description and schema.
+- **Deterministic / non-deterministic**: always behaving the same for the same input / possibly not.
+- **Endpoint**: one operation offered by an existing API.
+- **Task-level tool**: a tool built around a unit of work rather than a single endpoint.
+- **Namespacing**: shared name prefixes that group related tools.
+- **UUID**: a long random identifier, meaningless to a model.
+- **Pagination / truncation**: returning results a page at a time / cutting output at a limit.
+- **Actionable error**: an error message that says what was wrong and what a valid call looks like.
+- **Schema**: the formal description of a tool's parameters.
+- **Deferred loading (tool search)**: loading tool schemas on demand instead of all up front.
+- **Sandbox**: an isolated environment where code runs safely.
+- **Prefix**: the unchanged beginning of a prompt that is resent each request.
+- **Prompt caching**: provider-side reuse of the computation for an identical prefix.
+- **Cache breakpoint**: a marker saying where the cached prefix ends.
+- **Cache hit / miss**: the stored prefix is reused / is not.
+- **TTL (time to live)**: how long a cache entry lasts before it expires.
+- **Volatility**: how often a piece of context changes.
+- **Serialisation**: the exact way an object is written out as text.
+- **Hash**: a short fingerprint of text; any change gives a different fingerprint.
+- **Exact / semantic response cache**: returning a stored answer for an identical / a similar request.
+- **Batch API**: discounted, delayed processing of many requests.
+
+## Check yourself
 
 ```quiz
 [
@@ -244,7 +478,10 @@ print("date moved to a later message :", prefix_key(tools, "You are a support ag
    "explain": "Frequent small edits cause constant cache misses that can outweigh the token savings."},
   {"q": "What is the main risk of semantic response caching?",
    "options": ["Serving a stored answer to a similar-looking query that needs a different answer", "It uses too much GPU", "It breaks tokenization", "It requires fine-tuning"], "answer": 0,
-   "explain": "Similarity is not equivalence; personalised or time-sensitive answers are especially dangerous."}
+   "explain": "Similarity is not equivalence; personalised or time-sensitive answers are especially dangerous."},
+  {"q": "Without caching, how does the total input cost of an agent loop grow with the number of turns?",
+   "options": ["Roughly quadratically, because every turn re-reads the whole growing history", "Linearly", "It stays constant", "Logarithmically"], "answer": 0,
+   "explain": "Turn n reads n chunks, and 1 + 2 + ... + n is about n squared over two."}
 ]
 ```
 
