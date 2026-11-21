@@ -289,6 +289,115 @@ console.log("compressed size:", bytes, "bytes");
 
 **Postponing expensive set-up.** Creating thousands of file streams up front opens thousands of files at once. A stand-in that creates the real stream only when someone starts reading from it avoids that; small packages such as `lazystream` do this.
 
+## Late piping and lazy streams
+
+PassThrough's "placeholder" and "postponed set-up" uses deserve a closer look, because two real problems are solved with them. Both rest on one idea: **a stream you hand to someone does not have to be the stream that finally does the work.**
+
+### Late piping: the data is not ready yet
+
+Imagine a library function that uploads a file to cloud storage. Its shape is something like `upload(name, contentStream)`: you give it a name and a readable stream, and it reads the stream and sends the bytes. Reading a file from disk is easy, because `createReadStream` gives you a stream right away. But suppose you want to compress the file first, or the content must be fetched or generated before you know what to send. The function needs a stream **now**, and your real data will exist **later**.
+
+The trick is to hand over a `PassThrough` immediately and connect the real source to it afterwards. This is called **late piping**: the pipe is attached after the stream was already handed to the consumer.
+
+```javascript
+import { PassThrough } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import { createReadStream } from "node:fs";
+import { createGzip } from "node:zlib";
+
+const slot = new PassThrough();                  // an empty slot, usable straight away
+const uploading = upload("report.csv.gz", slot); // the library starts reading from the slot
+
+// Later, perhaps after an awaited lookup, the real data source is connected:
+await pipeline(createReadStream("report.csv"), createGzip(), slot);
+await uploading;
+```
+
+Step by step: `slot` is a Transform that forwards bytes unchanged. `upload` begins consuming it and simply waits, because nothing has been written yet. When `pipeline` connects the file, through gzip, into `slot`, bytes start to flow and the upload receives them as if they had always been coming. `pipeline` also ends `slot` when the source finishes, which tells the uploader the content is complete. The uploader never knows the stream was empty at first.
+
+Writing is the mirror image. If a function wants a **writable** and the real destination is not known yet, give it a PassThrough and later `pipe` the PassThrough into the destination.
+
+> [!NOTE]
+> A PassThrough has an internal buffer with a limit (the high-water mark), so if you write a lot into the slot before anyone reads it, backpressure tells the writer to wait. That is exactly what you want: data cannot pile up without bound while the consumer is not ready.
+
+### Lazy streams: do not open it until it is read
+
+Creating a stream is often **not free**. `createReadStream("a.txt")` starts opening the file right away, and an open file takes a **file descriptor**: a small number the operating system gives a process for each open file or socket, from a limited supply (often a few thousand per process). If you create a stream for every file in a big folder before reading any of them, you can run out and receive the error `EMFILE: too many open files`. This happens in practice with archive tools that accept a whole list of streams to pack into one zip or tar file.
+
+```javascript
+// Eager: one descriptor per file, all opened at once. Thousands of files -> EMFILE.
+const streams = files.map((name) => createReadStream(name));
+archive.add(streams);   // pseudo-code for an API that takes a list of streams
+```
+
+A **lazy stream** postpones creating the expensive real stream until the first time someone actually reads from (or writes to) it. Until then it is a cheap empty shell. Think of a restaurant: eager is cooking every dish on the menu before anyone orders, lazy is cooking on the first order.
+
+Here is a small version you could write yourself, using a PassThrough plus a factory function (a function that creates and returns the real stream):
+
+```javascript
+import { PassThrough } from "node:stream";
+
+function lazyReadable(factory) {
+  let started = false;
+  const shell = new PassThrough();
+  const originalRead = shell._read.bind(shell);
+
+  shell._read = function (size) {
+    if (!started) {
+      started = true;
+      const real = factory();                       // the file is opened only now
+      real.on("error", (err) => shell.destroy(err));
+      real.pipe(shell);                             // real stream feeds the shell
+    }
+    return originalRead(size);
+  };
+  return shell;
+}
+
+const streams = files.map((name) => lazyReadable(() => createReadStream(name)));
+```
+
+Reading it line by line: `lazyReadable` returns a PassThrough. The first time the consumer asks for data, Node calls the shell's `_read` method (the internal hook a stream uses to request data). We replace that hook so that on the first call only, we run the factory, connect the real stream to the shell and then carry on normally. The consumer sees an ordinary Readable. Errors from the real stream are forwarded explicitly because `pipe` does not do it.
+
+The same idea powers small packages such as `lazystream`, which uses the same approach internally. You would normally use such a package rather than your own version, but you should understand the mechanism.
+
+### A model you can run
+
+Node's stream module is not available on this page, but the principle (counting how many resources are open at the same time) is plain JavaScript:
+
+```js-run
+let open = 0, peak = 0;
+
+function openFile(name) {                 // pretend this takes a file descriptor
+  open++; peak = Math.max(peak, open);
+  return { name, close() { open--; } };
+}
+
+const names = Array.from({ length: 6 }, (_, i) => `file${i}.txt`);
+
+// Eager: open all, then read all.
+const eager = names.map(openFile);
+eager.forEach((f) => f.close());
+console.log("eager peak open files:", peak);
+
+// Lazy: describe the work now, open each file only when it is its turn.
+open = 0; peak = 0;
+const lazy = names.map((name) => () => openFile(name));
+for (const make of lazy) {
+  const file = make();                    // opened here, at first use
+  file.close();                           // finished before the next one starts
+}
+console.log("lazy peak open files:", peak);
+```
+
+The eager version holds six files open at once, the lazy version never more than one. With six thousand files, that is the difference between working and `EMFILE`.
+
+> [!TIP]
+> Laziness only helps if the consumer reads the streams **one after another** (or a few at a time). An archive library that reads all streams in parallel would open them all anyway. Combine lazy streams with a limit on concurrency, as in the earlier lessons on limited parallel execution.
+
+> [!WARNING]
+> A lazy stream defers errors too. A missing file is only discovered at the first read, not when the stream is created. Handle errors on the lazy stream itself (`pipeline` does this).
+
 ## Useful helpers
 
 ```javascript
@@ -357,6 +466,11 @@ const compressAndEncrypt = compose(createGzip(), createCipher());   // several t
 - **Async generator function**: an `async function*`; it produces values over time with `yield`.
 - **`PassThrough`**: a Transform that forwards data unchanged.
 - **Lazy**: doing work only when the result is requested.
+- **Late piping**: handing a PassThrough to a consumer now and connecting the real source to it later.
+- **File descriptor**: the small number an operating system gives a process for each open file or socket; the supply is limited.
+- **`EMFILE`**: the error code for "too many open files".
+- **Lazy stream**: a stand-in stream that creates the real, expensive stream only on first read or write.
+- **Factory function**: a function that builds and returns a new object when called.
 
 ```quiz
 [
@@ -375,7 +489,13 @@ const compressAndEncrypt = compose(createGzip(), createCipher());   // several t
   {"q": "In what order do these log?\n\n`async function* gen() { console.log('G1'); yield 1; console.log('G2'); } const it = gen(); console.log('A'); for await (const x of it) console.log('X' + x); console.log('B');`", "options": ["G1, A, X1, G2, B", "A, G1, X1, G2, B", "A, G1, G2, X1, B", "A, X1, G1, G2, B"], "answer": 1,
    "explain": "Calling gen() runs nothing. The loop's first request runs the body to the first yield (G1), the loop body logs X1, the next request logs G2 and finishes."},
   {"q": "Which is a legitimate use of PassThrough?", "options": ["Speeding up a pipeline", "Counting the bytes that flow through a pipeline without changing them", "Converting bytes to objects", "Encrypting data"], "answer": 1,
-   "explain": "A PassThrough forwards data unchanged, so it is a convenient tap for observation or a placeholder."}
+   "explain": "A PassThrough forwards data unchanged, so it is a convenient tap for observation or a placeholder."},
+  {"q": "A library function needs a readable stream immediately, but your data will only be available after an async lookup. What is the late-piping solution?", "options": ["Wait for the lookup, then call the function", "Pass a PassThrough now and pipe the real source into it when ready", "Pass null and replace it later", "Use pipe() twice"], "answer": 1,
+   "explain": "The PassThrough is a valid stream from the start. Whatever you pipe into it later flows to the consumer unchanged."},
+  {"q": "You create 20,000 fs read streams up front and get EMFILE. What is the best fix?", "options": ["Raise the stream highWaterMark", "Create each real stream lazily, only when its consumer starts reading", "Use pipe instead of pipeline", "Switch to object mode"], "answer": 1,
+   "explain": "createReadStream opens its file immediately, using a file descriptor. Deferring creation keeps the number of open files small."},
+  {"q": "In a hand-written lazy Readable built on PassThrough, when is the factory called?", "options": ["When the lazy stream is constructed", "The first time the stream is asked for data", "When the stream ends", "Every time a chunk is read"], "answer": 1,
+   "explain": "Construction stays cheap. The factory runs once, on the first read request, and the real stream is then piped into the shell."}
 ]
 ```
 

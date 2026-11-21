@@ -225,6 +225,97 @@ flowchart TB
   UV --> Pool["Thread pool: files, DNS, crypto, zlib"]
 ```
 
+## Running native code: addons, Node-API and WebAssembly
+
+JavaScript, even on a fast engine like V8, is not the right tool for every job. Sometimes you need a feature JavaScript simply does not have, sometimes you already own a large library written in another language, and sometimes a computation is so heavy that every saved millisecond counts. Node gives you two doors out of JavaScript and into faster or lower-level code. First, some terms.
+
+- **Native code** is a program already translated into the machine instructions of one specific processor, usually from C, C++ or Rust. It runs directly on the processor with no engine in between. Think of a book printed in the reader's own language, as opposed to one that needs a live interpreter reading aloud.
+- A **native addon** is a native-code file (it ends in `.node`) that Node can load like a module, so that JavaScript can call the functions inside it.
+- An **ABI** (application binary interface) is the agreement about how already-compiled pieces of code talk to each other at the machine level: where arguments are placed, how structures are laid out in memory. It is the binary cousin of an API. If the ABI changes, a file compiled yesterday no longer fits today's program, even though the source code would still compile.
+
+### Why bother?
+
+There are four common reasons, and they are worth knowing because an interviewer may ask "when would you leave JavaScript?"
+
+1. **Reuse.** Decades of excellent libraries exist in C and C++: image processing, databases, cryptography, compression. Wrapping one is far cheaper than rewriting it. A company with a large legacy C++ code base can reach it from Node without migrating anything.
+2. **Hardware and operating-system features.** Talking to a USB device, a serial port or a special driver needs native code. This is a big reason Node became popular for hobby robotics and the Internet of Things (everyday devices connected to a network).
+3. **Raw speed for CPU-bound work.** Earlier in this lesson you saw that long computation blocks the event loop. Native code runs the heavy part faster, and an addon can also do the work on its own thread so the loop stays free.
+4. **Code shared across languages**, which is also where WebAssembly comes in (below).
+
+### Door 1: native addons and Node-API
+
+An addon is a small piece of C or C++ glue that registers functions with Node. Your JavaScript then loads the compiled file and calls them as if they were ordinary functions:
+
+```javascript
+// Loading a compiled addon: the file name ends in .node
+const fastHash = require("./build/Release/fast_hash.node");
+console.log(fastHash.hash("hello"));   // runs C++ code, returns a JavaScript value
+```
+
+Here `require` is the CommonJS loader; ES modules reach addons through `createRequire`. Both are covered in the modules lessons. This snippet is not runnable in the browser, since there is no compiled file; it only shows the shape.
+
+**The compatibility problem.** In the early days, addons talked directly to V8's internal C++ classes. V8 changes with every Node release, so an addon often had to be rewritten or at least recompiled for each new Node version. Imagine a phone charger whose plug changes shape every year: every device would need a new cable.
+
+**Node-API (older name: N-API)** is the fix. It is a C interface, built into Node and maintained by the Node team, that sits between your addon and the engine. The addon calls Node-API functions (create a string, read an argument, throw an error) and never touches V8 directly. Because the Node-API functions keep a stable ABI, a compiled addon keeps working when you upgrade Node, without recompiling. Node-API is versioned: each Node release supports a known set of Node-API versions, and an addon states the lowest version it needs. In practice:
+
+- Write C directly against Node-API, or use `node-addon-api`, an official C++ wrapper that is friendlier.
+- Build with a tool such as `node-gyp` or `cmake-js`, which needs a C/C++ compiler on the machine.
+- Package authors often ship **prebuilt binaries** for common operating systems so that users never need a compiler. Stable ABI makes this practical: one binary per operating system and processor, not one per Node version.
+
+```mermaid
+flowchart LR
+  A["JavaScript: require addon"] --> B["Addon .node file"]
+  B --> C["Node-API: stable C functions"]
+  C --> D["V8 and libuv inside Node"]
+  B --> E["Your C or C++ library"]
+```
+
+> [!WARNING]
+> Native code is powerful and unforgiving. A bug in JavaScript throws an exception you can catch. A bug in native code (a bad pointer, a memory leak) can crash the entire Node process with no warning, and it can open security holes. Native code also runs with the full permissions of the process. Reach for it only when the benefit is clear.
+
+### Door 2: WebAssembly
+
+**WebAssembly** (**Wasm**) is a compact, low-level instruction format designed to be a compilation target. You write in C, C++, Rust or another language, compile to a `.wasm` file, and any engine that understands WebAssembly can run it: browsers and Node alike. V8 runs it at near-native speed.
+
+The key difference from an addon is safety and portability. Wasm runs in a **sandbox** (a fenced area): it can only touch its own memory and only call functions you deliberately hand to it. It cannot open files or crash the process through a stray pointer. And one `.wasm` file runs on every operating system and processor, so there is nothing to compile on the user's machine.
+
+Here is a real, runnable WebAssembly module. The numbers are the raw bytes of a tiny module exporting a function `add`; in practice a compiler produces these bytes for you:
+
+```js-run
+const bytes = new Uint8Array([
+  0,97,115,109, 1,0,0,0,                    // header: the magic word "\0asm" and version 1
+  1,7,1,96,2,127,127,1,127,                 // one function type: two 32-bit ints in, one out
+  3,2,1,0,                                  // one function, using that type
+  7,7,1,3,97,100,100,0,0,                   // export it under the name "add"
+  10,9,1,7,0,32,0,32,1,106,11               // body: read both inputs, add them, return
+]);
+
+const module = await WebAssembly.instantiate(bytes);   // compile and prepare the module
+const { add } = module.instance.exports;               // the exported function
+console.log("add(2, 3) =", add(2, 3));
+console.log("add(40, 2) =", add(40, 2));
+```
+
+`WebAssembly.instantiate` takes the bytes, checks that they are valid, compiles them and returns an instance. `exports` holds what the module chose to expose, and each export is callable like a normal JavaScript function. In a real project you would load a file instead: `await WebAssembly.instantiate(await readFile("lib.wasm"), imports)` in Node, where `imports` is the object of JavaScript functions the module is allowed to call.
+
+A limit worth knowing: Wasm only passes simple numbers across the boundary. Strings and objects are copied through the module's linear memory, and tools such as `wasm-bindgen` (for Rust) generate that glue. Crossing the boundary has a cost, so Wasm pays off when one call does a lot of work, not when you call a tiny function a million times.
+
+### Which door should you use?
+
+| Question | Native addon (Node-API) | WebAssembly |
+|---|---|---|
+| Speed | Fastest; can use threads and SIMD freely | Near native, single-threaded unless set up otherwise |
+| Safety | A bug can crash the process | Sandboxed |
+| Portability | Compile per operating system and processor | One file runs everywhere |
+| Access to OS, hardware, drivers | Full | None, except what you pass in |
+| Install experience | Needs prebuilt binaries or a compiler | Plain file, nothing to build |
+| Runs in the browser too | No | Yes |
+
+A simple rule of thumb: try plain JavaScript first, and measure. If you need a hardware driver or an existing C/C++ library with system access, use a Node-API addon. If you need portable, safe, fast computation (image codecs, parsers, cryptography), choose WebAssembly. And if the problem is only that CPU work blocks the loop, remember that worker threads (a later lesson) may be enough with no native code at all.
+
+> [!INTERVIEW]
+> **"What is Node-API and why does it matter?"** "It is a stable C interface that Node provides for native addons. Addons call Node-API instead of V8's internals, and its ABI stays stable across Node versions, so a compiled addon does not need to be rebuilt for each release. That makes distributing prebuilt binaries realistic." Follow-up: **"WebAssembly or an addon?"** "WebAssembly when I want sandboxed, portable computation; an addon when I need OS or hardware access, threads, or an existing native library."
+
 ## The cost of the model: do not block the loop
 
 There is exactly one waiter. If the waiter stops to peel potatoes for a minute, nobody is served for a minute. A handler that computes for a long time has the same effect: no other handler can run, no request is accepted, no timer fires.
@@ -298,6 +389,12 @@ The timer wanted 10 ms and got roughly 200. Work that needs the processor for a 
 - **Thread pool**: a fixed set of helper threads for blocking work.
 - **CPU-bound**: limited by computation, not by waiting.
 - **Userland**: the ecosystem of packages outside Node's core.
+- **Native code**: machine instructions for a specific processor, usually compiled from C, C++ or Rust.
+- **Native addon**: a compiled `.node` file that JavaScript can load and call.
+- **ABI**: the binary-level agreement that lets separately compiled code work together.
+- **Node-API (N-API)**: Node's stable C interface for addons; its stable ABI means no rebuild per Node version.
+- **WebAssembly (Wasm)**: a portable, sandboxed, low-level instruction format that engines run at near-native speed.
+- **Sandbox**: a fenced environment that limits what code inside can touch.
 
 ```quiz
 [
@@ -316,7 +413,13 @@ The timer wanted 10 ms and got roughly 200. Work that needs the processor for a 
   {"q": "Which task is a poor fit for a single Node process?", "options": ["A chat server with 20,000 mostly idle connections", "An API that forwards requests to a database", "Resizing thousands of large images inside request handlers", "Serving static files"], "answer": 2,
    "explain": "Image resizing is CPU-bound; it would block the loop for every other user unless moved to workers."},
   {"q": "\"Node is single-threaded.\" Which refinement is most accurate?", "options": ["Node uses exactly one thread for everything", "JavaScript runs on one thread, while libuv also uses a small thread pool and the OS for I/O", "Each request gets its own thread", "Each callback runs on a random thread"], "answer": 1,
-   "explain": "Your code sees one thread and one event at a time; helper threads exist underneath."}
+   "explain": "Your code sees one thread and one event at a time; helper threads exist underneath."},
+  {"q": "What is the main benefit of Node-API for addon authors?", "options": ["It makes C++ code run on the JavaScript thread", "A compiled addon keeps working across Node versions without being rebuilt", "It removes the need for a compiler", "It lets addons run in the browser"], "answer": 1,
+   "explain": "Node-API has a stable ABI and hides V8's internals, so the same binary works across Node releases. A compiler is still needed to build the addon in the first place."},
+  {"q": "You need to read from a USB device from Node. Which option fits?", "options": ["WebAssembly, because it can open any device", "A native addon, because it has full operating-system access", "Plain JavaScript only; it is impossible", "A larger libuv thread pool"], "answer": 1,
+   "explain": "WebAssembly is sandboxed and cannot touch hardware unless you pass functions in. A native addon runs with the process's full permissions."},
+  {"q": "Which is true of a WebAssembly module compared with a native addon?", "options": ["It must be recompiled for each operating system", "It can crash the process through a bad pointer", "It runs sandboxed and the same file works on every platform", "It cannot be used from Node"], "answer": 2,
+   "explain": "Wasm is portable and sandboxed. Both properties are its main selling points over addons."}
 ]
 ```
 
