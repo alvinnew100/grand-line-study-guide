@@ -404,9 +404,9 @@
    "Official docs: docs.docker.com (Dockerfile reference, Compose file reference, Engine, Build, Swarm)",
    "Official docs: kubernetes.io, prometheus.io, NVIDIA Container Toolkit, astral.sh/uv"
   ],
-  "words": 111749,
+  "words": 119234,
   "modules": 14,
-  "lessons": 31,
+  "lessons": 32,
   "problems": 25
  },
  {

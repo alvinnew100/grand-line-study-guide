@@ -479,7 +479,7 @@ services:
    "answer": 2,
    "explain": "Mappings merge key by key, with the later file winning for keys defined in both."},
   {"q": "Which expression makes Compose stop with a clear error if DB_PASSWORD is not provided?",
-   "options": ["${DB_PASSWORD}", "${DB_PASSWORD:-}", "${DB_PASSWORD:?DB_PASSWORD is required}", "$$DB_PASSWORD"],
+   "options": ["${DB_PASSWORD}", "${DB_PASSWORD:-}", "${DB_PASSWORD:?DB_PASSWORD is required}", "\\$\\$DB_PASSWORD"],
    "answer": 2,
    "explain": "The :? operator raises an error with the given message when the variable is unset or empty."},
   {"q": "How do you run two independent copies of the same Compose application on one machine?",

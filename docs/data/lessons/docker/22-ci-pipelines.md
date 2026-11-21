@@ -305,7 +305,7 @@ docker buildx build --sbom=true --provenance=mode=max -t $IMAGE:git-$SHA --push 
 
 ## Continuous delivery in one paragraph
 
-CI ends with a tested image in a registry. **Continuous delivery** (CD) continues the pipeline: deploy that same image to a test environment automatically, run checks, and promote it to production, either automatically or after a person approves. The deployment step is one of the commands you already know, `docker stack deploy` or `kubectl apply`, run by the pipeline with the new image tag. The upgrades lesson covered making that step safe.
+CI ends with a tested image in a registry. **Continuous delivery** (CD) continues the pipeline: deploy that same image to a test environment automatically, run checks, and promote it to production, either automatically or after a person approves. The deployment step is one of the commands you already know, `docker stack deploy` or `kubectl apply`, run by the pipeline with the new image tag. The upgrades lesson covered making that step safe, and the next lesson, [Remote engines, secure access, contexts and continuous deployment](#/lesson/docker/remote-engines-cd), builds the deployment stage in full.
 
 > [!INTERVIEW]
 > "Describe a CI pipeline for a containerised service." On every push: check out; build with a multi-stage Dockerfile so the runner needs only Docker; run unit tests in a test stage; start the candidate image with its dependencies using Compose and run integration tests; scan; tag with the commit identifier; push; deploy that exact image onward. Add how you keep it fast (layer order, registry cache with `mode=max`) and safe (secret mounts, least-privilege tokens, no socket for untrusted code).

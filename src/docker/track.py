@@ -81,8 +81,10 @@ TRACK = dict(
             ("app-config-patterns", "Application configuration patterns for containers", "21-app-config-patterns.md")],
            ["docker-rolling-update", "docker-secret-audit"]),
         _m("build-infra", "10. Build Infrastructure",
-           "CI pipelines whose only dependency is Docker, and images that run on both Intel and Arm.",
+           "CI pipelines whose only dependency is Docker, secure remote engines and continuous deployment, "
+           "and images that run on both Intel and Arm.",
            [("ci-pipelines", "Build infrastructure and CI pipelines with Docker", "22-ci-pipelines.md"),
+            ("remote-engines-cd", "Remote engines, secure access, contexts and continuous deployment", "22a-remote-engines-cd.md"),
             ("multi-arch", "Multi-architecture images", "23-multi-arch.md")],
            ["docker-platform-select"]),
         _m("security-optimisation", "11. Security and Image Optimisation",
