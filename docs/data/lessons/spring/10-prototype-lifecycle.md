@@ -350,6 +350,13 @@ Destruction callbacks run only if the context is closed properly.
 - In plain Spring call `context.close()`, or use try-with-resources, or call `context.registerShutdownHook()` so that the callbacks run when the JVM exits normally.
 - Spring Boot registers the shutdown hook for you. Stopping the application with Ctrl+C or a normal termination signal triggers an orderly shutdown. Killing the process forcibly (`kill -9`) or pulling the plug does not, so never rely on `@PreDestroy` for anything that must not be lost.
 
+## Practise in real Java
+
+The judge has the JDK only, without Spring jars, so in these exercises you write in real Java 21 the mechanism that Spring provides. That is the level interview questions probe.
+
+- [Java: singleton, prototype and lazy beans](#/problem/spring-java-scopes-lazy): the prototype-inside-a-singleton trap, observed in a container you build.
+- [Java: bean lifecycle callbacks and post-processors](#/problem/spring-java-lifecycle): the lifecycle pipeline with InitializingBean, BeanPostProcessor and reverse-order destruction.
+
 ## Pitfalls
 
 - **Prototype injected into a singleton.** One instance, shared for ever. Use `ObjectProvider`.

@@ -370,6 +370,12 @@ The dividing line between 4xx and 5xx matters operationally: 4xx means "the call
 > [!WARNING]
 > Never send exception messages or stack traces of unexpected errors to the client. They reveal class names, SQL, file paths and library versions, which is a gift to attackers. Log them on the server with a correlation id and return the id in the response so that support can find the log entry.
 
+## Practise in real Java
+
+The judge has the JDK only, without Spring jars, so in these exercises you write in real Java 21 the mechanism that Spring provides. That is the level interview questions probe.
+
+- [Java: a Bean Validation engine with annotations and reflection](#/problem/spring-java-bean-validation): a Bean Validation engine that reads annotations with reflection and builds the field-error map.
+
 ## Pitfalls
 
 - **Forgetting `@Valid`.** The constraints are silently ignored.

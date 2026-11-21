@@ -365,6 +365,12 @@ Study the FAILURE log. The exception leaves `tx` (order 5), which logs `afterThr
 > [!INTERVIEW]
 > "Two aspects apply to the same method. In which order do they run?" Undefined unless you declare it with `@Order` or by implementing `Ordered`. The lower order value has higher precedence: its before-part runs first and its after-part runs last, wrapping the others. Follow with an example where it matters: retry outside transaction, or security outside logging.
 
+## Practise in real Java
+
+The judge has the JDK only, without Spring jars, so in these exercises you write in real Java 21 the mechanism that Spring provides. That is the level interview questions probe.
+
+- [Java: an ordered chain of before, after and around advice](#/problem/spring-java-advice-chain): an ordered chain of before, after, after-returning, after-throwing and around advice.
+
 ## Pitfalls
 
 - **Relying on undeclared order.** It works on your machine and flips in production. Add `@Order` whenever two aspects can meet.

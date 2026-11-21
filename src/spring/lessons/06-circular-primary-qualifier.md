@@ -392,6 +392,13 @@ EMAIL to ana@example.com: Your order has shipped
 SMS to +34 600 000 000: Payment failed
 ```
 
+## Practise in real Java
+
+The judge has the JDK only, without Spring jars, so in these exercises you write in real Java 21 the mechanism that Spring provides. That is the level interview questions probe.
+
+- [Java: constructor injection and cycle detection with reflection](#/problem/spring-java-constructor-injection): constructor injection with circular-dependency detection and a clear error message.
+- [Java: choose the bean with @Qualifier, @Primary and the parameter name](#/problem/spring-java-qualifier-primary): the decision procedure for @Qualifier, @Primary and the parameter-name fallback.
+
 ## Pitfalls
 
 - **Hiding a cycle with field injection and the allow flag.** The application starts, and the design problem stays. Cycles make classes impossible to test or reuse separately.

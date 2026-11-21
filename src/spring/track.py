@@ -10,7 +10,8 @@ TRACK = dict(
     group="Languages",
     blurb="From 'what is a framework?' to production Spring Boot 3: the container, dependency injection, AOP, "
           "web and REST, data access, transactions, Spring Data, testing, security and interview preparation. "
-          "Every mechanism is modelled in runnable Python so you can watch it work.",
+          "Every mechanism is modelled in runnable Python so you can watch it work, then rebuilt in real Java 21 "
+          "on the judge: an IoC container, AOP proxies, transactions, a router, validation and a filter chain.",
     sources=[
         "Spilcă, Spring Start Here (Manning), ch. 1–15",
         "Spring Framework reference documentation (docs.spring.io/spring-framework/reference)",
@@ -35,7 +36,7 @@ TRACK = dict(
                 _l("spring-context-bean", "The application context and @Bean", "03-context-and-bean.md"),
                 _l("spring-stereotypes-scan", "Stereotype annotations, component scanning and programmatic registration", "04-stereotypes-scanning.md"),
             ],
-            problems=["spring-component-scan"],
+            problems=["spring-component-scan", "spring-java-bean-registry"],
         ),
         dict(
             id="spring-wiring",
@@ -45,7 +46,8 @@ TRACK = dict(
                 _l("spring-wiring-autowired", "Wiring beans with @Bean methods and @Autowired", "05-wiring-autowired.md"),
                 _l("spring-circular-primary-qualifier", "Circular dependencies, @Primary and @Qualifier", "06-circular-primary-qualifier.md"),
             ],
-            problems=["spring-creation-order", "spring-resolve-candidate"],
+            problems=["spring-creation-order", "spring-resolve-candidate",
+                      "spring-java-constructor-injection", "spring-java-qualifier-primary"],
         ),
         dict(
             id="spring-abstractions",
@@ -65,7 +67,8 @@ TRACK = dict(
                 _l("spring-singleton-scope", "Singleton scope, eager and lazy beans, thread safety", "09-singleton-scope.md"),
                 _l("spring-prototype-lifecycle", "Prototype scope and the bean lifecycle", "10-prototype-lifecycle.md"),
             ],
-            problems=["spring-scope-count", "spring-lazy-eager-order", "spring-lifecycle-order"],
+            problems=["spring-scope-count", "spring-lazy-eager-order", "spring-lifecycle-order",
+                      "spring-java-scopes-lazy", "spring-java-lifecycle"],
         ),
         dict(
             id="spring-aop",
@@ -75,7 +78,8 @@ TRACK = dict(
                 _l("spring-aop-proxies", "How Spring AOP works: proxies and your first aspect", "11-aop-proxies.md"),
                 _l("spring-aop-advice-pointcuts", "Advice types, pointcut expressions and aspect order", "12-advice-pointcuts-order.md"),
             ],
-            problems=["spring-advice-order", "spring-pointcut-match", "spring-self-invocation"],
+            problems=["spring-advice-order", "spring-pointcut-match", "spring-self-invocation",
+                      "spring-java-jdk-proxy", "spring-java-advice-chain", "spring-java-self-invocation"],
         ),
         dict(
             id="spring-boot-mvc",
@@ -85,7 +89,7 @@ TRACK = dict(
                 _l("spring-boot-autoconfig", "Spring Boot: starters and auto-configuration", "13-boot-starters-autoconfig.md"),
                 _l("spring-mvc-request-flow", "Spring MVC: the request flow through DispatcherServlet", "14-mvc-request-flow.md"),
             ],
-            problems=["spring-conditional-autoconfig", "spring-request-mapping"],
+            problems=["spring-conditional-autoconfig", "spring-request-mapping", "spring-java-request-mapping"],
         ),
         dict(
             id="spring-web-apps",
@@ -115,7 +119,8 @@ TRACK = dict(
                 _l("spring-rest-controllers", "REST endpoints with @RestController and ResponseEntity", "19-rest-controllers.md"),
                 _l("spring-rest-errors-validation", "Request bodies, validation and error handling with @RestControllerAdvice", "20-rest-errors-validation.md"),
             ],
-            problems=["spring-content-negotiation", "spring-bean-validation", "spring-exception-status"],
+            problems=["spring-content-negotiation", "spring-bean-validation", "spring-exception-status",
+                      "spring-java-bean-validation"],
         ),
         dict(
             id="spring-rest-clients",
@@ -125,7 +130,7 @@ TRACK = dict(
                 _l("spring-rest-clients", "Calling REST endpoints: RestTemplate, RestClient and OpenFeign", "21-rest-clients.md"),
                 _l("spring-webclient", "WebClient, timeouts and resilient calls", "22-webclient-resilience.md"),
             ],
-            problems=["spring-retry-backoff"],
+            problems=["spring-retry-backoff", "spring-java-retry-backoff", "spring-java-circuit-breaker"],
         ),
         dict(
             id="spring-data-sources",
@@ -135,7 +140,7 @@ TRACK = dict(
                 _l("spring-jdbc-template", "JDBC, DataSource and JdbcTemplate", "23-jdbc-jdbctemplate.md"),
                 _l("spring-datasource-pools", "Configuring the DataSource and connection pools", "24-datasource-pools.md"),
             ],
-            problems=["spring-connection-pool"],
+            problems=["spring-connection-pool", "spring-java-jdbc-template", "spring-java-record-row-mapper"],
         ),
         dict(
             id="spring-transactions",
@@ -145,7 +150,8 @@ TRACK = dict(
                 _l("spring-transactional", "@Transactional, rollback rules and the self-invocation pitfall", "25-transactional.md"),
                 _l("spring-propagation-isolation", "Propagation and isolation", "26-propagation-isolation.md"),
             ],
-            problems=["spring-rollback-rules", "spring-tx-propagation", "spring-isolation-anomaly"],
+            problems=["spring-rollback-rules", "spring-tx-propagation", "spring-isolation-anomaly",
+                      "spring-java-rollback-rules", "spring-java-propagation"],
         ),
         dict(
             id="spring-data",
@@ -155,7 +161,7 @@ TRACK = dict(
                 _l("spring-data-repositories", "Spring Data repositories: derived queries and @Query", "27-spring-data-repositories.md"),
                 _l("spring-jpa-mapping", "JPA basics: entity mapping, relationships and the N+1 problem", "28-jpa-mapping-nplus1.md"),
             ],
-            problems=["spring-page-request", "spring-derived-query", "spring-n-plus-one"],
+            problems=["spring-page-request", "spring-derived-query", "spring-n-plus-one", "spring-java-pageable"],
         ),
         dict(
             id="spring-testing",
@@ -177,7 +183,7 @@ TRACK = dict(
                 _l("spring-security-jwt", "Spring Security basics and JWT resource servers", "33-security-jwt.md"),
             ],
             problems=["spring-property-precedence", "spring-placeholder-expand", "spring-health-aggregate",
-                      "spring-security-filter-chain", "spring-jwt-validate"],
+                      "spring-security-filter-chain", "spring-jwt-validate", "spring-java-security-filter-chain"],
         ),
         dict(
             id="spring-interview",

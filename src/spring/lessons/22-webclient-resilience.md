@@ -302,6 +302,13 @@ A **fallback** is what you return when the dependency is unavailable: a cached v
 > [!TIP]
 > Decide the user-visible behaviour first: "if shipping quotes are down, can the customer still check out?" Then choose the mechanisms. A fallback hides a failure from the user; it must not hide it from monitoring, so count and log every fallback.
 
+## Practise in real Java
+
+The judge has the JDK only, without Spring jars, so in these exercises you write in real Java 21 the mechanism that Spring provides. That is the level interview questions probe.
+
+- [Java: retry with exponential backoff](#/problem/spring-java-retry-backoff): a retry loop with exponential backoff and a cap.
+- [Java: a circuit breaker state machine](#/problem/spring-java-circuit-breaker): a count-based circuit breaker state machine like Resilience4j's.
+
 ## Pitfalls
 
 - **Forgetting to subscribe.** A `Mono` that is created and ignored sends nothing. No error, no request.

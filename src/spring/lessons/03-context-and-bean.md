@@ -321,6 +321,12 @@ That is why the exceptions are named `NoSuchBeanDefinition…`: the lookup fails
 > [!WARNING]
 > Calling `getBean` from business code is a habit to avoid. It hides a class's dependencies and ties the class to Spring. In real applications you declare what you need as constructor parameters and let Spring inject it, which is the topic of [Wiring beans with @Bean methods and @Autowired](#/lesson/spring/spring-wiring-autowired). In these early lessons `getBean` appears only in `main` to inspect what the context contains.
 
+## Practise in real Java
+
+The judge has the JDK only, without Spring jars, so in these exercises you write in real Java 21 the mechanism that Spring provides. That is the level interview questions probe.
+
+- [Java: a bean registry with lookup by name and by type](#/problem/spring-java-bean-registry): a bean registry with lookup by name and by type, including the NoSuchBeanDefinitionException and NoUniqueBeanDefinitionException messages.
+
 ## Pitfalls
 
 - **Forgetting to pass the configuration class.** `new AnnotationConfigApplicationContext()` without arguments creates an empty context. Your `@Bean` methods are never read.

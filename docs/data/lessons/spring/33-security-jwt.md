@@ -435,6 +435,12 @@ Tests for the negative cases, 401 and 403, are the ones that protect you; a rule
 > [!TIP]
 > Start every rule list from "deny". Open what must be public explicitly, and finish with `anyRequest().authenticated()` or `denyAll()`. A forgotten endpoint then fails closed (inaccessible) instead of open (public), and somebody will notice the former.
 
+## Practise in real Java
+
+The judge has the JDK only, without Spring jars, so in these exercises you write in real Java 21 the mechanism that Spring provides. That is the level interview questions probe.
+
+- [Java: a Spring Security filter chain with bearer tokens and URL rules](#/problem/spring-java-security-filter-chain): an ordered filter chain with a bearer-token filter and URL authorisation rules.
+
 ## Pitfalls
 
 - **Rule order.** A broad matcher above a narrow one hides it.

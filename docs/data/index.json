@@ -295,17 +295,17 @@
   "id": "spring",
   "title": "Spring Boot",
   "icon": "🌱",
-  "blurb": "From 'what is a framework?' to production Spring Boot 3: the container, dependency injection, AOP, web and REST, data access, transactions, Spring Data, testing, security and interview preparation. Every mechanism is modelled in runnable Python so you can watch it work.",
+  "blurb": "From 'what is a framework?' to production Spring Boot 3: the container, dependency injection, AOP, web and REST, data access, transactions, Spring Data, testing, security and interview preparation. Every mechanism is modelled in runnable Python so you can watch it work, then rebuilt in real Java 21 on the judge: an IoC container, AOP proxies, transactions, a router, validation and a filter chain.",
   "color": "#5aa02c",
   "sources": [
    "Spilcă, Spring Start Here (Manning), ch. 1–15",
    "Spring Framework reference documentation (docs.spring.io/spring-framework/reference)",
    "Spring Boot reference documentation (docs.spring.io/spring-boot)"
   ],
-  "words": 108586,
+  "words": 109522,
   "modules": 17,
   "lessons": 35,
-  "problems": 31
+  "problems": 49
  },
  {
   "id": "go",

@@ -349,6 +349,12 @@ public class CatalogueService {
 
 The text `${shop.page-size:20}` is a **placeholder**: Spring replaces it with the value of the property `shop.page-size`, or with `20` when the property is not defined, and converts the text to `int`. Properties and the grouped alternative `@ConfigurationProperties` are covered in [Configuration properties, profiles and logging](#/lesson/spring/spring-config-profiles-logging).
 
+## Practise in real Java
+
+The judge has the JDK only, without Spring jars, so in these exercises you write in real Java 21 the mechanism that Spring provides. That is the level interview questions probe.
+
+- [Java: constructor injection and cycle detection with reflection](#/problem/spring-java-constructor-injection): a small IoC container that reads constructors with reflection, injects by type and caches singletons.
+
 ## Pitfalls
 
 - **`new` breaks the chain.** `new OrderService(new BookRepository())` in your own code produces unmanaged objects. The repository inside is not the bean, so anything Spring adds to the bean (transactions, for example) is missing.

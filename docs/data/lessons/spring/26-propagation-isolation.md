@@ -309,6 +309,12 @@ if (changed == 0) {
 > [!WARNING]
 > A **deadlock** occurs when transaction A holds a lock B needs while B holds a lock A needs. The database picks a victim and aborts it with an error. Reduce the risk by always touching tables and rows in the same order, keeping transactions short, and being prepared to retry the aborted one.
 
+## Practise in real Java
+
+The judge has the JDK only, without Spring jars, so in these exercises you write in real Java 21 the mechanism that Spring provides. That is the level interview questions probe.
+
+- [Java: transaction propagation with a fake connection log](#/problem/spring-java-propagation): a transaction manager that logs begin, suspend, resume, commit and rollback for each propagation.
+
 ## Pitfalls
 
 - **Catching an exception from a `REQUIRED` participant and expecting to commit.** `UnexpectedRollbackException`.

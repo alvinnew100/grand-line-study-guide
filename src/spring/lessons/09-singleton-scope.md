@@ -299,6 +299,12 @@ public class ReportConfig {
 }
 ```
 
+## Practise in real Java
+
+The judge has the JDK only, without Spring jars, so in these exercises you write in real Java 21 the mechanism that Spring provides. That is the level interview questions probe.
+
+- [Java: singleton, prototype and lazy beans](#/problem/spring-java-scopes-lazy): singleton, prototype and lazy beans created through factory functions.
+
 ## Pitfalls
 
 - **State in a singleton.** The headline bug of this lesson. Review every non-final field of a `@Service`, `@Repository` or `@Controller` with suspicion.

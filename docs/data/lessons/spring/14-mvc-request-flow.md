@@ -334,6 +334,12 @@ flowchart LR
 - A **`HandlerInterceptor`** belongs to Spring MVC and runs around handler methods, knowing which handler was chosen.
 - An **aspect** wraps bean method calls and knows nothing about HTTP.
 
+## Practise in real Java
+
+The judge has the JDK only, without Spring jars, so in these exercises you write in real Java 21 the mechanism that Spring provides. That is the level interview questions probe.
+
+- [Java: a request-mapping router with path variables, 404 and 405](#/problem/spring-java-request-mapping): a handler-mapping router with path variables, most-specific matching, 404 and 405.
+
 ## Pitfalls
 
 - **Template not found.** The returned view name must match a file under `templates/` without the `.html` suffix. A typo gives a `TemplateInputException` and a 500 page.

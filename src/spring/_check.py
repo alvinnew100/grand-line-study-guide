@@ -14,7 +14,7 @@ def all_ids():
         for m in re.finditer(r'"([a-z0-9-]+)"', text):
             lessons.add((track, m.group(1)))
         for pf in glob.glob(os.path.join(os.path.dirname(tp), "problems", "*.py")):
-            problems.update(re.findall(r'id="([^"]+)"', open(pf, encoding="utf-8").read()))
+            problems.update(re.findall(r'(?:\bid=|^J\()"([^"]+)"', open(pf, encoding="utf-8").read(), re.M))
     return lessons, problems
 
 

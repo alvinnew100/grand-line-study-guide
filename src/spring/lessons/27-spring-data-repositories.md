@@ -346,6 +346,12 @@ A repository can combine generated and hand-written code: declare an extra inter
 > [!INTERVIEW]
 > "How does Spring Data implement a repository interface with no implementation class?" At start-up it scans for interfaces extending `Repository`, and for each creates a proxy backed by a store-specific base class (`SimpleJpaRepository` for JPA). CRUD calls go to that base class. For other methods it selects a strategy once at start-up: a declared `@Query`, or a query derived by parsing the method name against the entity's properties. Invalid names or properties fail at start-up. The proxy also applies transactions and exception translation.
 
+## Practise in real Java
+
+The judge has the JDK only, without Spring jars, so in these exercises you write in real Java 21 the mechanism that Spring provides. That is the level interview questions probe.
+
+- [Java: Pageable, Sort and Page like Spring Data](#/problem/spring-java-pageable): Pageable, Sort and Page over in-memory rows.
+
 ## Pitfalls
 
 - **Monster method names.** Hard to read and easy to get wrong. Switch to `@Query`.

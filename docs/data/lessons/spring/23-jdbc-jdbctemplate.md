@@ -356,6 +356,13 @@ public Book add(Book book) {
 
 **CRUD** stands for create, read, update, delete. **ORM** (object-relational mapping) means a library that maps objects to tables automatically. The last two rows are the subject of module 14. Many applications mix approaches: JPA for everyday CRUD and `JdbcTemplate` for the few hand-tuned queries.
 
+## Practise in real Java
+
+The judge has the JDK only, without Spring jars, so in these exercises you write in real Java 21 the mechanism that Spring provides. That is the level interview questions probe.
+
+- [Java: a JdbcTemplate with RowMapper over in-memory rows](#/problem/spring-java-jdbc-template): a JdbcTemplate with RowMapper, queryForObject size checks and update.
+- [Java: map rows to records like DataClassRowMapper](#/problem/spring-java-record-row-mapper): a DataClassRowMapper that maps snake_case columns to record components.
+
 ## Pitfalls
 
 - **String concatenation in SQL.** SQL injection. Use placeholders.

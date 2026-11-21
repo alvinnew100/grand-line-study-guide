@@ -352,6 +352,13 @@ DEBUG DataSourceTransactionManager : Initiating transaction rollback
 
 In code, `TransactionSynchronizationManager.isActualTransactionActive()` returns whether the current thread has a transaction. A unit test that makes the second step fail and then asserts that the first step's change is absent is the definitive proof.
 
+## Practise in real Java
+
+The judge has the JDK only, without Spring jars, so in these exercises you write in real Java 21 the mechanism that Spring provides. That is the level interview questions probe.
+
+- [Java: @Transactional rollback rules](#/problem/spring-java-rollback-rules): rollback rules with rollbackFor and noRollbackFor matched by class-hierarchy depth.
+- [Java: the self-invocation trap and AopContext.currentProxy()](#/problem/spring-java-self-invocation): why this.method() skips @Transactional, shown with a real proxy.
+
 ## Pitfalls
 
 - **Checked exception, default rules.** Commit of partial work. Use `rollbackFor` or unchecked exceptions.

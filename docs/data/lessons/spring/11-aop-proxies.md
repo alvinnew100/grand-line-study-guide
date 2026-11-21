@@ -346,6 +346,13 @@ Good uses share one property: the behaviour is independent of the business logic
 
 Bad uses: anything that changes the business outcome in a way the reader of the target method must know about. An aspect is invisible at the call site. A discount applied by an aspect is a discount that nobody can find. Use aspects for technical concerns and keep business rules in plain, visible code.
 
+## Practise in real Java
+
+The judge has the JDK only, without Spring jars, so in these exercises you write in real Java 21 the mechanism that Spring provides. That is the level interview questions probe.
+
+- [Java: a logging aspect with java.lang.reflect.Proxy](#/problem/spring-java-jdk-proxy): a logging aspect built on java.lang.reflect.Proxy.
+- [Java: the self-invocation trap and AopContext.currentProxy()](#/problem/spring-java-self-invocation): the self-invocation trap and an AopContext.currentProxy() equivalent.
+
 ## Pitfalls
 
 - **`@Aspect` without `@Component`.** The class is not a bean, so Spring never sees it.
