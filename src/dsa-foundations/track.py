@@ -18,7 +18,7 @@ TRACK = dict(
                 dict(id="asymptotic-notation", title="Big-O, Big-Omega and Big-Theta", file="02-asymptotic-notation.md"),
                 dict(id="analysis-examples", title="Analysing real code and proving it correct", file="03-analysis-examples.md"),
             ],
-            problems=["dsaf-prefix-averages"],
+            problems=["dsaf-prefix-averages", "dsaf-three-way-common", "dsaf-loop-step-count"],
         ),
         dict(
             id="recursion",
@@ -29,7 +29,7 @@ TRACK = dict(
                 dict(id="recursion-analysis", title="Analysing recursive algorithms", file="05-recursion-analysis.md"),
                 dict(id="recursion-design", title="Designing recursion and eliminating it", file="06-recursion-design.md"),
             ],
-            problems=["dsaf-english-ruler", "dsaf-recursive-binary-search"],
+            problems=["dsaf-english-ruler", "dsaf-recursive-binary-search", "dsaf-hanoi-kth-move"],
         ),
         dict(
             id="arrays",
@@ -50,7 +50,7 @@ TRACK = dict(
                 dict(id="stacks", title="Stacks and their applications", file="10-stacks.md"),
                 dict(id="queues-deques", title="Queues, circular arrays and deques", file="11-queues-deques.md"),
             ],
-            problems=["dsaf-array-stack", "dsaf-circular-queue"],
+            problems=["dsaf-array-stack", "dsaf-circular-queue", "dsaf-infix-to-postfix"],
         ),
         dict(
             id="linked-lists",
@@ -61,7 +61,7 @@ TRACK = dict(
                 dict(id="doubly-positional", title="Doubly linked lists and positional lists", file="13-doubly-positional.md"),
                 dict(id="mtf-tradeoffs", title="Access frequencies, move-to-front and link vs array", file="14-mtf-tradeoffs.md"),
             ],
-            problems=["dsaf-linked-deque", "dsaf-move-to-front"],
+            problems=["dsaf-linked-deque", "dsaf-move-to-front", "dsaf-positional-list"],
         ),
         dict(
             id="trees",
@@ -71,7 +71,7 @@ TRACK = dict(
                 dict(id="tree-basics", title="Tree terminology, ADTs and representations", file="15-tree-basics.md"),
                 dict(id="tree-traversals", title="Traversals, Euler tours and expression trees", file="16-tree-traversals.md"),
             ],
-            problems=["dsaf-tree-traversals", "dsaf-expression-tree"],
+            problems=["dsaf-tree-traversals", "dsaf-expression-tree", "dsaf-parenthesize-tree"],
         ),
         dict(
             id="priority-queues",
@@ -81,7 +81,7 @@ TRACK = dict(
                 dict(id="heaps", title="Priority queues and binary heaps", file="17-heaps.md"),
                 dict(id="heap-sort-adaptable", title="PQ sorting, heap-sort and adaptable priority queues", file="18-heap-sort-adaptable.md"),
             ],
-            problems=["dsaf-heap-pq", "dsaf-heap-sort"],
+            problems=["dsaf-heap-pq", "dsaf-heap-sort", "dsaf-adaptable-pq"],
         ),
         dict(
             id="maps-hashing",
@@ -92,7 +92,7 @@ TRACK = dict(
                 dict(id="collisions", title="Collision handling, load factors and rehashing", file="20-collisions.md"),
                 dict(id="sorted-maps-skip-lists", title="Sorted maps, skip lists, sets and multimaps", file="21-sorted-maps-skip-lists.md"),
             ],
-            problems=["dsaf-chain-hashmap"],
+            problems=["dsaf-chain-hashmap", "dsaf-linear-probing", "dsaf-skip-list"],
         ),
         dict(
             id="search-trees",
@@ -149,7 +149,7 @@ TRACK = dict(
                 dict(id="memory-management", title="Memory allocation, garbage collection and caching", file="37-memory-management.md"),
                 dict(id="btrees", title="External searching: (a,b) trees and B-trees", file="38-btrees.md"),
             ],
-            problems=["dsaf-btree-search"],
+            problems=["dsaf-btree-search", "dsaf-gc-reclaim", "dsaf-btree-insert"],
         ),
     ],
 )
