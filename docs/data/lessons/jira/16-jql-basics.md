@@ -138,7 +138,7 @@ The diagram shows the query as a tree: the parentheses make the OR group one bra
 
 Values that are a single plain word can be written bare: `type = Bug`. You need quotes (single or double both work) when the value:
 
-- contains a space: `status = "In Review"`, `labels = "tech debt"` (better: avoid spaces in labels);
+- contains a space: `status = "In Review"`, `summary ~ "tech debt"` (labels cannot contain spaces at all, so a label would be written `labels = tech-debt`, with no quotes needed);
 - contains a reserved character such as `+`, `.`, `,`, `;`, `?`, `|`, `*`, `/`, `%`, `^`, `$`, `#`, `@`, `[` or `]` (from Atlassian's Data Center documentation of reserved characters);
 - is a reserved word such as `and`, `or`, `not`, `order`: `labels = "order"`.
 

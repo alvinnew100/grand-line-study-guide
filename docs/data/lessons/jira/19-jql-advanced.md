@@ -159,20 +159,24 @@ parent = SHOP-10 AND statusCategory != Done ORDER BY status
 
 Sample data: SHOP-2 (In Progress), SHOP-3 (To Do).
 
-**Items with no epic:**
+**Items with no epic.** `parent IS EMPTY` is not available, because Atlassian lists `IS` and `IS NOT` as unsupported for `parent`. A supported route takes two steps: first list the children, then exclude them by key.
 
 ```text
-project = SHOP AND type IN (Story, Task, Bug) AND parent IS EMPTY
+project = SHOP AND parent IN (SHOP-10, SHOP-20)
 ```
 
-Sample data: SHOP-4, SHOP-5, SHOP-6. Useful in refinement: work floating without a home is often work nobody prioritised.
+```text
+project = SHOP AND type IN (Story, Task, Bug) AND key NOT IN (SHOP-1, SHOP-2, SHOP-3)
+```
+
+Paste the keys returned by the first query into the second (here the three items under the "Promo codes" epic), which leaves SHOP-4, SHOP-5, SHOP-6 in the sample data. For a whole-site view, the hierarchy-aware screens on higher Jira plans are the other route. Useful in refinement: work floating without a home is often work nobody prioritised.
 
 **By level.** `type = Epic` finds epics under the default hierarchy. Jira Cloud's field reference also describes a `hierarchyLevel` field for searching by level number, for example `hierarchyLevel = 1` for epics or `hierarchyLevel = -1` for sub-tasks, which keeps working if your site renames or adds work types. Check that your site supports it; `type = ...` works everywhere.
 
 > [!NOTE]
 > Old filters may contain `"Epic Link" = SHOP-10`. Epic Link was retired in February 2024; rewrite such clauses as `parent = SHOP-10`.
 
-`parent` supports only `=`, `!=`, `IN` and `NOT IN` according to the Data Center field reference, so you cannot write `parent > SHOP-10`. To find grandchildren (sub-tasks under an epic's stories), you usually need two steps: find the stories, then search `parent IN (...)` with their keys, or use a plan-level feature on higher Jira plans.
+`parent` supports only `=`, `!=`, `IN` and `NOT IN` (Atlassian's Jira Cloud field reference lists `IS`, `IS NOT`, `~`, `!~` and comparison operators as unsupported for it), so you cannot write `parent > SHOP-10` or `parent IS EMPTY`. To find grandchildren (sub-tasks under an epic's stories), you usually need two steps: find the stories, then search `parent IN (...)` with their keys, or use a plan-level feature on higher Jira plans.
 
 ## Board filters: the queries behind every board
 
@@ -237,7 +241,7 @@ Other likely questions:
 - They work on Assignee, Fix Version, Priority, Reporter, Resolution and Status.
 - Predicates narrow history clauses: `AFTER`, `BEFORE`, `ON`, `DURING`, `BY`, and `FROM` / `TO` for `CHANGED`.
 - `WAS` reasons about the periods a value was held; `CHANGED` reasons about individual change events.
-- Search the hierarchy with `parent = KEY`, `parent IN (...)` and `parent IS EMPTY`; Jira Cloud also documents `hierarchyLevel`.
+- Search the hierarchy with `parent = KEY`, `parent IN (...)`; there is no `parent IS EMPTY`, so find orphans by excluding known children; Jira Cloud also documents `hierarchyLevel`.
 - Board filters should be scoped, lean and end with `ORDER BY Rank ASC`; changing them changes every report.
 
 ## Glossary

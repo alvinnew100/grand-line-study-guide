@@ -60,7 +60,7 @@ The same facts should be framed differently depending on who is asking.
 
 ### Go beyond the CV
 
-One of Amazon's Bar Raisers, in Amazon's own article of interview tips, says she appreciates candidates who tell her something about themselves that she would not learn from the CV. The CV is already in front of the interviewer; repeating it wastes your best minute. Add what the CV cannot show: why you made a move, what you enjoy, a project outside work, the thread that ties it together.
+One of Amazon's Bar Raisers, in Amazon's own article of interview tips, says they appreciate candidates who share something about themselves that the CV would not reveal. The CV is already in front of the interviewer; repeating it wastes your best minute. Add what the CV cannot show: why you made a move, what you enjoy, a project outside work, the thread that ties it together.
 
 ### Weak and strong: a student
 
@@ -199,7 +199,7 @@ When the opening goes well, the interviewer has heard your thread, three accompl
    "options": ["I am a hard-working team player.", "I rebuilt our report generation, which went from 40 minutes to under 2.", "I have a degree in computing.", "I like coding."],
    "answer": 1,
    "explain": "A hook is a brief accomplishment with a number that invites a follow-up, pointing to a prepared story."},
-  {"q": "An Amazon Bar Raiser says she appreciates candidates who tell her something she would not learn from the CV. What does that imply for 'Tell me about yourself'?",
+  {"q": "An Amazon Bar Raiser says they appreciate candidates who share something the CV would not reveal. What does that imply for 'Tell me about yourself'?",
    "options": ["Read the CV aloud", "Add what the CV cannot show: motivations, the thread, a project outside work", "Talk about hobbies only", "Refuse to answer"],
    "answer": 1,
    "explain": "The CV is already in front of the interviewer; the introduction should add context and direction."},

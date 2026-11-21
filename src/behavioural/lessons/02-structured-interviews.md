@@ -39,7 +39,7 @@ Google's re:Work guide defines structured interviewing as asking every candidate
 
 The guide also explains that each question comes with an initial prompt and a set of **predetermined follow-up questions**: probes that dig into the parts of the story the first answer usually leaves out, such as what your goal was, how others reacted, and what you did next. This is useful to know, because it means the follow-ups you hear are often not a sign that you answered badly. They are part of the plan. Lesson 18, [Handling follow-up probes](#/lesson/behavioural/follow-up-probes), shows how to handle them.
 
-Google's public "How we hire" page adds that it uses the same rubrics for every candidate and describes its process as taking roughly six to eight weeks from application to decision, while noting that timing varies.
+Google's public "How we hire" page adds that it uses the same rubrics for every candidate and describes its process as taking roughly six to eight weeks once interviews for a role begin (not counted from the application), while noting that timing varies.
 
 ## Why companies bother
 

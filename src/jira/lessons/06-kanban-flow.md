@@ -227,7 +227,7 @@ Try this: move SHOP-4 into In Progress. The column now holds 3 items, exactly it
 | Jira board | Scrum board with backlog and sprints | Kanban board with continuous columns |
 | Good fit | Product development with a goal per cycle | Support, operations, platform and maintenance work with unpredictable arrivals |
 
-They are not exclusive. Many Scrum teams add WIP limits to their sprint board, and the Kanban Guide says Kanban can be used with other approaches. The term "Scrumban" is sometimes used for such mixes.
+They are not exclusive. Many Scrum teams add WIP limits to their sprint board, and the Kanban Guide's preface says various approaches can complement Kanban, and its endnote says other principles, methodologies and techniques can be added so long as the minimum practices, metrics and the spirit of optimising value are kept. The term "Scrumban" is sometimes used for such mixes.
 
 ## Scenario: a platform team switches to Kanban
 

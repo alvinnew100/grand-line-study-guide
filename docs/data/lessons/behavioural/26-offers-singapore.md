@@ -112,7 +112,7 @@ Other points from MOM's page:
 
 - The notice period must be **the same for the employer and the employee**.
 - Notice must be given **in writing**, such as a letter or email; when resigning, ask for written acknowledgement.
-- Either side can pay **salary in lieu of notice**, an amount equal to the pay for the notice period, instead of serving it.
+- An employee who resigns can either serve the notice or pay **salary in lieu of notice** to the employer, an amount equal to the pay for the notice period. MOM's page describes this from the resigning employee's side, and notice can also be waived by mutual consent.
 - With the employer's agreement, annual leave can be used to offset the notice period.
 
 Why this matters for job searching: your **current** notice period decides your earliest start date at the new company. Tell recruiters accurately, and do not resign until you have the new offer in writing.
@@ -123,7 +123,7 @@ TAFEP's guidance tells employers to keep interview questions job-related and to 
 
 If you are asked such a question, you can answer, decline politely, or steer to the job: "I'm not sure how that relates to the role; I'm happy to talk about how I'd handle the on-call schedule." You can raise concerns with TAFEP afterwards.
 
-Singapore is also introducing a **Workplace Fairness Act**. MOM's 2025 factsheet says MOM intends to implement it, comprising two Bills, in **2027**, subject to Parliament passing the second Bill. At the time of writing there is no confirmed commencement date, so treat it as expected rather than in force.
+Singapore is also introducing a **Workplace Fairness Act**. The Act comes in two Bills. The first passed in January 2025 and the second (the dispute resolution Bill) on 4 November 2025. In that debate MOM said it targets bringing the Act into force around the end of 2027, adjusting if needed, and no commencement date has been gazetted yet, so treat it as expected rather than in force.
 
 ### Pre-employment checks
 
@@ -226,8 +226,8 @@ The page picks one opener, shuffles the seven question families and takes four o
 - Research market value: MOM's Occupational Wages tables are the official benchmark; recruiters, peers and employee-reported sites help.
 - Evaluate total compensation (base, bonus, equity, sign-on, benefits, level, start date). Respond to offers with gratitude, ask for time, then make one clear, reasoned request. Never invent competing offers.
 - KETs: 18 items (17 required where applicable, place of work optional), including probation and notice, issued in writing within 14 days of starting.
-- Notice when the contract is silent: under 26 weeks, 1 day; 26 weeks to under 2 years, 1 week; 2 to under 5 years, 2 weeks; 5 years or more, 4 weeks. Same for both sides, in writing, with pay in lieu allowed.
-- TAFEP: interview questions should be job-related, avoiding age, race, religion, marital status, plans for children and disability; concerns can be reported to TAFEP. The Workplace Fairness Act is expected to be implemented in 2027.
+- Notice when the contract is silent: under 26 weeks, 1 day; 26 weeks to under 2 years, 1 week; 2 to under 5 years, 2 weeks; 5 years or more, 4 weeks. Same for both sides, in writing; a resigning employee may pay in lieu.
+- TAFEP: interview questions should be job-related, avoiding age, race, religion, marital status, plans for children and disability; concerns can be reported to TAFEP. Both Workplace Fairness Bills have passed; the Act is expected to take effect in 2027 (no date gazetted yet).
 - Finish with a full mock interview using the checklist.
 
 ## Glossary
@@ -241,7 +241,7 @@ The page picks one opener, shuffles the seven question families and takes four o
 - **Salary in lieu of notice**: payment equal to the notice period's salary instead of working the notice.
 - **MOM**: Singapore's Ministry of Manpower.
 - **TAFEP**: the Tripartite Alliance for Fair and Progressive Employment Practices.
-- **Workplace Fairness Act**: Singapore legislation on workplace discrimination, expected to be implemented in 2027.
+- **Workplace Fairness Act**: Singapore legislation on workplace discrimination; both Bills have passed and MOM expects it to take effect in 2027, with no date gazetted yet.
 
 ```quiz
 [
@@ -262,18 +262,18 @@ The page picks one opener, shuffles the seven question families and takes four o
    "answer": 1,
    "explain": "TAFEP's examples to avoid cover age, race, religion, marital status, plans for children and disability."},
   {"q": "When is the Workplace Fairness Act expected to be implemented?",
-   "options": ["It has been in force since 2020", "MOM intends 2027, subject to Parliament passing the second Bill", "Never", "2035"],
+   "options": ["It has been in force since 2020", "Expected in 2027 (both Bills have passed; no date gazetted yet)", "Never", "2035"],
    "answer": 1,
-   "explain": "MOM's 2025 factsheet states the intention to implement it in 2027; there is no confirmed commencement date yet."},
+   "explain": "The first Bill passed in January 2025 and the second on 4 November 2025; MOM expects the Act to take effect in 2027, but no commencement date has been gazetted."},
   {"q": "Base salary is fixed by a pay band. According to Berkeley's tips, what else might you discuss?",
    "options": ["Nothing; accept immediately", "Other components such as bonus, sign-on, benefits, or whether the level could be reconsidered", "The interviewer's salary", "Your previous employer's secrets"],
    "answer": 1,
    "explain": "Berkeley advises understanding the full package; other parts and the level may be more flexible."},
-  {"q": "Which statement about salary in lieu of notice is correct under MOM's guidance?",
-   "options": ["Only employers can pay it", "Either side can pay salary equal to the notice period instead of serving it", "It is illegal in Singapore", "It is always double the salary"],
+  {"q": "Which statement about salary in lieu of notice matches MOM's termination-with-notice page?",
+   "options": ["Employees can never use it", "A resigning employee can pay salary equal to the notice period instead of serving it", "It is illegal in Singapore", "It is always double the salary"],
    "answer": 1,
-   "explain": "MOM's page allows salary in lieu of notice; the notice period is also the same for both sides."}
+   "explain": "MOM's page says a resigning employee must either serve notice or pay salary in lieu; the notice length is the same for both sides."}
 ]
 ```
 
-> **Source:** UC Berkeley Graduate Division, Three tips for job offer negotiations (https://grad.berkeley.edu/news/announcements/three-tips-for-job-offer-negotiations/); Meta, Hiring process (https://www.metacareers.com/hiring-process/); MOM, Termination with notice (https://www.mom.gov.sg/employment-practices/termination-of-employment/termination-with-notice); MOM, Key employment terms (https://www.mom.gov.sg/employment-practices/contract-of-service/key-employment-terms); MOM FAQ, Why must I issue written KETs within 14 days (https://www.mom.gov.sg/faq/key-employment-terms/why-must-i-issue-written-kets-within-14-days-of-my-employees-first-day-of-work-instead-of-before-their-first-day-of-work); TAFEP, Conducting job interviews (https://www.tal.sg/tafep/employment-practices/recruitment/conducting-job-interviews); MOM, Workplace Fairness (Dispute Resolution) Bill factsheet, 2025 (https://www.mom.gov.sg/newsroom/press-releases/2025/1014-workplace-fairness-dispute-resolution-bill-factsheet); DBS, How we hire (https://www.dbs.com/careers/how-we-hire/default.page). Scripts, checklist and page are original; not legal advice.
+> **Source:** UC Berkeley Graduate Division, Three tips for job offer negotiations (https://grad.berkeley.edu/news/announcements/three-tips-for-job-offer-negotiations/); Meta, Hiring process (https://www.metacareers.com/hiring-process/); MOM, Termination with notice (https://www.mom.gov.sg/employment-practices/termination-of-employment/termination-with-notice); MOM, Key employment terms (https://www.mom.gov.sg/employment-practices/contract-of-service/key-employment-terms); MOM FAQ, Why must I issue written KETs within 14 days (https://www.mom.gov.sg/faq/key-employment-terms/why-must-i-issue-written-kets-within-14-days-of-my-employees-first-day-of-work-instead-of-before-their-first-day-of-work); TAFEP, Conducting job interviews (https://www.tal.sg/tafep/employment-practices/recruitment/conducting-job-interviews); MOM, Workplace Fairness (Dispute Resolution) Bill factsheet, 2025 (https://www.mom.gov.sg/newsroom/press-releases/2025/1014-workplace-fairness-dispute-resolution-bill-factsheet); MOM, Second reading speech, 4 Nov 2025 (https://www.mom.gov.sg/newsroom/speeches/2025/1104-second-reading-of-workplace-fairness-dispute-resolution-bill); Baker McKenzie, second Bill passed (https://www.bakermckenzie.com/en/insight/publications/alerts/2025/11/singapore-workplace-fairness-act-second-bill-passed); DBS, How we hire (https://www.dbs.com/careers/how-we-hire/default.page). Scripts, checklist and page are original; not legal advice.

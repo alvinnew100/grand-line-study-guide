@@ -177,7 +177,7 @@ Work items can be connected by **links**, each with a **link type** that reads i
 | Duplicates | SHOP-3 *duplicates* SHOP-1 | SHOP-1 *is duplicated by* SHOP-3 |
 | Clones | SHOP-4 *clones* SHOP-1 | SHOP-1 *is cloned by* SHOP-4 |
 
-Links are different from the parent relationship. A parent link builds the hierarchy (one parent only); other links express dependencies and relationships (many allowed). JQL's `linkedIssues()` function can find items linked to a given key (lesson 18).
+Links are different from the parent relationship. A parent link builds the hierarchy (one parent only); other links express dependencies and relationships (many allowed). JQL's `linkedIssues()` function can find items linked to a given key (lesson 18); current Jira Cloud docs also list the newer name `linkedWorkItems()`, and the older name still works.
 
 Atlassian's work item view can also show **development information**: branches, commits, pull requests and builds connected through keys (lesson 24).
 

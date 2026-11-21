@@ -112,6 +112,8 @@ Bugs fixed in the last release, ready for release notes.
 | `linkedIssues(KEY)` / `linkedIssues(KEY, "link type")` | Items linked to a given item | `issue in linkedIssues(SHOP-1042, "is blocked by")` |
 | `issueHistory()` | Items you viewed recently | `issue in issueHistory() ORDER BY lastViewed DESC` |
 
+> **Newer names.** Current Jira Cloud documentation also lists work-item names for these functions: `linkedWorkItems()`, `workItemHistory()`, `watchedWorkItems()`, `votedWorkItems()` and `standardWorkTypes()`. The older names (`linkedIssues()`, `issueHistory()`, and so on) still work, so this track keeps the long-established forms, as lesson 16 does for `space`.
+
 `linkedIssues()` is perfect for dependency checks: "which items are blocking SHOP-1042, and are they done?"
 
 ```text
@@ -159,7 +161,7 @@ startOfMonth("-1M")     start of last month
 startOfDay("+1d")       midnight at the start of tomorrow
 ```
 
-The first day of the week depends on the locale: Monday in much of Europe and Asia, Sunday in the USA, as Atlassian's reference notes.
+The first day of the week is **not** taken from your locale. By default `startOfWeek()` treats Sunday as the first day, unless ISO8601 is enabled for the date picker in Look and feel settings. To get Monday regardless, add an offset of one day: `startOfWeek("+1d")`. Everything below that says "weeks start Monday" assumes ISO8601 is enabled on the site or that you use the `"+1d"` form.
 
 ### Relative offset or calendar function?
 
@@ -169,7 +171,7 @@ They answer different questions, and mixing them up is a classic bug.
 from datetime import datetime, timedelta
 
 now = datetime(2026, 3, 10, 15, 30)                 # a Tuesday afternoon
-start_of_week = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0)  # Monday start
+start_of_week = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0)  # Monday start (assumes ISO8601 or the "+1d" form)
 print("now                    :", now)
 print('"-7d"  (rolling 7 days):', now - timedelta(days=7))
 print("startOfWeek()          :", start_of_week)
@@ -177,7 +179,7 @@ print('startOfWeek("-1w")     :', start_of_week - timedelta(weeks=1))
 print("last week, as a range  :", start_of_week - timedelta(weeks=1), "to", start_of_week)
 ```
 
-On a Tuesday afternoon, `"-7d"` reaches back to last Tuesday afternoon, while `startOfWeek()` is this Monday at midnight. For "what did we resolve last week?" use the calendar boundaries, so the answer is the same whenever you run it during the week:
+On a Tuesday afternoon, `"-7d"` reaches back to last Tuesday afternoon, while `startOfWeek()` is this Monday at midnight (with Monday weeks, as above). For "what did we resolve last week?" use the calendar boundaries, so the answer is the same whenever you run it during the week:
 
 ```text
 resolved >= startOfWeek("-1w") AND resolved < startOfWeek()
@@ -187,7 +189,7 @@ For "anything that changed recently", a rolling window such as `updated >= "-24h
 
 ### Worked date examples on the sample data
 
-With "today" as Tuesday 2026-03-10 (week starting Monday):
+With "today" as Tuesday 2026-03-10 (week starting Monday, which assumes ISO8601 is enabled or `startOfWeek("+1d")` is used):
 
 | Query | Result | Why |
 |---|---|---|
@@ -270,7 +272,7 @@ Other likely questions:
 ## Summary
 
 - Functions compute values when the query runs, keeping saved filters correct over time.
-- People: `currentUser()`, `membersOf()`, `updatedBy()`. Sprints: `openSprints()`, `closedSprints()`, `futureSprints()`. Versions: `unreleasedVersions()`, `releasedVersions()`, `earliestUnreleasedVersion()`, `latestReleasedVersion()`. Links and history: `linkedIssues()`, `issueHistory()`.
+- People: `currentUser()`, `membersOf()`, `updatedBy()`. Sprints: `openSprints()`, `closedSprints()`, `futureSprints()`. Versions: `unreleasedVersions()`, `releasedVersions()`, `earliestUnreleasedVersion()`, `latestReleasedVersion()`. Links and history: `linkedIssues()`, `issueHistory()` (newer docs also name `linkedWorkItems()`, `workItemHistory()`; the older names still work).
 - Dates can be absolute (`"2026-03-01"`), relative offsets (`"-7d"`) or calendar functions (`startOfWeek("-1w")`), with units y, M, w, d, h, m.
 - Use calendar boundaries for "last week" questions and rolling offsets for "recently".
 - `ORDER BY` comes last, accepts several fields with `ASC` or `DESC`, and uses each field's default order otherwise; `ORDER BY Rank` is the backlog order.
@@ -284,7 +286,7 @@ Other likely questions:
 - **`closedSprints()`** — completed sprints.
 - **`futureSprints()`** — created but not started sprints.
 - **`earliestUnreleasedVersion()`** — the next upcoming release of a space.
-- **`linkedIssues()`** — items linked to a given item, optionally by link type.
+- **`linkedIssues()`** — items linked to a given item, optionally by link type (newer docs also call it `linkedWorkItems()`).
 - **Relative date** — a date given as an offset from now, such as `"-7d"`.
 - **Calendar function** — a function snapping to a day, week, month or year boundary, such as `startOfWeek()`.
 - **Increment** — the optional offset passed to a calendar function, such as `"-1w"`.
@@ -315,7 +317,7 @@ Other likely questions:
    "options": ["`resolved >= \"-7d\"`", "`resolved >= startOfWeek(\"-1w\") AND resolved < startOfWeek()`", "`resolved = startOfWeek()`", "`resolved <= now()`"],
    "answer": 1,
    "explain": "Calendar boundaries give the same answer whichever day you run the query."},
-  {"q": "Using the sample data (today Tuesday 10 March, weeks start Monday), what does `created >= startOfWeek()` return?",
+  {"q": "Using the sample data (today Tuesday 10 March, weeks start Monday, e.g. ISO8601 enabled), what does `created >= startOfWeek()` return?",
    "options": ["SHOP-2, SHOP-3, SHOP-4, PAY-7", "PAY-7", "Nothing", "Everything"],
    "answer": 1,
    "explain": "Only PAY-7 was created on or after Monday 9 March."},

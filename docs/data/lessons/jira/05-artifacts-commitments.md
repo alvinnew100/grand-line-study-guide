@@ -127,7 +127,7 @@ An item is finished when it meets **both**: its own acceptance criteria and the 
 
 ## Definition of Ready: popular, but not in the Guide
 
-Some teams also use a **Definition of Ready** (DoR): a checklist an item should meet before it is pulled into a Sprint, for example "has acceptance criteria", "is estimated", "dependencies identified". It is **not** part of the Scrum Guide. A Scrum.org article from 2017 describes it as an optional practice and warns about the risk: if a DoR becomes a strict gate, it can turn into a hand-off contract between a business side and a development side, which works against collaboration.
+Some teams also use a **Definition of Ready** (DoR): a checklist an item should meet before it is pulled into a Sprint, for example "has acceptance criteria", "is estimated", "dependencies identified". It is **not** part of the Scrum Guide. A 2017 Scrum.org article by Ian Mitchell walks through the idea: it treats a DoR as a way to say when an item is refined enough to plan (estimable and small enough for a Sprint), asks whether a DoR might even be an anti-pattern without declaring that it is, and worries that the Sprint boundary could get "mushy" if work on an item keeps spilling across it, so refinement should stop once the item is ready.
 
 A sensible stance: a light DoR can help a team notice unrefined items before planning, but treat it as a conversation guide, not a rule for refusing work.
 
@@ -171,7 +171,7 @@ Other likely questions:
 - "What is the difference between acceptance criteria and the Definition of Done?" Item-specific versus universal.
 - "What happens to unfinished work at the end of a Sprint?" It does not count towards the Increment; it returns to the Product Backlog, where the Product Owner reorders it (often into the next Sprint).
 - "Can you release in the middle of a Sprint?" Yes; Increments can be delivered before the Sprint ends. The review is not a release gate.
-- "Is a Definition of Ready part of Scrum?" No; it is an optional practice with a risk of becoming a gate.
+- "Is a Definition of Ready part of Scrum?" No; it is an optional team practice, and critics ask whether it can become an anti-pattern or blur the Sprint boundary.
 
 ## Summary
 

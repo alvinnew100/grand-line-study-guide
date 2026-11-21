@@ -55,12 +55,20 @@ Many new spaces start with To Do, In Progress and Done. Teams then add what they
 
 A plain transition lets anyone with permission move the item. Often you want more control. The vocabulary depends on the space type.
 
-**Team-managed spaces** offer **workflow rules** that you add to transitions. Atlassian's documentation lists four kinds:
+**Team-managed spaces** offer **workflow rules** that you add to transitions. Atlassian groups them into three types:
+
+- **Restrict transition**: hides the transition unless a requirement is met (for example, only people with the Designer role can move work out of "In design").
+- **Validate details**: lets people see and pick the transition, but stops the move until details are correct (for example, prompting them to fill in a field).
+- **Perform actions**: does something automatically after the transition (for example, assigning the work item).
+
+Within these types Atlassian lists several individual rules. Four examples:
 
 1. **Assign a work item** to someone during the transition (for example, assign to the QA engineer on "Approve").
 2. **Check a work item's field** before allowing the transition (for example, "Story point estimate must not be empty" before "Start work").
 3. **Check whether the work item has been through a status** (for example, can only enter Done if it has been through In Review).
 4. **Update a work item field** during the transition (for example, clear the assignee when moving back to To Do).
+
+The set of rules changes over time, so treat this list as examples and check Atlassian's current list for your site.
 
 **Company-managed spaces** use the classic three building blocks, configured by Jira admins:
 
@@ -188,7 +196,7 @@ Other likely questions:
 
 - A workflow is the path work items take: statuses (states) connected by transitions (allowed moves). It is a state machine.
 - Every status belongs to one of three categories, To Do, In Progress or Done, which make cross-workflow searches and reports possible.
-- Team-managed spaces offer four kinds of workflow rule: assign, check a field, check a previous status, update a field.
+- Team-managed spaces offer three workflow rule types (Restrict transition, Validate details, Perform actions), each with several rules such as assign, check a field, check a previous status, update a field.
 - Company-managed spaces use conditions, validators and post functions, with workflows assigned to work types by workflow schemes.
 - Unmapped statuses hide items from the board and backlog; only the rightmost column counts as complete.
 - Good workflows are minimal, mirror real hand-offs, allow backward moves, and always set a resolution when work finishes.
@@ -226,10 +234,10 @@ Other likely questions:
    "options": ["Condition", "Validator", "Post function", "Screen"],
    "answer": 2,
    "explain": "Post functions run after a successful transition, for example setting the resolution."},
-  {"q": "Which of these is NOT one of the team-managed workflow rule kinds Atlassian lists?",
-   "options": ["Assign a work item", "Check a work item's field", "Check whether it has been through a status", "Delete the work item"],
+  {"q": "Which of these is NOT one of the three team-managed workflow rule types Atlassian lists?",
+   "options": ["Restrict transition", "Validate details", "Perform actions", "Delete the work item"],
    "answer": 3,
-   "explain": "The four kinds are assign, check a field, check a previous status, and update a field."},
+   "explain": "The three types are Restrict transition, Validate details and Perform actions; deleting the work item is not a rule type."},
   {"q": "Why might a team prefer flagging blocked cards over a 'Blocked' status?",
    "options": ["Flags are required by Scrum", "The card keeps its real position in the flow and its wait still shows in cycle time", "Flags delete the card", "Statuses cannot be added"],
    "answer": 1,

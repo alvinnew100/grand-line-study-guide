@@ -112,8 +112,8 @@ Text search is not a simple substring match. Based on Atlassian's operator refer
 |---|---|
 | `summary ~ refund` | Summaries containing the word "refund", and close variations such as "refunds" |
 | `summary ~ "refund*"` | Words starting with "refund" (wildcard) |
-| `summary ~ "partial refund"` | Summaries containing both words, matched as a phrase search |
-| `summary ~ "\"partial refund\""` | The exact phrase, with escaped inner quotes |
+| `summary ~ "partial refund"` | Summaries containing both words, not necessarily next to each other or in that order |
+| `summary ~ "\"partial refund\""` | The exact phrase "partial refund" (only this escaped form is an exact phrase), with escaped inner quotes |
 | `text ~ "timeout"` | "timeout" in summary, description, comments and more |
 
 Sample results using the playground's simpler word matching:
@@ -124,7 +124,7 @@ summary ~ "promo code"
 
 returns SHOP-1, SHOP-2, SHOP-3.
 
-`!~` is the negation. For text fields, `summary !~ promo` finds summaries without the word. Atlassian's reference notes that for version fields, `!~` also excludes items with an empty version, so add `OR fixVersion IS EMPTY` when needed.
+`!~` is the negation. For text fields, `summary !~ promo` finds summaries without the word. The Jira Data Center operators reference describes `!~` on version fields as also excluding items with an empty version (Data Center behaviour; the Jira Cloud documentation does not describe it), so if you rely on it, test on your site and add `OR fixVersion IS EMPTY` when needed.
 
 > [!TIP]
 > Text search is great for finding a half-remembered bug ("something about a timeout in refunds": `text ~ "timeout refund"`), but poor for reporting. Words vary ("refund", "chargeback", "reversal"). If you need a reliable category, use a label or component, not a text search.
@@ -208,7 +208,7 @@ flowchart LR
 | `priority > "High"` expecting alphabetical | Priority uses the configured order | It means Highest here, which may be what you want; check |
 | `status != Done` for open work | Misses other done statuses such as Won't Do | `statusCategory != Done` or `resolution IS EMPTY` |
 | `assignee = ""` | Not the empty check | `assignee IS EMPTY` |
-| `fixVersion !~ "2026.*"` | Silently drops items with no version | add `OR fixVersion IS EMPTY` |
+| `fixVersion !~ "2026.*"` | On Data Center, silently drops items with no version (not documented for Cloud) | add `OR fixVersion IS EMPTY` |
 
 ## Practice in code
 
@@ -265,7 +265,7 @@ Other likely questions:
 - **Text field** — a field holding free text, such as summary or description.
 - **Text search** — matching words in text fields with `~`, including variations and wildcards.
 - **Wildcard** — a `*` in a text search that matches any ending.
-- **Phrase search** — a text search for words appearing together.
+- **Phrase search** — a text search for words appearing together; in JQL only the escaped form `"\"partial refund\""` is an exact phrase, while `"partial refund"` matches both words anywhere.
 - **`text` field** — a special JQL field that searches summary, description, environment, comments and text custom fields.
 - **Custom field id** — the numeric identifier of a custom field, used as `cf[id]`.
 - **Incremental query building** — adding one clause at a time and checking results after each.

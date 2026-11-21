@@ -246,7 +246,7 @@ The facts stay the same; the headline and the parts of the Action you expand cha
 ## Summary
 
 - A story bank is a set of prepared stories in note form, each tagged with the competencies it shows.
-- MIT suggests at least three to five stories; Amazon advises one or two examples per Leadership Principle. Realistically, aim for 8 to 12 stories, more for Amazon, and avoid repeating one story across a loop.
+- MIT suggests three to five stories; Amazon advises one or two examples per Leadership Principle. Realistically, aim for 8 to 12 stories, more for Amazon, and avoid repeating one story across a loop.
 - Each entry has a title, headline, STAR notes, results with numbers, reflection, competency tags, likely probes and a 30-second version.
 - Use a coverage matrix to find gaps (no story) and thin spots (one story).
 - Do not script or memorise (MIT). Rehearse alone, recorded and with a trusted person (Amazon Bar Raisers), and practise each story from several angles.

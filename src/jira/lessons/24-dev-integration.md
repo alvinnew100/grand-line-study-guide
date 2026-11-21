@@ -17,7 +17,7 @@ Atlassian's guidance, with its rules:
 | Place | How | Notes |
 |---|---|---|
 | **Branch name** | `git checkout -b SHOP-1042-promo-code-api` | With Bitbucket Cloud, GitHub or GitLab connected, you can create a branch from the work item's Development section and Jira adds the key |
-| **Commit message** | `git commit -m "SHOP-1042 validate expiry dates"` | Put the key at the **start** of the message |
+| **Commit message** | `git commit -m "SHOP-1042 validate expiry dates"` | Include the key anywhere in the message; many teams put it at the **start** as a convention (Atlassian's example does) |
 | **Pull request title** | `SHOP-1042 Apply promo code API` | Creating the PR from the work item's development panel adds the key |
 
 For a pull request to be linked, Atlassian says at least one of these must hold: the **PR title** includes the key, or the **source branch name** includes the key (and, on Bitbucket Cloud only, a non-merge commit in the PR mentions the key).
@@ -95,7 +95,7 @@ Runs the workflow transition named "close" (if it exists from the item's current
 From Atlassian's smart commits documentation:
 
 - **Transition names are matched by the part before the first space.** A transition called "Finish work" is triggered by `#finish`. Where names share a first word, such as "Start Progress" and "Start Review", `#start` is ambiguous; use hyphens: `#start-review` or `#start-progress`.
-- **If a transition has required fields** (other than a comment, which `#comment` can supply), the transition silently fails.
+- **Required fields.** If your Jira admin has made the comment field required, you must **not** add `#comment` to the command. If any other field is required, the transition command silently fails.
 - **You cannot set the Resolution field** with `#resolve`.
 - **Several commands on one line** are allowed: `SHOP-1042 #time 2d 5h #comment Done ahead of schedule #resolve`.
 - **One command can apply to several items**, with keys separated by whitespace or commas: `SHOP-1042 SHOP-1043 #resolve`.
@@ -194,13 +194,13 @@ Two weeks in, the Scrum Master runs `project = SHOP AND statusCategory = Done AN
 
 Other likely questions:
 
-- "Why didn't my commit show up on the ticket?" Lowercase key, key not at the start, tool not connected, missing permission, or syncing delay.
+- "Why didn't my commit show up on the ticket?" Lowercase key, key missing from the message, branch or PR title, tool not connected, missing permission, or syncing delay.
 - "What can smart commits do?" Comment, log time and transition, for one or several keys on a line.
 - "What's a permission scheme?" A shareable set of grants from permissions to users, groups or roles, used by company-managed spaces.
 
 ## Summary
 
-- Put the uppercase work item key in branch names, at the start of commit messages and in pull request titles; Jira links them in the Development panel.
+- Put the uppercase work item key in branch names, in commit messages (many teams put it first) and in pull request titles; Jira links them in the Development panel.
 - A PR links if its title or source branch includes the key; builds and deployments can link through commits or branch names with supported tools.
 - Smart commits support `#comment`, `#time` (w, d, h, m, decimals allowed) and `#<transition>`; transitions match the name's first word, so use hyphens for ambiguous names.
 - Smart commits need the committer's email to match exactly one Jira user with the right permissions; commands do not span lines.
@@ -226,10 +226,10 @@ Other likely questions:
 
 ```quiz
 [
-  {"q": "Where does Atlassian recommend putting the key in a commit message?",
+  {"q": "Which placement of the key in a commit message follows Atlassian's example and common team convention?",
    "options": ["At the end", "At the start", "Only in the commit body", "Anywhere in lowercase"],
    "answer": 1,
-   "explain": "The documentation's example puts the key at the start: `JRA-123 <summary>`."},
+   "explain": "Atlassian only requires the key to appear in the message; its example, `JRA-123 <summary>`, starts with it, and many teams copy that as a convention."},
   {"q": "A PR does not appear on the work item. The branch is `feature/promo` and the title is `shop-1042 promo API`. Why?",
    "options": ["PRs never link", "The key is lowercase in the title and absent from the branch name", "The PR is too large", "Titles cannot contain keys"],
    "answer": 1,
