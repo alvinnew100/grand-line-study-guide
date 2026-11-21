@@ -36,7 +36,7 @@ TRACK = dict(
              summary="The eight primitive types, reference variables, arrays, and where everything lives in memory.",
              lessons=[L("java-primitives", "Primitive types and how numbers are stored", "05-primitives.md"),
                       L("java-references-stack-heap", "References, arrays, the stack and the heap", "06-references-stack-heap.md")],
-             problems=["java-code-average", "java-code-index-of-max", "java-code-reverse-array", "java-int-arithmetic", "java-char-string-concat", "java-array-defaults-bounds"]),
+             problems=["java-code-average", "java-code-index-of-max", "java-code-reverse-array", "java-int-arithmetic", "java-char-string-concat", "java-array-defaults-bounds", "java-bit-toolbox"]),
         dict(id="java-methods-encapsulation", title="A4. Methods and encapsulation",
              summary="Parameters, return values, pass-by-value, private fields, getters and setters.",
              lessons=[L("java-methods-pass-by-value", "Methods, parameters, return values and pass-by-value", "07-methods-pass-by-value.md"),

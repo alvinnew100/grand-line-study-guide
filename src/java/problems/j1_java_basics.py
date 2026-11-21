@@ -1673,4 +1673,50 @@ void pay(long price) throws InsufficientFundsException {
     "All operations O(1).",
     "- Extending `RuntimeException`: the exception becomes unchecked and callers are no longer forced to handle it.\n- Subtracting before checking, leaving a negative balance after a failed payment.\n- No `throws` clause on `pay`: the compiler rejects throwing a checked exception without it."),
   ),
+# ------------------------------------------------------------------ java-bit-toolbox
+J("java-bit-toolbox", "Bit toolbox", "Easy", "Bitwise operators",
+  r"""
+In class `Solution`, write three small methods that treat an `int` as a row of 32 switches. Bit 0 is the
+rightmost bit and bit 31 is the sign bit.
+
+```java
+static int setBit(int x, int i)         // return x with bit i turned on
+static int clearBit(int x, int i)       // return x with bit i turned off
+static boolean isPowerOfTwo(int x)      // true if x is 1, 2, 4, 8, ...
+```
+
+**Examples** `setBit(5, 1)` → `7`; `clearBit(7, 1)` → `5`; `isPowerOfTwo(64)` → `true`; `isPowerOfTwo(0)` → `false`.
+
+`i` is between 0 and 31. Setting a bit that is already on, or clearing one that is already off, changes nothing.
+Use bitwise operators (`|`, `&`, `~`, `<<`), not loops.
+
+*Java problems are compiled and run on a judge server: you need to be logged in to submit.*
+""",
+  'class Solution {\n    static int setBit(int x, int i) {\n        // your code\n        return 0;\n    }\n\n    static int clearBit(int x, int i) {\n        // your code\n        return 0;\n    }\n\n    static boolean isPowerOfTwo(int x) {\n        // your code\n        return false;\n    }\n}\n',
+  'class Solution {\n    static int setBit(int x, int i) {\n        return x | (1 << i);\n    }\n\n    static int clearBit(int x, int i) {\n        return x & ~(1 << i);\n    }\n\n    static boolean isPowerOfTwo(int x) {\n        return x > 0 && (x & (x - 1)) == 0;\n    }\n}\n',
+  ["eq(Solution.setBit(0, 0), 1)", "eq(Solution.setBit(5, 1), 7)", "eq(Solution.setBit(7, 1), 7)", "eq(Solution.setBit(0, 31), Integer.MIN_VALUE)",
+   "eq(Solution.clearBit(7, 1), 5)", "eq(Solution.clearBit(5, 1), 5)", "eq(Solution.clearBit(-1, 31), Integer.MAX_VALUE)",
+   "eq(Solution.isPowerOfTwo(1), true)", "eq(Solution.isPowerOfTwo(64), true)", "eq(Solution.isPowerOfTwo(1 << 30), true)",
+   "eq(Solution.isPowerOfTwo(0), false)", "eq(Solution.isPowerOfTwo(6), false)", "eq(Solution.isPowerOfTwo(-8), false)",
+   "eq(Solution.isPowerOfTwo(Integer.MIN_VALUE), false)"],
+  ['class Solution {\n    static int setBit(int x, int i) {\n        return x | (1 << i);\n    }\n\n    static int clearBit(int x, int i) {\n        return x & ~(1 << i);\n    }\n\n    static boolean isPowerOfTwo(int x) {\n        return (x & (x - 1)) == 0;\n    }\n}\n', 'class Solution {\n    static int setBit(int x, int i) {\n        return x + (1 << i);\n    }\n\n    static int clearBit(int x, int i) {\n        return x & ~(1 << i);\n    }\n\n    static boolean isPowerOfTwo(int x) {\n        return x > 0 && (x & (x - 1)) == 0;\n    }\n}\n'],
+  G("Lesson *Primitive types and how numbers are stored* (section on bitwise operators).",
+    "A mask with a single 1 at position i is `1 << i`. OR turns a bit on, AND with the flipped mask turns it off, and a power of two has exactly one 1-bit.",
+    ["Build the mask first: `1 << i`.", "To clear, AND with the complement of the mask: `~mask`.", "`x & (x - 1)` removes the lowest 1-bit. What is left when only one bit existed? Do not forget zero and negatives."],
+    "Loop over the 32 positions, rebuilding the number bit by bit, or divide by 2 repeatedly to test for a power of two. It works and is far more code.",
+    r"""Build the mask `1 << i`, then combine.
+
+**Dry run** `setBit(5, 1)`: `5 = 101`, mask `010`, `101 | 010 = 111 = 7`. `clearBit(7, 1)`: `~010 = ...11111101`, `111 & ...101 = 101 = 5`.
+`isPowerOfTwo(64)`: `64 = 1000000`, `63 = 0111111`, AND is 0 and 64 > 0, so true.
+
+```java
+class Solution {
+    static int setBit(int x, int i) { return x | (1 << i); }
+    static int clearBit(int x, int i) { return x & ~(1 << i); }
+    static boolean isPowerOfTwo(int x) { return x > 0 && (x & (x - 1)) == 0; }
+}
+```""",
+    "Time O(1), space O(1).",
+    "- Using `+` to set a bit: it carries when the bit is already on.\n- Leaving out `x > 0`: zero and `Integer.MIN_VALUE` both satisfy `x & (x - 1) == 0`.\n- Forgetting parentheses: `x & (x - 1) == 0` is parsed with `==` first and does not compile."),
+  ),
 ]

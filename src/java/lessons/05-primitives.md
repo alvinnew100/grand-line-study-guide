@@ -300,6 +300,307 @@ Used on a line alone (`i++;`) the two forms are identical. Avoid mixing them int
 > [!INTERVIEW]
 > Expect: "What is the output of `int x = 5; x = x++ + ++x;`?" Work left to right. `x++` yields 5 and makes x 6. `++x` makes x 7 and yields 7. The sum 12 is then assigned to x. Answer: 12. Add that you would never write this in production.
 
+## Bitwise operators: working on the switches directly
+
+So far numbers were quantities. Sometimes a number is better thought of as a **row of independent on/off switches**: the permissions on a file, the options of a feature, the red, green and blue parts of a colour. The **bitwise operators** work on those switches one position at a time. Picture a bank of light switches on a wall: you can flip one switch without touching its neighbours.
+
+> [!NOTE]
+> This section uses the idea of a bit from "Bits and bytes in sixty seconds" and the casting rules above. It is a favourite interview topic, but it also appears in real code: network addresses, graphics, hash functions and compact flag fields.
+
+### Reading binary and two's complement
+
+Whole numbers are written in **binary** (base 2), where each position is worth double the one to its right: 1, 2, 4, 8, 16, and so on. Reading `1100` from the right: 0 ones, 0 twos, 1 four, 1 eight, so 4 + 8 = 12.
+
+Java lets you write numbers in other bases directly. A **binary literal** starts with `0b`, a **hexadecimal literal** (base 16, digits 0-9 then a-f) starts with `0x`. Hex is popular because one hex digit is exactly four bits. Underscores are allowed for readability.
+
+```java
+int a = 0b1100;          // 12
+int b = 0x0C;            // also 12
+int c = 0b1111_0000;     // 240
+int d = 0xFF;            // 255, eight ones
+```
+
+How does an `int` hold a **negative** number? Java uses **two's complement**: the leftmost of the 32 bits, the **sign bit**, is worth a large negative amount (-2^31) instead of a large positive one. The rule to negate a number: flip every bit, then add 1.
+
+| Step | Pattern (shown with 8 bits for readability) | Value |
+|---|---|---|
+| start | `00000101` | 5 |
+| flip every bit | `11111010` | -6 |
+| add 1 | `11111011` | -5 |
+
+So `-5` is a pattern of mostly ones, and `-1` is all ones. This explains the overflow wrap in the previous section: adding 1 to `0111...1` carries into the sign bit and gives `1000...0`, the most negative number.
+
+### The six operators
+
+| Operator | Name | Rule, applied to each bit position |
+|---|---|---|
+| `a & b` | AND | 1 only if both bits are 1 |
+| `a \| b` | OR | 1 if at least one bit is 1 |
+| `a ^ b` | XOR (exclusive or) | 1 if the bits differ |
+| `~a` | NOT (complement) | flips every bit |
+| `a << n` | left shift | moves bits left by n, fills with zeros |
+| `a >> n` / `a >>> n` | right shift | moves bits right by n (two kinds, below) |
+
+```java
+public class BitOps {
+    public static void main(String[] args) {
+        int a = 0b1100;   // 12
+        int b = 0b1010;   // 10
+        System.out.println(a & b);   // 1000
+        System.out.println(a | b);   // 1110
+        System.out.println(a ^ b);   // 0110
+        System.out.println(~a);      // flips all 32 bits
+        System.out.println(Integer.toBinaryString(~a));
+    }
+}
+```
+
+```text
+8
+14
+6
+-13
+11111111111111111111111111110011
+```
+
+Line by line: `1100 & 1010` keeps the positions where both are 1, which is `1000`, or 8. `|` keeps positions where either is 1, `1110`, or 14. `^` keeps positions where they differ, `0110`, or 6. `~12` flips all 32 bits, and by the negation rule above, `~x` always equals `-x - 1`, so the result is -13. `Integer.toBinaryString` returns the bits as text, **without leading zeros**, which is why a negative number shows all 32 digits and a small positive number shows few.
+
+> [!WARNING]
+> `&`, `|` and `^` also work on `boolean` values, but `&` and `|` always evaluate **both** sides, unlike `&&` and `||`, which stop early. Use the doubled forms for conditions.
+
+### Shifts: signed, unsigned, and why Java has `>>>`
+
+Shifting slides the whole row of bits. `x << n` moves them left and fills the gap on the right with zeros. For an `int` that is multiplication by 2^n, as long as nothing falls off the left end.
+
+Right shifts have a decision to make: what fills the gap on the **left**? Java offers two answers.
+
+- `>>` is the **signed (arithmetic) right shift**. It copies the sign bit into the gap, so a negative number stays negative. It divides by 2^n, rounding toward negative infinity.
+- `>>>` is the **unsigned (logical) right shift**. It always fills with zeros, so the result is non-negative whenever n is at least 1.
+
+Why does Java need both? Because the leftmost bit means "negative" for a number but may be only another data bit when you treat the int as raw bits (a hash, a packed colour, a bit set). Java defines one portable behaviour for each operator, so the same code gives the same answer on every machine.
+
+```java
+public class Shifts {
+    public static void main(String[] args) {
+        int x = -16;                    // 11111111111111111111111111110000
+        System.out.println(x >> 2);     // sign copied in
+        System.out.println(x >>> 28);   // zeros copied in: only the top 4 bits remain
+        System.out.println(x >>> 2);    // a huge positive number
+        System.out.println(x << 1);
+        System.out.println(-5 >> 1);    // rounds toward negative infinity
+        System.out.println(-5 / 2);     // division truncates toward zero
+        System.out.println(1 << 31);    // lands in the sign bit
+        System.out.println(1 << 32);    // distance is taken modulo 32
+        System.out.println(1L << 32);   // long has room
+    }
+}
+```
+
+```text
+-4
+15
+1073741820
+-32
+-3
+-2
+-2147483648
+1
+4294967296
+```
+
+Notes on the results:
+
+- `-16 >> 2` is -4: the pattern slides right and ones fill in from the left.
+- `-16 >>> 28` leaves only the top four bits, `1111`, which is 15.
+- `-5 >> 1` is -3 but `-5 / 2` is -2. They agree for non-negative numbers and differ for negative odd ones. This is a common trick question.
+- The **shift distance** is reduced to the low 5 bits for `int` (low 6 for `long`), so `1 << 32` is `1 << 0`, which is 1. Shifting by 32 does not clear the number, as many beginners expect.
+- There is no `<<<`: a left shift fills with zeros either way.
+- Precedence trap: `+` binds tighter than `<<`, so `1 << 2 + 1` means `1 << 3`, which is 8. Use parentheses.
+
+### What happens to `byte` and `short`
+
+The promotion rule from earlier applies here too: `byte`, `short` and `char` operands are converted to `int` **before** any bitwise operator or shift runs, and the conversion copies the sign bit (this is called **sign extension**). The result is an `int`.
+
+```java
+public class SmallTypes {
+    public static void main(String[] args) {
+        byte b = (byte) 0xF0;                          // -16
+        System.out.println(Integer.toBinaryString(b)); // b became an int first
+        System.out.println(b >>> 4);                   // unexpected
+        System.out.println((b & 0xFF) >>> 4);          // intended
+        System.out.println(Integer.toBinaryString(b & 0xFF));
+        b >>>= 4;                                      // compound assignment casts back
+        System.out.println(b);
+    }
+}
+```
+
+```text
+11111111111111111111111111110000
+268435455
+15
+11110000
+-1
+```
+
+The byte `0xF0` is -16, and as an `int` it grows 24 extra ones on the left. So `b >>> 4` shifts a full 32-bit pattern of ones and gives 268,435,455. The fix is the **mask** `& 0xFF`: it keeps the low eight bits and clears the rest, which recovers the byte as the unsigned value 240. Use `& 0xFF` whenever you want a byte treated as 0 to 255. The last line shows the same bug hiding inside `>>>=`: the shift happens on the `int`, and the hidden cast keeps only the low byte, which is all ones again, so `b` becomes -1 and not 15.
+
+### Masks and flags: set, clear, toggle, test
+
+A **mask** is a number whose 1-bits select positions. A **flag** is a single bit that stands for one yes/no option. Giving each option its own bit lets one `int` hold many options.
+
+```java
+public class Flags {
+    static final int READ  = 1 << 0;   // 001
+    static final int WRITE = 1 << 1;   // 010
+    static final int EXEC  = 1 << 2;   // 100
+
+    public static void main(String[] args) {
+        int perms = READ | EXEC;                      // combine with OR
+        System.out.println(perms);
+        System.out.println((perms & WRITE) != 0);     // test one bit
+        perms |= WRITE;                               // set
+        System.out.println(perms);
+        perms &= ~EXEC;                               // clear
+        System.out.println(perms);
+        perms ^= READ;                                // toggle
+        System.out.println(perms);
+    }
+}
+```
+
+```text
+5
+false
+7
+3
+2
+```
+
+The four recipes, each worth memorising:
+
+| Goal | Code | Why it works |
+|---|---|---|
+| set bit | `x \|= MASK` | OR with 1 forces 1, OR with 0 changes nothing |
+| clear bit | `x &= ~MASK` | `~MASK` has 0 at the target and 1 elsewhere, so AND wipes only the target |
+| toggle bit | `x ^= MASK` | XOR with 1 flips, XOR with 0 keeps |
+| test bit | `(x & MASK) != 0` | AND leaves only the target bit; non-zero means it was on |
+
+Always compare to `!= 0`, not `== 1`: a mask such as `4` produces 4, not 1.
+
+The same tools pack and unpack **fields**. A colour like `0x336699` stores red, green and blue in one byte each:
+
+```java
+int rgb = 0x336699;
+int red   = (rgb >> 16) & 0xFF;   // 51
+int green = (rgb >> 8)  & 0xFF;   // 102
+int blue  =  rgb        & 0xFF;   // 153
+int packed = (red << 16) | (green << 8) | blue;
+System.out.println(Integer.toHexString(packed));   // 336699
+```
+
+Shift the wanted field down to the right edge, then mask off everything above it. To pack, shift each part up and OR the parts together.
+
+### EnumSet: the readable alternative
+
+Bit flags are compact but easy to misuse: a typo in a mask compiles fine, and `perms = 8` means nothing to a reader. When the options are a fixed list, Java has a type-safe tool that stores bits internally but reads like a normal set: `EnumSet`. It needs an **enum** (a type with a fixed list of named values); the lesson [Enums: constants with data and behaviour](#/lesson/java/java-ej-enums) covers both in depth.
+
+```java
+import java.util.EnumSet;
+
+public class PermSet {
+    enum Perm { READ, WRITE, EXEC }
+
+    public static void main(String[] args) {
+        EnumSet<Perm> perms = EnumSet.of(Perm.READ, Perm.EXEC);
+        System.out.println(perms.contains(Perm.WRITE));
+        perms.add(Perm.WRITE);
+        perms.remove(Perm.EXEC);
+        System.out.println(perms);
+        System.out.println(EnumSet.complementOf(perms));
+    }
+}
+```
+
+```text
+false
+[READ, WRITE]
+[EXEC]
+```
+
+`add`, `remove` and `contains` replace `|=`, `&= ~` and `& != 0`, and printing shows names instead of numbers. Prefer `EnumSet` in application code. Keep raw bit operations for protocols, hashing, graphics and performance-critical code, or when an `int` is the format you must produce.
+
+### Interview favourites
+
+```java
+public class Tricks {
+    static boolean isPowerOfTwo(int x) { return x > 0 && (x & (x - 1)) == 0; }
+
+    public static void main(String[] args) {
+        System.out.println(12 & 11);        // x & (x - 1)
+        System.out.println(12 & -12);       // x & -x
+        System.out.println(isPowerOfTwo(64) + " " + isPowerOfTwo(12) + " " + isPowerOfTwo(0));
+        System.out.println(Integer.bitCount(255));
+        System.out.println(Integer.bitCount(-1));
+        System.out.println(Long.bitCount(-1L));
+        System.out.println(Integer.toHexString(255));
+        System.out.println(Integer.parseInt("1010", 2));
+        System.out.println((-3 & 1) + " " + (-3 % 2));
+    }
+}
+```
+
+```text
+8
+4
+true false false
+8
+32
+64
+ff
+10
+1 -1
+```
+
+- **`x & (x - 1)` clears the lowest set bit.** Subtracting 1 flips the lowest 1 to 0 and every 0 below it to 1, so the AND wipes exactly that bit. `12` (`1100`) becomes `8` (`1000`).
+- **Power-of-two test.** A power of two has exactly one 1-bit, so clearing it leaves 0. The `x > 0` guard matters: zero and `Integer.MIN_VALUE` would otherwise pass.
+- **`x & -x` isolates the lowest set bit.** `12 & -12` is 4.
+- **Counting bits.** The hand-written loop `while (x != 0) { x &= x - 1; count++; }` runs once per 1-bit. In real code use `Integer.bitCount` (or `Long.bitCount`), which the JVM can turn into a single processor instruction. Note `bitCount(-1)` is 32, because negative numbers carry many ones.
+- **Odd check.** `(x & 1) != 0` works for all integers. `x % 2 == 1` fails for negative odd numbers, since `-3 % 2` is -1.
+- **Related helpers:** `Integer.highestOneBit`, `numberOfLeadingZeros`, `numberOfTrailingZeros`, `Integer.toBinaryString`, `toHexString`, and `Integer.parseInt(text, 2)` for the reverse direction.
+
+> [!INTERVIEW]
+> "Check whether an integer is a power of two in O(1)." Answer `x > 0 && (x & (x - 1)) == 0`, then explain why subtracting 1 flips the trailing bits, and mention the zero and negative cases. Expect follow-ups: count the set bits (Kernighan's loop or `Integer.bitCount`), and "what is the difference between `>>` and `>>>`?"
+
+### A model you can run
+
+Python has a `>>` that behaves like Java's signed shift, and no `>>>`. This model builds Java's three shifts for 32 bits, so you can test your predictions.
+
+```python-run
+MASK = 0xFFFFFFFF
+
+def to_int(v):                       # reinterpret low 32 bits as a signed int
+    v &= MASK
+    return v - (1 << 32) if v >> 31 else v
+
+def shl(x, n):  return to_int(x << (n & 31))           # distance uses low 5 bits
+def shr(x, n):  return to_int(x) >> (n & 31)           # signed: Python's >> copies the sign
+def ushr(x, n): return to_int((x & MASK) >> (n & 31))  # zeros fill in from the left
+
+def bits(x):    return format(x & MASK, "032b")
+
+x = -16
+print(bits(x))
+print("x >> 2   =", shr(x, 2))
+print("x >>> 28 =", ushr(x, 28))
+print("x >>> 2  =", ushr(x, 2))
+print("1 << 31  =", shl(1, 31), "  1 << 32 =", shl(1, 32))
+b = x & 0xFF                          # a byte treated as unsigned
+print("byte bits:", format(b, "08b"), " >>> 4 with mask:", b >> 4)
+```
+
+Change `x` and the distances, predict the output first, then run.
+
 ## Pitfalls
 
 - **Integer division where a fraction was wanted.** `double avg = sum / count;` with two `int`s loses the fraction. Write `(double) sum / count`.
@@ -310,6 +611,8 @@ Used on a line alone (`i++;`) the two forms are identical. Avoid mixing them int
 - **`==` on doubles**, and money in doubles.
 - **Assuming Python's rules** for negative division and remainder.
 - **`char` arithmetic printing numbers** when a letter was expected.
+- **`>>>` on a `byte`** without `& 0xFF`: the sign-extended `int` is shifted instead.
+- **`x & 1 == 0`** without parentheses: `==` binds tighter than `&`, so it does not compile; write `(x & 1) == 0`.
 
 ## Cheat sheet
 
@@ -336,6 +639,8 @@ Used on a line alone (`i++;`) the two forms are identical. Avoid mixing them int
 - `byte`, `short` and `char` are promoted to `int` in arithmetic; compound assignment hides a cast.
 - `+` concatenates as soon as a `String` is involved, reading left to right.
 - Floating-point numbers are approximations: no `==`, no money.
+- Bitwise operators work on each bit: `&` AND, `|` OR, `^` XOR, `~` NOT; `>>` keeps the sign, `>>>` fills with zeros; `byte` and `short` are sign-extended to `int` first, so mask with `& 0xFF`.
+- Set, clear, toggle and test a bit with `|=`, `&= ~`, `^=` and `(x & mask) != 0`; `EnumSet` is the readable alternative; `x & (x - 1)` and `Integer.bitCount` are the classic tricks.
 
 ## Glossary
 
@@ -352,6 +657,16 @@ Used on a line alone (`i++;`) the two forms are identical. Avoid mixing them int
 - **Unicode**: the standard that assigns a number to every character.
 - **Floating point**: the approximate binary format used by `float` and `double`.
 - **NaN**: "not a number", the result of undefined floating-point operations.
+- **Binary / hexadecimal**: writing numbers in base 2 or base 16; literals start with `0b` and `0x`.
+- **Two's complement**: how Java stores negative integers: flip all bits, add 1.
+- **Sign bit**: the leftmost bit of a signed integer, which marks it negative when 1.
+- **Bitwise operator**: an operator (`&`, `|`, `^`, `~`, `<<`, `>>`, `>>>`) that works on each bit separately.
+- **Signed (arithmetic) shift `>>`**: right shift that copies the sign bit into the gap.
+- **Unsigned (logical) shift `>>>`**: right shift that fills the gap with zeros.
+- **Sign extension**: copying the sign bit when a smaller integer type widens to `int`.
+- **Mask**: a number whose 1-bits select which bit positions an operation affects.
+- **Flag**: one bit standing for a yes/no option.
+- **`EnumSet`**: a type-safe set of enum values stored internally as bits.
 
 ## Check yourself
 
@@ -372,8 +687,16 @@ Used on a line alone (`i++;`) the two forms are identical. Avoid mixing them int
   {"q": "What does `char c = 'C'; c += 2; System.out.println(c);` print?", "options": ["69", "E", "C2", "It does not compile"], "answer": 1,
    "explain": "Compound assignment includes a hidden cast back to char, so c becomes the character with code 69, which is E."},
   {"q": "Does this compile? `float rate = 0.5;`", "options": ["Yes", "No: 0.5 is a double literal; write 0.5f", "No: float cannot hold fractions", "Yes, with a warning"], "answer": 1,
-   "explain": "A literal with a decimal point is a double. Narrowing double to float needs the f suffix or a cast."}
+   "explain": "A literal with a decimal point is a double. Narrowing double to float needs the f suffix or a cast."},
+  {"q": "What does `System.out.println(-16 >>> 28);` print?", "options": ["-1", "15", "-16", "0"], "answer": 1,
+   "explain": "-16 is 0xFFFFFFF0. The unsigned shift moves it right by 28 and fills with zeros, leaving the top four bits 1111, which is 15."},
+  {"q": "`byte b = (byte) 0xF0;` What does `b >>> 4` evaluate to?", "options": ["15", "-1", "268435455", "240"], "answer": 2,
+   "explain": "b is promoted to the int -16 with sign extension, so 32 bits are shifted, giving 0x0FFFFFFF. Use (b & 0xFF) >>> 4 to get 15."},
+  {"q": "Which statement clears the bit selected by `MASK` and leaves the others alone?", "options": ["x |= MASK;", "x &= ~MASK;", "x ^= MASK;", "x &= MASK;"], "answer": 1,
+   "explain": "~MASK has 0 only at the target position, so AND zeroes that bit and keeps every other bit."},
+  {"q": "Which expression tests whether a positive int x is a power of two?", "options": ["x % 2 == 0", "(x & (x - 1)) == 0", "(x | (x - 1)) == 0", "x >> 1 == 0"], "answer": 1,
+   "explain": "A power of two has one 1-bit; x & (x - 1) clears the lowest set bit, leaving 0. (Also require x > 0 so zero and negatives are rejected.)"}
 ]
 ```
 
-> **Source:** Head First Java, ch. 3 (primitive variables) and ch. 10 (numbers). Checked against the Java Language Specification, ch. 4 and 5 (types and conversions): https://docs.oracle.com/javase/specs/jls/se21/html/jls-5.html and https://dev.java/learn/language-basics/primitive-types/ .
+> **Source:** Head First Java, ch. 3 (primitive variables), ch. 10 (numbers) and appendix B (bit manipulation). Checked against the Java Language Specification, ch. 4 and 5 (types and conversions): https://docs.oracle.com/javase/specs/jls/se21/html/jls-5.html and https://dev.java/learn/language-basics/primitive-types/ .
