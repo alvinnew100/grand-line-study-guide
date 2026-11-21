@@ -1,24 +1,41 @@
 # Service optimization: batching, prompt caching and parallelism
 
-Model-level techniques change the model. **Service-level** techniques change how the model is run. Given fixed resources (compute and memory) and a changing workload (requests from many users, possibly for different models), the goal is to allocate resources so that latency and cost are as low as possible. Huyen notes that these techniques **don't modify the model and shouldn't change output quality**. This lesson covers the four she discusses: **batching, decoupling prefill and decode, prompt caching and parallelism**.
+> **Before this lesson:** read [Inference bottlenecks, metrics and hardware](#/lesson/ai-eng/aie-inference-metrics) (prefill and decode, TTFT, TPOT, throughput, goodput, SLOs) and [Model optimization: compression, speculative decoding, KV cache](#/lesson/ai-eng/aie-model-opt) (the KV cache and its memory cost). The system prompt was introduced in [Prompts, in-context learning and context length](#/lesson/ai-eng/aie-prompt-intro). The demos use basic Python and NumPy, explained line by line.
+
+## In plain words
+
+The previous lesson changed the model. This lesson leaves the model alone and changes **how the service runs it**. You have a fixed amount of hardware (chips and memory) and a constantly changing stream of requests from many users, sometimes for several different models. **Service-level optimization** is the art of sharing that hardware out so that responses are fast and cheap. Huyen stresses an important property: these techniques **do not modify the model, so they should not change the quality of its outputs**. That makes them low-risk wins.
+
+She covers four techniques, and this lesson takes them in turn:
+
+1. **Batching**: processing several requests together.
+2. **Decoupling prefill and decode**: running the two phases of a request on separate machines.
+3. **Prompt caching**: computing shared prompt text once and reusing it.
+4. **Parallelism**: spreading work across many chips.
+
+An everyday picture: a city's public transport. Instead of everyone driving their own car, people share buses (batching). Some buses wait until full, some leave on a timetable, and the best ones let passengers hop on and off at every stop so seats are never empty. Ticket checking happens at the station entrance, separately from the ride itself, so the two do not slow each other down (decoupling). Regular commuters use a season pass, so they skip buying a ticket every morning (prompt caching). And when one bus is not enough, the city runs more buses on the route, or a longer articulated bus that several drivers' sections share (parallelism).
+
+Why this matters for a job: these are the levers you pull when a self-hosted model is too slow or too expensive, and the features you switch on when using an API (prompt caching can cut a bill by half or more). Interview questions like "How would you cut cost for a chatbot with a long system prompt?" are answered with this lesson.
 
 ## 1. Batching
 
-Batching is one of the easiest ways to cut cost. Instead of processing each request separately, the service processes requests that arrive around the same time together, which raises throughput a lot. Huyen's analogy: individual processing is everyone driving their own car, and batching is putting them on a bus. A bus moves more people, but each rider may wait longer.
+**Batching** means grouping requests that arrive at around the same time and processing them together in one pass through the model. It is one of the easiest ways to cut cost. Recall that decode is memory bandwidth-bound: for every token, the model's weights must be read from memory. If 16 requests share the same pass, the weights are read once for all 16, so throughput rises dramatically for little extra cost. Huyen's analogy: processing each request alone is everyone driving their own car; batching is putting them on a bus. The bus moves far more people per trip, but a rider may have to wait for it.
+
+There are three styles of batching, each fixing a weakness of the previous one.
 
 ### Static batching
 
-Group a **fixed number** of requests. The bus waits until every seat is filled. The drawback is that the first request waits for the last one to arrive, however late it is.
+**Static batching** groups a **fixed number** of requests. The bus does not leave until every seat is taken. The weakness: the first request must wait for the last one to arrive, however long that takes. At a quiet time of day, an early request might wait a very long time.
 
 ### Dynamic batching
 
-Set a batch size **and a maximum time window**. With a batch size of 4 and a 100 ms window, the server runs the batch when it has 4 requests or when 100 ms has passed, whichever comes first. The bus leaves on schedule or when it is full. Latency stays bounded, but batches may run partly empty, which wastes compute.
+**Dynamic batching** sets a batch size **and a maximum waiting time**. With a batch size of 4 and a window of 100 milliseconds, the server runs the batch as soon as it has 4 requests or as soon as 100 ms have passed since the first one arrived, whichever comes first. The bus leaves when full or when the timetable says so. Waiting time is now capped, but batches may leave partly empty, which wastes some compute.
 
 ### Continuous (in-flight) batching
 
-With naive batching, every response in a batch is returned only when the whole batch finishes. LLM responses vary widely in length. If one request needs 10 tokens and another 1,000, the short one waits for the long one.
+Both styles above share a hidden problem for language models. With ordinary batching, the responses in a batch are all returned only when the **whole batch** has finished. Language-model responses vary enormously in length. If one request needs 10 tokens and its batch-mate needs 1,000, the short one finishes early and then sits waiting, done but undelivered, while its slot in the batch does nothing.
 
-**Continuous batching** (introduced in the Orca paper, Yu et al., 2022) returns each response **as soon as it completes** and immediately puts a **new request into the freed slot**. The bus drops off a passenger and picks up another right away, which keeps it full.
+**Continuous batching**, also called **in-flight batching** and introduced in the Orca paper (Yu and colleagues, 2022), fixes both halves. It returns each response **the moment it finishes**, and it **immediately puts a new request into the freed slot**. The bus drops a passenger off at their stop and picks up a waiting one straight away, so it always runs full.
 
 ```mermaid
 sequenceDiagram
@@ -32,6 +49,8 @@ sequenceDiagram
   Q->>B: R5 takes R3's slot
   B-->>Q: R2 done
 ```
+
+The simulation below compares static and continuous batching on twelve requests of very different lengths, with four slots.
 
 ```python-run
 # Simulate static vs continuous batching. Each request needs `n` decode steps; one step serves every slot.
@@ -60,38 +79,51 @@ for name, f in [("static", static), ("continuous", continuous)]:
     print(f"{name:10s}: mean completion {statistics.mean(d):7.1f} steps, median {statistics.median(d):6.1f}, all done at {max(d)}")
 ```
 
-Median completion time drops sharply with continuous batching, because short requests no longer wait behind long ones.
+**Reading this Python line by line**
+
+- `need` lists how many output tokens (decode steps) each of 12 requests needs. They all arrive at time 0. `SLOTS = 4` is the batch size.
+- In `static`, `range(0, len(reqs), SLOTS)` walks through the requests four at a time. `reqs[i:i + SLOTS]` takes the next four. The batch takes as many steps as its longest member, `max(batch)`, and every member is recorded as finishing at that moment.
+- In `continuous`, `queue` holds waiting requests and `slots` holds the remaining steps of requests in progress.
+- The inner `while` fills empty slots from the front of the queue (`queue.pop(0)` removes and returns the first item).
+- `step = min(slots)` jumps time forward to the next moment any request finishes. Every slot's remaining work drops by `step`.
+- `slots.count(0)` counts the requests that have finished; each gets the current time as its completion time. Finished requests are then removed so their slots can be refilled.
+- `statistics.mean` and `statistics.median` summarize when requests finished.
+- Output: static batching gives a mean completion of about 1,417 steps and a median of 1,600, with everything done at step 1,650. Continuous batching gives a mean of about 221, a median of only 76, and everything done at step 1,000. Short requests no longer wait behind long ones, so the typical user gets an answer about twenty times sooner, and the whole workload even finishes earlier because no slot sits idle.
 
 ## 2. Decoupling prefill and decode
 
-LLM inference has two phases with different bottlenecks. Prefill is compute-bound and decode is memory bandwidth-bound. If both run on the same machine they compete for resources and slow each other down. Adding a new query's prefill to a machine in the middle of decoding other responses can stall those responses and noticeably hurt TPOT.
+Recall the two phases of a language-model request: **prefill** (reading the input, compute-bound) and **decode** (writing the output one token at a time, memory bandwidth-bound). When both run on the same machine, they compete for its resources and slow each other down. For example, when a new request's prefill lands on a GPU that is in the middle of decoding other users' answers, those answers stall while the prefill runs, and their TPOT (time per output token) gets noticeably worse.
 
-DistServe (Zhong et al., 2024) and "Inference without Interference" (Hu et al., 2024) show that assigning **prefill and decode to different instances**, such as different GPUs, significantly increases the volume of requests served within latency targets. The intermediate state has to be transferred from prefill to decode instances, but with fast links such as NVLink the overhead is small.
+Two research papers, DistServe (Zhong and colleagues, 2024) and "Inference without Interference" (Hu and colleagues, 2024), showed that putting **prefill and decode on different instances**, for example different GPUs, significantly increases the number of requests served within latency targets. The prefill machine must hand over its intermediate results (the KV cache for the prompt) to the decode machine, but with fast connections between GPUs, such as NVIDIA's **NVLink**, this transfer costs little.
 
-The **ratio** of prefill to decode instances depends on the workload and on priorities:
+How many prefill machines per decode machine? The **ratio** depends on your workload and priorities:
 
-- Long inputs with a priority on **TTFT**: more prefill, for example **2:1 to 4:1**.
-- Short inputs with a priority on **TPOT**: more decode, for example **1:2 to 1:1**.
+- **Long inputs, with TTFT (time to first token) as the priority**: more prefill capacity, for example **2:1 to 4:1** prefill to decode.
+- **Short inputs, with TPOT as the priority**: more decode capacity, for example **1:2 to 1:1**.
 
 ## 3. Prompt caching
 
-Many prompts in an application share text. The most common shared segment is the **system prompt**. A **prompt cache** (also called a context cache or prefix cache) stores the processed form of these overlapping segments so that they are computed once.
+Many prompts within one application share large chunks of text. The most common shared chunk is the **system prompt**, the fixed instructions placed at the start of every request. Normally the model would prefill that same text again for every single request. A **prompt cache**, also called a **context cache** or **prefix cache**, stores the processed form of shared segments (their KV cache entries) so they are computed only once and then reused.
 
-Good fits:
+Prompt caching pays off most for:
 
-- **Long system prompts.** With a 1,000-token system prompt and one million API calls a day, caching saves about **one billion** repeated input tokens daily.
-- **Long documents** queried many times: chat with a book or a codebase.
-- **Long conversations.** Earlier turns are cached and reused when processing later messages.
+- **Long system prompts.** With a 1,000-token system prompt and one million API calls a day, caching avoids reprocessing about **one billion** input tokens every day.
+- **Long documents queried many times**, such as chatting with a book or a codebase: the document is processed once and every question reuses it.
+- **Long conversations.** The earlier turns of a chat are cached and reused as each new message arrives.
 
-Caveats: like the KV cache, a prompt cache can be large and uses memory. Implementing it yourself takes significant engineering. Model APIs now offer it. The technique was introduced in November 2023 (Gim et al.) and adopted quickly. Google Gemini gave cached input tokens a **75% discount** and charged for cache storage (\$1.00 per million tokens per hour at the time of writing). Anthropic's prompt caching promised up to **90% cost savings** and up to **75% lower latency**.
+Some cautions. Like the KV cache, a prompt cache can be large and occupies memory. Building one yourself takes real engineering effort. Fortunately, model APIs now offer it as a feature. The technique was introduced in November 2023 (Gim and colleagues) and spread quickly. Google Gemini charged cached input tokens at a **75% discount** but added a fee for storing the cache (\$1.00 per million tokens per hour at the time the book was written). Anthropic advertised up to **90% lower cost** and up to **75% lower latency** with its prompt caching.
 
-Anthropic's reported numbers (2024):
+Anthropic's reported examples (2024):
 
 | Use case | TTFT without caching | TTFT with caching | Cost reduction |
 |---|---|---|---|
 | Chat with a book (100,000-token cached prompt) | 11.5 s | 2.4 s (−79%) | −90% |
 | Many-shot prompting (10,000-token prompt) | 1.6 s | 1.1 s (−31%) | −86% |
 | Multi-turn conversation (10 turns, long system prompt) | about 10 s | about 2.5 s (−75%) | −53% |
+
+"Many-shot prompting" means putting many worked examples in the prompt, which makes it long and repetitive across requests: a perfect caching target.
+
+The demo estimates a daily bill with and without caching. The prices are illustrative, in US dollars per million tokens.
 
 ```python-run
 # Cost of a workload with and without prompt caching (prices in USD per 1M tokens, illustrative).
@@ -105,25 +137,38 @@ print(f"without cache: {a:,.0f} USD/day   with cache: {b:,.0f} USD/day   saving 
 print("Saved input tokens per day:", f"{args['calls'] * args['prefix_tokens']:,}")
 ```
 
-> [!TIP]
-> Prompt caches match on **prefixes**. Put the stable content first (system prompt, tool definitions, long documents, few-shot examples) and the variable content last (the user's question). A timestamp or a user name at the top of the prompt defeats the cache. Provider details vary, including minimum cacheable length, cache lifetime and write surcharges, so check the documentation for your model.
+**Reading this Python line by line**
 
-Prompt caching is different from the **response caching** covered in Module 10 (exact and semantic caching). A prompt cache reuses the *computation of the input prefix* and still generates a fresh response. A response cache returns a stored *answer* and skips generation altogether.
+- `daily_cost` takes the number of calls per day, the length of the shared prefix (the system prompt), the length of each request's unique part, the output length, and three prices: normal input, cached input and output.
+- With caching on, the prefix tokens are billed at the cached price and only the unique tokens at the full input price. With caching off, the prefix is billed at the full input price along with the unique part.
+- The last line multiplies the per-call cost by the number of calls and divides by a million, because prices are per million tokens.
+- `args` is a dictionary of settings; `**args` unpacks it into the function's named parameters, so we do not repeat them. `1_000_000` is Python's way of writing one million with readable underscores.
+- `{a:,.0f}` prints with thousands separators and no decimals.
+- Output: about \$5,850 a day without caching and \$3,150 with it, a 46% saving, and one billion input tokens a day not reprocessed. Output tokens (150 per call at \$15 per million) are untouched by caching, which is why the saving is not larger.
+
+> [!TIP]
+> Prompt caches match on **prefixes**: the cache only helps for text that is identical from the very first token. Put stable content first (system prompt, tool definitions, long documents, few-shot examples) and variable content last (the user's question). A timestamp or the user's name at the top of the prompt breaks the match and defeats the cache. Providers differ in minimum cacheable length, how long the cache lives, and whether writing to the cache costs extra, so check the documentation for your model.
+
+Prompt caching is not the same as **response caching**, which the architecture lesson covers (exact and semantic caching). A prompt cache reuses the *computation for the input prefix* and still generates a fresh answer. A response cache returns a previously stored *answer* and skips generation entirely.
 
 ## 4. Parallelism
 
-Accelerators are built for parallel processing, and parallelism is the backbone of high-performance computing. There are two general families, **data parallelism** and **model parallelism**, plus strategies specific to LLMs.
+Accelerators are built for parallel work, and parallelism is the backbone of high-performance computing. There are two broad families: **data parallelism**, where each device works on different inputs with a full copy of the model, and **model parallelism**, where one model is split across devices. Language models add some strategies of their own.
 
 ### Replica parallelism
 
-The simplest strategy is to create **multiple replicas** of the model. More replicas handle more simultaneous requests, at the cost of more chips. Fitting models of different sizes (8B, 13B, 34B, 70B) onto GPUs of different memory sizes (24, 40, 48, 80 GB) is a **bin-packing problem**. Should three 13B models share a 40 GB GPU, or should that GPU be reserved for one 34B model? It gets complicated as models, replicas and chips multiply.
+The simplest strategy is to run **several replicas** (complete copies) of the model, each on its own chips. More replicas serve more requests at the same time, at the cost of more hardware. This is the inference version of data parallelism.
+
+It sounds trivial, but deciding which models go on which chips quickly becomes a puzzle. Fitting models of different sizes (8B, 13B, 34B and 70B parameters) onto GPUs with different memory (24, 40, 48 and 80 GB) is a **bin-packing problem**: like packing boxes of different sizes into suitcases of different sizes with as little empty space as possible. Should a 40 GB GPU hold three 13B models, or be kept for one 34B model? With many models, replicas and chip types, the choice gets complicated.
 
 ### Model parallelism
 
-Often the model is too big for one machine. **Model parallelism** splits one model across several machines.
+Often a model is too large to fit on one chip. **Model parallelism** splits one model across several devices.
 
-- **Tensor parallelism** (intra-operator parallelism) is the most common for inference. The tensors in an operator such as a matrix multiplication are partitioned across devices and computed in parallel. For example, one matrix is split column-wise and each part is multiplied on a different device. This lets you serve models that don't fit on one chip and **reduces latency**, though communication overhead limits the gain.
-- **Pipeline parallelism** divides the model's computation into **stages** assigned to different machines, with data passing from one stage to the next. Several inputs can be in different stages at once, which raises throughput. Each request pays extra communication between stages, so **latency increases**. It is therefore more common in training than in latency-sensitive inference.
+- **Tensor parallelism**, also called **intra-operator parallelism**, is the most common choice for inference. A **tensor** is a multi-dimensional array of numbers, such as a weight matrix. Tensor parallelism splits the tensors inside one operation, such as a matrix multiplication, across devices, and the pieces are computed at the same time. For example, a weight matrix can be cut into column blocks, with each block multiplied on a different GPU. This lets you serve models that do not fit on a single chip and also **reduces latency**, because each device does only part of the work. The devices must exchange partial results, and that communication limits how much you gain.
+- **Pipeline parallelism** splits the model's layers into consecutive **stages** on different machines, like stations on an assembly line, with each stage passing its output to the next. Different inputs can occupy different stages at the same time, which raises throughput. But each request now pays for hand-offs between stages, so **latency goes up**. That is why pipeline parallelism is more common in training than in latency-sensitive inference.
+
+Here is tensor parallelism in miniature. When you multiply a matrix by a vector, you can split the matrix's columns (and the matching parts of the vector) between two devices and add their partial answers.
 
 ```python-run
 import numpy as np
@@ -135,16 +180,25 @@ dev1 = W[:, 4:] @ x[4:]              # computed on device 1, at the same time
 print("split result equals the full product:", np.allclose(dev0 + dev1, W @ x))
 ```
 
+**Reading this Python line by line**
+
+- `W` is a 6 × 8 weight matrix and `x` an input vector of length 8, both random.
+- `W[:, :4]` means "all rows, first four columns"; `x[:4]` is the first four entries of `x`. Their product is device 0's share of the work.
+- `W[:, 4:]` and `x[4:]` are the last four columns and entries: device 1's share. In a real system both devices compute at the same time.
+- `dev0 + dev1` combines the partial results. This combining step is the communication that tensor parallelism must pay for.
+- `np.allclose` checks that the combined answer matches the full multiplication `W @ x`, allowing for tiny rounding differences.
+- Output: `True`. Matrix multiplication splits cleanly into independent pieces, which is exactly why GPUs and multi-GPU systems handle it so well.
+
 ### Context and sequence parallelism
 
-For LLMs specifically, the **input sequence** can be split across machines:
+For language models, you can also split the **input sequence** across machines, which helps with very long inputs:
 
-- **Context parallelism**: split the sequence itself, with the first half of the tokens processed on machine 1 and the second half on machine 2.
-- **Sequence parallelism**: split the operators needed for the whole sequence, with attention handled on one machine and the feedforward computation on another.
+- **Context parallelism** splits the sequence itself: the first half of the tokens is processed on machine 1 and the second half on machine 2.
+- **Sequence parallelism** splits the operations needed for the whole sequence: for example, attention runs on one machine and the **feedforward** computation (the other main part of each transformer layer) on another.
 
 ## 5. Putting it together
 
-These techniques are usually combined, and they interact:
+Real systems combine these techniques, and they interact. This table summarizes what each mainly buys you and what to watch for.
 
 | Technique | Mainly improves | Watch out for |
 |---|---|---|
@@ -157,26 +211,53 @@ These techniques are usually combined, and they interact:
 | Tensor parallelism | latency, fitting big models | communication overhead |
 | Pipeline parallelism | throughput | higher latency per request |
 
-Huyen's closing advice for the chapter applies widely. No single technique fits every workload. Measure your own traffic: input and output length distributions, burstiness, and latency requirements. Find the bottleneck and then pick techniques. Across use cases, the ones with the largest impact have tended to be **quantization, tensor parallelism, replica parallelism and attention mechanism optimization**.
+Huyen's closing advice for the inference chapter applies broadly. No single technique fits every workload. Measure your own traffic first: the distribution of input and output lengths, how **bursty** it is (whether requests arrive in sudden spikes), and your latency requirements. Find the bottleneck, then choose techniques. Across many use cases, the techniques that have tended to make the biggest difference are **quantization, tensor parallelism, replica parallelism and attention mechanism optimization**.
 
 > [!INTERVIEW]
-> **"How would you cut cost and latency for a chatbot with a 4,000-token system prompt and bursty traffic?"** Enable prompt caching and keep the system prompt as a stable prefix (lower TTFT and input cost). Use continuous batching so short replies aren't held up by long ones. Scale replicas for the bursts, and use dynamic batching windows tuned to the latency SLO. For self-hosting, separate prefill and decode instances (with more prefill capacity when inputs are long), quantize the model, and track goodput rather than raw throughput. Send non-interactive jobs to a batch API.
+> **"How would you cut cost and latency for a chatbot with a 4,000-token system prompt and bursty traffic?"** Enable prompt caching and keep the system prompt as a stable prefix (lower TTFT and input cost). Use continuous batching so short replies are not held up by long ones. Scale replicas for the bursts, and tune dynamic batching windows to the latency SLO. When self-hosting, separate prefill and decode instances (with more prefill capacity when inputs are long), quantize the model, and track goodput rather than raw throughput. Send non-interactive jobs to a batch API.
+
+> [!INTERVIEW]
+> **"Tensor versus pipeline parallelism: which for inference, and why?"** Tensor parallelism splits each operation across devices, so every device works on every request at the same time: it lowers latency and lets an oversized model fit, at the cost of frequent communication, which favours devices linked by fast interconnects. Pipeline parallelism assigns groups of layers to devices; it raises throughput by keeping several requests in flight but adds per-request latency from stage hand-offs. For latency-sensitive inference, tensor parallelism is usually the choice.
 
 ## Pitfalls
 
 - Batching for throughput without checking the latency SLO. Watch goodput.
-- Static batching for LLM outputs of very different lengths.
+- Using static batching for language-model outputs of very different lengths.
 - Putting variable content at the start of the prompt, which breaks prefix caching.
 - Confusing prompt caching (reuses the input computation) with response caching (reuses answers).
 - Using pipeline parallelism for a latency-critical service.
+- Running prefill and decode on the same GPUs under heavy load and blaming the model for slow streaming.
 
 ## Summary
 
-- Service-level optimization allocates fixed resources to changing workloads without changing the model or its outputs.
-- **Batching**: static (wait for a full batch), dynamic (full batch or time window), continuous (return finished responses immediately and refill the slots).
-- **Decoupling prefill and decode** removes resource contention. The ratio depends on input lengths and whether you prioritize TTFT or TPOT.
-- **Prompt caching** reuses shared prefixes such as system prompts, documents and conversation history. It can cut cost by up to 90% and TTFT by up to about 75–79% in the reported cases.
-- **Parallelism**: replicas for capacity, tensor parallelism for latency and large models, pipeline parallelism for throughput (mostly in training), and context or sequence parallelism for long inputs.
+- Service-level optimization shares fixed resources among changing workloads without changing the model or its outputs.
+- **Batching**: static (wait for a full batch), dynamic (full batch or time window, whichever first), continuous (return finished responses at once and refill their slots).
+- **Decoupling prefill and decode** removes contention between compute-bound and bandwidth-bound work. The ratio depends on input lengths and whether TTFT or TPOT matters more.
+- **Prompt caching** reuses shared prefixes such as system prompts, documents and conversation history. In the reported cases it cut cost by up to 90% and TTFT by up to about 79%.
+- **Parallelism**: replicas for capacity, tensor parallelism for latency and oversized models, pipeline parallelism for throughput (mostly in training), and context or sequence parallelism for long inputs.
+
+## Glossary
+
+- **Service-level optimization**: running a model more efficiently without changing it.
+- **Batching**: processing several requests together in one pass.
+- **Static batching**: waiting for a fixed number of requests.
+- **Dynamic batching**: running when the batch is full or a time window expires.
+- **Continuous (in-flight) batching**: returning each response when done and refilling its slot immediately.
+- **Decoupling prefill and decode**: running the two phases on separate instances.
+- **NVLink**: NVIDIA's fast connection between GPUs.
+- **System prompt**: fixed instructions placed at the start of every request.
+- **Prompt cache (context cache, prefix cache)**: stored computation for shared prompt prefixes.
+- **Many-shot prompting**: a prompt with many worked examples.
+- **Response caching**: returning a stored answer instead of generating one.
+- **Data parallelism / model parallelism**: copies of the model on different inputs / one model split across devices.
+- **Replica parallelism**: running several full copies of a model.
+- **Bin-packing problem**: fitting items of different sizes into containers with minimal waste.
+- **Tensor**: a multi-dimensional array of numbers.
+- **Tensor (intra-operator) parallelism**: splitting each operation's tensors across devices.
+- **Pipeline parallelism**: splitting layers into stages on different machines.
+- **Context parallelism / sequence parallelism**: splitting the input tokens / the per-sequence operations across machines.
+- **Feedforward layer**: the part of each transformer layer that transforms each token's vector independently.
+- **Bursty traffic**: requests arriving in sudden spikes.
 
 ```quiz
 [

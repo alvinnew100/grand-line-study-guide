@@ -1,6 +1,22 @@
 # Model optimization: compression, speculative decoding and the KV cache
 
-Model-level optimization makes the **model itself** more efficient, usually by modifying it, which means it can change the model's behaviour. Huyen points out that most foundation models today share three properties that make inference expensive: they are **large**, they are **autoregressive**, and they rely on **attention**. This lesson follows that structure: model compression, getting around the autoregressive decoding bottleneck, optimizing attention (the KV cache), and kernels and compilers.
+> **Before this lesson:** read [Inference bottlenecks, metrics and hardware](#/lesson/ai-eng/aie-inference-metrics), which explains prefill and decode, compute-bound versus memory bandwidth-bound work, TTFT, TPOT and GPU memory. Quantization is taught in [Memory math, numerical formats and quantization](#/lesson/ai-eng/aie-memory-quant) and distillation in [Data synthesis, distillation and processing](#/lesson/ai-eng/aie-data-synthesis). The transformer and its attention mechanism were introduced in [Training data, architecture and scale](#/lesson/ai-eng/aie-data-arch-scale); this lesson recaps what you need. The demos use basic Python and NumPy, explained line by line.
+
+## In plain words
+
+The previous lesson showed what makes inference slow and how to measure it. This lesson is about the first family of fixes: changing **the model itself** so it runs faster. Because these techniques modify the model or the way it computes, some of them can also change its answers, so you must re-evaluate after applying them.
+
+Huyen observes that most foundation models today share three traits that make inference expensive, and each trait has its own family of fixes:
+
+1. They are **large**: billions of numbers must be stored and moved. Fix: **compress** the model so it has fewer or smaller numbers.
+2. They are **autoregressive**: they write one token at a time, each waiting for the previous one. Fix: find ways to produce **several tokens per step**.
+3. They rely on **attention**: each new token looks back at all earlier tokens, which costs memory and time that grow with the length of the text. Fix: **store and reuse** earlier work (the KV cache) and make attention cheaper.
+
+A fourth, cross-cutting fix is to write faster low-level code for the hardware, through **kernels** and **compilers**.
+
+An everyday picture: a professional translator working on a long book. You can make them faster by giving them a pocket dictionary instead of a twenty-volume encyclopedia (compression). You can hire a junior assistant who drafts the next few sentences, which the expert then checks in one glance and approves or corrects (speculative decoding). The translator keeps a notebook of names and terms already decided, so they never have to re-read earlier chapters to remember them (the KV cache). And you can rearrange their desk so everything they reach for most is closest to hand (kernels).
+
+Why this matters for a job: whenever you host an open model, these techniques decide your cost per request and your latency. Interview questions such as "Explain speculative decoding" and "What is the KV cache and why does it limit batch size?" are very common for AI engineering roles.
 
 ```mermaid
 flowchart TB
@@ -21,13 +37,15 @@ flowchart TB
 
 ## 1. Model compression
 
-Compression reduces a model's size, and a smaller model is usually faster too.
+**Model compression** means making a model smaller. A smaller model is usually faster too, because there is less data to move through memory for every token (recall that decode is bandwidth-bound). There are three main methods.
 
-- **Quantization** (Module 7) reduces numerical precision. **Weight-only quantization is by far the most popular** technique. It is easy, works out of the box for many models, and is very effective: going from 32 to 16 bits halves memory. It has a floor of 1 bit per value.
-- **Distillation** (Module 8) trains a small model to mimic a large one. It is common when a smaller model can match the behaviour you need.
-- **Pruning** has two meanings. One is removing entire nodes, which changes the architecture and reduces the parameter count. The other is setting the **least useful parameters to zero**, which keeps the count but makes the model **sparse**, reducing storage and speeding up computation. Pruned models can be used directly or finetuned to recover quality. Frankle and Carbin (2019) reduced non-zero parameters of some networks by over **90%** without hurting accuracy.
+- **Quantization** (covered in the memory-math lesson) stores each number with fewer bits, for example 16 bits instead of 32, or 4 instead of 16. **Weight-only quantization**, which shrinks the stored weights while leaving other values alone, is by far the most popular compression technique in practice. It is easy to apply, works out of the box for many models, and is very effective: going from 32 to 16 bits halves the memory needed. It does have a floor: you cannot go below 1 bit per value.
+- **Distillation** (covered in the data-synthesis lesson) trains a small **student** model to imitate a big **teacher**. It is common when a smaller model can match the specific behaviour you need.
+- **Pruning** comes from gardening: cutting away branches that do not help. It has two meanings for neural networks. The first removes entire **nodes** (units of the network), which changes the architecture and reduces the number of parameters. The second keeps the architecture but finds the **least useful parameters and sets them to zero**. A model with many zeros is called **sparse**. Sparse models need less storage, and on hardware that can skip zeros they compute faster. A pruned model can be used as is, or finetuned briefly to recover lost quality. Frankle and Carbin (2019) showed that some networks could lose over **90%** of their non-zero parameters without losing accuracy.
 
-In practice **pruning is less common**. It requires understanding the model's architecture, its gains are often smaller than those of other methods, and not all hardware can take advantage of sparsity.
+In practice **pruning is less common** than the other two. It requires understanding the model's architecture in detail, its gains are often smaller, and not all hardware can take advantage of sparsity.
+
+The demo below applies **magnitude pruning**, the simplest version: zero out the weights with the smallest absolute values, on the theory that they contribute least.
 
 ```python-run
 import numpy as np
@@ -42,30 +60,49 @@ for sparsity in [0.5, 0.9, 0.99]:
 print("A random matrix has no redundancy to exploit, so errors grow fast; trained networks tolerate pruning much better.")
 ```
 
+**Reading this Python line by line**
+
+- `W` is a 256 × 256 **weight matrix** (a grid of 65,536 numbers), standing in for one layer of a network. `x` is an input vector of 256 numbers.
+- `y = W @ x` is the layer's output. The `@` symbol is matrix multiplication.
+- For each target sparsity (50%, 90%, 99%), `np.quantile(np.abs(W), sparsity)` finds the threshold below which that share of weights fall, by absolute size.
+- `np.where(condition, W, 0.0)` keeps each weight whose size is at least the threshold and replaces the rest with zero.
+- `rel_err` measures how far the pruned layer's output is from the original, as a fraction of the original's size. `np.linalg.norm` gives the length of a vector.
+- Output: at 50% sparsity, 32,768 weights remain and the error is about 0.28; at 90%, 6,554 remain and the error is about 0.75; at 99%, 656 remain and the output is almost entirely wrong (0.97). This random matrix is a worst case, since every weight carries independent information. Trained networks contain a lot of redundancy, which is why real models can often lose most of their weights with little harm.
+
 ## 2. Overcoming the autoregressive decoding bottleneck
 
-Autoregressive models generate one token after another. At 100 ms per token, a 100-token response takes 10 s. Output tokens are also more expensive than input tokens. Huyen cites Anyscale's finding that one output token can have the same latency impact as about 100 input tokens for some models. Small improvements in decoding therefore matter a lot.
+An autoregressive model produces tokens strictly one after another. At 100 ms per token, a 100-token answer takes 10 seconds. Output tokens are also much more expensive than input tokens: Huyen cites Anyscale's finding that for some models, one output token adds about as much latency as 100 input tokens. Even small improvements to decoding therefore pay off handsomely. Three families of techniques attack it.
 
 ### Speculative decoding
 
-A faster, weaker **draft model** proposes tokens, and the **target model** verifies them:
+**Speculative decoding** pairs two models. A small, fast **draft model** guesses the next few tokens, and the big **target model** (the one whose quality you want) checks the guesses. Step by step:
 
-1. The draft model generates $K$ tokens: $x_{t+1}, \ldots, x_{t+K}$.
-2. The target model **verifies these $K$ tokens in parallel**.
-3. The target accepts the **longest prefix** of draft tokens it agrees with, say $j$ tokens.
-4. The target generates **one extra token** $x_{t+j+1}$, and the loop repeats from there.
+1. The draft model generates $K$ tokens in a row: $x_{t+1}, \ldots, x_{t+K}$. Here $t$ is the number of tokens so far and $K$ is a small number such as 4.
+2. The target model **checks all $K$ tokens in a single parallel pass**.
+3. The target accepts the **longest run of draft tokens, from the start, that it agrees with**. Call the number accepted $j$. If it disagrees with the third token, it keeps the first two, and the rest are thrown away.
+4. As a by-product of the same pass, the target produces **one extra token** of its own, $x_{t+j+1}$, at the first position it disagreed with (or after the last one if all were accepted). The cycle then repeats from there.
 
-If no draft token is accepted, the loop still produces one token, the target's. If all are accepted, it produces $K + 1$ tokens.
+So every cycle produces at least one token (the target's own, if no draft token is accepted) and at most $K + 1$ tokens (all $K$ accepted plus the extra one). With greedy decoding, the output is exactly what the target alone would have produced, and with sampling, a careful acceptance rule keeps it statistically equivalent; only the speed changes.
 
-Why it works:
+```mermaid
+flowchart LR
+  D[Draft model guesses K tokens] --> V[Target checks all K in one parallel pass]
+  V --> A[Keep longest agreeing run of j tokens]
+  A --> E[Target adds one token of its own]
+  E --> D
+```
 
-1. **Verifying is parallel and generating is sequential.** Speculative decoding effectively turns decoding's computational profile into that of prefilling.
-2. **Some tokens are easy to predict**, so a weak draft model gets them right, giving a high acceptance rate.
-3. Decoding is memory bandwidth-bound, so there are **idle FLOPs** that can be used for verification at little cost.
+Why does this help?
 
-Acceptance rates depend on the domain. Structured text such as code has higher acceptance. A larger $K$ means fewer verification calls but a lower acceptance rate. The draft model should ideally share the target's vocabulary and tokenizer.
+1. **Checking is parallel, generating is sequential.** Checking $K$ tokens is like a small prefill: the target processes them all at once. Speculative decoding effectively turns part of decoding's slow, one-at-a-time work into prefill-style parallel work.
+2. **Many tokens are easy to predict.** After "The capital of France is", even a tiny model guesses "Paris". A weak draft model gets the easy tokens right, so the acceptance rate is high.
+3. **Decode leaves compute idle.** Because decode is bandwidth-bound, the processor spends much of its time waiting for data. The extra maths needed to verify $K$ tokens uses those otherwise wasted **FLOPs** (floating-point operations) almost for free.
 
-Results: for Chinchilla-70B, DeepMind trained a 4B draft model that generated a token in 1.8 ms versus 14.1 ms, about 8× faster, and this cut response latency by **more than half without changing quality**. T5-XXL got similar speedups. The technique is easy to implement (about 50 lines of PyTorch) and is built into vLLM, TGI (Text Generation Inference) and llama.cpp.
+The **acceptance rate** (the share of drafted tokens accepted) depends on the domain. Structured text such as code is more predictable, so acceptance is higher. A bigger $K$ means fewer verification passes but more rejected guesses. The draft model should ideally use the same vocabulary and tokenizer as the target, so their tokens line up.
+
+Results: for Chinchilla-70B, DeepMind trained a 4-billion-parameter draft model that produced a token in 1.8 ms versus the target's 14.1 ms, nearly 8 times faster. Speculative decoding cut response latency by **more than half without changing quality**. T5-XXL saw similar gains. The technique is easy to implement (about 50 lines of PyTorch) and is built into popular serving frameworks: vLLM, TGI (Text Generation Inference) and llama.cpp.
+
+The demo uses a toy "language" where the target model always knows the next word of one fixed sentence, and the draft model gets it right except for two hard words.
 
 ```python-run
 # Speculative decoding with greedy verification on a toy deterministic "language".
@@ -93,38 +130,54 @@ print(" ".join(out))
 print(f"tokens: {len(out)}, target passes: {target_calls} (vs {len(out)} without), acceptance rate: {accepted/drafted:.0%}")
 ```
 
+**Reading this Python line by line**
+
+- `target` is the sentence split into 13 words; it plays the role of what the big model would write.
+- `target_next(prefix)` returns the correct next word given the words so far (`len(prefix)` is how many words are written), or `None` at the end.
+- `draft_next` copies the target except that it wrongly guesses "floor" whenever the correct word is "mat" or "rug".
+- `K = 4` draft tokens per cycle; `out` is the text so far; the three counters track target passes, drafted tokens and accepted tokens.
+- Inside the `while` loop, the inner `for` loop lets the draft model write up to 4 words, appending each guess to a scratch copy `ctx` so the next guess builds on it.
+- `target_calls += 1` counts one verification pass. In a real system this single pass checks all 4 guesses at once.
+- The small `while` finds `j`, the number of leading guesses the target agrees with, stopping at the first disagreement.
+- `out += proposal[:j]` keeps the accepted guesses; then the target adds its own next word.
+- Output: the full sentence, produced in 13 tokens with only 4 target passes instead of 13, and an acceptance rate of 64%. Each pass yielded about three tokens. In real systems each verification pass costs a bit more than one ordinary decoding step, so the speedup is smaller than 13/4, but it is often around two to three times.
+
 ### Inference with reference
 
-Outputs often **repeat input text**: quoting a document, or fixing a bug where most of the code stays the same. Instead of generating those tokens, **copy them from the input** as draft tokens and verify them. It is like speculative decoding but needs **no extra model**. The challenge is finding the relevant span at each step, and the simplest approach is matching the current tokens. It is useful only when context and output overlap heavily, as in retrieval systems, coding and multi-turn conversations. Yang et al. (2023) report about a **2×** speedup in such cases.
+Outputs often **repeat parts of the input**. A model answering a question about a document quotes it; a model fixing a bug in code rewrites the file with most lines unchanged. **Inference with reference** exploits this: instead of generating those tokens, it **copies candidate tokens from the input** and lets the model verify them, exactly as with draft tokens. It is speculative decoding **without a draft model**. The hard part is finding the right span of the input to copy at each step; the simplest method looks for input text that matches the most recent output tokens. It only helps when input and output overlap heavily, as in retrieval-based systems, coding assistants and long multi-turn conversations. Yang and colleagues (2023) report roughly a **2×** speedup in such cases.
 
 ### Parallel decoding
 
-These techniques try to break the sequential dependency by generating $x_{t+1}, \ldots, x_{t+k}$ **simultaneously**. Given "the cat sits", you can guess the token after next is probably "the" without knowing whether the next one is "on" or "under".
+**Parallel decoding** tries to break the one-after-another rule altogether, generating several future tokens $x_{t+1}, \ldots, x_{t+k}$ **at the same time**. The intuition: given "the cat sits", you can guess that the token after next is probably "the", even without knowing whether the next one is "on" or "under".
 
-- **Lookahead decoding** (Fu et al., 2024) uses the same decoder. It generates $K$ future tokens in parallel, verifies them with the **Jacobi method**, and regenerates only those that fail until all pass.
-- **Medusa** (Cai et al., 2024) adds several small **decoding heads**, where head $k$ predicts the token at position $t+k+1$. The heads are trained while the original model is frozen. Each head proposes options, which are organized into a tree to select the most promising combination. NVIDIA reported up to **1.9×** faster generation for Llama 3.1 on H200 GPUs.
+- **Lookahead decoding** (Fu and colleagues, 2024) uses the model's own decoder. It guesses $K$ future tokens in parallel and refines the guesses with the **Jacobi method**, an old numerical technique for solving many equations by repeatedly updating all unknowns at once, until the guesses are consistent with what the model would generate one by one.
+- **Medusa** (Cai and colleagues, 2024) attaches several small extra output layers, called **decoding heads**, to the model. Head $k$ predicts the token $k+1$ positions ahead. The heads are trained while the original model stays **frozen** (its weights unchanged). Each head proposes several options, which are arranged in a tree, and the model picks the most promising combination. NVIDIA reported up to **1.9×** faster generation for Llama 3.1 on its H200 GPUs using Medusa.
 
-Parallel decoding is appealing but unintuitive, and techniques like Medusa are harder to implement.
+Parallel decoding is promising but counter-intuitive, and methods like Medusa are harder to implement than speculative decoding.
 
 ## 3. Attention mechanism optimization
 
-Generating token $x_t$ requires the key and value vectors of all previous tokens $x_1..x_{t-1}$. Generating $x_{t+1}$ needs those again plus $x_t$'s.
+### A short recap of attention
+
+Inside a transformer, each token is represented by a vector (a list of numbers). In every **attention layer**, each token's vector is turned into three new vectors: a **query** (what this token is looking for), a **key** (what this token offers, used for matching) and a **value** (the information this token passes on if chosen). To compute the output for the newest token, the model compares its query with the keys of **all earlier tokens**, and uses the matches to blend those tokens' values. A model has many such layers, and each layer usually has several **attention heads**, independent copies of this matching process that can each focus on different relationships.
+
+The key consequence: generating token $x_t$ needs the key and value vectors of every earlier token $x_1, \ldots, x_{t-1}$, in every layer. Generating $x_{t+1}$ needs all of those again, plus the ones for $x_t$.
 
 ### The KV cache
 
-Recomputing all previous keys and values at every step is wasteful. The **KV cache** stores them, so each step computes only the K/V vectors of the newest token. It is used **only during inference**. During training the whole sequence is known and processed at once.
+Recomputing the keys and values for every earlier token at every step would be enormously wasteful: their values do not change. The **KV cache** (key-value cache) stores them in GPU memory, so each new step only computes the keys and values of the single newest token and appends them. The cache is used **only during inference**. In training, the whole sequence is known in advance and processed in one go, so there is nothing to cache.
 
-The cache trades computation for **memory**. Attention computation still grows with sequence length: to generate $x_t$, the new query attends to all $t-1$ cached keys. Without optimization the cache needs:
+The cache trades computation for **memory**, and that memory adds up quickly. Note too that the cache does not make attention free: to generate $x_t$, the newest query still has to be compared with all $t-1$ stored keys, so the work per step still grows with the length of the text. Without optimizations, the cache needs:
 
 $$\text{KV cache size} = 2 \times B \times S \times L \times H \times M$$
 
-where $B$ is batch size, $S$ sequence length, $L$ the number of transformer layers, $H$ the model dimension and $M$ bytes per value. The factor 2 covers keys and values.
+where $B$ is the **batch size** (how many sequences are processed together), $S$ the sequence length in tokens, $L$ the number of transformer layers, $H$ the **model dimension** (the length of each token's vector), and $M$ the bytes per stored value. The factor 2 is there because we store both keys and values.
 
-Example: Llama 2 13B has $L = 40$ and $H = 5{,}120$. With $B = 32$, $S = 2{,}048$ and 2 bytes per value:
+Worked example: Llama 2 13B has $L = 40$ layers and $H = 5{,}120$. With a batch of $B = 32$ sequences, each $S = 2{,}048$ tokens long, at $M = 2$ bytes per value:
 
 $$2 \times 32 \times 2048 \times 40 \times 5120 \times 2 \approx 54\ \text{GB}$$
 
-That is twice the model's 26 GB of weights. For long contexts the **KV cache becomes the main bottleneck for throughput**, because it limits the batch size.
+That is about **twice the size of the model's own 26 GB of weights**. For long contexts, the KV cache becomes the main limit on throughput, because the memory it consumes caps how many sequences can share a GPU at once.
 
 ```python-run
 def kv_cache_gb(B, S, L, H, M=2): return 2 * B * S * L * H * M / 1e9
@@ -134,36 +187,47 @@ for S in [2048, 8192, 32768, 131072]:
     print(f"context {S:>6}: {per_seq:6.2f} GB per sequence -> max batch on 80 GB GPU after 26 GB weights: {int(54 // per_seq)}")
 ```
 
+**Reading this Python line by line**
+
+- `kv_cache_gb` multiplies out the formula and divides by $10^9$ to get gigabytes. `M=2` sets a default of 2 bytes per value (FP16).
+- The first `print` reproduces the worked example.
+- The loop computes the cache for **one** sequence at four context lengths, from 2,048 to 131,072 tokens.
+- An 80 GB GPU holding 26 GB of weights has 54 GB left for the cache. `54 // per_seq` is **integer division** (how many whole sequences fit), and `int(...)` turns it into a whole number.
+- `{S:>6}` right-aligns the number in six characters so the columns line up.
+- Output: 53.7 GB for the worked example. Per sequence, the cache needs 1.68 GB at 2K tokens (32 sequences fit), 6.71 GB at 8K (8 fit), 26.84 GB at 32K (2 fit) and 107 GB at 128K, which does not fit at all. Quadrupling the context divides the batch size by four, which is why long-context serving is expensive.
+
 ### Redesigning the attention mechanism
 
-These change the architecture, so they apply only during training or finetuning:
+These techniques change the model's architecture, so they must be applied when the model is trained or finetuned, not afterwards.
 
-- **Local windowed attention** (Beltagy et al., 2020): attend only to a fixed window of nearby tokens. With 10,000-token sequences and a 1,000-token window, the KV cache shrinks 10×. It can be interleaved with global attention to keep document-level information.
-- **Cross-layer attention** (Brandon et al., 2024): share K/V vectors across adjacent layers. Three layers sharing gives a 3× smaller cache.
-- **Multi-query attention** (Shazeer, 2019): share K/V vectors across all query heads.
-- **Grouped-query attention** (Ainslie et al., 2023): a generalization where heads are divided into groups, and each group shares K/V. This balances quality and cache size.
+- **Local windowed attention** (Beltagy and colleagues, 2020): each token attends only to a fixed window of nearby tokens instead of all earlier ones. With 10,000-token sequences and a 1,000-token window, the KV cache shrinks tenfold. Windowed layers can be interleaved with ordinary **global attention** layers so the model still sees the whole document.
+- **Cross-layer attention** (Brandon and colleagues, 2024): neighbouring layers share the same key and value vectors. If three layers share, the cache shrinks threefold.
+- **Multi-query attention** (Shazeer, 2019): all the attention heads in a layer share a single set of keys and values, while keeping separate queries.
+- **Grouped-query attention** (Ainslie and colleagues, 2023): a middle ground. The heads are split into groups, and each group shares one set of keys and values. This balances quality against cache size.
 
-Character.AI, whose average conversation has a history of **180 messages**, reported that multi-query attention, interleaved local and global attention, and cross-layer attention together reduced its KV cache by **over 20×**, so memory was no longer the bottleneck for large batches.
+Character.AI, whose average conversation carries a history of **180 messages**, reported that combining multi-query attention, interleaved local and global attention, and cross-layer attention cut its KV cache by **more than 20 times**. Memory stopped being the bottleneck even for large batches.
 
-### Optimizing the KV cache size
+### Managing the KV cache without changing the model
 
-These manage the cache without changing the model:
+These techniques leave the model alone and manage the cache more cleverly.
 
-- **PagedAttention** (vLLM; Kwon et al., 2023) splits the KV cache into non-contiguous blocks, like OS paging. This reduces fragmentation and allows flexible memory sharing.
-- **KV cache quantization**, **adaptive KV cache compression** and **selective KV caching**.
+- **PagedAttention**, introduced with the vLLM serving framework (Kwon and colleagues, 2023), splits the cache into small blocks that need not sit next to each other in memory, much as an operating system splits memory into **pages**. Without it, systems reserve one big contiguous chunk per request, much of which goes unused. Paging reduces this waste (**fragmentation**) and lets requests share common blocks.
+- **KV cache quantization** stores the cache with fewer bits; **adaptive KV cache compression** and **selective KV caching** drop or compress entries that matter little.
 
-### Writing kernels for attention computation
+### Writing kernels for attention
 
-Instead of changing the design or the storage, make the computation itself faster on specific hardware. **FlashAttention** (Dao et al., 2022) fuses several operations used in attention into one kernel, which greatly reduces memory reads and writes. It was written for A100 GPUs, and FlashAttention-3 targets H100s.
+A third approach changes neither the design nor the storage, but makes the attention computation itself faster on specific hardware. **FlashAttention** (Dao and colleagues, 2022) **fuses** the several operations of attention into a single GPU program, so intermediate results stay in fast on-chip memory instead of being written to and read back from the slower main GPU memory. This sharply reduces memory traffic. The original was written for NVIDIA A100 GPUs; FlashAttention-3 targets H100s.
 
 ## 4. Kernels and compilers
 
-A **kernel** is a piece of code optimized for a particular hardware accelerator, for routines such as matrix multiplication, attention and convolution. Writing kernels requires knowing the hardware's memory hierarchy and using lower-level languages (CUDA, Triton, ROCm). It used to be a dark art practised by a few. Four common techniques:
+A **kernel** is a small program optimized for a particular hardware accelerator, implementing a routine such as matrix multiplication, attention or convolution. Writing kernels requires knowing the hardware's memory hierarchy and using low-level languages such as CUDA, Triton or ROCm (introduced in the previous lesson). It used to be a dark art practised by a handful of specialists. Four common techniques:
 
-- **Vectorization**: process multiple contiguous data elements at once instead of one at a time.
-- **Parallelization**: divide the input into independent chunks processed on different cores or threads.
-- **Loop tiling**: reorder data access in loops to fit the hardware's memory layout and cache. This is hardware-dependent.
-- **Operator fusion**: combine several operators into a single pass to avoid redundant memory access. It needs knowledge of the specific model's operators.
+- **Vectorization**: process several neighbouring data elements in one instruction instead of one at a time.
+- **Parallelization**: split the input into independent chunks and process them simultaneously on different cores or threads.
+- **Loop tiling**: reorder the way loops visit data so that the pieces being worked on fit in the fast cache. The best tile size depends on the hardware.
+- **Operator fusion**: combine several operations into one pass, so intermediate results are not written to memory and read back. This needs knowledge of which operations the specific model uses.
+
+The demo shows vectorization in plain Python and NumPy. The task: apply ReLU (replace negatives with zero), double each value, and sum.
 
 ```python-run
 import numpy as np, time
@@ -178,27 +242,67 @@ fused = time.perf_counter() - t
 print(f"python loop {loop*1e3:7.1f} ms | vectorized {vec*1e3:6.2f} ms | chained {fused*1e3:6.2f} ms | results equal: {np.isclose(s, s2) and np.isclose(s, s3)}")
 ```
 
-A model script describes operations at a high level. To run on a chip it must be **lowered** into hardware-specific code by a **compiler**: torch.compile, XLA, Apache TVM, MLIR, OpenVINO, TensorRT, ONNX Runtime and others. Compilers can apply these optimizations automatically and sometimes find ones that humans miss.
+**Reading this Python line by line**
 
-Combined, these techniques add up. In a PyTorch case study on Llama-7B on an A100-80GB, throughput went from 25.5 tokens/s to 107 with `torch.compile`, to 157.4 with INT8 quantization, 196.8 with INT4, and **244.7 tokens/s** after adding speculative decoding. The effect on output quality was not reported.
+- `x` holds 300,000 random numbers. `time.perf_counter()` reads a precise clock; subtracting two readings gives elapsed seconds.
+- The `for` loop handles one number at a time in Python: `max(v, 0.0)` is ReLU, then multiply by 2 and add to the running sum.
+- The vectorized line uses NumPy, which runs the same operation over the whole array in compiled code: `np.maximum(x, 0.0)` applies ReLU to every element, `* 2.0` doubles every element, `.sum()` adds them up.
+- The "chained" line writes the same NumPy work as one expression. NumPy still creates intermediate arrays here, so it is not truly fused; a compiler or custom kernel would do all three steps in a single pass.
+- `np.isclose` checks the three answers agree, allowing for tiny rounding differences.
+- Output: the Python loop takes tens of milliseconds (about 70 ms on one machine), while the vectorized versions take under a millisecond, roughly 80 times faster, with identical results. Exact timings vary by computer and browser. The gap comes from doing the work in bulk in compiled code rather than one element at a time.
+
+A model written in PyTorch describes its operations at a high level. To run on a specific chip, that description must be **lowered**, translated step by step into hardware-specific instructions, by a **compiler**. Examples include torch.compile, XLA, Apache TVM, MLIR, OpenVINO, TensorRT and ONNX Runtime. Compilers apply techniques like fusion and tiling automatically and sometimes find optimizations people miss.
+
+Combined, these techniques add up. In a PyTorch case study running Llama-7B on an A100-80GB GPU, throughput rose from 25.5 tokens per second to 107 with `torch.compile`, to 157.4 with INT8 weight quantization, to 196.8 with INT4, and to **244.7 tokens per second** after adding speculative decoding: nearly ten times the starting point. The study did not report the effect on output quality, which is a reminder to evaluate before shipping.
 
 > [!INTERVIEW]
-> **"What is the KV cache and why does it limit throughput?"** During autoregressive decoding each new token attends to all previous tokens. The KV cache stores every previous token's key and value vectors per layer so they are not recomputed. Its size is 2·B·S·L·H·M, which grows linearly with batch size and context length and can exceed the weights (about 54 GB for Llama 2 13B at batch 32 and 2K context). It therefore caps how many sequences fit in a batch. Mitigations: grouped- or multi-query attention, windowed and cross-layer attention (architectural), PagedAttention and cache quantization or compression (serving), and prompt caching to reuse prefixes across requests.
+> **"Explain speculative decoding."** A small draft model proposes K tokens. The large target model verifies all K in one parallel pass, accepts the longest agreeing prefix, and adds one token of its own, so each pass yields between 1 and K+1 tokens. It works because verification is parallel like prefill, many tokens are easy for a small model, and decode leaves compute idle because it is bandwidth-bound. With exact verification the output distribution matches the target model's. Gains depend on the acceptance rate, which is higher for predictable text such as code.
+
+> [!INTERVIEW]
+> **"What is the KV cache and why does it limit throughput?"** During autoregressive decoding each new token attends to all previous tokens. The KV cache stores every previous token's key and value vectors per layer so they are not recomputed. Its size is 2·B·S·L·H·M, which grows linearly with batch size and context length and can exceed the weights (about 54 GB for Llama 2 13B at batch 32 and 2K context). It therefore caps how many sequences fit in a batch. Mitigations: grouped- or multi-query attention, windowed and cross-layer attention (architectural), PagedAttention and cache quantization or compression (serving), and prompt caching to reuse shared prefixes across requests.
 
 ## Pitfalls
 
 - Assuming compression is free. Quantization, pruning and distillation can change outputs, so evaluate again.
-- Using speculative decoding with a draft model that rarely agrees. A low acceptance rate means wasted work.
+- Using speculative decoding with a draft model that rarely agrees with the target. A low acceptance rate means wasted work and can even slow things down.
 - Forgetting KV-cache memory when sizing GPUs for long-context workloads.
 - Expecting pruning speedups on hardware that cannot exploit sparsity.
+- Assuming architectural attention changes (GQA, windowed attention) can be bolted onto an existing model without retraining or finetuning.
 
 ## Summary
 
-- Models are large, autoregressive and attention-based, and each property has its own optimization family.
-- **Compression**: quantization (the most popular), distillation, and pruning (less common).
-- **Decoding bottleneck**: **speculative decoding** (draft, parallel verify, accept the longest agreeing prefix plus one token), **inference with reference** (copy from the input) and **parallel decoding** (Lookahead, Medusa).
-- **Attention**: the **KV cache** avoids recomputation but costs $2BSLHM$ bytes. Reduce it with windowed, cross-layer, multi-query or grouped-query attention, manage it with PagedAttention and compression, and compute it faster with FlashAttention.
-- **Kernels and compilers**: vectorization, parallelization, loop tiling, operator fusion, and lowering through compilers.
+- Foundation models are **large**, **autoregressive** and **attention-based**, and each trait has its own family of optimizations.
+- **Compression**: weight-only quantization (the most popular), distillation, and pruning (less common).
+- **Decoding bottleneck**: **speculative decoding** (draft K tokens, verify in parallel, keep the longest agreeing prefix plus one target token), **inference with reference** (copy candidate tokens from the input) and **parallel decoding** (Lookahead, Medusa).
+- **Attention**: the **KV cache** avoids recomputation but costs $2BSLHM$ bytes. Shrink it with windowed, cross-layer, multi-query or grouped-query attention, manage it with PagedAttention and compression, and compute attention faster with FlashAttention.
+- **Kernels and compilers**: vectorization, parallelization, loop tiling and operator fusion, applied by hand or by compilers that lower models to hardware.
+
+## Glossary
+
+- **Model compression**: making a model smaller (quantization, distillation, pruning).
+- **Weight-only quantization**: storing weights with fewer bits.
+- **Pruning**: removing nodes or zeroing out the least useful parameters.
+- **Sparse model**: a model in which many parameters are zero.
+- **Magnitude pruning**: zeroing the weights with the smallest absolute values.
+- **Speculative decoding**: a draft model proposes tokens that the target model verifies in parallel.
+- **Draft model / target model**: the small fast guesser / the large model whose output you want.
+- **Acceptance rate**: the share of drafted tokens the target accepts.
+- **Inference with reference**: using spans copied from the input as draft tokens.
+- **Parallel decoding**: generating several future tokens simultaneously (Lookahead, Medusa).
+- **Decoding head**: an extra output layer that predicts a token further ahead.
+- **Frozen**: weights kept fixed during training.
+- **Query / key / value**: the three vectors attention computes per token, for asking, matching and passing information.
+- **Attention head**: one independent copy of the attention computation within a layer.
+- **KV cache**: stored keys and values of earlier tokens, reused during decoding.
+- **Batch size**: the number of sequences processed together.
+- **Model dimension**: the length of each token's vector inside the model.
+- **Local windowed / cross-layer / multi-query / grouped-query attention**: architectural changes that shrink the KV cache.
+- **PagedAttention**: storing the KV cache in non-contiguous blocks to reduce waste.
+- **Fragmentation**: memory wasted in reserved but unused gaps.
+- **FlashAttention**: a fused attention kernel that minimizes memory traffic.
+- **Kernel**: a small program optimized for specific hardware.
+- **Vectorization / parallelization / loop tiling / operator fusion**: core kernel-optimization techniques.
+- **Compiler / lowering**: a tool that translates a model into hardware instructions / that translation process.
 
 ```quiz
 [
