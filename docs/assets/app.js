@@ -1655,12 +1655,14 @@
     if (b.fits) trim = `<p class="pl-fit">Everything you selected${b.depth === "essentials" ? " (interview essentials)" : ""} fits: about ${fmtH(b.need)} of material in about ${fmtH(b.room)} of study time${b.skipped ? `, leaving out ${b.skipped} items you had already finished` : ""}.</p>`;
     else {
       const wN = planFitSearch(plan, "weeks"), hN = planFitSearch(plan, "hours");
-      const list = b.trimmed.map((p) => `<li><b>${esc(p.title)}</b> <span class="muted">${p.kept ? `partly planned: ${p.kept} of ${p.total} tasks, ${p.total - p.kept} left out` : `left out: all ${p.total} tasks`} (about ${fmtH(p.min - p.keptMin)})</span></li>`).join("");
-      trim = `<section class="card pl-trim" aria-labelledby="plTrimH"><h2 id="plTrimH">Not everything fits</h2>
-        <p>The tracks you picked need about <b>${fmtH(b.need)}</b>; this plan has room for about <b>${fmtH(b.room)}</b> once mocks, spaced revisits and the final review days are set aside. Nothing is dropped silently: the tasks below are left out. Interview material is kept first (lessons on interviews, essentials and playbooks, the hiring and behavioural chapters of Cracking the Coding Interview, and each coding pattern's first lesson with its first two problems); the rest is trimmed from the end of the roadmap. Reading, DSA theory and pattern practice run side by side (about 45%, 25% and 30% of the time), so each is trimmed from its own end.${b.depth === "essentials" ? ` Counts are at the ${DEPTH_NAME.essentials} depth; choose Everything in Edit settings for the full tracks.` : ""}</p>
-        <ul class="pl-trim-list">${list}</ul>
-        <p>To fit everything: ${wN ? `about <b>${wN} weeks</b> at ${plan.hours} h a week` : "more than three years at this pace"}${hN ? `, or about <b>${hN} h a week</b> until ${fmtDay(plan.end)}` : ""}.</p>
-        <div class="dlg-row">${wN && wN * 7 > b.days.length ? `<button class="btn sm" type="button" id="plExtend">Move end date to ${fmtDay(addDays(plan.start, wN * 7 - 1))}</button>` : ""}<a class="btn sm" href="#/plan/edit">Change hours or tracks</a></div></section>`;
+      // A short plan never holds every track, so this is a quiet, collapsed note at the end of the
+      // page, not a warning: the plan already contains the most interview-relevant work.
+      const later = b.trimmed.map((p) => `<li><b>${esc(p.title)}</b> <span class="muted">${p.total - p.kept} more task${p.total - p.kept === 1 ? "" : "s"} for later (about ${fmtH(p.min - p.keptMin)})</span></li>`).join("");
+      trim = `<details class="card pl-later"><summary>This plan covers the interview essentials that fit your time. More material is waiting for later: show what</summary>
+        <p>Your tracks hold about <b>${fmtH(b.need)}</b> of material and this plan has about <b>${fmtH(b.room)}</b> of study time, so it starts with what interviews test most: coding patterns, DSA, the behavioural chapters and each track's interview lessons. Everything else stays on the site for after the plan, or for a longer plan.</p>
+        <ul class="pl-trim-list">${later}</ul>
+        <p>To include all of it: ${wN ? `about <b>${wN} weeks</b> at ${plan.hours} h a week` : "more than three years at this pace"}${hN ? `, or about <b>${hN} h a week</b> until ${fmtDay(plan.end)}` : ""}.</p>
+        <div class="dlg-row">${wN && wN * 7 > b.days.length ? `<button class="btn sm" type="button" id="plExtend">Move end date to ${fmtDay(addDays(plan.start, wN * 7 - 1))}</button>` : ""}<a class="btn sm" href="#/plan/edit">Change hours or tracks</a></div></details>`;
     }
     const todayList = tday ? (tday.items.length ? `<ul class="pl-items">${tday.items.map((it) => planItemHTML(it, plan)).join("")}</ul>` : `<p class="muted pl-rest">${tday.rest ? "Rest day. Catch up on anything left from this week, or take the day off." : "Nothing scheduled today."}</p>`)
       : `<p class="muted pl-rest">${today < plan.start ? `Your plan starts on ${fmtDay(plan.start)}.` : "This plan has ended."}</p>`;
@@ -1669,10 +1671,10 @@
         <div class="pl-actions"><a class="btn sm" href="#/plan/edit">Edit settings</a><button class="btn sm" type="button" id="plIcs">Export to calendar (.ics)</button><button class="btn sm danger" type="button" id="plDel">Delete plan</button></div></div>
       <p id="plMsg" class="pl-msg" role="status" tabindex="-1">${esc(msg || "")}</p>
       <section class="card pl-status" id="plStatus" aria-label="Plan status"></section>
-      ${trim}
       <section class="card pl-today" aria-labelledby="plTodayH"><h2 id="plTodayH">Today${tday ? ` · ${fmtDay(today)}` : ""}</h2>${todayList}</section>
       <div class="section-h"><h2>Week by week</h2>${tday ? `<button class="btn sm" type="button" id="plJump">Jump to today</button>` : ""}</div>
       ${wk}
+      ${trim}
       <p class="muted pl-note">How times are estimated: a lesson takes its word count at 180 words a minute plus 30% for demos and the quiz; an Easy problem 20 minutes, Medium 35, Hard 50. ${plan.hours} h a week is spread over six study days; every seventh day is a rest or catch-up day. DSA theory (about 25% of the time) and pattern practice (30%, in NeetCode roadmap order with a lesson before each pattern's problems) run alongside the other tracks, each pattern comes back for a revisit about three days after you first practise it, and the last ${Math.round(PL.review * 100)}% of the plan is review and mock interviews.</p></div>`);
     const drawStatus = () => {
       const st = planStatus(plan, b), el = $("#plStatus");
@@ -1686,7 +1688,7 @@
       $("#plRe").onclick = () => {
         store.set((s) => { s.plan.start = today; s.plan.genAt = Date.now(); s.plan.replans = (s.plan.replans || 0) + 1; });
         const nb = buildPlan(S().plan);
-        viewPlan(null, nb.fits ? `Re-planned: unfinished work now runs from today to ${fmtDay(plan.end)}.` : `Re-planned from today, but the unfinished work no longer fits before ${fmtDay(plan.end)}. See what is left out below, or move the end date.`);
+        viewPlan(null, nb.fits ? `Re-planned: unfinished work now runs from today to ${fmtDay(plan.end)}.` : `Re-planned from today. Some unfinished work no longer fits before ${fmtDay(plan.end)} and moved to "for later" at the end of the page; move the end date to keep it.`);
         const m = $("#plMsg"); if (m) m.focus();
       };
       for (let w = 1; w <= weeks; w++) {
@@ -1780,7 +1782,7 @@
       const b = buildPlan(c), n = Math.ceil(b.days.length / 7);
       const pct = b.need ? Math.round((100 * b.kept) / b.need) : 100;
       pv.innerHTML = `<p style="margin:0 0 6px">${fmtDay(c.start)} to ${fmtDay(c.end)} · ${n} weeks · ${DEPTH_NAME[c.depth]} · about <b>${fmtH(b.room)}</b> of study time for <b>${fmtH(b.need)}</b> of material.</p>
-        ${b.fits ? `<p class="pl-fit" style="margin:0">Everything you selected fits.</p>` : `<p class="pl-warn" style="margin:0">About ${pct}% fits. Interview material is kept first; the rest is trimmed from the end of the roadmap. Partly or fully left out: ${b.trimmed.map((p) => `${esc(p.title)}${p.kept ? ` (partly, ${p.kept} of ${p.total} tasks)` : ""}`).join(", ")}. The plan page lists exactly what was trimmed.</p>`}`;
+        ${b.fits ? `<p class="pl-fit" style="margin:0">Everything you selected fits.</p>` : `<p class="pl-fit" style="margin:0">Covers about ${pct}% of these tracks, starting with what interviews test most. The rest stays available for later; more weeks or hours include more.</p>`}`;
     };
     const redraw = debounce(draw, 120);
     form.addEventListener("input", redraw);

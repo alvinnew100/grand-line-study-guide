@@ -665,3 +665,6 @@ a.rstep:hover { text-decoration: none; border-color: var(--accent); }
 .mk-help { grid-column: 1 / -1; font-size: 13px; color: var(--muted); }
 .mk-notes { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 32ch; font-size: 13.5px; }
 @media (max-width: 640px) { .mk-table .mk-notes { max-width: 18ch; } }
+.pl-later { margin-top: 14px; }
+.pl-later > summary { cursor: pointer; color: var(--muted); font-size: 14px; }
+.pl-later[open] > summary { margin-bottom: 8px; }
